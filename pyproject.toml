@@ -1,0 +1,24 @@
+[project]
+name = "fastapi-throttle"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
+]
+requires-python = ">=3.8"
+dependencies = [
+    "redis>=6.1.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "fastapi>=0.115.13",
+    "httpx>=0.28.1",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.24.0",
+]

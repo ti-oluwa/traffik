@@ -1,0 +1,72 @@
+import typing
+import time
+
+from fastapi_throttle._typing import (
+    HTTPConnectionT,
+    ConnectionIdentifier,
+    ConnectionThrottledHandler,
+)
+from fastapi_throttle.backends.base import ThrottleBackend
+
+
+class InMemoryBackend(ThrottleBackend[str, typing.MutableMapping[str, int]]):
+    """
+    In-memory throttle backend for testing or single-process use.
+    Not suitable for production or multi-process environments.
+    """
+
+    def __init__(
+        self,
+        prefix: str = "inmemory",
+        identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
+        handle_throttled: typing.Optional[
+            ConnectionThrottledHandler[HTTPConnectionT]
+        ] = None,
+        persistent: bool = False,
+    ) -> None:
+        super().__init__(
+            connection=None,
+            prefix=prefix,
+            identifier=identifier,
+            handle_throttled=handle_throttled,
+            persistent=persistent,
+        )
+
+    async def initialize(self) -> None:
+        # Recreate store
+        self.connection = {}
+
+    async def get_wait_period(
+        self,
+        key: str,
+        limit: int,
+        expires_after: int,
+    ) -> int:
+        connection = self.connection
+        if connection is None:
+            raise ValueError("In-memory backend is not initialized")
+
+        now = int(time.monotonic() * 1000)
+        record = connection.get(key, {"count": 0, "start": now})
+        elapsed = now - record["start"]
+
+        if elapsed > expires_after:
+            # Reset window
+            record = {"count": 1, "start": now}
+            connection[key] = record
+            return 0
+
+        if record["count"] < limit:
+            record["count"] += 1
+            connection[key] = record
+            return 0
+        # Throttled: return remaining wait period
+        return expires_after - elapsed
+
+    async def reset(self) -> None:
+        if self.connection is None:
+            return
+        self.connection.clear()
+
+    async def close(self) -> None:
+        pass

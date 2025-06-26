@@ -7,6 +7,7 @@ from fastapi_throttle._typing import (
     ConnectionThrottledHandler,
 )
 from fastapi_throttle.backends.base import ThrottleBackend
+from fastapi_throttle.exceptions import ConfigurationError
 
 
 class InMemoryBackend(ThrottleBackend[str, typing.MutableMapping[str, int]]):
@@ -44,7 +45,7 @@ class InMemoryBackend(ThrottleBackend[str, typing.MutableMapping[str, int]]):
     ) -> int:
         connection = self.connection
         if connection is None:
-            raise ValueError("In-memory backend is not initialized")
+            raise ConfigurationError("In-memory backend is not initialized")
 
         now = int(time.monotonic() * 1000)
         record = connection.get(key, {"count": 0, "start": now})

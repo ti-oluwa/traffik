@@ -8,6 +8,7 @@ from fastapi_throttle._typing import (
     ConnectionThrottledHandler,
     HTTPConnectionT,
 )
+from fastapi_throttle.exceptions import ConfigurationError
 
 
 class RedisBackend(ThrottleBackend[Redis, HTTPConnectionT]):
@@ -39,15 +40,8 @@ end"""
         handle_throttled: typing.Optional[
             ConnectionThrottledHandler[HTTPConnectionT]
         ] = None,
+        persistent: bool = False,
     ) -> None:
-        """
-        Initialize the Redis backend for API throttling.
-
-        :param connection: The Redis connection.
-        :param prefix: The prefix to be prepended to all throttling keys.
-        :param identifier: The connected client identifier generator.
-        :param handle_throttled: The handler to call when the client connection is throttled.
-        """
         if isinstance(connection, str):
             connection = Redis.from_url(url=connection)
 
@@ -86,7 +80,7 @@ end"""
         :return: The wait period in milliseconds.
         """
         if not self._lua_sha:
-            raise RuntimeError(
+            raise ConfigurationError(
                 "Lua script SHA is not initialized. Call `initialize` first."
             )
 

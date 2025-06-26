@@ -33,6 +33,11 @@ class NoLimit(Exception):
     pass
 
 
+class ConfigurationError(Exception):
+    """Exception raised when the throttle configuration is invalid."""
+    pass
+
+
 class AnonymousConnection(Exception):
     """
     Exception raised when the connection identifier cannot be determined.

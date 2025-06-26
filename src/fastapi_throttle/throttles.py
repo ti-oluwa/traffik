@@ -15,7 +15,7 @@ from fastapi_throttle._typing import (
     ConnectionThrottledHandler,
 )
 from fastapi_throttle.backends.base import ThrottleBackend, get_throttle_backend
-from fastapi_throttle.exceptions import NoLimit
+from fastapi_throttle.exceptions import NoLimit, ConfigurationError
 
 
 __all__ = [
@@ -116,7 +116,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
 
         backend = backend or get_throttle_backend()
         if not isinstance(backend, ThrottleBackend):
-            raise ValueError("No throttle backend provided or detected.")
+            raise ConfigurationError("No throttle backend provided or detected.")
 
         self.backend = backend
         self.identifier = identifier or backend.identifier

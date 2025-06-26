@@ -95,6 +95,9 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         return re.match(self.get_key_pattern(), key) is not None
 
     async def initialize(self) -> None:
+        """
+        Initialize the throttle backend ensuring it is ready for use.
+        """
         pass
 
     async def get_wait_period(

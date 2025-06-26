@@ -1,21 +1,23 @@
+import collections.abc
 import pytest
 
 from fastapi_throttle.backends.base import throttle_backend_ctx
-from fastapi_throttle.backends.redis import RedisBackend
+from fastapi_throttle.backends.inmemory import InMemoryBackend
 
 
 @pytest.fixture(scope="function")
-async def backend() -> RedisBackend:
-    return RedisBackend(connection="redis://127.0.0.1:6379", prefix="redis-backend")
+async def backend() -> InMemoryBackend:
+    return InMemoryBackend()
 
 
-async def test_backend_reset(backend: RedisBackend) -> None:
+async def test_backend_reset(backend: InMemoryBackend) -> None:
+    await backend.initialize()
     await backend.reset()
-    keys = await backend.connection.keys(f"{backend.prefix}:*")
-    assert not keys
+    keys = backend.connection.keys()
+    assert len(keys) == 0
 
 
-async def test_get_wait_period(backend: RedisBackend) -> None:
+async def test_get_wait_period(backend: InMemoryBackend) -> None:
     await backend.reset()
     async with backend:
         wait_period = await backend.get_wait_period(
@@ -36,15 +38,15 @@ async def test_get_wait_period(backend: RedisBackend) -> None:
         assert wait_period != 0
 
 
-async def test_backend_context_management(backend: RedisBackend) -> None:
+async def test_backend_context_management(backend: InMemoryBackend) -> None:
     # Test that the context variable is initialized to None
     assert throttle_backend_ctx.get() is None
 
-    assert backend._lua_sha is None
+    assert backend.connection is None
     assert backend._context_token is None
     async with backend:
         # Test the lua script has been loaded
-        assert isinstance(backend._lua_sha, str)
+        assert isinstance(backend.connection, collections.abc.MutableMapping)
         # Test that the context variable is set within the context
         assert throttle_backend_ctx.get() is backend
         assert backend._context_token is not None
@@ -55,7 +57,7 @@ async def test_backend_context_management(backend: RedisBackend) -> None:
     assert throttle_backend_ctx.get() is None
 
 
-async def test_backend_persistence(backend: RedisBackend) -> None:
+async def test_backend_persistence(backend: InMemoryBackend) -> None:
     # Test that the backend can be set to persistent
     backend.persistent = True
     assert backend.persistent
@@ -66,8 +68,8 @@ async def test_backend_persistence(backend: RedisBackend) -> None:
             f"{backend.prefix}:test_key", limit=3, expires_after=5000
         )
     # Test that the backend persists the keys even after exiting the context
-    assert len(await backend.connection.keys(f"{backend.prefix}:*")) > 0
+    assert len(backend.connection.keys()) > 0
     # Reset the backend
     await backend.reset()
     # Test that the backend can be reset
-    assert len(await backend.connection.keys(f"{backend.prefix}:*")) == 0
+    assert len(backend.connection.keys()) == 0

@@ -122,6 +122,8 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "anyio", version = "4.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "anyio", version = "4.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pytest", version = "8.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
@@ -135,6 +137,7 @@ requires-dist = [{ name = "redis", specifier = ">=6.1.1" }]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "anyio", specifier = ">=4.5.2" },
     { name = "fastapi", specifier = ">=0.115.13" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pytest", specifier = ">=8.3.5" },

@@ -1,3 +1,4 @@
+import time
 import typing
 import asyncio
 import pytest
@@ -33,6 +34,7 @@ async def redis_backend() -> RedisBackend:
     )
 
 
+@pytest.mark.asyncio
 async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> None:
     # Test that an error is raised when not backend is passed or detected
     with pytest.raises(ConfigurationError):
@@ -84,11 +86,12 @@ async def test_http_throttle_inmemory(
             transport=ASGITransport(app=app),
             base_url=base_url,
         ) as client:
-            for i in range(1, 5):
-                if i == 4:
+            for count, name in enumerate(repeat("test-client", 5), start=1):
+                if count == 4:
                     await asyncio.sleep(sleep_time)
-                response = await client.get(f"{base_url}/{i}")
+                response = await client.get(f"{base_url}/{name}")
                 assert response.status_code == 200
+                assert response.json() == {"message": f"PONG: {name}"}
 
             await inmemory_backend.reset()
             for count, name in enumerate(repeat("test-client", 5), start=1):
@@ -100,9 +103,7 @@ async def test_http_throttle_inmemory(
 
 
 @pytest.mark.anyio
-async def test_http_throttle_redis(
-    redis_backend: RedisBackend, app: FastAPI
-) -> None:
+async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) -> None:
     async with redis_backend:
         throttle = HTTPThrottle(
             limit=3,
@@ -124,11 +125,12 @@ async def test_http_throttle_redis(
             transport=ASGITransport(app=app),
             base_url=base_url,
         ) as client:
-            for i in range(1, 5):
-                if i == 4:
+            for count, name in enumerate(repeat("test-client", 5), start=1):
+                if count == 4:
                     await asyncio.sleep(sleep_time)
-                response = await client.get(f"{base_url}/{i}")
+                response = await client.get(f"{base_url}/{name}")
                 assert response.status_code == 200
+                assert response.json() == {"message": f"PONG: {name}"}
 
             await redis_backend.reset()
             for count, name in enumerate(repeat("test-client", 5), start=1):
@@ -211,14 +213,14 @@ async def test_http_throttle_redis_concurrent(
             assert status_codes.count(429) == 2
 
 
-@pytest.mark.anyio
-async def test_websocket_throttle_inmemory_concurrent(
+@pytest.mark.asyncio
+async def test_websocket_throttle_inmemory(
     inmemory_backend: InMemoryBackend, app: FastAPI
 ) -> None:
     async with inmemory_backend:
         throttle = WebSocketThrottle(
             limit=3,
-            seconds=3,
+            seconds=5,
             milliseconds=5,
         )
 
@@ -229,40 +231,48 @@ async def test_websocket_throttle_inmemory_concurrent(
             await websocket.send_json({"message": f"PONG: {name}"})
             await websocket.close()
 
-        base_url = "http://0.0.0.0"
-        client = TestClient(
+        base_url = "ws://0.0.0.0"
+        with TestClient(
             app=app,
             base_url=base_url,
             client=("127.0.0.1", 123),
-        )
+        ) as client:
 
-        async def make_ws_request(name):
-            ws_url = f"/ws/{name}"
-            try:
-                with client.websocket_connect(ws_url) as ws:
-                    data = ws.receive_json()
-                    return 200, data
-            except Exception as exc:
-                print(exc)
-                return 429, str(exc)
+            def make_ws_request(name):
+                ws_url = f"/ws/{name}"
+                try:
+                    with client.websocket_connect(ws_url) as ws:
+                        data = ws.receive_json()
+                        return 200, data
+                except Exception as exc:
+                    print(exc)
+                    return 429, str(exc)
 
-        results = await asyncio.gather(
-            *(make_ws_request(name) for name in repeat("test-client", 5))
-        )
-        status_codes = [r[0] for r in results]
-        assert status_codes.count(200) == 3
-        assert status_codes.count(429) == 2
-        client.close()
+            for count, name in enumerate(repeat("test-client", 5), start=1):
+                if count == 4:
+                    time.sleep(5 + (5 / 1000))
+                result = make_ws_request(name)
+                assert result[0] == 200
+                assert result[1] == {"message": f"PONG: {name}"}
+
+            await inmemory_backend.reset()
+            for count, name in enumerate(repeat("test-client", 5), start=1):
+                result = make_ws_request(name)
+                if count > 3:
+                    assert result[0] == 429
+                else:
+                    assert result[0] == 200
+                    assert result[1] == {"message": f"PONG: {name}"}
 
 
 @pytest.mark.asyncio
-async def test_websocket_throttle_redis_concurrent(
+async def test_websocket_throttle_redis(
     redis_backend: RedisBackend, app: FastAPI
 ) -> None:
     async with redis_backend:
         throttle = WebSocketThrottle(
             limit=3,
-            seconds=3,
+            seconds=5,
             milliseconds=5,
         )
 
@@ -273,27 +283,35 @@ async def test_websocket_throttle_redis_concurrent(
             await websocket.send_json({"message": f"PONG: {name}"})
             await websocket.close()
 
-        base_url = "http://0.0.0.0"
-        client = TestClient(
+        base_url = "ws://0.0.0.0"
+        with TestClient(
             app=app,
             base_url=base_url,
             client=("127.0.0.1", 123),
-        )
+        ) as client:
 
-        async def make_ws_request(name):
-            ws_url = f"/ws/{name}"
-            try:
-                with client.websocket_connect(ws_url) as ws:
-                    data = ws.receive_json()
-                    return 200, data
-            except Exception as exc:
-                print(exc)
-                return 429, str(exc)
+            def make_ws_request(name):
+                ws_url = f"/ws/{name}"
+                try:
+                    with client.websocket_connect(ws_url) as ws:
+                        data = ws.receive_json()
+                        return 200, data
+                except Exception as exc:
+                    print(exc)
+                    return 429, str(exc)
 
-        results = await asyncio.gather(
-            *(make_ws_request(name) for name in repeat("test-client", 5))
-        )
-        status_codes = [r[0] for r in results]
-        assert status_codes.count(200) == 3
-        assert status_codes.count(429) == 2
-        client.close()
+            for count, name in enumerate(repeat("test-client", 5), start=1):
+                if count == 4:
+                    time.sleep(5 + (5 / 1000))
+                result = make_ws_request(name)
+                assert result[0] == 200
+                assert result[1] == {"message": f"PONG: {name}"}
+
+            await redis_backend.reset()
+            for count, name in enumerate(repeat("test-client", 5), start=1):
+                result = make_ws_request(name)
+                if count > 3:
+                    assert result[0] == 429
+                else:
+                    assert result[0] == 200
+                    assert result[1] == {"message": f"PONG: {name}"}

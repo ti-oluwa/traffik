@@ -290,7 +290,7 @@ async def test_websocket_throttle_inmemory(
             
             # Allow time for the message put in the queue to be processed
             # and received by the client before closing the websocket
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(1)
             await websocket.close(code=close_code, reason=close_reason)
 
         base_url = "http://0.0.0.0"
@@ -315,7 +315,6 @@ async def test_websocket_throttle_inmemory(
                     return "disconnected", 1000
 
             for count in range(1, 6):
-                print(count)
                 result = await make_ws_request()
                 assert result[0] == "success"
                 assert result[1] == 200

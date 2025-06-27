@@ -12,22 +12,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Matrix testing across Python versions
-  test:
-    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+  # Linux testing with Redis support
+  test-linux:
+    name: Test Python ${{ matrix.python-version }} on Linux (with Redis)
+    runs-on: ubuntu-latest
     
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
-        include:
-          # Test on different OS for latest Python
-          - os: windows-latest
-            python-version: "3.12"
-          - os: macos-latest
-            python-version: "3.12"
 
     services:
       redis:
@@ -54,50 +47,21 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
+      - name: Install dependencies with Redis
         run: uv sync --extra test
 
-      - name: Install Redis CLI (Ubuntu/macOS)
-        if: runner.os != 'Windows'
+      - name: Install Redis CLI
         run: |
-          if [[ "${{ runner.os }}" == "Linux" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y redis-tools
-          elif [[ "${{ runner.os }}" == "macOS" ]]; then
-            brew install redis
-          fi
+          sudo apt-get update
+          sudo apt-get install -y redis-tools
 
-      - name: Wait for Redis (Ubuntu/macOS)
-        if: runner.os != 'Windows'
+      - name: Wait for Redis
         run: |
           echo "Waiting for Redis to be ready..."
           timeout 30 bash -c 'until redis-cli -h localhost -p 6379 ping 2>/dev/null; do sleep 1; done'
           echo "Redis is ready!"
 
-      - name: Wait for Redis (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          echo "Waiting for Redis to be ready..."
-          $timeout = 30
-          $elapsed = 0
-          do {
-            try {
-              $connection = New-Object System.Net.Sockets.TcpClient("localhost", 6379)
-              $connection.Close()
-              Write-Output "Redis is ready!"
-              break
-            } catch {
-              Start-Sleep 1
-              $elapsed++
-            }
-          } while ($elapsed -lt $timeout)
-          if ($elapsed -ge $timeout) {
-            Write-Error "Redis did not start within $timeout seconds"
-            exit 1
-          }
-        shell: powershell
-
-      - name: Run tests with coverage
+      - name: Run full test suite with coverage
         env:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
@@ -112,7 +76,7 @@ jobs:
             -v
 
       - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest'
+        if: matrix.python-version == '3.11'
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -121,11 +85,43 @@ jobs:
           name: codecov-umbrella
           fail_ci_if_error: false
 
+  # Windows and macOS testing without Redis (containers not supported)
+  test-cross-platform:
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }} (no Redis)
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        python-version: ["3.8", "3.11", "3.12"]  # Test fewer versions for speed
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies (no Redis)
+        run: uv sync --extra test
+
+      - name: Run tests without Redis
+        run: |
+          uv run pytest tests/ -k "not redis and not Redis" -v --tb=short
+
   # Test installation from built package
   test-install:
     name: Test Package Installation
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test-linux]
     
     steps:
       - name: Checkout code
@@ -180,7 +176,6 @@ jobs:
       - name: Install minimal dependencies
         run: |
           uv sync --extra test
-          # Don't install redis extra
 
       - name: Run tests without Redis
         run: |

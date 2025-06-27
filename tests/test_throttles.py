@@ -85,7 +85,7 @@ async def test_http_throttle_inmemory(
             seconds=3,
             milliseconds=5,
         )
-        sleep_time = 7 + (5 / 1000)
+        sleep_time = 4 + (5 / 1000)
 
         @app.get(
             "/{name}",
@@ -125,7 +125,7 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
             seconds=3,
             milliseconds=5,
         )
-        sleep_time = 3 + (5 / 1000)
+        sleep_time = 4 + (5 / 1000)
 
         @app.get(
             "/{name}",
@@ -320,9 +320,14 @@ async def test_websocket_throttle_inmemory(
                 assert result[0] == "success"
                 assert result[1] == 200
                 if count == 3:
-                    await asyncio.sleep(5 + (5 / 1000))
+                    sleep_time = 5 + (5 / 1000) + 2 # For the last request, we wait a bit longer
+                    await asyncio.sleep(sleep_time)
 
             await inmemory_backend.reset()
+            # Ensure the reset is processed, especially for in-memory backends
+            # as it uses an `asyncio.Lock` internally to prevent race conditions
+            # so the reset might not be immediate.
+            await asyncio.sleep(0.01)
             for count in range(1, 4):
                 result = await make_ws_request()
                 if count > 3:
@@ -392,7 +397,7 @@ async def test_websocket_throttle_redis(
                     close_code = 1011  # Internal error
                     close_reason = "Internal error"
                     break
-                
+
             # Allow time for the message put in the queue to be processed
             # and received by the client before closing the websocket
             await asyncio.sleep(0.1)
@@ -424,7 +429,8 @@ async def test_websocket_throttle_redis(
                 assert result[0] == "success"
                 assert result[1] == 200
                 if count == 3:
-                    await asyncio.sleep(5 + (5 / 1000))
+                    sleep_time = 5 + (5 / 1000) + 1 # For the last request, we wait a bit longer
+                    await asyncio.sleep(sleep_time)
 
             await redis_backend.reset()
             for count in range(1, 4):

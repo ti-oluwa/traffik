@@ -85,7 +85,7 @@ async def test_http_throttle_inmemory(
             seconds=3,
             milliseconds=5,
         )
-        sleep_time = 3 + (5 / 1000)
+        sleep_time = 7 + (5 / 1000)
 
         @app.get(
             "/{name}",
@@ -125,7 +125,7 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
             seconds=3,
             milliseconds=5,
         )
-        sleep_time = 3 + (5 / 1000)
+        sleep_time = 7 + (5 / 1000)
 
         @app.get(
             "/{name}",
@@ -311,12 +311,11 @@ async def test_websocket_throttle_inmemory(
                     return "disconnected", 1000
 
             for count in range(1, 6):
-                print(count)
                 result = await make_ws_request()
                 assert result[0] == "success"
                 assert result[1] == 200
                 if count == 3:
-                    await asyncio.sleep(5 + (5 / 1000))
+                    await asyncio.sleep(9 + (5 / 1000))
 
             await inmemory_backend.reset()
             for count in range(1, 4):

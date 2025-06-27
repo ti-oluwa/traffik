@@ -311,6 +311,7 @@ async def test_websocket_throttle_inmemory(
                     return "disconnected", 1000
 
             for count in range(1, 6):
+                print(count)
                 result = await make_ws_request()
                 assert result[0] == "success"
                 assert result[1] == 200

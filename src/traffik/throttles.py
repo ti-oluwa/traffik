@@ -177,7 +177,7 @@ class HTTPThrottle(BaseThrottle[Request]):
 
         rate_key = await identifier(request)
         suffix = f"{rate_key}:{route_index}:{dependency_index}:{id(self)}"
-        hashed_suffix = hashlib.md5(suffix.encode()).hexdigest()
+        hashed_suffix = hashlib.md5(suffix.encode()).hexdigest() # nosec
         throttle_key = f"http:{hashed_suffix}"
         # Added id(self) to ensure unique key for each throttle instance
         # in the advent that the dependency index is not unique. Especially when
@@ -199,7 +199,7 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
     ) -> str:
         rate_key = await identifier(connection)
         suffix = f"{rate_key}:{connection.url.path}:{id(self)}:{context_key or ''}"
-        hashed_suffix = hashlib.md5(suffix.encode()).hexdigest()
+        hashed_suffix = hashlib.md5(suffix.encode()).hexdigest() # nosec
         throttle_key = f"ws:{hashed_suffix}"
         # Added id(self) to ensure unique key for each throttle instance
         # in the advent that the context key is not unique. Especially when

@@ -65,7 +65,7 @@ By participating in this project, you agree to abide by our Code of Conduct. We 
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
    # Install in development mode with all dependencies
-   pip install -e ".[dev,test]"
+   pip install -e ".[dev]"
    ```
 
 3. **Verify Installation**
@@ -80,6 +80,10 @@ By participating in this project, you agree to abide by our Code of Conduct. We 
    uv run ruff check src/ tests/
    # or 
    ruff check src/ tests/
+   
+   # Run security checks
+   uv run bandit -r src/
+   uv run safety scan
    ```
 
 4. **Set Up Redis (Optional)**
@@ -155,6 +159,8 @@ We welcome several types of contributions:
 - [ ] New code has appropriate test coverage
 - [ ] Documentation has been updated (if applicable)
 - [ ] Commit messages are clear and descriptive
+- [ ] Security checks pass (bandit and safety)
+- [ ] Code formatting is correct (ruff format)
 
 ### PR Description Template
 
@@ -179,11 +185,13 @@ Describe the tests you ran and how to reproduce them.
 - [ ] My changes generate no new warnings
 - [ ] I have added tests that prove my fix is effective or that my feature works
 - [ ] New and existing unit tests pass locally with my changes
+- [ ] Security checks pass (bandit scan shows no new issues)
+- [ ] Dependencies are secure (safety check passes)
 ```
 
 ### Review Process
 
-1. **Automated Checks**: All PRs must pass CI/CD checks (tests, linting, type checking)
+1. **Automated Checks**: All PRs must pass CI/CD checks (tests, linting, type checking, security scans)
 2. **Code Review**: At least one maintainer will review your PR
 3. **Discussion**: Address any feedback or questions from reviewers
 4. **Approval**: Once approved, maintainers will merge your PR
@@ -249,7 +257,7 @@ async def test_throttle_allows_requests_within_limit():
 
 ### Formatting and Linting
 
-We use [Ruff](https://docs.astral.sh/ruff/) for code formatting and linting:
+We use [Ruff](https://docs.astral.sh/ruff/) for code formatting and linting, plus additional security tools:
 
 ```bash
 # Check for issues
@@ -266,6 +274,16 @@ ruff check --fix src/ tests/
 uv run ruff format src/ tests/
 # or
 ruff format src/ tests/
+
+# Security checks
+uv run bandit -r src/
+# or
+bandit -r src/
+
+# Dependency vulnerability checks
+uv run safety scan
+# or
+safety scan
 ```
 
 ### Style Guidelines
@@ -276,6 +294,8 @@ ruff format src/ tests/
 - **Docstrings**: Use Google-style docstrings for all public functions and classes
 - **Import sorting**: Use isort-compatible import ordering
 - **Variable naming**: Use descriptive names, avoid abbreviations
+- **Security**: Follow secure coding practices, avoid common vulnerabilities
+- **Dependencies**: Regular security audits with safety and bandit
 
 ### Example Code Style
 
@@ -429,9 +449,10 @@ Maintainers follow this process for releases:
 
 1. Update version in `pyproject.toml`
 2. Update `CHANGELOG.md` with new features and fixes
-3. Create release PR for review
-4. Tag release and publish to PyPI
-5. Update GitHub release with changelog
+3. Run security audits: `uv run bandit -r src/ && uv run safety scan`
+4. Create release PR for review
+5. Tag release and publish to PyPI
+6. Update GitHub release with changelog
 
 ---
 

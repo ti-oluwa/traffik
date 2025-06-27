@@ -2,23 +2,41 @@ name: Test
 
 on:
   push:
-    branches: [main]
-  
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+  workflow_dispatch:  # Allow manual triggering
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  run-tests:
-    runs-on: ubuntu-latest
+  # Matrix testing across Python versions
+  test:
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        include:
+          # Test on different OS for latest Python
+          - os: windows-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
 
     services:
       redis:
-        image: redis:7
+        image: redis:7-alpine
         ports:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 5s
+          --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
@@ -26,34 +44,108 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --extra test
+
+      - name: Wait for Redis
+        run: |
+          timeout 30 bash -c 'until redis-cli -h localhost -p 6379 ping; do sleep 1; done'
+
+      - name: Run tests with coverage
+        env:
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+        run: |
+          uv run pytest \
+            --cov=traffik \
+            --cov-branch \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=80 \
+            --tb=short \
+            -v
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  # Test installation from built package
+  test-install:
+    name: Test Package Installation
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build package
+        run: uv build
+
+      - name: Install built package
+        run: |
+          cd dist
+          uv pip install --system traffik-*.whl
+
+      - name: Test installation
+        run: |
+          python -c "
+          import traffik
+          from traffik.backends.inmemory import InMemoryBackend
+          from traffik.throttles import HTTPThrottle
+          print('✅ Package installed and imports work')
+          "
+
+  # Test with minimal dependencies
+  test-minimal:
+    name: Test Minimal Dependencies
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.8"
 
-      - name: Cache uv install
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Install uv
+      - name: Install minimal dependencies
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          uv sync --extra test
+          # Don't install redis extra
 
-      - name: Synchronize dependencies with uv
-        run: uv sync --group test --no-cache
-
-      - name: Run tests
-        env:
-          REDIS_HOST: localhost
-          REDIS_PORT: 6379
-        run: uv run pytest --cov-report=xml
-
-      - name: Generate coverage badge
+      - name: Run tests without Redis
         run: |
-          uv add coverage-badge
-          uv run coverage-badge -o coverage.svg
+          uv run pytest tests/ -k "not redis and not Redis" -v --tb=short

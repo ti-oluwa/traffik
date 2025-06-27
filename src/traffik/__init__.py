@@ -47,3 +47,5 @@ from .backends.inmemory import InMemoryBackend  # noqa
 from .throttles import *  # noqa
 from .decorators import throttled  # noqa
 from ._utils import get_ip_address  # noqa
+
+__version__ = "0.1.0"

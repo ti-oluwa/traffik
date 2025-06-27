@@ -3,7 +3,6 @@ import pytest
 import asyncio
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-
 from traffik.backends.base import ThrottleBackend, throttle_backend_ctx
 
 
@@ -13,7 +12,7 @@ def backend():
 
 
 def test_get_key_pattern(backend: ThrottleBackend) -> None:
-    # Test the regular expression pattern``
+    # Test the regular expression pattern
     pattern = backend.get_key_pattern()
     assert isinstance(pattern, re.Pattern)
     assert pattern.match("test:some_key") is not None

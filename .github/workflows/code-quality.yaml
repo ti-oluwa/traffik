@@ -1,0 +1,94 @@
+name: Code Quality
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:  # Allow manual triggering
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run linting
+        run: |
+          echo "Running Ruff linter..."
+          uv run ruff check src/ tests/
+
+      - name: Check code formatting
+        run: |
+          echo "Checking code formatting..."
+          uv run ruff format --check src/ tests/
+
+      - name: Run security analysis
+        run: |
+          echo "Running Bandit security analysis..."
+          uv run bandit -r src/ -f json -o bandit-report.json || true
+          uv run bandit -r src/
+        continue-on-error: false
+
+      - name: Check for known vulnerabilities
+        run: |
+          echo "Checking for known vulnerabilities..."
+          uv run safety scan --json --output safety-report.json || true
+          uv run safety scan
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+          retention-days: 30
+
+  type-check:
+    name: Type Checking
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run type checking
+        run: |
+          echo "Running mypy type checking..."
+          uv run python -m mypy src/ --ignore-missing-imports --no-strict-optional
+        continue-on-error: true  # Optional since you might not have mypy setup yet

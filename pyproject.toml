@@ -6,34 +6,62 @@ readme = "README.md"
 authors = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
 ]
+maintainers = [
+    { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
+]
+license = { file = "LICENSE" }
+keywords = ["fastapi", "starlette", "throttling", "rate-limiting", "api"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Networking",
+]
 requires-python = ">=3.8"
-dependencies = []
+dependencies = [
+    "fastapi>=0.68.0",
+    "starlette>=0.14.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ti-oluwa/traffik"
+Documentation = "https://github.com/ti-oluwa/traffik#readme"
+Repository = "https://github.com/ti-oluwa/traffik.git"
+"Bug Tracker" = "https://github.com/ti-oluwa/traffik/issues"
+Changelog = "https://github.com/ti-oluwa/traffik/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-redis = ["redis>=5.0"]
+all = ["redis>=5.0.0"]
+redis = ["redis>=5.0.0"]
+dev = [
+    "bandit>=1.7.10",
+    "ruff>=0.12.1",
+    "safety>=3.5.2",
+    "traffik[test]",
+]
+test = [
+    "traffik[all]",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "httpx>=0.28.0",
+    "anyio>=4.0.0",
+    "requests>=2.20.0",
+]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[dependency-groups]
-dev = [
-    "fastapi>=0.115.13",
-    "redis>=5.0",
-    "ruff>=0.12.1",
-]
-
-test = [
-    "fastapi>=0.115.13",
-    "redis>=5.0",
-    "anyio>=4.5.2",
-    "httpx>=0.28.1",
-    "pytest>=8.3.5",
-    "pytest-asyncio>=0.24.0",
-    "pytest-cov>=5.0.0",
-    "requests>=2.32.4",
-    "uvicorn>=0.33.0",
-]
 
 [tool.pytest.ini_options]
 addopts = "--cov=traffik --cov-report=term-missing"

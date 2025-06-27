@@ -2,9 +2,9 @@
 
 [![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
 [![Code Quality](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml)
-[![codecov](https://codecov.io/gh/ti-oluwa/traffik/branch/main/graph/badge.svg?token=YOUR_TOKEN_HERE)](https://codecov.io/gh/ti-oluwa/traffik)
-[![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
-[![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/)
+[![codecov](https://codecov.io/gh/ti-oluwa/traffik/branch/main/graph/badge.svg)](https://codecov.io/gh/ti-oluwa/traffik)
+<!-- [![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
+[![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/) -->
 
 Traffik provides rate limiting capabilities for FastAPI applications with support for both HTTP and WebSocket connections. It offers multiple backend options including in-memory storage for development and Redis for production environments. Customizable throttling strategies allow you to define limits based on time intervals, client identifiers, and more.
 
@@ -85,6 +85,7 @@ For quick testing across different platforms and Python versions:
 ```
 
 **Testing Documentation:**
+
 - [DOCKER.md](DOCKER.md) - Complete Docker testing guide
 - [TESTING.md](TESTING.md) - Quick testing guide  
 - [TESTING_COMPLETE.md](TESTING_COMPLETE.md) - Comprehensive testing reference

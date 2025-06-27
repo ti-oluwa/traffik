@@ -123,7 +123,6 @@ class AsyncioWebSocketTestSession:
         assert mode in ["text", "binary"]
         message = await self.receive()
         self._raise_on_close(message)
-        print("RECEIVED:", message)
 
         if mode == "text":
             text = message["text"]

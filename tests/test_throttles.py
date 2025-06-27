@@ -28,7 +28,7 @@ async def app() -> FastAPI:
 
 
 @pytest.fixture(scope="function")
-async def inmemory_backend() -> InMemoryBackend:
+def inmemory_backend() -> InMemoryBackend:
     return InMemoryBackend()
 
 
@@ -229,7 +229,7 @@ async def test_http_throttle_redis_concurrent(
             assert status_codes.count(429) == 2
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_websocket_throttle_inmemory(
     inmemory_backend: InMemoryBackend, app: FastAPI
 ) -> None:
@@ -290,10 +290,11 @@ async def test_websocket_throttle_inmemory(
             await websocket.close(code=close_code, reason=close_reason)
 
         base_url = "http://0.0.0.0"
+        running_loop = asyncio.get_running_loop()
         async with AsyncioTestClient(
             app=app,
             base_url=base_url,
-            event_loop=asyncio.get_running_loop(),
+            event_loop=running_loop,
         ) as client, client.websocket_connect(url="/ws/") as ws:
             # Reset the backend before starting the test
             # as connecting to the websocket already counts as a request
@@ -314,7 +315,7 @@ async def test_websocket_throttle_inmemory(
                 assert result[0] == "success"
                 assert result[1] == 200
                 if count == 3:
-                    await anyio.sleep(6 + (5 / 1000))
+                    await asyncio.sleep(6 + (5 / 1000))
 
             await inmemory_backend.reset()
             for count in range(1, 4):
@@ -328,8 +329,7 @@ async def test_websocket_throttle_inmemory(
                     assert result[0] == "success"
                     assert result[1] == 200
 
-
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_websocket_throttle_redis(
     redis_backend: RedisBackend, app: FastAPI
 ) -> None:
@@ -390,10 +390,11 @@ async def test_websocket_throttle_redis(
             await websocket.close(code=close_code, reason=close_reason)
 
         base_url = "http://0.0.0.0"
+        running_loop = asyncio.get_running_loop()
         async with AsyncioTestClient(
             app=app,
             base_url=base_url,
-            event_loop=asyncio.get_running_loop(),
+            event_loop=running_loop,
         ) as client, client.websocket_connect(url="/ws/") as ws:
             # Reset the backend before starting the test
             # as connecting to the websocket already counts as a request
@@ -414,7 +415,7 @@ async def test_websocket_throttle_redis(
                 assert result[0] == "success"
                 assert result[1] == 200
                 if count == 3:
-                    await anyio.sleep(5 + (5 / 1000))
+                    await asyncio.sleep(5 + (5 / 1000))
 
             await redis_backend.reset()
             for count in range(1, 4):

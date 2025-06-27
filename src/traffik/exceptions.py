@@ -35,6 +35,7 @@ class NoLimit(Exception):
 
 class ConfigurationError(Exception):
     """Exception raised when the throttle configuration is invalid."""
+
     pass
 
 

@@ -16,7 +16,9 @@ Decorated: TypeAlias = typing.Union[Function[P, R], CoroutineFunction[P, R]]
 Dependency: TypeAlias = typing.Union[Function[Q, S], CoroutineFunction[Q, S]]
 
 HTTPConnectionT = typing.TypeVar("HTTPConnectionT", bound=HTTPConnection)
-ConnectionIdentifier: TypeAlias = typing.Callable[[HTTPConnectionT], typing.Awaitable[typing.Any]]
+ConnectionIdentifier: TypeAlias = typing.Callable[
+    [HTTPConnectionT], typing.Awaitable[typing.Any]
+]
 
 WaitPeriod: TypeAlias = int
 if sys.version_info >= (3, 12):

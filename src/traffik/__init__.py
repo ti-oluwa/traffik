@@ -43,7 +43,7 @@ async def some_route():
 """
 
 from .backends.base import *  # noqa
-from .backends.inmemory import InMemoryBackend # noqa
+from .backends.inmemory import InMemoryBackend  # noqa
 from .throttles import *  # noqa
 from .decorators import throttled  # noqa
 from ._utils import get_ip_address  # noqa

@@ -19,10 +19,12 @@ jobs:
     name: Code Quality Assurance Gate
     uses: ./.github/workflows/code-quality.yaml
 
+
   # Run the full test suite first
   test-gate:
     name: Test Suite Gate
     uses: ./.github/workflows/test.yaml
+
 
   # Build and validate package
   build:
@@ -92,6 +94,7 @@ jobs:
           path: dist/
           retention-days: 30
 
+
   # Publish to TestPyPI for testing
   publish-testpypi:
     name: Publish to TestPyPI
@@ -114,13 +117,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install tomli for version parsing
-        run: pip install tomli jq
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install jq for version parsing
+        run: uv pip install jq
 
       - name: Get project version
         id: get-version
         run: |
-          VERSION=$(python -c "import tomli; print(tomli.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check if version already exists on TestPyPI
@@ -143,21 +151,13 @@ jobs:
           name: dist-${{ github.sha }}
           path: dist/
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-
       - name: Publish to TestPyPI
+        if: steps.version-check.outputs.exists == 'false'
         run: uv publish --index testpypi
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
 
-      - name: Wait for TestPyPI availability
-        run: |
-          echo "⏳ Waiting for package to be available on TestPyPI..."
-          sleep 60  # Give TestPyPI time to process
-
+  
   # Verify TestPyPI installation
   verify-testpypi:
     name: Verify TestPyPI Installation
@@ -172,6 +172,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Wait for TestPyPI availability
+        run: |
+          echo "⏳ Waiting for package to be available on TestPyPI..."
+          sleep 60  # Give TestPyPI time to process
 
       - name: Install from TestPyPI
         run: |
@@ -199,6 +204,7 @@ jobs:
           asyncio.run(test())
           "
 
+
   # Publish to PyPI (production)
   publish-pypi:
     name: Publish to PyPI
@@ -219,13 +225,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install tomli and jq
-        run: pip install tomli jq
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install jq for version parsing
+        run: uv pip install jq
 
       - name: Get project version
         id: get-version
         run: |
-          VERSION=$(python -c "import tomli; print(tomli.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check if version already exists on PyPI
@@ -241,19 +252,15 @@ jobs:
       - name: Skip publishing (version exists)
         if: steps.version-check.outputs.exists == 'true'
         run: echo "⚠️ Version already exists on PyPI. Skipping publish."
-        
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           name: dist-${{ github.sha }}
           path: dist/
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-
       - name: Final validation before PyPI
+        if: steps.version-check.outputs.exists == 'false'
         run: |
           echo "🚀 Publishing to PyPI..."
           ls -la dist/
@@ -267,22 +274,11 @@ jobs:
           fi
 
       - name: Publish to PyPI
+        if: steps.version-check.outputs.exists == 'false'
         run: uv publish
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
-      - name: Create release summary
-        run: |
-          echo "## 🎉 Release Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Quality checks passed" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ All tests passed" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Security checks passed" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Package built successfully" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Published to TestPyPI" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ TestPyPI installation verified" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Published to PyPI" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📦 Package is now available: \`pip install traffik\`" >> $GITHUB_STEP_SUMMARY
 
   # Post-publish verification
   verify-pypi:
@@ -311,7 +307,7 @@ jobs:
           import traffik
           print(f'✅🎉 Successfully installed traffik {getattr(traffik, \"__version__\", \"unknown\")} from PyPI')
           "
-
+      
       - name: Create release summary
         run: |
           echo "## 🎉 Release Summary" >> $GITHUB_STEP_SUMMARY

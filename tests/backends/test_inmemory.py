@@ -7,7 +7,7 @@ from traffik.backends.inmemory import InMemoryBackend
 
 
 @pytest.fixture(scope="function")
-async def backend() -> InMemoryBackend:
+def backend() -> InMemoryBackend:
     return InMemoryBackend()
 
 

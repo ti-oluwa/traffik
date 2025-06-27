@@ -64,7 +64,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
-addopts = "--cov=traffik --cov-report=term-missing"
+addopts = ""
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

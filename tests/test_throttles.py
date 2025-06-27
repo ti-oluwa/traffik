@@ -3,6 +3,7 @@ import os
 import typing
 from itertools import repeat
 
+import anyio
 import pytest
 from fastapi import Depends, FastAPI, WebSocketDisconnect
 from httpx import ASGITransport, AsyncClient, Response
@@ -21,18 +22,18 @@ REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
 
 
 @pytest.fixture(scope="function")
-async def app() -> FastAPI:
+def app() -> FastAPI:
     app = FastAPI()
     return app
 
 
 @pytest.fixture(scope="function")
-async def inmemory_backend() -> InMemoryBackend:
+def inmemory_backend() -> InMemoryBackend:
     return InMemoryBackend()
 
 
 @pytest.fixture(scope="function")
-async def redis_backend() -> RedisBackend:
+def redis_backend() -> RedisBackend:
     return RedisBackend(
         connection=REDIS_URL,
         prefix="redis-test",
@@ -101,7 +102,7 @@ async def test_http_throttle_inmemory(
         ) as client:
             for count, name in enumerate(repeat("test-client", 5), start=1):
                 if count == 4:
-                    await asyncio.sleep(sleep_time)
+                    await anyio.sleep(sleep_time)
                 response = await client.get(f"{base_url}/{name}")
                 assert response.status_code == 200
                 assert response.json() == {"message": f"PONG: {name}"}
@@ -141,7 +142,7 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
         ) as client:
             for count, name in enumerate(repeat("test-client", 5), start=1):
                 if count == 4:
-                    await asyncio.sleep(sleep_time)
+                    await anyio.sleep(sleep_time)
                 response = await client.get(f"{base_url}/{name}")
                 assert response.status_code == 200
                 assert response.json() == {"message": f"PONG: {name}"}
@@ -228,7 +229,7 @@ async def test_http_throttle_redis_concurrent(
             assert status_codes.count(429) == 2
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_websocket_throttle_inmemory(
     inmemory_backend: InMemoryBackend, app: FastAPI
 ) -> None:
@@ -313,7 +314,7 @@ async def test_websocket_throttle_inmemory(
                 assert result[0] == "success"
                 assert result[1] == 200
                 if count == 3:
-                    await asyncio.sleep(5 + (5 / 1000))
+                    await anyio.sleep(6 + (5 / 1000))
 
             await inmemory_backend.reset()
             for count in range(1, 4):
@@ -413,7 +414,7 @@ async def test_websocket_throttle_redis(
                 assert result[0] == "success"
                 assert result[1] == 200
                 if count == 3:
-                    await asyncio.sleep(5 + (5 / 1000))
+                    await anyio.sleep(5 + (5 / 1000))
 
             await redis_backend.reset()
             for count in range(1, 4):

@@ -1,6 +1,6 @@
-import asyncio
 import typing
 
+import anyio
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -84,7 +84,7 @@ async def test_throttle_decorator_with_dependency(
             assert response.headers.get("Retry-After") is not None
 
             # Wait for burst window to clear
-            await asyncio.sleep(int(response.headers.get("Retry-After")))
+            await anyio.sleep(int(response.headers.get("Retry-After")))
 
             # Sustained rate test — allow 1 more (total: 5 in 10s)
             response = await client.get("/throttled")

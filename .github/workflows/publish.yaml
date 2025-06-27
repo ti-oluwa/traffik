@@ -106,6 +106,9 @@ jobs:
       url: https://test.pypi.org/p/traffik
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:

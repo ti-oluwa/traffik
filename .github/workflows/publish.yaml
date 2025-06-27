@@ -149,7 +149,7 @@ jobs:
         run: |
           pip install --index-url https://test.pypi.org/simple/ \
                       --extra-index-url https://pypi.org/simple/ \
-                      traffik[all]
+                      traffik[all] --prefer-binary
 
       - name: Test installation and functionality
         run: |

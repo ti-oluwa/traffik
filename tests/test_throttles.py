@@ -125,7 +125,7 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
             seconds=3,
             milliseconds=5,
         )
-        sleep_time = 7 + (5 / 1000)
+        sleep_time = 3 + (5 / 1000)
 
         @app.get(
             "/{name}",
@@ -287,6 +287,10 @@ async def test_websocket_throttle_inmemory(
                     close_code = 1011  # Internal error
                     close_reason = "Internal error"
                     break
+            
+            # Allow time for the message put in the queue to be processed
+            # and received by the client before closing the websocket
+            await asyncio.sleep(0.1)
             await websocket.close(code=close_code, reason=close_reason)
 
         base_url = "http://0.0.0.0"
@@ -316,7 +320,7 @@ async def test_websocket_throttle_inmemory(
                 assert result[0] == "success"
                 assert result[1] == 200
                 if count == 3:
-                    await asyncio.sleep(9 + (5 / 1000))
+                    await asyncio.sleep(5 + (5 / 1000))
 
             await inmemory_backend.reset()
             for count in range(1, 4):
@@ -388,6 +392,10 @@ async def test_websocket_throttle_redis(
                     close_code = 1011  # Internal error
                     close_reason = "Internal error"
                     break
+                
+            # Allow time for the message put in the queue to be processed
+            # and received by the client before closing the websocket
+            await asyncio.sleep(0.1)
             await websocket.close(code=close_code, reason=close_reason)
 
         base_url = "http://0.0.0.0"

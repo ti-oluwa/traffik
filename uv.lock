@@ -1943,7 +1943,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=5.0.0" },
     { name = "redis", marker = "extra == 'all'", specifier = ">=5.0.0" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0" },
-    { name = "requests", marker = "extra == 'test'", specifier = ">=2.20.0" },
+    { name = "requests", marker = "extra == 'test'", specifier = ">=2.32.4" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.1" },
     { name = "safety", marker = "extra == 'dev'", specifier = ">=3.5.2" },
     { name = "starlette", specifier = ">=0.14.0" },

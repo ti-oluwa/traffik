@@ -107,7 +107,7 @@ class AsyncioWebSocketTestSession:
 
                 return message
             except asyncio.queues.QueueEmpty:
-                await asyncio.sleep(0.000001)
+                await asyncio.sleep(0)
 
     async def receive_text(self) -> str:
         message = await self.receive()
@@ -346,10 +346,10 @@ class AsyncioTestClient(requests.Session):
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        pass
         # await self.__send({"type": "lifespan.shutdown"})
         # message = await self.__receive()
         # assert message["type"] in (
         #     "lifespan.shutdown.complete",
         #     "lifespan.shutdown.failed",
         # )
+        pass

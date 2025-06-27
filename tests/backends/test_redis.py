@@ -11,7 +11,7 @@ REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
 
 
 @pytest.fixture(scope="function")
-def backend() -> RedisBackend:
+async def backend() -> RedisBackend:
     return RedisBackend(connection=REDIS_URL, prefix="redis-backend")
 
 

@@ -22,18 +22,18 @@ REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
 
 
 @pytest.fixture(scope="function")
-def app() -> FastAPI:
+async def app() -> FastAPI:
     app = FastAPI()
     return app
 
 
 @pytest.fixture(scope="function")
-def inmemory_backend() -> InMemoryBackend:
+async def inmemory_backend() -> InMemoryBackend:
     return InMemoryBackend()
 
 
 @pytest.fixture(scope="function")
-def redis_backend() -> RedisBackend:
+async def redis_backend() -> RedisBackend:
     return RedisBackend(
         connection=REDIS_URL,
         prefix="redis-test",

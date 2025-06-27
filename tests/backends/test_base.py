@@ -9,7 +9,7 @@ from traffik.backends.base import ThrottleBackend, throttle_backend_ctx
 
 
 @pytest.fixture(scope="module")
-def backend():
+async def backend():
     return ThrottleBackend(connection=None, prefix="test")
 
 

@@ -1,6 +1,6 @@
+import anyio
 import typing
 
-import anyio
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -11,13 +11,13 @@ from traffik.throttles import HTTPThrottle
 
 
 @pytest.fixture(scope="function")
-def app() -> FastAPI:
+async def app() -> FastAPI:
     app = FastAPI()
     return app
 
 
 @pytest.fixture(scope="function")
-def throttle_backend() -> InMemoryBackend:
+async def throttle_backend() -> InMemoryBackend:
     return InMemoryBackend(prefix="test", persistent=False)
 
 

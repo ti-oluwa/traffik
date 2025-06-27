@@ -1,7 +1,8 @@
-import pytest
 import re
 
-from fastapi_throttle.backends.base import ThrottleBackend, throttle_backend_ctx
+import pytest
+
+from traffik.backends.base import ThrottleBackend, throttle_backend_ctx
 
 
 @pytest.fixture(scope="module")

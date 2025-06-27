@@ -1,14 +1,15 @@
 import typing
+
 from redis.asyncio import Redis
 from redis.exceptions import NoScriptError
 
-from fastapi_throttle.backends.base import ThrottleBackend
-from fastapi_throttle._typing import (
+from traffik._typing import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
 )
-from fastapi_throttle.exceptions import ConfigurationError
+from traffik.backends.base import ThrottleBackend
+from traffik.exceptions import ConfigurationError
 
 
 class RedisBackend(ThrottleBackend[Redis, HTTPConnectionT]):

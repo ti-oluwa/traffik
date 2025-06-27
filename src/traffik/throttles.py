@@ -1,22 +1,22 @@
-import typing
 import functools
 import hashlib
-from typing_extensions import Annotated
+import typing
+
 from annotated_types import Ge
-from starlette.websockets import WebSocket
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.websockets import WebSocket
+from typing_extensions import Annotated
 
-from fastapi_throttle._typing import (
-    T,
-    HTTPConnectionT,
-    CoroutineFunction,
+from traffik._typing import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
+    CoroutineFunction,
+    HTTPConnectionT,
+    T,
 )
-from fastapi_throttle.backends.base import ThrottleBackend, get_throttle_backend
-from fastapi_throttle.exceptions import NoLimit, ConfigurationError
-
+from traffik.backends.base import ThrottleBackend, get_throttle_backend
+from traffik.exceptions import ConfigurationError, NoLimit
 
 __all__ = [
     "BaseThrottle",
@@ -78,7 +78,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
 
     def __init__(
         self,
-        limit: Annotated[int, Ge(0)] = 1,
+        limit: Annotated[int, Ge(0)] = 0,
         milliseconds: Annotated[int, Ge(0)] = 0,
         seconds: Annotated[int, Ge(0)] = 0,
         minutes: Annotated[int, Ge(0)] = 0,
@@ -122,16 +122,25 @@ class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
         self.identifier = identifier or backend.identifier
         self.handle_throttled = handle_throttled or backend.handle_throttled
 
-    async def __call__(
-        self, connection: HTTPConnectionT, *args, **kwargs
-    ) -> typing.Any:
+    async def __call__(self, connection: HTTPConnectionT, *args, **kwargs) -> None:
+        """
+        Throttle the connection based on the limit and time period.
+
+        :param connection: The HTTP or WebSocket connection to throttle.
+        :param args: Additional positional arguments to pass to the throttled handler.
+        :param kwargs: Additional keyword arguments to pass to the throttled handler.
+        :raises NoLimit: If the limit is set to 0, this method will return None.
+        """
+        if self.limit == 0 or self.expires_after == 0:
+            return  # No throttling applied if limit is 0
+
         backend = self.backend
         key = await self.get_key(connection, *args, **kwargs)
         wait_period = await backend.get_wait_period(
             key, limit=self.limit, expires_after=self.expires_after
         )
 
-        if wait_period != 0 and self.handle_throttled:
+        if wait_period != 0:
             await self.handle_throttled(connection, wait_period, *args, **kwargs)
         return None
 
@@ -168,7 +177,7 @@ class HTTPThrottle(BaseThrottle[Request]):
         # used with the `throttle` decorator.
         return key
 
-    async def __call__(self, connection: Request, response: Response):
+    async def __call__(self, connection: Request, response: Response) -> None:
         return await super().__call__(connection, response=response)
 
 
@@ -189,5 +198,5 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
 
     async def __call__(
         self, connection: WebSocket, context_key: typing.Optional[str] = None
-    ) -> typing.Any:
+    ) -> None:
         return await super().__call__(connection, context_key=context_key)

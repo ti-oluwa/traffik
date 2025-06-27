@@ -1,22 +1,22 @@
-from contextvars import ContextVar
 import functools
 import math
 import re
 import typing
+from contextvars import ContextVar
 
-from starlette.requests import HTTPConnection
 from starlette.exceptions import HTTPException
+from starlette.requests import HTTPConnection
 from starlette.status import HTTP_429_TOO_MANY_REQUESTS
 
-from fastapi_throttle._typing import (
-    WaitPeriod,
+from traffik._typing import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
-    T,
     HTTPConnectionT,
+    T,
+    WaitPeriod,
 )
-from fastapi_throttle._utils import get_ip_address
-from fastapi_throttle.exceptions import AnonymousConnection
+from traffik._utils import get_ip_address
+from traffik.exceptions import AnonymousConnection
 
 
 async def connection_identifier(connection: HTTPConnection) -> str:

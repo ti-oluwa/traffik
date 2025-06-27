@@ -3,3 +3,4 @@
 **/.venv/
 **/.ruff_cache/
 **/logs/
+.pytest_cache

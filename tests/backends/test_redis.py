@@ -1,7 +1,7 @@
 import pytest
 
-from fastapi_throttle.backends.base import throttle_backend_ctx
-from fastapi_throttle.backends.redis import RedisBackend
+from traffik.backends.base import throttle_backend_ctx
+from traffik.backends.redis import RedisBackend
 
 
 @pytest.fixture(scope="function")

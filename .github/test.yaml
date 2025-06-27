@@ -1,0 +1,43 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  run-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"
+
+      - name: Cache uv install
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Synchronize dependencies with uv
+        run: uv sync --group test --no-cache
+
+      - name: Run tests
+        run: uv run pytest --cov-report=xml
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          name: codecov-coverage

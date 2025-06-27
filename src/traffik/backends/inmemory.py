@@ -1,16 +1,21 @@
-import typing
 import time
+import typing
 
-from fastapi_throttle._typing import (
-    HTTPConnectionT,
+from traffik._typing import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
+    HTTPConnectionT,
 )
-from fastapi_throttle.backends.base import ThrottleBackend
-from fastapi_throttle.exceptions import ConfigurationError
+from traffik.backends.base import ThrottleBackend
+from traffik.exceptions import ConfigurationError
 
 
-class InMemoryBackend(ThrottleBackend[str, typing.MutableMapping[str, int]]):
+class InMemoryBackend(
+    ThrottleBackend[
+        typing.Optional[typing.MutableMapping[str, int]],
+        HTTPConnectionT,
+    ]
+):
     """
     In-memory throttle backend for testing or single-process use.
     Not suitable for production or multi-process environments.
@@ -52,7 +57,8 @@ class InMemoryBackend(ThrottleBackend[str, typing.MutableMapping[str, int]]):
         elapsed = now - record["start"]
 
         if elapsed > expires_after:
-            # Reset window
+            # Reset window but we still count as 1
+            # since the first request after expiration is allowed
             record = {"count": 1, "start": now}
             connection[key] = record
             return 0

@@ -1,10 +1,11 @@
-import typing
 import inspect
 import ipaddress
-from starlette.requests import HTTPConnection
-import fastapi.params
+import typing
 
-from fastapi_throttle._typing import P, R, Q, S
+import fastapi.params
+from starlette.requests import HTTPConnection
+
+from traffik._typing import P, Q, R, S
 
 
 def get_ip_address(

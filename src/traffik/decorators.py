@@ -3,15 +3,15 @@ import copy
 import functools
 import inspect
 import typing
-from typing_extensions import Annotated
-from starlette.requests import HTTPConnection
+
 import fastapi
+from starlette.requests import HTTPConnection
+from typing_extensions import Annotated
 
-from fastapi_throttle._typing import HTTPConnectionT, P, Q, R
-from fastapi_throttle.backends.base import connection_identifier
-from fastapi_throttle.throttles import BaseThrottle, NoLimit
-from fastapi_throttle._utils import add_parameter_to_signature, DecoratorDepends
-
+from traffik._typing import HTTPConnectionT, P, Q, R
+from traffik._utils import DecoratorDepends, add_parameter_to_signature
+from traffik.backends.base import connection_identifier
+from traffik.throttles import BaseThrottle, NoLimit
 
 ThrottleT = typing.TypeVar("ThrottleT", bound=BaseThrottle)
 
@@ -43,7 +43,7 @@ def _wrap_route(
     if asyncio.iscoroutinefunction(route):
         wrapper_code = f"""
 async def route_wrapper(
-    {throttle_dep_param_name}: typing.Annotated[typing.Any, fastapi.Depends(throttle)],
+    {throttle_dep_param_name}: Annotated[typing.Any, fastapi.Depends(throttle)],
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> R:
@@ -52,7 +52,7 @@ async def route_wrapper(
     else:
         wrapper_code = f"""
 def route_wrapper(
-    {throttle_dep_param_name}: typing.Annotated[typing.Any, fastapi.Depends(throttle)],
+    {throttle_dep_param_name}: Annotated[typing.Any, fastapi.Depends(throttle)],
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> R:
@@ -61,6 +61,7 @@ def route_wrapper(
 
     local_namespace = {
         "throttle": throttle,
+        "Annotated": Annotated,
     }
     global_namespace = {
         **globals(),
@@ -154,13 +155,13 @@ def throttled(
         ]
     )
 
-    @router.get("/limited1")
-    async def limited_route1():
+    @router.get("/throttled1")
+    async def throttled_route1():
         return {"message": "Limited route 1"}
 
-    @router.get("/limited2")
+    @router.get("/throttled2")
     @throttled(burst_throttle)
-    async def limited_route2():
+    async def throttled_route2():
         return {"message": "Limited route 2"}
 
     ```

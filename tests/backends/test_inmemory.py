@@ -1,8 +1,9 @@
 import collections.abc
+
 import pytest
 
-from fastapi_throttle.backends.base import throttle_backend_ctx
-from fastapi_throttle.backends.inmemory import InMemoryBackend
+from traffik.backends.base import throttle_backend_ctx
+from traffik.backends.inmemory import InMemoryBackend
 
 
 @pytest.fixture(scope="function")

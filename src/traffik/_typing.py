@@ -1,9 +1,8 @@
-import typing
 import sys
-from typing_extensions import ParamSpec, TypeAlias, Unpack
+import typing
 
 from starlette.requests import HTTPConnection
-
+from typing_extensions import ParamSpec, TypeAlias, Unpack
 
 P = ParamSpec("P")
 Q = ParamSpec("Q")

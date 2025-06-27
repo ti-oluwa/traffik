@@ -1,0 +1,534 @@
+# Traffik - A FastAPI throttling library
+
+[![Test](https://github.com/tioluwa/traffik/actions/workflows/test.yml/badge.svg)](https://github.com/tioluwa/traffik/actions/workflows/test.yml)
+
+[![codecov](https://codecov.io/gh/tioluwa/traffik/branch/main/graph/badge.svg)](https://codecov.io/gh/tioluwa/traffik)
+
+Traffik provides elegant rate limiting capabilities for FastAPI applications with support for both HTTP and WebSocket connections. It offers multiple backend options including in-memory storage for development and Redis for production environments. Customizable throttling strategies allow you to define limits based on time intervals, client identifiers, and more.
+
+Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-limiter), and some of the code is adapted from it. However, Traffik aims to provide a more flexible and extensible solution with a focus on performance and ease of use.
+
+## Features
+
+- 🚀 **Easy Integration**: Simple decorator and dependency-based throttling
+- 🔄 **Multiple Backends**: In-memory (development) and Redis (production) support
+- 🌐 **Protocol Support**: Both HTTP and WebSocket throttling
+- ⚡ **High Performance**: Efficient Lua scripts for Redis backend
+- 🔧 **Flexible Configuration**: Time-based limits with multiple time units
+- 🎯 **Per-Route Throttling**: Individual limits for different endpoints
+- 📊 **Client Identification**: Customizable client identification strategies
+
+## Installation
+
+We recommend using `uv`, however, it is not a strict requirement.
+
+### Install `uv` (optional)
+
+Visit the [uv documentation](https://docs.astral.sh/uv/getting-started/installation/) for installation instructions.
+
+### Basic Installation
+
+```bash
+uv add traffik
+
+# or using pip
+pip install traffik
+```
+
+### With Redis Support
+
+```bash
+uv add traffik[redis]
+
+# or using pip
+pip install traffik[redis]
+```
+
+### Development Installation
+
+```bash
+git clone https://github.com/your-username/traffik.git
+cd traffik
+
+pip install -e .[dev,test]
+```
+
+## Quick Start
+
+### 1. Basic HTTP Throttling
+
+```python
+from fastapi import FastAPI, Depends
+from contextlib import asynccontextmanager
+from traffik.backends.inmemory import InMemoryBackend
+from traffik.throttles import HTTPThrottle
+
+# Create backend
+throttle_backend = InMemoryBackend()
+
+# Create FastAPI app lifespan
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with throttle_backend:
+        yield
+
+app = FastAPI(lifespan=lifespan)
+
+# Create throttle
+throttle = HTTPThrottle(
+    limit=10,        # 10 requests
+    seconds=60,      # per 60 seconds
+)
+
+@app.get("/api/hello", dependencies=[Depends(throttle)])
+async def say_hello():
+    return {"message": "Hello World"}
+
+```
+
+### 2. Using Decorators
+
+```python
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
+import traffik
+from traffik.backends.redis import RedisBackend
+
+backend = RedisBackend(
+    connection="redis://localhost:6379/0",
+    prefix="myapp",  # Key prefix
+    persistent=True,  # Survive restarts
+)
+
+# Setup FastAPI app with lifespan
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with backend:
+        yield
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/api/limited")
+@traffik.throttled(traffik.HTTPThrottle(limit=5, minutes=1))
+async def limited_endpoint():
+    return {"data": "Limited access"}
+
+```
+
+### 3. WebSocket Throttling
+
+```python
+import traffik
+from starlette.websockets import WebSocket
+
+ws_throttle = traffik.WebSocketThrottle(
+    limit=3,
+    seconds=10,
+)
+
+@app.websocket("/ws/")
+async def ws_endpoint(websocket: WebSocket) -> None:
+    """
+    WebSocket endpoint with throttling.
+    """
+    await websocket.accept()
+    print("ACCEPTED WEBSOCKET CONNECTION")
+    close_code = 1000  # Normal closure
+    close_reason = "Normal closure"
+    while True:
+        try:
+            data = await websocket.receive_json()
+            await ws_throttle(websocket)
+            await websocket.send_json(
+                {
+                    "status": "success",
+                    "status_code": 200,
+                    "headers": {},
+                    "detail": "Request successful",
+                    "data": data,
+                }
+            )
+        except HTTPException as exc:
+            print("HTTP EXCEPTION:", exc)
+            await websocket.send_json(
+                {
+                    "status": "error",
+                    "status_code": exc.status_code,
+                    "detail": exc.detail,
+                    "headers": exc.headers,
+                    "data": None,
+                }
+            )
+            close_reason = exc.detail
+            break
+        except Exception as exc:
+            print("WEBSOCKET ERROR:", exc)
+            await websocket.send_json(
+                {
+                    "status": "error",
+                    "status_code": 500,
+                    "detail": "Operation failed",
+                    "headers": {},
+                    "data": None,
+                }
+            )
+            close_code = 1011  # Internal error
+            close_reason = "Internal error"
+            break
+    await websocket.close(code=close_code, reason=close_reason)
+```
+
+## Backends
+
+### In-Memory Backend
+
+Perfect for development, testing, and single-process applications:
+
+```python
+from traffik.backends.inmemory import InMemoryBackend
+
+backend = InMemoryBackend(
+    prefix="myapp",           # Key prefix
+    persistent=False,         # Don't persist across restarts
+)
+```
+
+**Pros:**
+
+- No external dependencies
+- Fast and simple
+- Great for testing
+
+**Cons:**
+
+- Not suitable for multi-process/distributed systems
+- Data lost on restart (unless persistent=True)
+
+### Redis Backend
+
+Recommended for production environments:
+
+```python
+from traffik.backends.redis import RedisBackend
+
+# From URL
+backend = RedisBackend(
+    connection="redis://localhost:6379/0",
+    prefix="myapp",
+    persistent=True,  # Survive restarts
+)
+
+# From Redis instance
+import redis.asyncio as redis
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
+backend = RedisBackend(
+    connection=redis_client,
+    prefix="myapp",
+)
+```
+
+**Pros:**
+
+- Distributed throttling across multiple processes
+- Persistent across restarts
+- High performance with Lua scripts
+- Production-ready
+
+**Cons:**
+
+- Requires Redis server
+- Additional infrastructure dependency
+
+## Configuration Options
+
+### Time Units
+
+Throttles support multiple time units that can be combined:
+
+```python
+HTTPThrottle(
+    limit=100,
+    milliseconds=500,  # 500ms
+    seconds=30,        # + 30 seconds  
+    minutes=5,         # + 5 minutes
+    hours=1,           # + 1 hour
+    # Total: 1 hour, 5 minutes, 30.5 seconds
+)
+```
+
+### Custom Client Identification
+
+By default, clients are identified by IP address and path. You can customize this:
+
+```python
+from starlette.requests import HTTPConnection
+from traffik.throttles import HTTPThrottle
+
+async def custom_identifier(connection: HTTPConnection):
+    # Use user ID from JWT token
+    user_id = extract_user_id(connection.headers.get("authorization"))
+    return f"user:{user_id}:{connection.scope['path']}"
+
+throttle = HTTPThrottle(
+    limit=10,
+    minutes=1,
+    identifier=custom_identifier,
+)
+```
+
+### Custom Throttled Response
+
+Customize what happens when a client is throttled:
+
+```python
+from starlette.requests import HTTPConnection
+from starlette.exceptions import HTTPException
+import traffik
+
+async def custom_throttled_handler(connection: HTTPConnection, wait_period: int):
+    raise HTTPException(
+        status_code=429,
+        detail=f"Too many requests. Try again in {wait_period // 1000} seconds.",
+        headers={"Retry-After": str(wait_period // 1000)},
+    )
+
+throttle = traffik.HTTPThrottle(
+    limit=5,
+    minutes=1,
+    handle_throttled=custom_throttled_handler,
+)
+```
+
+## Advanced Usage
+
+### Multiple Rate Limits
+
+Apply different limits to the same endpoint:
+
+```python
+# Burst limit: 10 requests per minute
+burst_throttle = HTTPThrottle(limit=10, minutes=1)
+
+# Sustained limit: 100 requests per hour  
+sustained_throttle = HTTPThrottle(limit=100, hours=1)
+
+async def search_db(query: str):
+    # Simulate a database search
+    return {"query": query, "result": ...}
+
+@app.get(
+    "/api/data",
+    dependencies=[Depends(burst_throttle), Depends(sustained_throttle)],
+)
+async def search(query: str):
+    data = await search_db(query)
+    return {"message": "Data retrieved", "data": data}
+```
+
+### Per-User Rate Limiting
+
+```python
+from traffik.throttles import HTTPThrottle
+from fastapi import Request
+
+
+async def get_user_id(request: Request):
+    # Extract user ID from request state
+    return request.state.user.id if hasattr(request.state, 'user') else None
+
+
+async def user_identifier(request: Request):
+    # Extract user ID from JWT or session
+    user_id = await get_user_id(request)
+    return f"user:{user_id}"
+
+user_throttle = HTTPThrottle(
+    limit=100,
+    hours=1,
+    identifier=user_identifier,
+)
+```
+
+### Application Lifespan Management
+
+```python
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    async with backend:
+        yield
+    # Shutdown - backend cleanup handled automatically
+
+app = FastAPI(lifespan=lifespan)
+```
+
+## Error Handling
+
+Traffik provides specific exceptions for different error conditions:
+
+A `traffik.exceptions.ConfigurationError` is raised when a throttle or throttle backend configuration is invalid.
+
+```python
+from starlette.requests import HTTPConnection
+from traffik.exceptions import AnonymousConnection
+from traffik import connection_identifier # Default identifier function
+
+
+# Custom identifier that handles anonymous users
+async def safe_identifier(connection: HTTPConnection):
+    """
+    Safely get the connection identifier, handling anonymous connections.
+    """
+    try:
+        return connection_identifier(connection)
+    except AnonymousConnection:
+        # Fallback for anonymous connections
+        return f"anonymous:{connection.scope['path']}"
+```
+
+## Testing
+
+Here's an example of how to test throttling behavior using the `InMemoryBackend`. You can
+write something similar for your custom backend too.
+
+```python
+import pytest
+import pytest_asyncio
+from httpx import AsyncClient, ASGITransport
+from fastapi import FastAPI, Depends
+from traffik.backends.inmemory import InMemoryBackend
+from traffik.throttles import HTTPThrottle
+
+
+@pytest_asyncio.fixture(scope="function")
+async def backend():
+    backend = InMemoryBackend(prefix="test", persistent=False)
+    async with backend:
+        yield backend
+
+
+@pytest.fixture(scope="function")
+async def app(backend):
+    app = FastAPI()    
+    return app
+
+
+@pytest.mark.anyio
+async def test_throttling(backend: InMemoryBackend, app: FastAPI):
+    throttle = HTTPThrottle(limit=2, seconds=1)
+
+    @app.get("/throttled", dependencies=[Depends(throttle)])
+    async def throttled_endpoint():
+        return {"message": "This endpoint is throttled"}
+
+    # Test that first 2 requests succeed
+    async with AsyncClient(
+        transport=ASGITransport(app), 
+        base_url="http://127.0.0.1:123",
+    ) as client:
+        response1 = await client.get("/throttled")
+        response2 = await client.get("/throttled") 
+        assert response1.status_code == 200
+        assert response2.status_code == 200
+        
+        # Third request should be throttled
+        response3 = await client.get("/throttled")
+        assert response3.status_code == 429
+```
+
+## Performance Considerations
+
+### Redis Backend Implementation
+
+The Redis backend uses optimized Lua scripts to minimize round trips:
+
+```lua
+-- Atomic increment with expiration
+local current = redis.call('GET', key) or "0"
+if current + 1 > limit then
+    return redis.call("PTTL", key)  -- Return remaining time
+else
+    redis.call("INCR", key)
+    if current == "0" then
+        redis.call("PEXPIRE", key, expire_time)
+    end
+    return 0  -- Allow request
+end
+```
+
+### In-Memory Backend Implementation
+
+Uses efficient dictionary lookups with monotonic time for accuracy:
+
+```python
+now = int(time.monotonic() * 1000)  # Monotonic milliseconds
+record = store.get(key, {"count": 0, "start": now})
+```
+
+## API Reference
+
+### Throttle Classes
+
+#### `HTTPThrottle`
+
+- **Purpose**: Rate limiting for HTTP requests
+- **Usage**: As FastAPI dependency or decorator
+- **Key Generation**: Based on route, client IP, and throttle instance
+
+#### `WebSocketThrottle`  
+
+- **Purpose**: Rate limiting for WebSocket connections
+- **Usage**: Call directly in WebSocket handlers
+- **Key Generation**: Based on WebSocket path, client, and optional context
+
+#### `BaseThrottle`
+
+- **Purpose**: Base class for custom throttle implementations
+- **Customizable**: Override `get_key()` method for custom key generation
+
+### Backend Classes
+
+#### `InMemoryBackend`
+
+- **Storage**: Python dictionary
+- **Suitable for**: Development, testing, single-process apps
+- **Persistence**: Optional (not recommended for production)
+
+#### `RedisBackend`
+
+- **Storage**: Redis database
+- **Suitable for**: Production, multi-process, distributed systems
+- **Persistence**: Built-in Redis persistence
+
+## Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+### Development Setup
+
+```bash
+git clone https://github.com/tioluwa/traffik.git
+cd traffik
+uv pip install -e .[dev,test]
+
+# Run tests
+uv run pytest
+
+# Run linting
+uv run ruff check src/ tests/
+
+# Run formatting  
+uv run ruff format src/ tests/
+```
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history and changes.

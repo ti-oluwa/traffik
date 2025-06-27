@@ -1,15 +1,16 @@
 [project]
-name = "fastapi-throttle"
+name = "traffik"
 version = "0.1.0"
-description = "Add your description here"
+description = "Simple FastAPI throttling"
 readme = "README.md"
 authors = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
 ]
 requires-python = ">=3.8"
-dependencies = [
-    "redis>=6.1.1",
-]
+dependencies = []
+
+[project.optional-dependencies]
+redis = ["redis>=5.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -17,9 +18,37 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
-    "anyio>=4.5.2",
     "fastapi>=0.115.13",
+    "redis>=5.0",
+    "ruff>=0.12.1",
+]
+
+test = [
+    "fastapi>=0.115.13",
+    "redis>=5.0",
+    "anyio>=4.5.2",
     "httpx>=0.28.1",
     "pytest>=8.3.5",
     "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "requests>=2.32.4",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--cov=traffik --cov-report=term-missing"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+branch = true
+source = ["traffik"]
+
+[tool.coverage.report]
+omit = ["tests/*", "**/__init__.py", "__pycache__/*"]
+show_missing = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py38"
+lint.extend-select = ["I", "UP", "TID", "F"]

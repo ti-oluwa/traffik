@@ -1,17 +1,19 @@
-import time
-import typing
 import asyncio
-import pytest
+import typing
 from itertools import repeat
-from httpx import AsyncClient, ASGITransport, Response
-from starlette.websockets import WebSocket
-from fastapi import FastAPI, Depends
-from fastapi.testclient import TestClient
 
-from fastapi_throttle.backends.inmemory import InMemoryBackend
-from fastapi_throttle.backends.redis import RedisBackend
-from fastapi_throttle.exceptions import ConfigurationError
-from fastapi_throttle.throttles import BaseThrottle, HTTPThrottle, WebSocketThrottle
+import pytest
+from fastapi import Depends, FastAPI, WebSocketDisconnect
+from httpx import ASGITransport, AsyncClient, Response
+from starlette.exceptions import HTTPException
+from starlette.requests import HTTPConnection
+from starlette.websockets import WebSocket
+
+from tests.asyncio_client import AsyncioTestClient
+from traffik.backends.inmemory import InMemoryBackend
+from traffik.backends.redis import RedisBackend
+from traffik.exceptions import ConfigurationError
+from traffik.throttles import BaseThrottle, HTTPThrottle, WebSocketThrottle
 
 
 @pytest.fixture(scope="function")
@@ -34,11 +36,22 @@ async def redis_backend() -> RedisBackend:
     )
 
 
+async def _testclient_identifier(connection: WebSocket) -> str:
+    return "testclient"
+
+
 @pytest.mark.asyncio
 async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> None:
     # Test that an error is raised when not backend is passed or detected
     with pytest.raises(ConfigurationError):
         BaseThrottle()
+
+    async def _throttle_handler(
+        connection: HTTPConnection,
+        wait_period: int,
+    ) -> None:
+        # do nothing, just a placeholder for testing
+        return
 
     # Test initialization behaviour
     async with inmemory_backend:
@@ -48,7 +61,7 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
             seconds=50,
             minutes=2,
             hours=1,
-            handle_throttled=lambda x: x,
+            handle_throttled=_throttle_handler,
         )
         time_in_ms = 10 + (50 * 1000) + (2 * 60 * 1000) + (1 * 3600 * 1000)
         assert throttle.expires_after == time_in_ms
@@ -78,7 +91,7 @@ async def test_http_throttle_inmemory(
             dependencies=[Depends(throttle)],
             status_code=200,
         )
-        async def ping(name: str) -> typing.Dict[str, str]:
+        async def ping_endpoint(name: str) -> typing.Dict[str, str]:
             return {"message": f"PONG: {name}"}
 
         base_url = "http://0.0.0.0"
@@ -98,6 +111,7 @@ async def test_http_throttle_inmemory(
                 response = await client.get(f"/{name}")
                 if count > 3:
                     assert response.status_code == 429
+                    assert response.headers["Retry-After"] is not None
                 else:
                     assert response.status_code == 200
 
@@ -117,7 +131,7 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
             dependencies=[Depends(throttle)],
             status_code=200,
         )
-        async def ping(name: str) -> typing.Dict[str, str]:
+        async def ping_endpoint(name: str) -> typing.Dict[str, str]:
             return {"message": f"PONG: {name}"}
 
         base_url = "http://0.0.0.0"
@@ -137,6 +151,7 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
                 response = await client.get(f"/{name}")
                 if count > 3:
                     assert response.status_code == 429
+                    assert response.headers["Retry-After"] is not None
                 else:
                     assert response.status_code == 200
 
@@ -157,7 +172,7 @@ async def test_http_throttle_inmemory_concurrent(
             dependencies=[Depends(throttle)],
             status_code=200,
         )
-        async def ping(name: str) -> typing.Dict[str, str]:
+        async def ping_endpoint(name: str) -> typing.Dict[str, str]:
             return {"message": f"PONG: {name}"}
 
         base_url = "http://0.0.0.0"
@@ -193,7 +208,7 @@ async def test_http_throttle_redis_concurrent(
             dependencies=[Depends(throttle)],
             status_code=200,
         )
-        async def ping(name: str) -> typing.Dict[str, str]:
+        async def ping_endpoint(name: str) -> typing.Dict[str, str]:
             return {"message": f"PONG: {name}"}
 
         base_url = "ws://0.0.0.0"
@@ -222,50 +237,98 @@ async def test_websocket_throttle_inmemory(
             limit=3,
             seconds=5,
             milliseconds=5,
+            identifier=_testclient_identifier,
         )
 
-        @app.websocket("/ws/{name}")
-        async def ws_endpoint(websocket: WebSocket, name: str) -> None:
+        @app.websocket("/ws/")
+        async def ws_endpoint(websocket: WebSocket) -> None:
             await websocket.accept()
-            await throttle(websocket)
-            await websocket.send_json({"message": f"PONG: {name}"})
-            await websocket.close()
+            print("ACCEPTED WEBSOCKET CONNECTION")
+            close_code = 1000  # Normal closure
+            close_reason = "Normal closure"
+            while True:
+                try:
+                    data = await websocket.receive_json()
+                    await throttle(websocket)
+                    await websocket.send_json(
+                        {
+                            "status": "success",
+                            "status_code": 200,
+                            "headers": {},
+                            "detail": "Request successful",
+                            "data": data,
+                        }
+                    )
+                except HTTPException as exc:
+                    print("HTTP EXCEPTION:", exc)
+                    await websocket.send_json(
+                        {
+                            "status": "error",
+                            "status_code": exc.status_code,
+                            "detail": exc.detail,
+                            "headers": exc.headers,
+                            "data": None,
+                        }
+                    )
+                    close_reason = exc.detail
+                    break
+                except Exception as exc:
+                    print("WEBSOCKET ERROR:", exc)
+                    await websocket.send_json(
+                        {
+                            "status": "error",
+                            "status_code": 500,
+                            "detail": "Operation failed",
+                            "headers": {},
+                            "data": None,
+                        }
+                    )
+                    close_code = 1011  # Internal error
+                    close_reason = "Internal error"
+                    break
+            await websocket.close(code=close_code, reason=close_reason)
 
-        base_url = "ws://0.0.0.0"
-        with TestClient(
+        base_url = "http://0.0.0.0"
+        async with AsyncioTestClient(
             app=app,
             base_url=base_url,
-            client=("127.0.0.1", 123),
-        ) as client:
+            event_loop=asyncio.get_running_loop(),
+        ) as client, client.websocket_connect(url="/ws/") as ws:
+            # Reset the backend before starting the test
+            # as connecting to the websocket already counts as a request
+            # and we want to start fresh.
+            await inmemory_backend.reset()
 
-            def make_ws_request(name):
-                ws_url = f"/ws/{name}"
+            async def make_ws_request() -> typing.Tuple[str, int]:
                 try:
-                    with client.websocket_connect(ws_url) as ws:
-                        data = ws.receive_json()
-                        return 200, data
-                except Exception as exc:
-                    print(exc)
-                    return 429, str(exc)
+                    await ws.send_json({"message": "ping"})
+                    response = await ws.receive_json()
+                    return response["status"], response["status_code"]
+                except WebSocketDisconnect as exc:
+                    print("WEBSOCKET DISCONNECT:", exc)
+                    return "disconnected", 1000
 
-            for count, name in enumerate(repeat("test-client", 5), start=1):
-                if count == 4:
-                    time.sleep(5 + (5 / 1000))
-                result = make_ws_request(name)
-                assert result[0] == 200
-                assert result[1] == {"message": f"PONG: {name}"}
+            for count in range(1, 6):
+                result = await make_ws_request()
+                assert result[0] == "success"
+                assert result[1] == 200
+                if count == 3:
+                    await asyncio.sleep(5 + (5 / 1000))
 
             await inmemory_backend.reset()
-            for count, name in enumerate(repeat("test-client", 5), start=1):
-                result = make_ws_request(name)
+            for count in range(1, 4):
+                result = await make_ws_request()
                 if count > 3:
-                    assert result[0] == 429
+                    # After the third request, the throttle should kick in
+                    # and subsequent requests should fail
+                    assert result[0] == "error"
+                    assert result[1] == 429
                 else:
-                    assert result[0] == 200
-                    assert result[1] == {"message": f"PONG: {name}"}
+                    assert result[0] == "success"
+                    assert result[1] == 200
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_websocket_throttle_redis(
     redis_backend: RedisBackend, app: FastAPI
 ) -> None:
@@ -274,44 +337,92 @@ async def test_websocket_throttle_redis(
             limit=3,
             seconds=5,
             milliseconds=5,
+            identifier=_testclient_identifier,
         )
 
-        @app.websocket("/ws/{name}")
-        async def ws_endpoint(websocket: WebSocket, name: str) -> None:
+        @app.websocket("/ws/")
+        async def ws_endpoint(websocket: WebSocket) -> None:
             await websocket.accept()
-            await throttle(websocket)
-            await websocket.send_json({"message": f"PONG: {name}"})
-            await websocket.close()
+            print("ACCEPTED WEBSOCKET CONNECTION")
+            close_code = 1000  # Normal closure
+            close_reason = "Normal closure"
+            while True:
+                try:
+                    data = await websocket.receive_json()
+                    await throttle(websocket)
+                    await websocket.send_json(
+                        {
+                            "status": "success",
+                            "status_code": 200,
+                            "headers": {},
+                            "detail": "Request successful",
+                            "data": data,
+                        }
+                    )
+                except HTTPException as exc:
+                    print("HTTP EXCEPTION:", exc)
+                    await websocket.send_json(
+                        {
+                            "status": "error",
+                            "status_code": exc.status_code,
+                            "detail": exc.detail,
+                            "headers": exc.headers,
+                            "data": None,
+                        }
+                    )
+                    close_reason = exc.detail
+                    break
+                except Exception as exc:
+                    print("WEBSOCKET ERROR:", exc)
+                    await websocket.send_json(
+                        {
+                            "status": "error",
+                            "status_code": 500,
+                            "detail": "Operation failed",
+                            "headers": {},
+                            "data": None,
+                        }
+                    )
+                    close_code = 1011  # Internal error
+                    close_reason = "Internal error"
+                    break
+            await websocket.close(code=close_code, reason=close_reason)
 
-        base_url = "ws://0.0.0.0"
-        with TestClient(
+        base_url = "http://0.0.0.0"
+        async with AsyncioTestClient(
             app=app,
             base_url=base_url,
-            client=("127.0.0.1", 123),
-        ) as client:
+            event_loop=asyncio.get_running_loop(),
+        ) as client, client.websocket_connect(url="/ws/") as ws:
+            # Reset the backend before starting the test
+            # as connecting to the websocket already counts as a request
+            # and we want to start fresh.
+            await redis_backend.reset()
 
-            def make_ws_request(name):
-                ws_url = f"/ws/{name}"
+            async def make_ws_request() -> typing.Tuple[str, int]:
                 try:
-                    with client.websocket_connect(ws_url) as ws:
-                        data = ws.receive_json()
-                        return 200, data
-                except Exception as exc:
-                    print(exc)
-                    return 429, str(exc)
+                    await ws.send_json({"message": "ping"})
+                    response = await ws.receive_json()
+                    return response["status"], response["status_code"]
+                except WebSocketDisconnect as exc:
+                    print("WEBSOCKET DISCONNECT:", exc)
+                    return "disconnected", 1000
 
-            for count, name in enumerate(repeat("test-client", 5), start=1):
-                if count == 4:
-                    time.sleep(5 + (5 / 1000))
-                result = make_ws_request(name)
-                assert result[0] == 200
-                assert result[1] == {"message": f"PONG: {name}"}
+            for count in range(1, 6):
+                result = await make_ws_request()
+                assert result[0] == "success"
+                assert result[1] == 200
+                if count == 3:
+                    await asyncio.sleep(5 + (5 / 1000))
 
             await redis_backend.reset()
-            for count, name in enumerate(repeat("test-client", 5), start=1):
-                result = make_ws_request(name)
+            for count in range(1, 4):
+                result = await make_ws_request()
                 if count > 3:
-                    assert result[0] == 429
+                    # After the third request, the throttle should kick in
+                    # and subsequent requests should fail
+                    assert result[0] == "error"
+                    assert result[1] == 429
                 else:
-                    assert result[0] == 200
-                    assert result[1] == {"message": f"PONG: {name}"}
+                    assert result[0] == "success"
+                    assert result[1] == 200

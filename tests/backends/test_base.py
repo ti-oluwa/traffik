@@ -1,8 +1,10 @@
-import re
-import pytest
 import asyncio
-from fastapi import FastAPI
+import re
 from contextlib import asynccontextmanager
+
+import pytest
+from fastapi import FastAPI
+
 from traffik.backends.base import ThrottleBackend, throttle_backend_ctx
 
 

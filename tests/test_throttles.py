@@ -13,7 +13,6 @@ from starlette.websockets import WebSocket
 from tests.asyncio_client import AsyncioTestClient
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.redis import RedisBackend
-from traffik.exceptions import ConfigurationError
 from traffik.throttles import BaseThrottle, HTTPThrottle, WebSocketThrottle
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")

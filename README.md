@@ -2,8 +2,11 @@
 
 [![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
 [![Code Quality](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml)
+[![codecov](https://codecov.io/gh/ti-oluwa/traffik/branch/main/graph/badge.svg?token=YOUR_TOKEN_HERE)](https://codecov.io/gh/ti-oluwa/traffik)
+[![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
+[![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/)
 
-Traffik provides elegant rate limiting capabilities for FastAPI applications with support for both HTTP and WebSocket connections. It offers multiple backend options including in-memory storage for development and Redis for production environments. Customizable throttling strategies allow you to define limits based on time intervals, client identifiers, and more.
+Traffik provides rate limiting capabilities for FastAPI applications with support for both HTTP and WebSocket connections. It offers multiple backend options including in-memory storage for development and Redis for production environments. Customizable throttling strategies allow you to define limits based on time intervals, client identifiers, and more.
 
 Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-limiter), and some of the code is adapted from it. However, Traffik aims to provide a more flexible and extensible solution with a focus on ease of use. Some of these differences are listed below.
 

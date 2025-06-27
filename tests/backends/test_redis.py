@@ -1,9 +1,9 @@
-import pytest
 import os
+
+import pytest
 
 from traffik.backends.base import throttle_backend_ctx
 from traffik.backends.redis import RedisBackend
-
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")

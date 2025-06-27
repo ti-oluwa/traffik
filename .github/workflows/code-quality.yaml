@@ -36,7 +36,7 @@ jobs:
       - name: Run linting
         run: |
           echo "Running Ruff linter..."
-          uv run ruff check src/ tests/
+          uv run ruff check src/ tests/ --fix
 
       - name: Check code formatting
         run: |

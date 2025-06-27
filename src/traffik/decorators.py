@@ -10,7 +10,6 @@ from typing_extensions import Annotated
 
 from traffik._typing import HTTPConnectionT, P, Q, R
 from traffik._utils import DecoratorDepends, add_parameter_to_signature
-from traffik.backends.base import connection_identifier
 from traffik.throttles import BaseThrottle, NoLimit
 
 ThrottleT = typing.TypeVar("ThrottleT", bound=BaseThrottle)

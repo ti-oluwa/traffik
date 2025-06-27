@@ -108,6 +108,34 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tomli for version parsing
+        run: pip install tomli jq
+
+      - name: Get project version
+        id: get-version
+        run: |
+          VERSION=$(python -c "import tomli; print(tomli.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if version already exists on TestPyPI
+        id: version-check
+        run: |
+          VERSION="${{ steps.get-version.outputs.version }}"
+          if curl -sSf https://test.pypi.org/pypi/traffik/json | jq -e ".releases[\"$VERSION\"]" > /dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip publishing (version exists)
+        if: steps.version-check.outputs.exists == 'true'
+        run: echo "⚠️ Version already exists on TestPyPI. Skipping publish."
         
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -186,6 +214,34 @@ jobs:
       url: https://pypi.org/p/traffik
 
     steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tomli and jq
+        run: pip install tomli jq
+
+      - name: Get project version
+        id: get-version
+        run: |
+          VERSION=$(python -c "import tomli; print(tomli.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if version already exists on PyPI
+        id: version-check
+        run: |
+          VERSION="${{ steps.get-version.outputs.version }}"
+          if curl -sSf https://pypi.org/pypi/traffik/json | jq -e ".releases[\"$VERSION\"]" > /dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip publishing (version exists)
+        if: steps.version-check.outputs.exists == 'true'
+        run: echo "⚠️ Version already exists on PyPI. Skipping publish."
+        
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:

@@ -76,9 +76,9 @@ jobs:
       - name: Install and test built package
         run: |
           # Install the wheel in a clean environment
-          uv venv test-env
-          ./test-env/bin/pip install dist/*.whl
-          ./test-env/bin/python -c "
+          uv venv test-env && \
+          test-env/bin/pip install dist/*.whl && \
+          test-env/bin/python -c "
           import traffik
           from traffik.backends.inmemory import InMemoryBackend
           from traffik.throttles import HTTPThrottle

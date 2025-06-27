@@ -4,14 +4,13 @@
 
 Traffik provides elegant rate limiting capabilities for FastAPI applications with support for both HTTP and WebSocket connections. It offers multiple backend options including in-memory storage for development and Redis for production environments. Customizable throttling strategies allow you to define limits based on time intervals, client identifiers, and more.
 
-Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-limiter), and some of the code is adapted from it. However, Traffik aims to provide a more flexible and extensible solution with a focus on performance and ease of use.
+Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-limiter), and some of the code is adapted from it. However, Traffik aims to provide a more flexible and extensible solution with a focus on ease of use. Some of these differences are listed below.
 
 ## Features
 
 - 🚀 **Easy Integration**: Simple decorator and dependency-based throttling
 - 🔄 **Multiple Backends**: In-memory (development) and Redis (production) support
 - 🌐 **Protocol Support**: Both HTTP and WebSocket throttling
-- ⚡ **High Performance**: Efficient Lua scripts for Redis backend
 - 🔧 **Flexible Configuration**: Time-based limits with multiple time units
 - 🎯 **Per-Route Throttling**: Individual limits for different endpoints
 - 📊 **Client Identification**: Customizable client identification strategies
@@ -201,7 +200,7 @@ backend = InMemoryBackend(
 **Cons:**
 
 - Not suitable for multi-process/distributed systems
-- Data lost on restart (even with persistent=True)
+- Data is lost on restart (even with persistent=True)
 
 ### Redis Backend
 
@@ -229,14 +228,184 @@ backend = RedisBackend(
 **Pros:**
 
 - Distributed throttling across multiple processes
-- Persistent across restarts
-- High performance with Lua scripts
+- Persistence across restarts
 - Production-ready
 
 **Cons:**
 
 - Requires Redis server
 - Additional infrastructure dependency
+
+### Custom Backends
+
+You can create custom backends by subclassing `ThrottleBackend` and implementing the required methods. This allows you to integrate with any storage system or caching layer. Let's look at an example of a custom SQLite backend.
+
+```python
+import typing
+import time
+import asyncio
+from contextlib import asynccontextmanager
+from traffik.backends.base import ThrottleBackend
+from traffik._typing import (
+    HTTPConnectionT,
+    ConnectionIdentifier,
+    ConnectionThrottledHandler,
+)
+from traffik.exceptions import ConfiguationError
+from aiosqlite import connect, Connection
+
+
+class SQLiteBackend(ThrottleBackend[Connection, HTTPConnectionT]):
+    """
+    SQLite-based throttle backend for persistent rate limiting.
+    
+    Suitable for single-process applications that need persistence
+    across restarts without requiring Redis infrastructure.
+    """
+    
+    def __init__(
+        self, 
+        connection_string: str = ":memory:", 
+        *,
+        prefix: str = "sqlite-throttle",
+        identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
+        handle_throttled: typing.Optional[
+            ConnectionThrottledHandler[HTTPConnectionT]
+        ] = None,
+        persistent: bool = False,
+    ):
+        # Store connection string, don't create connection yet
+        self._connection_string = connection_string
+        self._connection: typing.Optional[Connection] = None
+        super().__init__(
+            connection=None,  # Will be set in initialize()
+            prefix=prefix,
+            identifier=identifier,
+            handle_throttled=handle_throttled,
+            persistent=persistent,
+        )
+
+    async def initialize(self) -> None:
+        """Initialize SQLite database and create required tables."""
+        self._connection = await aiosqlite.connect(self._connection_string)
+        self.connection = self._connection  # Set for base class
+        
+        # Enable WAL mode for better concurrency
+        await self._connection.execute("PRAGMA journal_mode=WAL")
+        
+        # Create throttles table with proper indexing
+        await self._connection.execute("""
+            CREATE TABLE IF NOT EXISTS throttle_records (
+                key TEXT PRIMARY KEY,
+                count INTEGER NOT NULL DEFAULT 1,
+                window_start INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            )
+        """)
+        
+        # Index for efficient cleanup of expired records
+        await self._connection.execute("""
+            CREATE INDEX IF NOT EXISTS idx_expires_at 
+            ON throttle_records(expires_at)
+        """)
+        
+        await self._connection.commit()
+        
+        # Start cleanup task for expired records
+        asyncio.create_task(self._cleanup_expired_records())
+
+    async def get_wait_period(self, key: str, limit: int, expires_after: int) -> int:
+        """
+        Check throttle status and return wait period if throttled.
+        
+        :param key: Throttle key (includes prefix)
+        :param limit: Maximum requests allowed
+        :param expires_after: Window duration in milliseconds 
+        :return: Wait period in milliseconds (0 if not throttled)
+        """
+        if not self._connection:
+            raise ConfiguationError("Backend not initialized")
+            
+        current_time_ms = int(time.time() * 1000)
+        window_start = current_time_ms
+        expires_at = current_time_ms + expires_after
+        
+        # Use a transaction for atomic read-modify-write
+        async with self._connection.execute("BEGIN IMMEDIATE"):
+            # Clean up expired record for this key
+            await self._connection.execute(
+                "DELETE FROM throttle_records WHERE key = ? AND expires_at <= ?",
+                (key, current_time_ms)
+            )
+            
+            # Get current count or insert new record
+            cursor = await self._connection.execute(
+                """
+                INSERT INTO throttle_records (key, count, window_start, expires_at)
+                VALUES (?, 1, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    count = count + 1
+                RETURNING count, window_start, expires_at
+                """,
+                (key, window_start, expires_at)
+            )
+            
+            row = await cursor.fetchone()
+            if not row:
+                await self._connection.commit()
+                return 0
+                
+            count, record_window_start, record_expires_at = row
+            await self._connection.commit()
+            
+            # Check if limit exceeded
+            if count > limit:
+                # Calculate remaining wait time
+                wait_time = record_expires_at - current_time_ms
+                return max(0, wait_time)
+                
+        return 0
+
+    async def reset(self) -> None:
+        """Reset all throttle records."""
+        if not self._connection:
+            return
+        
+        # Default key pattern is "{self.prefix}:*"
+        pattern = str(self.key_pattern).replace("*", "%")
+        await self._connection.execute(
+            "DELETE FROM throttle_records WHERE key LIKE ?",
+            (pattern,)
+        )
+        await self._connection.commit()
+
+    async def close(self) -> None:
+        """Close the SQLite connection."""
+        if self._connection:
+            await self._connection.close()
+            self._connection = None
+
+    async def _cleanup_expired_records(self) -> None:
+        """Background task to periodically clean up expired records."""
+        while self._connection:
+            try:
+                current_time = int(time.time() * 1000)
+                await self._connection.execute(
+                    "DELETE FROM throttle_records WHERE expires_at <= ?",
+                    (current_time,)
+                )
+                await self._connection.commit()
+                
+                # Clean up every 60 seconds
+                await asyncio.sleep(60)
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                # Log error in production
+                print(f"Cleanup task error: {exc}")
+                await asyncio.sleep(60)
+```
 
 ## Configuration Options
 

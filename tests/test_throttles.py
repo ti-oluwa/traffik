@@ -20,6 +20,7 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
 REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
 
+
 @pytest.fixture(scope="function")
 async def app() -> FastAPI:
     app = FastAPI()
@@ -46,9 +47,8 @@ async def _testclient_identifier(connection: WebSocket) -> str:
 
 @pytest.mark.asyncio
 async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> None:
-    # Test that an error is raised when not backend is passed or detected
-    with pytest.raises(ConfigurationError):
-        BaseThrottle()
+    with pytest.raises(ValueError):
+        BaseThrottle(limit=-1)
 
     async def _throttle_handler(
         connection: HTTPConnection,
@@ -73,9 +73,6 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
         assert throttle.identifier is inmemory_backend.identifier
         # Test that provided throttle handler is used
         assert throttle.handle_throttled is not inmemory_backend.handle_throttled
-
-    with pytest.raises(ValueError):
-        BaseThrottle(limit=-1)
 
 
 @pytest.mark.anyio

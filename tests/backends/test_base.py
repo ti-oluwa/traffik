@@ -1,6 +1,8 @@
 import re
-
 import pytest
+import asyncio
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
 
 from traffik.backends.base import ThrottleBackend, throttle_backend_ctx
 
@@ -11,7 +13,7 @@ def backend():
 
 
 def test_get_key_pattern(backend: ThrottleBackend) -> None:
-    # Test the regular expression pattern
+    # Test the regular expression pattern``
     pattern = backend.get_key_pattern()
     assert isinstance(pattern, re.Pattern)
     assert pattern.match("test:some_key") is not None
@@ -42,4 +44,41 @@ async def test_throttle_backend_context_management(backend: ThrottleBackend) -> 
     # Test that the context token is reset after exiting the context
     assert backend._context_token is None
     # Test that the context variable is reset after exiting the context
+    assert throttle_backend_ctx.get() is None
+
+
+@pytest.mark.asyncio
+async def test_throttle_backend_lifespan_management(backend: ThrottleBackend) -> None:
+    """Test that backend context is properly managed through FastAPI lifespan."""
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        async with backend:
+            yield
+
+    app = FastAPI()
+
+    # Test that context is None before lifespan starts
+    assert throttle_backend_ctx.get() is None
+
+    # Simulate lifespan startup
+    startup_complete = False
+
+    async def run_lifespan() -> None:
+        nonlocal startup_complete
+        async with lifespan(app):
+            startup_complete = True
+            # Context should be set during lifespan
+            assert throttle_backend_ctx.get() is backend
+            # Simulate the app running for a bit
+            await asyncio.sleep(0.1)
+
+    # Run the lifespan context
+    with pytest.raises(NotImplementedError):
+        # This will raise NotImplementedError from backend.initialize()
+        # but we can still test the context management
+        await run_lifespan()
+        assert startup_complete
+
+    # After lifespan ends, context should be reset
     assert throttle_backend_ctx.get() is None

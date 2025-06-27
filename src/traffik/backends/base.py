@@ -81,7 +81,15 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         self.persistent = persistent
         self._context_token = None
 
-    @functools.lru_cache(maxsize=1)
+    @functools.cached_property
+    def key_pattern(self) -> re.Pattern:
+        """
+        Regular expression pattern for throttling keys
+
+        All rate keys are expected to follow this pattern.
+        """
+        return self.get_key_pattern()
+
     def get_key_pattern(self) -> re.Pattern:
         """
         Regular expression pattern for throttling keys
@@ -92,13 +100,15 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
     async def check_key_pattern(self, key: str) -> bool:
         """Check if the key matches the throttling key pattern"""
-        return re.match(self.get_key_pattern(), key) is not None
+        return re.match(self.key_pattern, key) is not None
 
     async def initialize(self) -> None:
         """
         Initialize the throttle backend ensuring it is ready for use.
         """
-        pass
+        raise NotImplementedError(
+            "The initialize method must be implemented by the backend."
+        )
 
     async def get_wait_period(
         self,

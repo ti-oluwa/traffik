@@ -29,7 +29,6 @@ class ThrottleMeta(type):
     def __new__(cls, name, bases, attrs):
         new_cls = super().__new__(cls, name, bases, attrs)
         new_cls.__call__ = cls._capture_no_limit(new_cls.__call__)
-        new_cls.get_key = cls._wrap_get_key(new_cls.get_key)  # type: ignore
         return new_cls
 
     @staticmethod
@@ -47,26 +46,6 @@ class ThrottleMeta(type):
                 return await coroutine_func(*args, **kwargs)
             except NoLimit:
                 return
-
-        return wrapper
-
-    @staticmethod
-    def _wrap_get_key(get_key: CoroutineFunction) -> CoroutineFunction:
-        """Wraps the `get_key` method to ensure the pattern of the key returned is valid"""
-
-        @functools.wraps(get_key)
-        async def wrapper(self: "BaseThrottle", *args, **kwargs) -> str:
-            key = await get_key(self, *args, **kwargs)
-            if not isinstance(key, str):
-                raise TypeError("Generated throttling key should be a string")
-
-            backend = self.backend
-            if not await backend.check_key_pattern(key):
-                raise ValueError(
-                    "Invalid throttling key pattern. "
-                    f"Key must be in the format: {backend.get_key_pattern()}"
-                )
-            return key
 
         return wrapper
 
@@ -114,15 +93,17 @@ class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
         if self.limit < 0:
             raise ValueError("Limit must be non-negative")
 
-        backend = backend or get_throttle_backend()
-        if not isinstance(backend, ThrottleBackend):
-            raise ConfigurationError("No throttle backend provided or detected.")
+        self.backend = backend or get_throttle_backend()
+        self.identifier = identifier or (
+            self.backend.identifier if self.backend is not None else None
+        )
+        self.handle_throttled = handle_throttled or (
+            self.backend.handle_throttled if self.backend is not None else None
+        )
 
-        self.backend = backend
-        self.identifier = identifier or backend.identifier
-        self.handle_throttled = handle_throttled or backend.handle_throttled
-
-    async def __call__(self, connection: HTTPConnectionT, *args, **kwargs) -> None:
+    async def __call__(
+        self, connection: HTTPConnectionT, *args: typing.Any, **kwargs: typing.Any
+    ) -> None:
         """
         Throttle the connection based on the limit and time period.
 
@@ -134,17 +115,38 @@ class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
         if self.limit == 0 or self.expires_after == 0:
             return  # No throttling applied if limit is 0
 
-        backend = self.backend
-        key = await self.get_key(connection, *args, **kwargs)
+        backend = self.backend = self.backend or get_throttle_backend()
+        if backend is None:
+            raise ConfigurationError(
+                "No throttle backend configured. "
+                "Provide a backend to the throttle or set a default backend."
+            )
+
+        identifier = self.identifier = self.identifier or backend.identifier
+        key = await self.get_key(identifier, connection, *args, **kwargs)
+        backend_key = f"{backend.prefix}:{key}"
+        if not await backend.check_key_pattern(backend_key):
+            raise ValueError(
+                "Invalid throttling key pattern. "
+                f"Key must be in the format: {backend.get_key_pattern()}"
+            )
+
         wait_period = await backend.get_wait_period(
-            key, limit=self.limit, expires_after=self.expires_after
+            backend_key, self.limit, self.expires_after
         )
 
         if wait_period != 0:
-            await self.handle_throttled(connection, wait_period, *args, **kwargs)
+            handle_throttled = self.handle_throttled or backend.handle_throttled
+            await handle_throttled(connection, wait_period, *args, **kwargs)
         return None
 
-    async def get_key(self, connection: HTTPConnectionT, *args, **kwargs) -> str:
+    async def get_key(
+        self,
+        identifier: ConnectionIdentifier[HTTPConnectionT],
+        connection: HTTPConnectionT,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> str:
         """
         Returns the unique throttling key for the client.
 
@@ -157,7 +159,12 @@ class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
 class HTTPThrottle(BaseThrottle[Request]):
     """HTTP connection throttle"""
 
-    async def get_key(self, request: Request, response: Response) -> str:
+    async def get_key(
+        self,
+        identifier: ConnectionIdentifier[Request],
+        request: Request,
+        response: Response,
+    ) -> str:
         route_index = 0
         dependency_index = 0
         for i, route in enumerate(request.app.routes):
@@ -168,14 +175,14 @@ class HTTPThrottle(BaseThrottle[Request]):
                         dependency_index = j
                         break
 
-        rate_key = await self.identifier(request)
+        rate_key = await identifier(request)
         suffix = f"{rate_key}:{route_index}:{dependency_index}:{id(self)}"
         hashed_suffix = hashlib.md5(suffix.encode()).hexdigest()
-        key = f"{self.backend.prefix}:http:{hashed_suffix}"
+        throttle_key = f"http:{hashed_suffix}"
         # Added id(self) to ensure unique key for each throttle instance
         # in the advent that the dependency index is not unique. Especially when
         # used with the `throttle` decorator.
-        return key
+        return throttle_key
 
     async def __call__(self, connection: Request, response: Response) -> None:
         return await super().__call__(connection, response=response)
@@ -185,16 +192,19 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
     """WebSocket connection throttle"""
 
     async def get_key(
-        self, connection: WebSocket, context_key: typing.Optional[str] = None
+        self,
+        identifier: ConnectionIdentifier[WebSocket],
+        connection: WebSocket,
+        context_key: typing.Optional[str] = None,
     ) -> str:
-        rate_key = await self.identifier(connection)
+        rate_key = await identifier(connection)
         suffix = f"{rate_key}:{connection.url.path}:{id(self)}:{context_key or ''}"
         hashed_suffix = hashlib.md5(suffix.encode()).hexdigest()
-        key = f"{self.backend.prefix}:ws:{hashed_suffix}"
+        throttle_key = f"ws:{hashed_suffix}"
         # Added id(self) to ensure unique key for each throttle instance
         # in the advent that the context key is not unique. Especially when
         # used with the `throttle` decorator.
-        return key
+        return throttle_key
 
     async def __call__(
         self, connection: WebSocket, context_key: typing.Optional[str] = None

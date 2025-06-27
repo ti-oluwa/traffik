@@ -31,7 +31,7 @@ class InMemoryBackend(
         persistent: bool = False,
     ) -> None:
         super().__init__(
-            connection=None,
+            None,
             prefix=prefix,
             identifier=identifier,
             handle_throttled=handle_throttled,

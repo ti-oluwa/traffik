@@ -217,28 +217,8 @@ async def user_agent_identifier(connection: HTTPConnection) -> str:
     return f"{user_agent}:{connection.scope['path']}"
 
 
-async def anonymous_identifier(connection: HTTPConnection) -> str:
-    connected_user = getattr(connection.state, "user", None)
-    if connected_user and getattr(connected_user, "is_authenticated", False):
-        raise NoLimit()
-
-    identifier = await connection_identifier(connection)
-    return f"anonymous:{identifier}"
-
-
-async def authenticated_identifier(connection: HTTPConnection) -> str:
-    connected_user = getattr(connection.state, "user", None)
-    if connected_user and not getattr(connected_user, "is_authenticated", False):
-        raise NoLimit()
-
-    pk = getattr(connected_user, "pk", None) or getattr(connected_user, "id", None)
-    if pk is not None:
-        identifier = f"{str(pk)}:{connection.scope['path']}"
-
-    identifier = await connection_identifier(connection)
-    return f"authenticated:{identifier}"
-
-
 __all__ = [
     "throttled",
+    "throttle_referers",
+    "user_agent_identifier",
 ]

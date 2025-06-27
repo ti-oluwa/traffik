@@ -52,10 +52,11 @@ end"""
             )
 
         super().__init__(
-            connection=connection,
+            connection,
             prefix=prefix,
             identifier=identifier,
             handle_throttled=handle_throttled,
+            persistent=persistent,
         )
         self._lua_sha = None  # SHA1 hash of the Lua script
         self._session = self.connection

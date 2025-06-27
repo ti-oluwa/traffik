@@ -33,4 +33,4 @@ jobs:
         run: uv add ruff
 
       - name: Run ruff
-        run: ruff .
+        run: uv run ruff .

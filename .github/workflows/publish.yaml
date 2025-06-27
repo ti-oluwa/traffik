@@ -13,10 +13,6 @@ on:
         type: boolean
         default: true
 
-concurrency:
-  group: publish-${{ github.workflow }}-${{ github.sha }}
-  cancel-in-progress: false  # Don't cancel publishing workflows
-
 jobs:
   # Run code quality workflow 
   quality-gate:

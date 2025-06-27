@@ -123,7 +123,7 @@ jobs:
           version: "latest"
 
       - name: Install jq for version parsing
-        run: uv pip install jq
+        run: uv pip install jq --system
 
       - name: Get project version
         id: get-version
@@ -231,7 +231,7 @@ jobs:
           version: "latest"
 
       - name: Install jq for version parsing
-        run: uv pip install jq
+        run: uv pip install jq --system
 
       - name: Get project version
         id: get-version

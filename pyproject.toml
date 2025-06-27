@@ -1,7 +1,7 @@
 [project]
 name = "traffik"
 version = "0.1.0"
-description = "Simple FastAPI throttling"
+description = "A FastAPI throttling library"
 readme = "README.md"
 authors = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }

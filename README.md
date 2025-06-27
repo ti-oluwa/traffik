@@ -1,8 +1,8 @@
 # Traffik - A FastAPI throttling library
 
-[![Test](https://github.com/tioluwa/traffik/actions/workflows/test.yml/badge.svg)](https://github.com/tioluwa/traffik/actions/workflows/test.yml)
+[![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yml)
 
-[![codecov](https://codecov.io/gh/tioluwa/traffik/branch/main/graph/badge.svg)](https://codecov.io/gh/tioluwa/traffik)
+[![codecov](https://codecov.io/gh/ti-oluwa/traffik/branch/main/graph/badge.svg)](https://codecov.io/gh/ti-oluwa/traffik)
 
 Traffik provides elegant rate limiting capabilities for FastAPI applications with support for both HTTP and WebSocket connections. It offers multiple backend options including in-memory storage for development and Redis for production environments. Customizable throttling strategies allow you to define limits based on time intervals, client identifiers, and more.
 
@@ -511,7 +511,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 ### Development Setup
 
 ```bash
-git clone https://github.com/tioluwa/traffik.git
+git clone https://github.com/ti-oluwa/traffik.git
 cd traffik
 uv pip install -e .[dev,test]
 

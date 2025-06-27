@@ -203,7 +203,7 @@ backend = InMemoryBackend(
 **Cons:**
 
 - Not suitable for multi-process/distributed systems
-- Data lost on restart (unless persistent=True)
+- Data lost on restart (even with persistent=True)
 
 ### Redis Backend
 

@@ -42,7 +42,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
       
       - name: Verify version consistency
         run: |
@@ -77,15 +77,14 @@ jobs:
         run: |
           # Install the wheel in a clean environment
           uv venv test-env
-          source test-env/bin/activate
-          pip install dist/*.whl
-          python -c "
+          ./test-env/bin/pip install dist/*.whl
+          ./test-env/bin/python -c "
           import traffik
           from traffik.backends.inmemory import InMemoryBackend
           from traffik.throttles import HTTPThrottle
           print('✅ Built package works correctly')
           "
-
+      
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:

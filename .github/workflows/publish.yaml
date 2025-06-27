@@ -42,11 +42,8 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       
-      - name: Install tomllib
-        run: uv add tomllib
-
       - name: Verify version consistency
         run: |
           # Extract version from pyproject.toml and git tag

@@ -14,7 +14,7 @@ on:
         default: true
 
 concurrency:
-  group: publish-${{ github.workflow }}-${{ github.ref }}
+  group: publish-${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: false  # Don't cancel publishing workflows
 
 jobs:

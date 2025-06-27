@@ -3,13 +3,13 @@ import typing
 from redis.asyncio import Redis
 from redis.exceptions import NoScriptError
 
-from traffik._typing import (
+from traffik.backends.base import ThrottleBackend
+from traffik.exceptions import ConfigurationError
+from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
 )
-from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import ConfigurationError
 
 
 class RedisBackend(ThrottleBackend[Redis, HTTPConnectionT]):
@@ -46,9 +46,9 @@ end"""
         if isinstance(connection, str):
             connection = Redis.from_url(url=connection)
 
-        elif not isinstance(self.connection, Redis):
+        elif not isinstance(connection, Redis):
             raise TypeError(
-                f"Connection must be an instance of `{Redis!r}`, got {type(self.connection)!r}"
+                f"Connection must be an instance of `{Redis!r}`, got {type(connection)!r}"
             )
 
         super().__init__(

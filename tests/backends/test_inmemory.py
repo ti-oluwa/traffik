@@ -22,7 +22,7 @@ async def test_backend_reset(backend: InMemoryBackend) -> None:
 @pytest.mark.asyncio
 async def test_get_wait_period(backend: InMemoryBackend) -> None:
     await backend.reset()
-    async with backend:
+    async with backend():
         wait_period = await backend.get_wait_period(
             f"{backend.prefix}:test_key", limit=3, expires_after=5000
         )
@@ -47,16 +47,12 @@ async def test_backend_context_management(backend: InMemoryBackend) -> None:
     assert throttle_backend_ctx.get() is None
 
     assert backend.connection is None
-    assert backend._context_token is None
-    async with backend:
+    async with backend():
         # Test the lua script has been loaded
         assert isinstance(backend.connection, collections.abc.MutableMapping)
         # Test that the context variable is set within the context
         assert throttle_backend_ctx.get() is backend
-        assert backend._context_token is not None
 
-    # Test that the context token is reset after exiting the context
-    assert backend._context_token is None
     # Test that the context variable is reset after exiting the context
     assert throttle_backend_ctx.get() is None
 
@@ -68,7 +64,7 @@ async def test_backend_persistence(backend: InMemoryBackend) -> None:
     assert backend.persistent
 
     # Add some keys to the backend
-    async with backend:
+    async with backend():
         await backend.get_wait_period(
             f"{backend.prefix}:test_key", limit=3, expires_after=5000
         )

@@ -7,16 +7,18 @@ from contextvars import ContextVar
 from starlette.exceptions import HTTPException
 from starlette.requests import HTTPConnection
 from starlette.status import HTTP_429_TOO_MANY_REQUESTS
+from starlette.types import ASGIApp
+from typing_extensions import Self
 
-from traffik._typing import (
+from traffik._utils import get_ip_address
+from traffik.exceptions import AnonymousConnection
+from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
     T,
     WaitPeriod,
 )
-from traffik._utils import get_ip_address
-from traffik.exceptions import AnonymousConnection
 
 
 async def connection_identifier(connection: HTTPConnection) -> str:
@@ -47,6 +49,8 @@ async def connection_throttled(
 throttle_backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVar(
     "throttle_backend_ctx", default=None
 )
+
+BACKEND_STATE_KEY = "__traffik_throttle_backend"
 
 
 class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
@@ -79,7 +83,6 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         self.identifier = identifier or connection_identifier
         self.handle_throttled = handle_throttled or connection_throttled
         self.persistent = persistent
-        self._context_token = None
 
     @functools.cached_property
     def key_pattern(self) -> re.Pattern:
@@ -140,32 +143,91 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """Close the backend connection."""
         raise NotImplementedError
 
-    async def __aenter__(self) -> "ThrottleBackend[T, HTTPConnectionT]":
-        """Context manager entry point."""
-        await self.initialize()
+    def __call__(
+        self,
+        app: typing.Optional[ASGIApp] = None,
+        persistent: typing.Optional[bool] = None,
+        close_on_exit: bool = True,
+    ) -> "_ThrottleContext[Self]":
+        """
+        Create a throttle context for the backend.
+
+        :param app: The ASGI application to assign the backend to.
+        :param persistent: Whether to keep the backend state across application restarts.
+            This overrides the backend's persistent setting if set.
+        :param close_on_exit: Whether to close the backend when exiting the context.
+        :return: A context manager for the throttle backend.
+        """
+        if app is not None:
+            # Ensure app.state exists
+            app.state = getattr(app, "state", {})  # type: ignore
+            setattr(app.state, BACKEND_STATE_KEY, self)  # type: ignore
+
+        return _ThrottleContext(
+            backend=self,
+            persistent=persistent if persistent is not None else self.persistent,
+            close_on_exit=close_on_exit,
+        )
+
+
+ThrottleBackendTco = typing.TypeVar(
+    "ThrottleBackendTco", bound=ThrottleBackend, covariant=True
+)
+
+
+class _ThrottleContext(typing.Generic[ThrottleBackendTco]):
+    """
+    Context manager for throttle backends.
+    """
+
+    def __init__(
+        self,
+        backend: ThrottleBackendTco,
+        persistent: bool = False,
+        close_on_exit: bool = True,
+    ) -> None:
+        self.backend = backend
+        self.persistent = persistent
+        self.close_on_exit = close_on_exit
+        self._context_token = None
+
+    async def __aenter__(self) -> ThrottleBackendTco:
+        backend = self.backend
+        await backend.initialize()
         # Set the throttle backend in the context variable
-        self._context_token = throttle_backend_ctx.set(self)
-        return self
+        self._context_token = throttle_backend_ctx.set(backend)
+        return backend
 
     async def __aexit__(self, exc_type, exc_value, traceback) -> None:
-        """Context manager exit point."""
         if self._context_token is not None:
             throttle_backend_ctx.reset(self._context_token)
             self._context_token = None
 
+        backend = self.backend
         if not self.persistent:
             # Reset the backend if not persistent
-            await self.reset()
-        await self.close()
+            await backend.reset()
+
+        if self.close_on_exit:
+            await backend.close()
 
 
-def get_throttle_backend() -> typing.Optional[ThrottleBackend]:
+def get_throttle_backend(
+    connection: typing.Optional[HTTPConnectionT] = None,
+) -> typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]]:
     """
-    Get the current throttle backend from the context variable.
+    Get the current context's throttle backend or provided connection's throttle backend.
 
+    :param connection: The HTTP connection to check for a throttle backend.
     :return: The current throttle backend or None if not set.
     """
-    return throttle_backend_ctx.get(None)
+    # Try to get from contextvar, then check `connection.app.state`
+    backend = throttle_backend_ctx.get(None)
+    if backend is None and connection is not None:
+        backend = getattr(connection.app.state, BACKEND_STATE_KEY, None)
+    return typing.cast(
+        typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]], backend
+    )
 
 
 __all__ = [

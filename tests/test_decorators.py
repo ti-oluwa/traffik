@@ -1,6 +1,6 @@
-import anyio
 import typing
 
+import anyio
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -25,7 +25,7 @@ async def throttle_backend() -> InMemoryBackend:
 async def test_throttle_decorator_only(
     app: FastAPI, throttle_backend: InMemoryBackend
 ) -> None:
-    async with throttle_backend:
+    async with throttle_backend(app):
         throttle = HTTPThrottle(limit=3, seconds=5)
 
         @app.get("/throttled", status_code=200)
@@ -51,7 +51,7 @@ async def test_throttle_decorator_only(
 async def test_throttle_decorator_with_dependency(
     app: FastAPI, throttle_backend: InMemoryBackend
 ) -> None:
-    async with throttle_backend:
+    async with throttle_backend(app):
         burst_throttle = HTTPThrottle(limit=3, seconds=5)
         sustained_throttle = HTTPThrottle(limit=5, seconds=10)
 

@@ -2,13 +2,13 @@ import asyncio
 import time
 import typing
 
-from traffik._typing import (
+from traffik.backends.base import ThrottleBackend
+from traffik.exceptions import ConfigurationError
+from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
 )
-from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import ConfigurationError
 
 
 class InMemoryBackend(

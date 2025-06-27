@@ -106,7 +106,7 @@ throttle_backend = InMemoryBackend()
 # Create FastAPI app lifespan
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with throttle_backend:
+    async with throttle_backend(app):
         yield
 
 app = FastAPI(lifespan=lifespan)
@@ -131,7 +131,7 @@ from contextlib import asynccontextmanager
 import traffik
 from traffik.backends.redis import RedisBackend
 
-backend = RedisBackend(
+throttle_backend = RedisBackend(
     connection="redis://localhost:6379/0",
     prefix="myapp",  # Key prefix
     persistent=True,  # Survive restarts
@@ -140,7 +140,7 @@ backend = RedisBackend(
 # Setup FastAPI app with lifespan
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with backend:
+    async with throttle_backend(app):
         yield
 
 app = FastAPI(lifespan=lifespan)
@@ -225,7 +225,7 @@ Perfect for development, testing, and single-process applications:
 ```python
 from traffik.backends.inmemory import InMemoryBackend
 
-backend = InMemoryBackend(
+inmemory_throttle_backend = InMemoryBackend(
     prefix="myapp",           # Key prefix
     persistent=False,         # Don't persist across restarts
 )
@@ -250,7 +250,7 @@ Recommended for production environments:
 from traffik.backends.redis import RedisBackend
 
 # From URL
-backend = RedisBackend(
+redis_throttle_backend = RedisBackend(
     connection="redis://localhost:6379/0",
     prefix="myapp",
     persistent=True,  # Survive restarts
@@ -259,7 +259,7 @@ backend = RedisBackend(
 # From Redis instance
 import redis.asyncio as redis
 redis_client = redis.Redis(host='localhost', port=6379, db=0)
-backend = RedisBackend(
+redis_throttle_backend = RedisBackend(
     connection=redis_client,
     prefix="myapp",
 )
@@ -286,7 +286,7 @@ import time
 import asyncio
 from contextlib import asynccontextmanager
 from traffik.backends.base import ThrottleBackend
-from traffik._typing import (
+from traffik.types import (
     HTTPConnectionT,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -480,7 +480,7 @@ async def custom_identifier(connection: HTTPConnection):
 throttle = HTTPThrottle(
     limit=10,
     minutes=1,
-    identifier=custom_identifier,
+    identifier=custom_identifier, # Override default (backend) identifier
 )
 ```
 
@@ -566,7 +566,7 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    async with backend:
+    async with backend(app):
         yield
     # Shutdown - backend cleanup handled automatically
 
@@ -614,12 +614,14 @@ from traffik.throttles import HTTPThrottle
 @pytest_asyncio.fixture(scope="function")
 async def backend():
     backend = InMemoryBackend(prefix="test", persistent=False)
-    async with backend:
+    # backend can be used as a context manager
+    # without an ASGI app
+    async with backend():
         yield backend
 
 
 @pytest.fixture(scope="function")
-async def app(backend):
+async def app():
     app = FastAPI()    
     return app
 

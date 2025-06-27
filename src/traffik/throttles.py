@@ -8,15 +8,15 @@ from starlette.responses import Response
 from starlette.websockets import WebSocket
 from typing_extensions import Annotated
 
-from traffik._typing import (
+from traffik.backends.base import ThrottleBackend, get_throttle_backend
+from traffik.exceptions import ConfigurationError, NoLimit
+from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     CoroutineFunction,
     HTTPConnectionT,
     T,
 )
-from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import ConfigurationError, NoLimit
 
 __all__ = [
     "BaseThrottle",
@@ -115,7 +115,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
         if self.limit == 0 or self.expires_after == 0:
             return  # No throttling applied if limit is 0
 
-        backend = self.backend = self.backend or get_throttle_backend()
+        backend = self.backend = self.backend or get_throttle_backend(connection)
         if backend is None:
             raise ConfigurationError(
                 "No throttle backend configured. "
@@ -185,6 +185,12 @@ class HTTPThrottle(BaseThrottle[Request]):
         return throttle_key
 
     async def __call__(self, connection: Request, response: Response) -> None:
+        """
+        Calls the throttle for an HTTP connection.
+
+        :param connection: The HTTP connection to throttle.
+        :param response: The HTTP response to be returned if throttled.
+        """
         return await super().__call__(connection, response=response)
 
 
@@ -209,4 +215,11 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
     async def __call__(
         self, connection: WebSocket, context_key: typing.Optional[str] = None
     ) -> None:
+        """
+        Calls the throttle for a WebSocket connection.
+
+        :param connection: The WebSocket connection to throttle.
+        :param context_key: Optional context key to differentiate throttling
+            for different contexts within the same WebSocket connection.
+        """
         return await super().__call__(connection, context_key=context_key)

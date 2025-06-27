@@ -5,7 +5,7 @@ import typing
 import fastapi.params
 from starlette.requests import HTTPConnection
 
-from traffik._typing import P, Q, R, S
+from traffik.types import P, Q, R, S
 
 
 def get_ip_address(

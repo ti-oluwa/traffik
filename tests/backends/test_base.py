@@ -35,15 +35,11 @@ async def test_throttle_backend_context_management(backend: ThrottleBackend) -> 
     # Test that the context variable is initialized to None
     assert throttle_backend_ctx.get() is None
 
-    assert backend._context_token is None
     with pytest.raises(NotImplementedError):
-        async with backend:
+        async with backend():
             # Test that the context variable is set within the context
             assert throttle_backend_ctx.get() is backend
-            assert backend._context_token is not None
 
-    # Test that the context token is reset after exiting the context
-    assert backend._context_token is None
     # Test that the context variable is reset after exiting the context
     assert throttle_backend_ctx.get() is None
 
@@ -54,7 +50,7 @@ async def test_throttle_backend_lifespan_management(backend: ThrottleBackend) ->
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        async with backend:
+        async with backend(app):
             yield
 
     app = FastAPI()

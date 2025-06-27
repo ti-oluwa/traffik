@@ -58,7 +58,7 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
         return
 
     # Test initialization behaviour
-    async with inmemory_backend:
+    async with inmemory_backend():
         throttle = BaseThrottle(
             limit=2,
             milliseconds=10,
@@ -79,7 +79,7 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
 async def test_http_throttle_inmemory(
     inmemory_backend: InMemoryBackend, app: FastAPI
 ) -> None:
-    async with inmemory_backend:
+    async with inmemory_backend(app):
         throttle = HTTPThrottle(
             limit=3,
             seconds=3,
@@ -119,7 +119,7 @@ async def test_http_throttle_inmemory(
 
 @pytest.mark.anyio
 async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) -> None:
-    async with redis_backend:
+    async with redis_backend(app):
         throttle = HTTPThrottle(
             limit=3,
             seconds=3,
@@ -161,7 +161,7 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
 async def test_http_throttle_inmemory_concurrent(
     inmemory_backend: InMemoryBackend, app: FastAPI
 ) -> None:
-    async with inmemory_backend:
+    async with inmemory_backend(app):
         throttle = HTTPThrottle(
             limit=3,
             seconds=5,
@@ -197,7 +197,7 @@ async def test_http_throttle_inmemory_concurrent(
 async def test_http_throttle_redis_concurrent(
     redis_backend: RedisBackend, app: FastAPI
 ) -> None:
-    async with redis_backend:
+    async with redis_backend(app):
         throttle = HTTPThrottle(
             limit=3,
             seconds=5,
@@ -233,7 +233,7 @@ async def test_http_throttle_redis_concurrent(
 async def test_websocket_throttle_inmemory(
     inmemory_backend: InMemoryBackend, app: FastAPI
 ) -> None:
-    async with inmemory_backend:
+    async with inmemory_backend(app):
         throttle = WebSocketThrottle(
             limit=3,
             seconds=5,
@@ -342,7 +342,7 @@ async def test_websocket_throttle_inmemory(
 async def test_websocket_throttle_redis(
     redis_backend: RedisBackend, app: FastAPI
 ) -> None:
-    async with redis_backend:
+    async with redis_backend(app):
         throttle = WebSocketThrottle(
             limit=3,
             seconds=5,

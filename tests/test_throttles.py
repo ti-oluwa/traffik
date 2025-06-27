@@ -1,4 +1,5 @@
 import asyncio
+import os
 import typing
 from itertools import repeat
 
@@ -15,6 +16,9 @@ from traffik.backends.redis import RedisBackend
 from traffik.exceptions import ConfigurationError
 from traffik.throttles import BaseThrottle, HTTPThrottle, WebSocketThrottle
 
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = os.getenv("REDIS_PORT", "6379")
+REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
 
 @pytest.fixture(scope="function")
 async def app() -> FastAPI:
@@ -30,7 +34,7 @@ async def inmemory_backend() -> InMemoryBackend:
 @pytest.fixture(scope="function")
 async def redis_backend() -> RedisBackend:
     return RedisBackend(
-        connection="redis://localhost:6379/0",
+        connection=REDIS_URL,
         prefix="redis-test",
         persistent=False,
     )

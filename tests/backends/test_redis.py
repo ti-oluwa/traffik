@@ -1,12 +1,18 @@
 import pytest
+import os
 
 from traffik.backends.base import throttle_backend_ctx
 from traffik.backends.redis import RedisBackend
 
 
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = os.getenv("REDIS_PORT", "6379")
+REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+
+
 @pytest.fixture(scope="function")
 async def backend() -> RedisBackend:
-    return RedisBackend(connection="redis://127.0.0.1:6379", prefix="redis-backend")
+    return RedisBackend(connection=REDIS_URL, prefix="redis-backend")
 
 
 @pytest.mark.asyncio

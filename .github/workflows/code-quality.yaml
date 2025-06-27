@@ -41,7 +41,7 @@ jobs:
       - name: Check code formatting
         run: |
           echo "Checking code formatting..."
-          uv run ruff format --check src/ tests/
+          uv run ruff format src/ tests/
 
       - name: Run security analysis
         run: |

@@ -66,7 +66,7 @@ def route_wrapper(
         **globals(),
         "route": route,
     }
-    exec( # nosec
+    exec(  # nosec
         wrapper_code,
         global_namespace,
         local_namespace,

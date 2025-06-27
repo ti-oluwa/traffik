@@ -50,11 +50,14 @@ jobs:
           uv run bandit -r src/
         continue-on-error: false
 
-      - name: Check for known vulnerabilities
+      - name: Export dependencies for Safety
+        run: |
+          uv pip freeze > requirements.txt
+
+      - name: Check for known vulnerabilities with Safety
         run: |
           echo "Checking for known vulnerabilities..."
-          uv run safety scan --json --output safety-report.json || true
-          uv run safety scan
+          safety check --file=requirements.txt --output=json > safety-report.json || true
 
       - name: Upload security reports
         if: always()

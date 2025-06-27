@@ -1,0 +1,107 @@
+# .dockerignore for traffik library
+
+# Git
+.git
+.gitignore
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Documentation
+docs/_build/
+
+# CI/CD
+.github/
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Package manager
+node_modules/
+npm-debug.log*
+
+# Security
+*.pem
+*.key
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# Editor backups
+*.bak
+*.tmp
+
+# Coverage reports
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+
+# Ruff cache
+.ruff_cache/
+
+# UV cache
+.uv_cache/

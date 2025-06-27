@@ -66,6 +66,29 @@ uv sync --extra dev
 pip install -e .[dev]
 ```
 
+## Quick Testing with Docker
+
+For quick testing across different platforms and Python versions:
+
+```bash
+# Run fast tests (no Redis required)
+./docker-test.sh test-fast
+
+# Run full test suite with Redis
+./docker-test.sh test
+
+# Start development environment
+./docker-test.sh dev
+
+# Test across Python versions
+./docker-test.sh test-matrix
+```
+
+**Testing Documentation:**
+- [DOCKER.md](DOCKER.md) - Complete Docker testing guide
+- [TESTING.md](TESTING.md) - Quick testing guide  
+- [TESTING_COMPLETE.md](TESTING_COMPLETE.md) - Comprehensive testing reference
+
 ## Quick Start
 
 ### 1. Basic HTTP Throttling

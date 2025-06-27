@@ -1,3 +1,4 @@
+import asyncio
 import time
 import typing
 
@@ -37,6 +38,7 @@ class InMemoryBackend(
             handle_throttled=handle_throttled,
             persistent=persistent,
         )
+        self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         # Recreate store
@@ -56,24 +58,26 @@ class InMemoryBackend(
         record = connection.get(key, {"count": 0, "start": now})
         elapsed = now - record["start"]
 
-        if elapsed > expires_after:
-            # Reset window but we still count as 1
-            # since the first request after expiration is allowed
-            record = {"count": 1, "start": now}
-            connection[key] = record
-            return 0
+        async with self._lock:
+            if elapsed > expires_after:
+                # Reset window but we still count as 1
+                # since the first request after expiration is allowed
+                record = {"count": 1, "start": now}
+                connection[key] = record
+                return 0
 
-        if record["count"] < limit:
-            record["count"] += 1
-            connection[key] = record
-            return 0
+            if record["count"] < limit:
+                record["count"] += 1
+                connection[key] = record
+                return 0
         # Throttled: return remaining wait period
         return expires_after - elapsed
 
     async def reset(self) -> None:
         if self.connection is None:
             return
-        self.connection.clear()
+        async with self._lock:
+            self.connection.clear()
 
     async def close(self) -> None:
         pass

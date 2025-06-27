@@ -48,7 +48,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies with Redis
-        run: uv sync --extra test
+        run: uv sync --extra test --extra redis
 
       - name: Install Redis CLI
         run: |

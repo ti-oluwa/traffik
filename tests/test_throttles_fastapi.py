@@ -16,6 +16,7 @@ from tests.asyncio_client import AsyncioTestClient
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.redis import RedisBackend
 from traffik.throttles import BaseThrottle, HTTPThrottle, WebSocketThrottle
+from traffik.types import UNLIMITED
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
@@ -53,6 +54,10 @@ def lifespan_app(inmemory_backend: InMemoryBackend) -> FastAPI:
 
 async def _testclient_identifier(connection: HTTPConnection) -> str:
     return "testclient"
+
+
+async def _unlimited_identifier(connection: HTTPConnection) -> object:
+    return UNLIMITED
 
 
 @pytest.mark.asyncio
@@ -119,6 +124,46 @@ def test_throttle_with_app_lifespan(lifespan_app: FastAPI) -> None:
         response = client.get("/")
         assert response.status_code == 429
         assert response.headers["Retry-After"] is not None
+
+
+def test_throttle_exemption_with_identifier(
+    inmemory_backend: InMemoryBackend, app: FastAPI
+) -> None:
+    throttle = HTTPThrottle(
+        limit=2,
+        milliseconds=10,
+        seconds=50,
+        minutes=2,
+        hours=1,
+        identifier=_unlimited_identifier,
+        backend=inmemory_backend,
+    )
+
+    @app.get(
+        "/",
+        dependencies=[Depends(throttle)],
+        status_code=200,
+    )
+    async def ping_endpoint() -> typing.Dict[str, str]:
+        return {"message": "PONG"}
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # First request should succeed
+        response = client.get("/")
+        assert response.status_code == 200
+        assert response.json() == {"message": "PONG"}
+
+        # Second request should also succeed
+        response = client.get("/")
+        assert response.status_code == 200
+        assert response.json() == {"message": "PONG"}
+
+        # Third request should be throttled but since the identifier is UNLIMITED,
+        # it should not be throttled and should succeed
+        response = client.get("/")
+        assert response.status_code == 200
+        assert response.headers.get("Retry-After", None) is None
 
 
 @pytest.mark.anyio

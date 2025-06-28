@@ -9,8 +9,8 @@ from starlette.requests import HTTPConnection
 from typing_extensions import Annotated
 
 from traffik._utils import add_parameter_to_signature
-from traffik.throttles import BaseThrottle, NoLimit
-from traffik.types import HTTPConnectionT, P, Q, R, S
+from traffik.throttles import BaseThrottle
+from traffik.types import UNLIMITED, HTTPConnectionT, P, Q, R, S
 
 ThrottleT = typing.TypeVar("ThrottleT", bound=BaseThrottle)
 
@@ -169,7 +169,7 @@ def throttled(
         typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]
     ] = None,
 ) -> typing.Union[
-    DecoratorDepends[P, R, Q, None],
+    DecoratorDepends[P, R, Q, HTTPConnectionT],
     typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
 ]:
     """
@@ -205,7 +205,7 @@ def throttled(
 
     ```
     """
-    decorator_dependency = DecoratorDepends[P, R, Q, None](
+    decorator_dependency = DecoratorDepends[P, R, Q, HTTPConnectionT](
         dependency_decorator=_throttle_route,  # type: ignore
         dependency=throttle,
     )
@@ -238,12 +238,12 @@ def throttle_referers(
     """
     referrers = tuple(set(referrers))
 
-    async def _identifier(connection: HTTPConnection) -> str:
+    async def _identifier(connection: HTTPConnection) -> typing.Any:
         nonlocal referrers
 
         referrer = get_referrer(connection)
         if referrer not in referrers:
-            raise NoLimit()
+            return UNLIMITED
         return f"referer:{referrer}:{connection.scope['path']}"
 
     copied_throttle = copy.copy(throttle)

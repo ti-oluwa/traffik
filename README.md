@@ -18,7 +18,7 @@ Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-li
 - 🔧 **Flexible Configuration**: Time-based limits with multiple time units
 - 🎯 **Per-Route Throttling**: Individual limits for different endpoints
 - 📊 **Client Identification**: Customizable client identification strategies
-****
+
 ## Installation
 
 We recommend using `uv`, however, it is not a strict requirement.
@@ -555,25 +555,40 @@ throttle = HTTPThrottle(
 )
 ```
 
-### Excluding connections from Throttling
+### Exempting connections from Throttling
 
-You can exclude certain connections from throttling by writing a custom identifier that raises `traffik.exceptions.NoLimit` for those connections. This is useful when you have throttles you want to skip for specific routes or clients.
+You can exclude certain connections from throttling by writing a custom identifier that returns `traffik.UNLIMITED` for those connections. This is useful when you have throttles you want to skip for specific clients and/or routes.
 
 ```python
+import typing
 from starlette.requests import HTTPConnection
-from traffik.exceptions import NoLimit
+from traffik import UNLIMITED, HTTPThrottle
 
-async def admin_identifier(connection: HTTPConnection):
+def extract_user_id(authorization: str) -> str:
+    # Dummy function to extract user ID from JWT token
+    # Replace with actual JWT decoding logic
+    return authorization.split(" ")[1] if authorization else "anonymous"
+
+def extract_user_role(authorization: str) -> str:
+    # Dummy function to extract user role from JWT token
+    # Replace with actual JWT decoding logic
+    return "admin" if "admin" in authorization else "user"
+
+async def user_identifier(connection: HTTPConnection) -> str:
     # Use user ID from JWT token
     user_id = extract_user_id(connection.headers.get("authorization"))
-    if user_id == "admin":
-        raise NoLimit()  # Skip throttling for admin users
     return f"user:{user_id}:{connection.scope['path']}"
+
+async def no_throttle_admin_identifier(connection: HTTPConnection) -> typing.Any:
+    user_role = extract_user_role(connection.headers.get("authorization"))
+    if user_role == "admin":
+        return UNLIMITED  # Skip throttling for admin users
+    return user_identifier(connection)
 
 throttle = HTTPThrottle(
     limit=10,
     minutes=1,
-    identifier=admin_identifier,  # Override default (backend) identifier
+    identifier=no_throttle_admin_identifier,  # Override default (backend) identifier
 )
 ```
 
@@ -587,7 +602,11 @@ from starlette.exceptions import HTTPException
 import traffik
 
 
-async def custom_throttled_handler(connection: HTTPConnection, wait_period: int):
+async def custom_throttled_handler(
+    connection: HTTPConnection, 
+    wait_period: int, 
+    *args, **kwargs
+):
     raise HTTPException(
         status_code=429,
         detail=f"Too many requests. Try again in {wait_period // 1000} seconds.",
@@ -656,7 +675,7 @@ async def get_user_id(request: Request):
     return request.state.user.id if hasattr(request.state, 'user') else None
 
 
-async def user_identifier(request: Request):
+async def user_identifier(request: Request) -> str:
     # Extract user ID from JWT or session
     user_id = await get_user_id(request)
     return f"user:{user_id}"
@@ -730,7 +749,7 @@ from traffik import connection_identifier # Default identifier function
 
 
 # Custom identifier that handles anonymous users
-async def safe_identifier(connection: HTTPConnection):
+async def safe_identifier(connection: HTTPConnection) -> str:
     """
     Safely get the connection identifier, handling anonymous connections.
     """

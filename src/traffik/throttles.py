@@ -1,18 +1,17 @@
-import functools
 import hashlib
 import typing
 
 from annotated_types import Ge
-from starlette.requests import HTTPConnection, Request
+from starlette.requests import Request
 from starlette.websockets import WebSocket
 from typing_extensions import Annotated
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import ConfigurationError, NoLimit
+from traffik.exceptions import ConfigurationError
 from traffik.types import (
+    UNLIMITED,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
-    CoroutineFunction,
     HTTPConnectionT,
     T,
 )
@@ -24,32 +23,7 @@ __all__ = [
 ]
 
 
-class ThrottleMeta(type):
-    def __new__(cls, name, bases, attrs):
-        new_cls = super().__new__(cls, name, bases, attrs)
-        new_cls.__call__ = cls._capture_no_limit(new_cls.__call__)
-        return new_cls
-
-    @staticmethod
-    def _capture_no_limit(coroutine_func: CoroutineFunction) -> CoroutineFunction:
-        """
-        Wraps the coroutine function such that NoLimit exceptions are caught
-        and ignored, returning None instead.
-
-        :param func: The coroutine function to wrap
-        """
-
-        @functools.wraps(coroutine_func)
-        async def wrapper(*args, **kwargs) -> HTTPConnection:
-            try:
-                return await coroutine_func(*args, **kwargs)
-            except NoLimit:
-                return args[0]
-
-        return wrapper
-
-
-class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
+class BaseThrottle(typing.Generic[HTTPConnectionT]):
     """
     Base class for throttles
     """
@@ -122,8 +96,11 @@ class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
             )
 
         identifier = self.identifier = self.identifier or backend.identifier
-        key = await self.get_key(identifier, connection, *args, **kwargs)
-        backend_key = f"{backend.prefix}:{key}"
+        if (connection_id := await identifier(connection)) is UNLIMITED:
+            return connection
+
+        throttle_key = await self.get_key(connection, *args, **kwargs)
+        backend_key = f"{backend.prefix}:{connection_id}:{throttle_key}"
         if not await backend.check_key_pattern(backend_key):
             raise ValueError(
                 "Invalid throttling key pattern. "
@@ -133,24 +110,24 @@ class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
         wait_period = await backend.get_wait_period(
             backend_key, self.limit, self.expires_after
         )
-
         if wait_period != 0:
             handle_throttled = self.handle_throttled or backend.handle_throttled
             await handle_throttled(connection, wait_period, *args, **kwargs)
         return connection
 
     async def get_key(
-        self,
-        identifier: ConnectionIdentifier[HTTPConnectionT],
-        connection: HTTPConnectionT,
-        *args: typing.Any,
-        **kwargs: typing.Any,
+        self, connection: HTTPConnectionT, *args: typing.Any, **kwargs: typing.Any
     ) -> str:
         """
-        Returns the unique throttling key for the client.
+        Returns the unique throttling key for the connection.
 
         Key returned must match the pattern returned by `backend.get_key_pattern`,
         otherwise a ValueError is raised on key generation.
+
+        :param connection: The HTTP connection to throttle.
+        :param args: Additional positional arguments to pass to the throttled handler.
+        :param kwargs: Additional keyword arguments to pass to the throttled handler.
+        :return: The unique throttling key for the connection.
         """
         raise NotImplementedError
 
@@ -159,11 +136,7 @@ class HTTPThrottle(BaseThrottle[Request]):
     """HTTP connection throttle"""
 
     async def get_key(
-        self,
-        identifier: ConnectionIdentifier[Request],
-        request: Request,
-        *args: typing.Any,
-        **kwargs: typing.Any,
+        self, request: Request, *args: typing.Any, **kwargs: typing.Any
     ) -> str:
         route_index = 0
         dependency_index = 0
@@ -181,8 +154,7 @@ class HTTPThrottle(BaseThrottle[Request]):
                         dependency_index = j
                         break
 
-        rate_key = await identifier(request)
-        suffix = f"{rate_key}:{route_index}:{dependency_index}:{id(self)}"
+        suffix = f"{route_index}:{dependency_index}:{id(self)}"
         hashed_suffix = hashlib.md5(suffix.encode()).hexdigest()  # nosec
         throttle_key = f"http:{hashed_suffix}"
         # Added id(self) to ensure unique key for each throttle instance
@@ -204,13 +176,9 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
     """WebSocket connection throttle"""
 
     async def get_key(
-        self,
-        identifier: ConnectionIdentifier[WebSocket],
-        connection: WebSocket,
-        context_key: typing.Optional[str] = None,
+        self, connection: WebSocket, context_key: typing.Optional[str] = None
     ) -> str:
-        rate_key = await identifier(connection)
-        suffix = f"{rate_key}:{connection.url.path}:{id(self)}:{context_key or ''}"
+        suffix = f"{connection.url.path}:{id(self)}:{context_key or ''}"
         hashed_suffix = hashlib.md5(suffix.encode()).hexdigest()  # nosec
         throttle_key = f"ws:{hashed_suffix}"
         # Added id(self) to ensure unique key for each throttle instance

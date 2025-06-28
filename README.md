@@ -555,7 +555,7 @@ throttle = HTTPThrottle(
 )
 ```
 
-### Exxempting connections from Throttling
+### Exempting connections from Throttling
 
 You can exclude certain connections from throttling by writing a custom identifier that returns `traffik.UNLIMITED` for those connections. This is useful when you have throttles you want to skip for specific clients and/or routes.
 

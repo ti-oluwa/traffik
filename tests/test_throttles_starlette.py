@@ -115,7 +115,7 @@ def test_throttle_with_app_lifespan(inmemory_backend: InMemoryBackend) -> None:
         assert response.headers["Retry-After"] is not None
 
 
-def test_throttle_exemption_with_identier(inmemory_backend: InMemoryBackend) -> None:
+def test_throttle_exemption_with_identifier(inmemory_backend: InMemoryBackend) -> None:
     throttle = HTTPThrottle(
         limit=2,
         milliseconds=10,

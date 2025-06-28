@@ -126,7 +126,7 @@ def test_throttle_with_app_lifespan(lifespan_app: FastAPI) -> None:
         assert response.headers["Retry-After"] is not None
 
 
-def test_throttle_exemption_with_identier(
+def test_throttle_exemption_with_identifier(
     inmemory_backend: InMemoryBackend, app: FastAPI
 ) -> None:
     throttle = HTTPThrottle(

@@ -1,16 +1,47 @@
-name: Enforce PR Source Branch
+name: Enforce PR Source Branch and Origin
 
 on:
   pull_request:
     branches: [main]
 
 jobs:
-  block-invalid-source:
+  enforce-branch-policy:
     runs-on: ubuntu-latest
     steps:
-      - name: Check source branch
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required to access full history
+
+      - name: Add summary
         run: |
-          if [[ "${{ github.head_ref }}" != "develop" ]]; then
-            echo "❌ Pull requests to main must come from develop"
+            echo "## 🔒 Branch Policy Enforcement" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Only \`release/*\` and \`hotfix/*\` branches can PR into \`main\`" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ \`release/*\` must originate from \`develop\`" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ \`hotfix/*\` must originate from \`main\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Validate PR source branch and origin
+        run: |
+          SOURCE_BRANCH="${{ github.head_ref }}"
+          TARGET_BRANCH="${{ github.base_ref }}"
+
+          echo "🔍 Checking source: $SOURCE_BRANCH -> target: $TARGET_BRANCH"
+
+          if [[ "$SOURCE_BRANCH" == release/* ]]; then
+            BASE_BRANCH="develop"
+          elif [[ "$SOURCE_BRANCH" == hotfix/* ]]; then
+            BASE_BRANCH="main"
+          else
+            echo "❌ Invalid source branch name: must start with release/ or hotfix/"
             exit 1
           fi
+
+          git fetch origin $BASE_BRANCH
+          MERGE_BASE=$(git merge-base origin/$SOURCE_BRANCH origin/$BASE_BRANCH)
+
+          if [[ "$(git rev-parse origin/$BASE_BRANCH)" != "$MERGE_BASE" ]]; then
+            echo "❌ $SOURCE_BRANCH must be based on $BASE_BRANCH"
+            exit 1
+          fi
+
+          echo "✅ $SOURCE_BRANCH is valid and based on $BASE_BRANCH"

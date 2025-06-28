@@ -133,7 +133,6 @@ Available targets:
   redis-start     Start Redis using Docker
   redis-stop      Stop Redis container
   ci              Run CI-like checks locally
-  test-performance Run performance/load tests
   debug-env       Show environment information
   example         Run example usage tests
   dev             Quick development workflow
@@ -258,7 +257,6 @@ Test specific functionality:
 ```bash
 make test-throttles   # Throttling mechanisms
 make test-decorators  # Decorator functionality
-make test-concurrent  # Concurrency/performance
 ```
 
 ### 3. Integration Testing

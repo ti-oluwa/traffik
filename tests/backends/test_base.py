@@ -1,11 +1,14 @@
 import asyncio
 import re
-from contextlib import asynccontextmanager
 
 import pytest
-from fastapi import FastAPI
+from starlette.applications import Starlette
 
-from traffik.backends.base import ThrottleBackend, throttle_backend_ctx
+from traffik.backends.base import (
+    BACKEND_STATE_KEY,
+    ThrottleBackend,
+    get_throttle_backend,
+)
 
 
 @pytest.fixture(scope="module")
@@ -33,40 +36,36 @@ async def test_check_key_pattern(backend: ThrottleBackend) -> None:
 @pytest.mark.asyncio
 async def test_throttle_backend_context_management(backend: ThrottleBackend) -> None:
     # Test that the context variable is initialized to None
-    assert throttle_backend_ctx.get() is None
+    assert get_throttle_backend() is None
 
     with pytest.raises(NotImplementedError):
         async with backend():
             # Test that the context variable is set within the context
-            assert throttle_backend_ctx.get() is backend
+            assert get_throttle_backend() is backend
 
     # Test that the context variable is reset after exiting the context
-    assert throttle_backend_ctx.get() is None
+    assert get_throttle_backend() is None
 
 
 @pytest.mark.asyncio
 async def test_throttle_backend_lifespan_management(backend: ThrottleBackend) -> None:
-    """Test that backend context is properly managed through FastAPI lifespan."""
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        async with backend(app):
-            yield
-
-    app = FastAPI()
+    """Test that backend context is properly managed through application lifespan."""
+    app = Starlette()
 
     # Test that context is None before lifespan starts
-    assert throttle_backend_ctx.get() is None
+    assert get_throttle_backend() is None
 
     # Simulate lifespan startup
-    startup_complete = False
+    started = False
 
     async def run_lifespan() -> None:
-        nonlocal startup_complete
-        async with lifespan(app):
-            startup_complete = True
+        nonlocal started
+        async with backend.lifespan(app):
+            started = True
             # Context should be set during lifespan
-            assert throttle_backend_ctx.get() is backend
+            assert get_throttle_backend() is backend
+            # Check that the backend is set in the app state
+            assert getattr(app.state, BACKEND_STATE_KEY, None) is backend
             # Simulate the app running for a bit
             await asyncio.sleep(0.1)
 
@@ -75,7 +74,8 @@ async def test_throttle_backend_lifespan_management(backend: ThrottleBackend) ->
         # This will raise NotImplementedError from backend.initialize()
         # but we can still test the context management
         await run_lifespan()
-        assert startup_complete
+        assert started
 
     # After lifespan ends, context should be reset
-    assert throttle_backend_ctx.get() is None
+    assert get_throttle_backend() is None
+

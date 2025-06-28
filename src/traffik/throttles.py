@@ -4,7 +4,6 @@ import typing
 
 from annotated_types import Ge
 from starlette.requests import Request
-from starlette.responses import Response
 from starlette.websockets import WebSocket
 from typing_extensions import Annotated
 
@@ -163,14 +162,21 @@ class HTTPThrottle(BaseThrottle[Request]):
         self,
         identifier: ConnectionIdentifier[Request],
         request: Request,
-        response: Response,
+        *args: typing.Any,
+        **kwargs: typing.Any,
     ) -> str:
         route_index = 0
         dependency_index = 0
         for i, route in enumerate(request.app.routes):
+            if (route_dependencies := getattr(route, "dependencies", None)) is None:
+                # If the route has no dependencies, its mostlikely not a FastAPI route
+                break
             if route.path == request.scope["path"] and request.method in route.methods:
                 route_index = i
-                for j, dependency in enumerate(route.dependencies):
+                route_dependencies = typing.cast(
+                    typing.Sequence[typing.Any], route_dependencies
+                )
+                for j, dependency in enumerate(route_dependencies):
                     if self is dependency.dependency:
                         dependency_index = j
                         break
@@ -184,14 +190,13 @@ class HTTPThrottle(BaseThrottle[Request]):
         # used with the `throttle` decorator.
         return throttle_key
 
-    async def __call__(self, connection: Request, response: Response) -> None:
+    async def __call__(self, connection: Request) -> None:
         """
         Calls the throttle for an HTTP connection.
 
         :param connection: The HTTP connection to throttle.
-        :param response: The HTTP response to be returned if throttled.
         """
-        return await super().__call__(connection, response=response)
+        return await super().__call__(connection)
 
 
 class WebSocketThrottle(BaseThrottle[WebSocket]):

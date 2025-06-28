@@ -2,10 +2,7 @@ import inspect
 import ipaddress
 import typing
 
-import fastapi.params
 from starlette.requests import HTTPConnection
-
-from traffik.types import P, Q, R, S
 
 
 def get_ip_address(
@@ -14,7 +11,12 @@ def get_ip_address(
     """
     Returns the IP address of the connection client.
 
+    This function attempts to extract the IP address from the `x-forwarded-for` header
+    or the `remote-addr` header. If neither is present, it falls back to the `client.host`
+    attribute of the connection.
+
     :param connection: The HTTP connection
+    :return: The IP address of the connection client, or None if it cannot be determined.
     """
     x_forwarded_for = connection.headers.get(
         "x-forwarded-for"
@@ -103,45 +105,3 @@ def add_parameter_to_signature(
     func.__signature__ = new_sig  # type: ignore
     return func
 
-
-class DecoratorDepends(
-    typing.Generic[P, R, Q, S],
-    fastapi.params.Depends,
-):
-    """
-    `fastapi.params.Depends` subclass that allows instances to be used as decorators.
-
-    Instances use `dependency_decorator` to apply the dependency to the decorated object,
-    while still allowing usage as regular FastAPI dependencies.
-
-    `dependency_decorator` is a callable that takes the decorated object and an optional dependency
-    and returns the decorated object with/without the dependency applied.
-
-    Think of the `dependency_decorator` as a chef that mixes the sauce (dependency)
-    with the dish (decorated object), making a dish with the sauce or without it.
-    """
-
-    def __init__(
-        self,
-        dependency_decorator: typing.Callable[
-            [
-                typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
-                typing.Optional[
-                    typing.Callable[Q, typing.Union[S, typing.Awaitable[S]]]
-                ],
-            ],
-            typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
-        ],
-        dependency: typing.Optional[
-            typing.Callable[Q, typing.Union[S, typing.Awaitable[S]]]
-        ] = None,
-        *,
-        use_cache: bool = True,
-    ) -> None:
-        self.dependency_decorator = dependency_decorator
-        super().__init__(dependency, use_cache=use_cache)
-
-    def __call__(
-        self, decorated: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]
-    ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
-        return self.dependency_decorator(decorated, self.dependency)

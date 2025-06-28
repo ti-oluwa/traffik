@@ -89,9 +89,6 @@ make test
 
 # Without Redis
 make test-fast
-
-# Performance tests
-make test-performance
 ```
 
 ### Windows
@@ -226,9 +223,6 @@ asyncio.run(demo())
 ## Performance Testing
 
 ```bash
-# Run performance tests
-make test-performance
-
 # Manual performance test
 uv run python -c "
 import asyncio

@@ -1,4 +1,4 @@
-# Traffik - A FastAPI throttling library
+# Traffik - A Starlette throttling library
 
 [![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
 [![Code Quality](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml)
@@ -6,7 +6,7 @@
 <!-- [![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
 [![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/) -->
 
-Traffik provides rate limiting capabilities for FastAPI applications with support for both HTTP and WebSocket connections. It offers multiple backend options including in-memory storage for development and Redis for production environments. Customizable throttling strategies allow you to define limits based on time intervals, client identifiers, and more.
+Traffik provides rate limiting capabilities for starlette-based applications like FastAPI with support for both HTTP and WebSocket connections. It offers multiple backend options including in-memory storage for development and Redis for production environments. Customizable throttling strategies allow you to define limits based on time intervals, client identifiers, and more.
 
 Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-limiter), and some of the code is adapted from it. However, Traffik aims to provide a more flexible and extensible solution with a focus on ease of use. Some of these differences are listed below.
 
@@ -36,6 +36,15 @@ uv add traffik
 pip install traffik
 ```
 
+Let's also install `fastapi` if you haven't already:
+
+```bash
+uv add traffik[fastapi]
+
+# or using pip
+pip install traffik[fastapi]
+```
+
 ### With Redis Support
 
 ```bash
@@ -45,7 +54,7 @@ uv add traffik[redis]
 pip install traffik[redis]
 ```
 
-### With All Backends
+### With Support for all Features
 
 ```bash
 uv add traffik[all]
@@ -94,6 +103,42 @@ For quick testing across different platforms and Python versions:
 
 ### 1. Basic HTTP Throttling
 
+### For Starlette
+
+````python
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from traffik.throttles import HTTPThrottle
+from traffik.backends.inmemory import InMemoryBackend
+
+# Create backend
+throttle_backend = InMemoryBackend(prefix="myapp", persistent=False)
+
+throttle = HTTPThrottle(
+    limit=5,        # 5 requests
+    seconds=10,     # per 10 seconds
+)
+
+async def throttled_endpoint(request: Request):
+    """
+    Endpoint that is throttled.
+    """
+    await throttle(request)
+    return JSONResponse({"message": "Success"})
+
+
+app = Starlette(
+    routes=[
+        Route("/throttled", throttled_endpoint, methods=["GET"]),
+    ],
+    lifespan=throttle_backend.lifespan,  # Use `throttle_backend.lifespan` for cleanup
+)
+````
+
+#### For FastAPI
+
 ```python
 from fastapi import FastAPI, Depends
 from contextlib import asynccontextmanager
@@ -125,10 +170,13 @@ async def say_hello():
 
 ### 2. Using Decorators
 
+Currently, the available decorator is only for FastAPI applications.
+
 ```python
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-import traffik
+from traffik.throttles import HTTPThrottle
+from traffik.decorators import throttled # Requires `traffik[fastapi]` or `traffik[all]`
 from traffik.backends.redis import RedisBackend
 
 throttle_backend = RedisBackend(
@@ -147,7 +195,7 @@ app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/api/limited")
-@traffik.throttled(traffik.HTTPThrottle(limit=5, minutes=1))
+@throttled(HTTPThrottle(limit=5, minutes=1))
 async def limited_endpoint():
     return {"data": "Limited access"}
 
@@ -155,16 +203,17 @@ async def limited_endpoint():
 
 ### 3. WebSocket Throttling
 
+WebSocket throttling can be implemented using the `WebSocketThrottle` class. This allows you to limit the number of messages a client can send over a WebSocket connection.
+
 ```python
-import traffik
+from traffik.throttles import WebSocketThrottle
 from starlette.websockets import WebSocket
 
-ws_throttle = traffik.WebSocketThrottle(
+ws_throttle = WebSocketThrottle(
     limit=3,
     seconds=10,
 )
 
-@app.websocket("/ws/")
 async def ws_endpoint(websocket: WebSocket) -> None:
     """
     WebSocket endpoint with throttling.
@@ -214,6 +263,28 @@ async def ws_endpoint(websocket: WebSocket) -> None:
             close_reason = "Internal error"
             break
     await websocket.close(code=close_code, reason=close_reason)
+```
+
+You can then use this WebSocket endpoint in your Starlette application:
+
+```python
+from starlette.applications import Starlette
+from starlette.routing import WebSocketRoute
+
+app = Starlette(
+    routes=[
+        WebSocketRoute("/ws/limited", ws_endpoint),
+    ]
+)
+```
+
+Or in a FastAPI application:
+
+```python
+from fastapi import FastAPI, WebSocket
+
+app = FastAPI()
+app.websocket("/ws/limited")(ws_endpoint)
 ```
 
 ## Backends
@@ -484,6 +555,28 @@ throttle = HTTPThrottle(
 )
 ```
 
+### Excluding connections from Throttling
+
+You can exclude certain connections from throttling by writing a custom identifier that raises `traffik.exceptions.NoLimit` for those connections. This is useful when you have throttles you want to skip for specific routes or clients.
+
+```python
+from starlette.requests import HTTPConnection
+from traffik.exceptions import NoLimit
+
+async def admin_identifier(connection: HTTPConnection):
+    # Use user ID from JWT token
+    user_id = extract_user_id(connection.headers.get("authorization"))
+    if user_id == "admin":
+        raise NoLimit()  # Skip throttling for admin users
+    return f"user:{user_id}:{connection.scope['path']}"
+
+throttle = HTTPThrottle(
+    limit=10,
+    minutes=1,
+    identifier=admin_identifier,  # Override default (backend) identifier
+)
+```
+
 ### Custom Throttled Response
 
 Customize what happens when a client is throttled:
@@ -492,6 +585,7 @@ Customize what happens when a client is throttled:
 from starlette.requests import HTTPConnection
 from starlette.exceptions import HTTPException
 import traffik
+
 
 async def custom_throttled_handler(connection: HTTPConnection, wait_period: int):
     raise HTTPException(
@@ -511,9 +605,22 @@ throttle = traffik.HTTPThrottle(
 
 ### Multiple Rate Limits
 
-Apply different limits to the same endpoint:
+Different limits can be applied to the same endpoint using multiple throttles. This is useful for burst and sustained limits. Take the FastAPI example below:
 
 ```python
+from fastapi import FastAPI, Depends
+from traffik.throttles import HTTPThrottle
+from traffik.backends.inmemory import InMemoryBackend
+
+throttle_backend = InMemoryBackend(prefix="myapp", persistent=False)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with throttle_backend(app):
+        yield
+
+app = FastAPI(lifespan=lifespan)
+
 # Burst limit: 10 requests per minute
 burst_throttle = HTTPThrottle(limit=10, minutes=1)
 
@@ -524,9 +631,13 @@ async def search_db(query: str):
     # Simulate a database search
     return {"query": query, "result": ...}
 
+
 @app.get(
     "/api/data",
-    dependencies=[Depends(burst_throttle), Depends(sustained_throttle)],
+    dependencies=[
+        Depends(burst_throttle), 
+        Depends(sustained_throttle)
+    ],
 )
 async def search(query: str):
     data = await search_db(query)
@@ -537,7 +648,7 @@ async def search(query: str):
 
 ```python
 from traffik.throttles import HTTPThrottle
-from fastapi import Request
+from starlette.requests import Request
 
 
 async def get_user_id(request: Request):
@@ -550,6 +661,7 @@ async def user_identifier(request: Request):
     user_id = await get_user_id(request)
     return f"user:{user_id}"
 
+
 user_throttle = HTTPThrottle(
     limit=100,
     hours=1,
@@ -559,13 +671,45 @@ user_throttle = HTTPThrottle(
 
 ### Application Lifespan Management
 
+For Starlette applications, you can manage the backend lifecycle using the `lifespan` context manager on the throttle backend. This ensures that the backend is properly initialized and cleaned up when the application starts and stops.
+
+```python
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.requests import Request
+from traffik.backends.inmemory import InMemoryBackend
+from traffik.throttles import HTTPThrottle
+
+# Create backend
+throttle_backend = InMemoryBackend(prefix="myapp", persistent=False)
+throttle = HTTPThrottle(
+    limit=5,        # 5 requests
+    seconds=10,     # per 10 seconds
+)
+async def throttled_endpoint(request: Request):
+    """
+    Endpoint that is throttled.
+    """
+    await throttle(request)
+    return JSONResponse({"message": "Success"})
+
+app = Starlette(
+    routes=[
+        Route("/throttled", throttled_endpoint, methods=["GET"]),
+    ],
+    lifespan=throttle_backend.lifespan,  # Use `throttle_backend.lifespan` for cleanup
+)
+```
+
+For FastAPI applications, you can use the `lifespan` attribute of the throttle backend to manage the backend lifecycle. However, you can also use the `asynccontextmanager` decorator to create a lifespan context manager for your FastAPI application. This allows you to perform other setup and teardown tasks when the application starts and stops.
+
 ```python
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Other setup tasks can go here
     async with backend(app):
         yield
     # Shutdown - backend cleanup handled automatically
@@ -605,34 +749,37 @@ write something similar for your custom backend too.
 ```python
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
-from fastapi import FastAPI, Depends
+from httpx import AsyncClient, ASGITransport # pip install httpx
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.throttles import HTTPThrottle
 
 
-@pytest_asyncio.fixture(scope="function")
-async def backend():
-    backend = InMemoryBackend(prefix="test", persistent=False)
-    # backend can be used as a context manager
-    # without an ASGI app
-    async with backend():
-        yield backend
-
-
 @pytest.fixture(scope="function")
-async def app():
-    app = FastAPI()    
-    return app
+async def backend() -> InMemoryBackend:
+    return InMemoryBackend(prefix="test", persistent=False)
 
 
 @pytest.mark.anyio
-async def test_throttling(backend: InMemoryBackend, app: FastAPI):
+async def test_throttling(backend: InMemoryBackend):
     throttle = HTTPThrottle(limit=2, seconds=1)
 
-    @app.get("/throttled", dependencies=[Depends(throttle)])
-    async def throttled_endpoint():
-        return {"message": "This endpoint is throttled"}
+    async def throttled_endpoint(request: Request):
+        """
+        Endpoint that is throttled.
+        """
+        await throttle(request)
+        return JSONResponse({"message": "Success"})
+    
+    app = Starlette(
+        routes=[
+            Route("/throttled", throttled_endpoint, methods=["GET"]),
+        ],
+        lifespan=backend.lifespan,  # Use `backend.lifespan` for cleanup
+    )
 
     # Test that first 2 requests succeed
     async with AsyncClient(

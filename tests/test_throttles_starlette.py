@@ -5,11 +5,14 @@ from itertools import repeat
 
 import anyio
 import pytest
-from fastapi import Depends, FastAPI, WebSocketDisconnect
 from httpx import ASGITransport, AsyncClient, Response
+from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
-from starlette.requests import HTTPConnection
-from starlette.websockets import WebSocket
+from starlette.requests import HTTPConnection, Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route, WebSocketRoute
+from starlette.testclient import TestClient
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from tests.asyncio_client import AsyncioTestClient
 from traffik.backends.inmemory import InMemoryBackend
@@ -19,12 +22,6 @@ from traffik.throttles import BaseThrottle, HTTPThrottle, WebSocketThrottle
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
 REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
-
-
-@pytest.fixture(scope="function")
-async def app() -> FastAPI:
-    app = FastAPI()
-    return app
 
 
 @pytest.fixture(scope="function")
@@ -41,7 +38,7 @@ async def redis_backend() -> RedisBackend:
     )
 
 
-async def _testclient_identifier(connection: WebSocket) -> str:
+async def _testclient_identifier(connection: HTTPConnection) -> str:
     return "testclient"
 
 
@@ -51,7 +48,7 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
         BaseThrottle(limit=-1)
 
     async def _throttle_handler(
-        connection: HTTPConnection,
+        connection: Request,
         wait_period: int,
     ) -> None:
         # do nothing, just a placeholder for testing
@@ -75,11 +72,47 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
         assert throttle.handle_throttled is not inmemory_backend.handle_throttled
 
 
+def test_throttle_with_app_lifespan(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        limit=2,
+        milliseconds=10,
+        seconds=50,
+        minutes=2,
+        hours=1,
+        identifier=_testclient_identifier,
+    )
+
+    async def ping_endpoint(request: Request) -> JSONResponse:
+        await throttle(request)
+        return JSONResponse({"message": "PONG"})
+
+    routes = [
+        Route("/", ping_endpoint, methods=["GET"]),
+    ]
+
+    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # First request should succeed
+        response = client.get("/")
+        assert response.status_code == 200
+        assert response.json() == {"message": "PONG"}
+
+        # Second request should also succeed
+        response = client.get("/")
+        assert response.status_code == 200
+        assert response.json() == {"message": "PONG"}
+
+        # Third request should be throttled
+        response = client.get("/")
+        assert response.status_code == 429
+        assert response.headers["Retry-After"] is not None
+
+
 @pytest.mark.anyio
-async def test_http_throttle_inmemory(
-    inmemory_backend: InMemoryBackend, app: FastAPI
-) -> None:
-    async with inmemory_backend(app):
+async def test_http_throttle_inmemory(inmemory_backend: InMemoryBackend) -> None:
+    async with inmemory_backend():
         throttle = HTTPThrottle(
             limit=3,
             seconds=3,
@@ -87,13 +120,16 @@ async def test_http_throttle_inmemory(
         )
         sleep_time = 4 + (5 / 1000)
 
-        @app.get(
-            "/{name}",
-            dependencies=[Depends(throttle)],
-            status_code=200,
-        )
-        async def ping_endpoint(name: str) -> typing.Dict[str, str]:
-            return {"message": f"PONG: {name}"}
+        async def ping_endpoint(request: Request) -> JSONResponse:
+            await throttle(request)
+            name = request.path_params.get("name", "unknown")
+            return JSONResponse({"message": f"PONG: {name}"})
+
+        routes = [
+            Route("/{name}", ping_endpoint, methods=["GET"]),
+        ]
+
+        app = Starlette(routes=routes)
 
         base_url = "http://0.0.0.0"
         async with AsyncClient(
@@ -118,8 +154,8 @@ async def test_http_throttle_inmemory(
 
 
 @pytest.mark.anyio
-async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) -> None:
-    async with redis_backend(app):
+async def test_http_throttle_redis(redis_backend: RedisBackend) -> None:
+    async with redis_backend():
         throttle = HTTPThrottle(
             limit=3,
             seconds=3,
@@ -127,13 +163,16 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
         )
         sleep_time = 4 + (5 / 1000)
 
-        @app.get(
-            "/{name}",
-            dependencies=[Depends(throttle)],
-            status_code=200,
-        )
-        async def ping_endpoint(name: str) -> typing.Dict[str, str]:
-            return {"message": f"PONG: {name}"}
+        async def ping_endpoint(request: Request) -> JSONResponse:
+            await throttle(request)
+            name = request.path_params.get("name", "unknown")
+            return JSONResponse({"message": f"PONG: {name}"})
+
+        routes = [
+            Route("/{name}", ping_endpoint, methods=["GET"]),
+        ]
+
+        app = Starlette(routes=routes)
 
         base_url = "http://0.0.0.0"
         async with AsyncClient(
@@ -159,22 +198,25 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
 
 @pytest.mark.anyio
 async def test_http_throttle_inmemory_concurrent(
-    inmemory_backend: InMemoryBackend, app: FastAPI
+    inmemory_backend: InMemoryBackend,
 ) -> None:
-    async with inmemory_backend(app):
+    async with inmemory_backend():
         throttle = HTTPThrottle(
             limit=3,
             seconds=5,
             milliseconds=5,
         )
 
-        @app.get(
-            "/concurrent/{name}",
-            dependencies=[Depends(throttle)],
-            status_code=200,
-        )
-        async def ping_endpoint(name: str) -> typing.Dict[str, str]:
-            return {"message": f"PONG: {name}"}
+        async def ping_endpoint(request: Request) -> JSONResponse:
+            await throttle(request)
+            name = request.path_params.get("name", "unknown")
+            return JSONResponse({"message": f"PONG: {name}"})
+
+        routes = [
+            Route("/{name}", ping_endpoint, methods=["GET"]),
+        ]
+
+        app = Starlette(routes=routes)
 
         base_url = "http://0.0.0.0"
         async with AsyncClient(
@@ -182,8 +224,8 @@ async def test_http_throttle_inmemory_concurrent(
             base_url=base_url,
         ) as client:
 
-            async def make_request(name):
-                return await client.get(f"{base_url}/concurrent/{name}")
+            async def make_request(name) -> Response:
+                return await client.get(f"{base_url}/{name}")
 
             responses = await asyncio.gather(
                 *(make_request(name) for name in repeat("test-client", 5))
@@ -194,32 +236,33 @@ async def test_http_throttle_inmemory_concurrent(
 
 
 @pytest.mark.anyio
-async def test_http_throttle_redis_concurrent(
-    redis_backend: RedisBackend, app: FastAPI
-) -> None:
-    async with redis_backend(app):
+async def test_http_throttle_redis_concurrent(redis_backend: RedisBackend) -> None:
+    async with redis_backend():
         throttle = HTTPThrottle(
             limit=3,
             seconds=5,
             milliseconds=5,
         )
 
-        @app.get(
-            "/concurrent/{name}",
-            dependencies=[Depends(throttle)],
-            status_code=200,
-        )
-        async def ping_endpoint(name: str) -> typing.Dict[str, str]:
-            return {"message": f"PONG: {name}"}
+        async def ping_endpoint(request: Request) -> JSONResponse:
+            await throttle(request)
+            name = request.path_params.get("name", "unknown")
+            return JSONResponse({"message": f"PONG: {name}"})
 
-        base_url = "ws://0.0.0.0"
+        routes = [
+            Route("/{name}", ping_endpoint, methods=["GET"]),
+        ]
+
+        app = Starlette(routes=routes)
+
+        base_url = "http://0.0.0.0"
         async with AsyncClient(
             transport=ASGITransport(app=app),
             base_url=base_url,
         ) as client:
 
             async def make_request(name) -> Response:
-                return await client.get(f"{base_url}/concurrent/{name}")
+                return await client.get(f"{base_url}/{name}")
 
             responses = await asyncio.gather(
                 *(make_request(name) for name in repeat("test-client", 5))
@@ -230,10 +273,8 @@ async def test_http_throttle_redis_concurrent(
 
 
 @pytest.mark.asyncio
-async def test_websocket_throttle_inmemory(
-    inmemory_backend: InMemoryBackend, app: FastAPI
-) -> None:
-    async with inmemory_backend(app):
+async def test_websocket_throttle_inmemory(inmemory_backend: InMemoryBackend) -> None:
+    async with inmemory_backend():
         throttle = WebSocketThrottle(
             limit=3,
             seconds=5,
@@ -241,7 +282,6 @@ async def test_websocket_throttle_inmemory(
             identifier=_testclient_identifier,
         )
 
-        @app.websocket("/ws/")
         async def ws_endpoint(websocket: WebSocket) -> None:
             await websocket.accept()
             print("ACCEPTED WEBSOCKET CONNECTION")
@@ -287,11 +327,17 @@ async def test_websocket_throttle_inmemory(
                     close_code = 1011  # Internal error
                     close_reason = "Internal error"
                     break
-            
+
             # Allow time for the message put in the queue to be processed
             # and received by the client before closing the websocket
             await asyncio.sleep(1)
             await websocket.close(code=close_code, reason=close_reason)
+
+        routes = [
+            WebSocketRoute("/ws/", ws_endpoint),
+        ]
+
+        app = Starlette(routes=routes)
 
         base_url = "http://0.0.0.0"
         running_loop = asyncio.get_running_loop()
@@ -319,7 +365,9 @@ async def test_websocket_throttle_inmemory(
                 assert result[0] == "success"
                 assert result[1] == 200
                 if count == 3:
-                    sleep_time = 5 + (5 / 1000) + 2 # For the last request, we wait a bit longer
+                    sleep_time = (
+                        5 + (5 / 1000) + 2
+                    )  # For the last request, we wait a bit longer
                     await asyncio.sleep(sleep_time)
 
             await inmemory_backend.reset()
@@ -338,11 +386,10 @@ async def test_websocket_throttle_inmemory(
                     assert result[0] == "success"
                     assert result[1] == 200
 
+
 @pytest.mark.asyncio
-async def test_websocket_throttle_redis(
-    redis_backend: RedisBackend, app: FastAPI
-) -> None:
-    async with redis_backend(app):
+async def test_websocket_throttle_redis(redis_backend: RedisBackend) -> None:
+    async with redis_backend():
         throttle = WebSocketThrottle(
             limit=3,
             seconds=5,
@@ -350,7 +397,6 @@ async def test_websocket_throttle_redis(
             identifier=_testclient_identifier,
         )
 
-        @app.websocket("/ws/")
         async def ws_endpoint(websocket: WebSocket) -> None:
             await websocket.accept()
             print("ACCEPTED WEBSOCKET CONNECTION")
@@ -402,6 +448,12 @@ async def test_websocket_throttle_redis(
             await asyncio.sleep(0.1)
             await websocket.close(code=close_code, reason=close_reason)
 
+        routes = [
+            WebSocketRoute("/ws/", ws_endpoint),
+        ]
+
+        app = Starlette(routes=routes)
+
         base_url = "http://0.0.0.0"
         running_loop = asyncio.get_running_loop()
         async with AsyncioTestClient(
@@ -428,7 +480,9 @@ async def test_websocket_throttle_redis(
                 assert result[0] == "success"
                 assert result[1] == 200
                 if count == 3:
-                    sleep_time = 5 + (5 / 1000) + 1 # For the last request, we wait a bit longer
+                    sleep_time = (
+                        5 + (5 / 1000) + 1
+                    )  # For the last request, we wait a bit longer
                     await asyncio.sleep(sleep_time)
 
             await redis_backend.reset()

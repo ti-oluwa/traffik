@@ -2,6 +2,7 @@ import functools
 import math
 import re
 import typing
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 
 from starlette.exceptions import HTTPException
@@ -142,6 +143,14 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     async def close(self) -> None:
         """Close the backend connection."""
         raise NotImplementedError
+
+    @asynccontextmanager
+    async def lifespan(self, app: ASGIApp) -> typing.AsyncIterator[None]:
+        """
+        ASGI lifespan context manager for the throttle backend.
+        """
+        async with self(app):
+            yield
 
     def __call__(
         self,

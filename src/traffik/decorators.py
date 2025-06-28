@@ -4,15 +4,55 @@ import functools
 import inspect
 import typing
 
-import fastapi
+from fastapi.params import Depends
 from starlette.requests import HTTPConnection
 from typing_extensions import Annotated
 
-from traffik._utils import DecoratorDepends, add_parameter_to_signature
+from traffik._utils import add_parameter_to_signature
 from traffik.throttles import BaseThrottle, NoLimit
-from traffik.types import HTTPConnectionT, P, Q, R
+from traffik.types import HTTPConnectionT, P, Q, R, S
 
 ThrottleT = typing.TypeVar("ThrottleT", bound=BaseThrottle)
+
+
+class DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
+    """
+    `fastapi.params.Depends` subclass that allows instances to be used as decorators.
+
+    Instances use `dependency_decorator` to apply the dependency to the decorated object,
+    while still allowing usage as regular FastAPI dependencies.
+
+    `dependency_decorator` is a callable that takes the decorated object and an optional dependency
+    and returns the decorated object with/without the dependency applied.
+
+    Think of the `dependency_decorator` as a chef that mixes the sauce (dependency)
+    with the dish (decorated object), making a dish with the sauce or without it.
+    """
+
+    def __init__(
+        self,
+        dependency_decorator: typing.Callable[
+            [
+                typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
+                typing.Optional[
+                    typing.Callable[Q, typing.Union[S, typing.Awaitable[S]]]
+                ],
+            ],
+            typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
+        ],
+        dependency: typing.Optional[
+            typing.Callable[Q, typing.Union[S, typing.Awaitable[S]]]
+        ] = None,
+        *,
+        use_cache: bool = True,
+    ) -> None:
+        self.dependency_decorator = dependency_decorator
+        super().__init__(dependency, use_cache=use_cache)
+
+    def __call__(
+        self, decorated: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]
+    ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
+        return self.dependency_decorator(decorated, self.dependency)
 
 
 # Is this worth it? Just because of the `throttle` decorator?
@@ -42,7 +82,7 @@ def _wrap_route(
     if asyncio.iscoroutinefunction(route):
         wrapper_code = f"""
 async def route_wrapper(
-    {throttle_dep_param_name}: Annotated[typing.Any, fastapi.Depends(throttle)],
+    {throttle_dep_param_name}: Annotated[typing.Any, Depends(throttle)],
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> R:
@@ -51,7 +91,7 @@ async def route_wrapper(
     else:
         wrapper_code = f"""
 def route_wrapper(
-    {throttle_dep_param_name}: Annotated[typing.Any, fastapi.Depends(throttle)],
+    {throttle_dep_param_name}: Annotated[typing.Any, Depends(throttle)],
     *args: P.args,
     **kwargs: P.kwargs,
 ) -> R:
@@ -61,6 +101,7 @@ def route_wrapper(
     local_namespace = {
         "throttle": throttle,
         "Annotated": Annotated,
+        "Depends": Depends,
     }
     global_namespace = {
         **globals(),
@@ -87,7 +128,7 @@ def route_wrapper(
         parameter=inspect.Parameter(
             name=throttle_dep_param_name,
             kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            annotation=Annotated[typing.Any, fastapi.Depends(throttle)],
+            annotation=Annotated[typing.Any, Depends(throttle)],
         ),
         index=0,  # Since the throttle dependency was added as the first parameter
     )
@@ -132,13 +173,12 @@ def throttled(
     typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
 ]:
     """
-    Route dependency/decorator that throttles connections to a route
-    based on the defined client identifier.
+    Throttles connections to decorated route using the provided throttle.
 
-    :param route: Decorated route to throttle.
-    :param identifier: A callable that generates a unique identifier for the client. Defaults to the client IP.
-    :param throttle_type: The throttle type to use. Defaults to `HTTPThrottle`.
-    :param throttle_kwargs: Keyword arguments to be used to instantiate the throttle type.
+    :param throttle: The throttle to apply to the route.
+    :param route: The route to be throttled. If not provided, returns a decorator that can be used to apply throttling to routes.
+    :return: A decorator that applies throttling to the route, or the wrapped route if `route` is provided.
+
 
     Example:
     ```python

@@ -18,7 +18,7 @@ Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-li
 - 🔧 **Flexible Configuration**: Time-based limits with multiple time units
 - 🎯 **Per-Route Throttling**: Individual limits for different endpoints
 - 📊 **Client Identification**: Customizable client identification strategies
-****
+
 ## Installation
 
 We recommend using `uv`, however, it is not a strict requirement.
@@ -563,7 +563,7 @@ You can exclude certain connections from throttling by writing a custom identifi
 from starlette.requests import HTTPConnection
 from traffik.exceptions import NoLimit
 
-async def admin_identifier(connection: HTTPConnection):
+async def admin_identifier(connection: HTTPConnection) -> str:
     # Use user ID from JWT token
     user_id = extract_user_id(connection.headers.get("authorization"))
     if user_id == "admin":
@@ -587,7 +587,11 @@ from starlette.exceptions import HTTPException
 import traffik
 
 
-async def custom_throttled_handler(connection: HTTPConnection, wait_period: int):
+async def custom_throttled_handler(
+    connection: HTTPConnection, 
+    wait_period: int, 
+    *args, **kwargs
+):
     raise HTTPException(
         status_code=429,
         detail=f"Too many requests. Try again in {wait_period // 1000} seconds.",
@@ -656,7 +660,7 @@ async def get_user_id(request: Request):
     return request.state.user.id if hasattr(request.state, 'user') else None
 
 
-async def user_identifier(request: Request):
+async def user_identifier(request: Request) -> str:
     # Extract user ID from JWT or session
     user_id = await get_user_id(request)
     return f"user:{user_id}"
@@ -730,7 +734,7 @@ from traffik import connection_identifier # Default identifier function
 
 
 # Custom identifier that handles anonymous users
-async def safe_identifier(connection: HTTPConnection):
+async def safe_identifier(connection: HTTPConnection) -> str:
     """
     Safely get the connection identifier, handling anonymous connections.
     """

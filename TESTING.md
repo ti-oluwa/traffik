@@ -240,6 +240,7 @@ async def perf_test():
 
 asyncio.run(perf_test())
 "
+
 ```
 
 ## Cross-Platform Compatibility

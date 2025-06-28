@@ -5,3 +5,4 @@
 **/logs/
 .pytest_cache
 .python-version
+issue.md

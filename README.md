@@ -555,25 +555,40 @@ throttle = HTTPThrottle(
 )
 ```
 
-### Excluding connections from Throttling
+### Exxempting connections from Throttling
 
-You can exclude certain connections from throttling by writing a custom identifier that raises `traffik.exceptions.NoLimit` for those connections. This is useful when you have throttles you want to skip for specific routes or clients.
+You can exclude certain connections from throttling by writing a custom identifier that returns `traffik.UNLIMITED` for those connections. This is useful when you have throttles you want to skip for specific clients and/or routes.
 
 ```python
+import typing
 from starlette.requests import HTTPConnection
-from traffik.exceptions import NoLimit
+from traffik import UNLIMITED, HTTPThrottle
 
-async def admin_identifier(connection: HTTPConnection) -> str:
+def extract_user_id(authorization: str) -> str:
+    # Dummy function to extract user ID from JWT token
+    # Replace with actual JWT decoding logic
+    return authorization.split(" ")[1] if authorization else "anonymous"
+
+def extract_user_role(authorization: str) -> str:
+    # Dummy function to extract user role from JWT token
+    # Replace with actual JWT decoding logic
+    return "admin" if "admin" in authorization else "user"
+
+async def user_identifier(connection: HTTPConnection) -> str:
     # Use user ID from JWT token
     user_id = extract_user_id(connection.headers.get("authorization"))
-    if user_id == "admin":
-        raise NoLimit()  # Skip throttling for admin users
     return f"user:{user_id}:{connection.scope['path']}"
+
+async def no_throttle_admin_identifier(connection: HTTPConnection) -> typing.Any:
+    user_role = extract_user_role(connection.headers.get("authorization"))
+    if user_role == "admin":
+        return UNLIMITED  # Skip throttling for admin users
+    return user_identifier(connection)
 
 throttle = HTTPThrottle(
     limit=10,
     minutes=1,
-    identifier=admin_identifier,  # Override default (backend) identifier
+    identifier=no_throttle_admin_identifier,  # Override default (backend) identifier
 )
 ```
 

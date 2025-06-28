@@ -1,8 +1,7 @@
-import sys
 import typing
 
 from starlette.requests import HTTPConnection
-from typing_extensions import ParamSpec, TypeAlias, Unpack
+from typing_extensions import ParamSpec, TypeAlias
 
 P = ParamSpec("P")
 Q = ParamSpec("Q")
@@ -19,6 +18,16 @@ This value should be returned by the connection identifier function
 when the connection should not be subject to throttling.
 """
 
+Function: TypeAlias = typing.Callable[P, R]
+CoroutineFunction: TypeAlias = typing.Callable[P, typing.Awaitable[R]]
+Decorated: TypeAlias = typing.Union[Function[P, R], CoroutineFunction[P, R]]
+Dependency: TypeAlias = typing.Union[Function[Q, S], CoroutineFunction[Q, S]]
+
+HTTPConnectionT = typing.TypeVar("HTTPConnectionT", bound=HTTPConnection)
+HTTPConnectionTcon = typing.TypeVar(
+    "HTTPConnectionTcon", bound=HTTPConnection, contravariant=True
+)
+WaitPeriod: TypeAlias = int
 
 class Stringable(typing.Protocol):
     """Protocol for objects that can be converted to a string."""
@@ -28,23 +37,25 @@ class Stringable(typing.Protocol):
         ...
 
 
-Function: TypeAlias = typing.Callable[P, R]
-CoroutineFunction: TypeAlias = typing.Callable[P, typing.Awaitable[R]]
-Decorated: TypeAlias = typing.Union[Function[P, R], CoroutineFunction[P, R]]
-Dependency: TypeAlias = typing.Union[Function[Q, S], CoroutineFunction[Q, S]]
+class ConnectionIdentifier(typing.Protocol, typing.Generic[HTTPConnectionTcon]):
+    """Protocol for connection identifier functions."""
 
-HTTPConnectionT = typing.TypeVar("HTTPConnectionT", bound=HTTPConnection)
-ConnectionIdentifier: TypeAlias = typing.Callable[
-    [HTTPConnectionT], typing.Awaitable[typing.Union[Stringable, typing.Any]]
-]
+    async def __call__(
+        self, connection: HTTPConnectionTcon, *args: typing.Any, **kwargs: typing.Any
+    ) -> typing.Union[Stringable, typing.Any]:
+        """Identify a connection for throttling purposes."""
+        ...
 
-WaitPeriod: TypeAlias = int
-if sys.version_info >= (3, 12):
-    _Args = typing.Tuple[typing.Any, ...]
-    ConnectionThrottledHandler: TypeAlias = typing.Callable[
-        [HTTPConnectionT, WaitPeriod, Unpack[_Args]], typing.Awaitable[typing.Any]
-    ]
-else:
-    ConnectionThrottledHandler: TypeAlias = typing.Callable[
-        [HTTPConnectionT, WaitPeriod], typing.Awaitable[typing.Any]
-    ]
+
+class ConnectionThrottledHandler(typing.Protocol, typing.Generic[HTTPConnectionTcon]):
+    """Protocol for connection throttled handlers."""
+
+    async def __call__(
+        self,
+        connection: HTTPConnectionTcon,
+        wait_period: WaitPeriod,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> typing.Any:
+        """Handle a throttled connection."""
+        ...

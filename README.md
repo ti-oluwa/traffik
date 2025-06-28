@@ -18,7 +18,7 @@ Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-li
 - 🔧 **Flexible Configuration**: Time-based limits with multiple time units
 - 🎯 **Per-Route Throttling**: Individual limits for different endpoints
 - 📊 **Client Identification**: Customizable client identification strategies
-
+****
 ## Installation
 
 We recommend using `uv`, however, it is not a strict requirement.
@@ -80,10 +80,10 @@ pip install -e .[dev]
 For quick testing across different platforms and Python versions:
 
 ```bash
-# Run fast tests (no Redis required)
+# Run fast tests
 ./docker-test.sh test-fast
 
-# Run full test suite with Redis
+# Run full test suite
 ./docker-test.sh test
 
 # Start development environment

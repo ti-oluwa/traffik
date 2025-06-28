@@ -75,7 +75,7 @@ The Makefile provides convenient commands for local development:
 ### Core Testing Commands
 
 ```bash
-make test-fast      # Tests without Redis (fastest)
+make test-fast      # Basic tests
 make test-inmemory  # In-memory backend only
 make test-backends  # All backend tests
 make test-coverage  # With coverage analysis
@@ -113,7 +113,6 @@ Available targets:
   test-fast       Run tests without Redis dependency
   test-inmemory   Run only in-memory backend tests
   test-redis      Run only Redis backend tests
-  test-concurrent Run concurrent/stress tests
   test-backends   Run all backend tests
   test-throttles  Run throttle mechanism tests
   test-decorators Run decorator tests
@@ -176,8 +175,8 @@ uv run pytest --cov=src/traffik --cov-report=html
 
 ```bash
 # Local testing with all features
-make test           # If Redis installed
-make test-fast      # Without Redis
+make test           # If all backends dependencies installed
+make test-fast      # Quick tests without backend specifics
 
 # Docker testing
 ./docker-test.sh test

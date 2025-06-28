@@ -27,7 +27,7 @@ test-fast: ## Run tests without Redis dependency
 	uv run pytest -v --tb=short -k "not redis and not Redis"
 
 test-inmemory: ## Run only in-memory backend tests
-	uv run pytest -v tests/backends/test_inmemory.py tests/test_throttles.py::test_http_throttle_inmemory -k "not redis"
+	uv run pytest -v tests/backends/test_inmemory.py tests/test_throttles*.py::test_http_throttle_inmemory -k "not redis"
 
 test-redis: ## Run only Redis backend tests (requires Redis server)
 	uv run pytest -v -k "redis or Redis"
@@ -36,7 +36,7 @@ test-backends: ## Run all backend tests
 	uv run pytest -v tests/backends/
 
 test-throttles: ## Run throttle mechanism tests
-	uv run pytest -v tests/test_throttles.py
+	uv run pytest -v tests/test_throttles*.py
 
 test-decorators: ## Run decorator tests
 	uv run pytest -v tests/test_decorators.py

@@ -30,6 +30,7 @@ classifiers = [
 requires-python = ">=3.8"
 dependencies = [
     "starlette>=0.14.0",
+    "annotated-types>=0.7.0"
 ]
 
 [project.urls]
@@ -51,7 +52,6 @@ test = [
     "httpx>=0.28.0",
     "anyio>=4.0.0",
     "requests>=2.32.4",
-    "uvicorn>=0.33.0",
 ]
 dev = [
     "bandit>=1.7.10",

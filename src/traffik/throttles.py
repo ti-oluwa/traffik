@@ -3,7 +3,7 @@ import hashlib
 import typing
 
 from annotated_types import Ge
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.websockets import WebSocket
 from typing_extensions import Annotated
 
@@ -40,11 +40,11 @@ class ThrottleMeta(type):
         """
 
         @functools.wraps(coroutine_func)
-        async def wrapper(*args, **kwargs):
+        async def wrapper(*args, **kwargs) -> HTTPConnection:
             try:
                 return await coroutine_func(*args, **kwargs)
             except NoLimit:
-                return
+                return args[0]
 
         return wrapper
 
@@ -102,17 +102,17 @@ class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
 
     async def __call__(
         self, connection: HTTPConnectionT, *args: typing.Any, **kwargs: typing.Any
-    ) -> None:
+    ) -> HTTPConnectionT:
         """
         Throttle the connection based on the limit and time period.
 
-        :param connection: The HTTP or WebSocket connection to throttle.
+        :param connection: The HTTP connection to throttle.
         :param args: Additional positional arguments to pass to the throttled handler.
         :param kwargs: Additional keyword arguments to pass to the throttled handler.
-        :raises NoLimit: If the limit is set to 0, this method will return None.
+        :return: The throttled HTTP connection.
         """
         if self.limit == 0 or self.expires_after == 0:
-            return  # No throttling applied if limit is 0
+            return connection  # No throttling applied if limit is 0
 
         backend = self.backend = self.backend or get_throttle_backend(connection)
         if backend is None:
@@ -137,7 +137,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT], metaclass=ThrottleMeta):
         if wait_period != 0:
             handle_throttled = self.handle_throttled or backend.handle_throttled
             await handle_throttled(connection, wait_period, *args, **kwargs)
-        return None
+        return connection
 
     async def get_key(
         self,
@@ -190,11 +190,12 @@ class HTTPThrottle(BaseThrottle[Request]):
         # used with the `throttle` decorator.
         return throttle_key
 
-    async def __call__(self, connection: Request) -> None:
+    async def __call__(self, connection: Request) -> Request:
         """
         Calls the throttle for an HTTP connection.
 
         :param connection: The HTTP connection to throttle.
+        :return: The throttled HTTP connection.
         """
         return await super().__call__(connection)
 
@@ -219,12 +220,13 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
 
     async def __call__(
         self, connection: WebSocket, context_key: typing.Optional[str] = None
-    ) -> None:
+    ) -> WebSocket:
         """
         Calls the throttle for a WebSocket connection.
 
         :param connection: The WebSocket connection to throttle.
         :param context_key: Optional context key to differentiate throttling
             for different contexts within the same WebSocket connection.
+        :return: The throttled WebSocket connection.
         """
         return await super().__call__(connection, context_key=context_key)

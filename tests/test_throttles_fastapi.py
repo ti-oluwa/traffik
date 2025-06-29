@@ -8,6 +8,7 @@ import pytest
 from fastapi import Depends, FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient, Response
+from redis.asyncio import Redis
 from starlette.exceptions import HTTPException
 from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocket
@@ -36,11 +37,8 @@ def inmemory_backend() -> InMemoryBackend:
 
 @pytest.fixture(scope="function")
 async def redis_backend() -> RedisBackend:
-    return RedisBackend(
-        connection=REDIS_URL,
-        prefix="redis-test",
-        persistent=False,
-    )
+    redis = Redis.from_url(REDIS_URL, decode_responses=True)
+    return RedisBackend(connection=redis, prefix="redis-test", persistent=False)
 
 
 @pytest.fixture(scope="function")

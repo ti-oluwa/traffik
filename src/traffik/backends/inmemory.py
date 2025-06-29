@@ -13,7 +13,12 @@ from traffik.types import (
 
 class InMemoryBackend(
     ThrottleBackend[
-        typing.Optional[typing.MutableMapping[str, int]],
+        typing.Optional[
+            typing.MutableMapping[
+                str,
+                typing.MutableMapping[str, int],
+            ]
+        ],
         HTTPConnectionT,
     ]
 ):
@@ -55,7 +60,9 @@ class InMemoryBackend(
             raise ConfigurationError("In-memory backend is not initialized")
 
         now = int(time.monotonic() * 1000)
-        record = connection.get(key, {"count": 0, "start": now})
+        record = typing.cast(
+            typing.Dict[str, int], connection.get(key, {"count": 0, "start": now})
+        )
         elapsed = now - record["start"]
 
         async with self._lock:

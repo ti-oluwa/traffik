@@ -121,9 +121,6 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         """
         Returns the unique throttling key for the connection.
 
-        Key returned must match the pattern returned by `backend.get_key_pattern`,
-        otherwise a ValueError is raised on key generation.
-
         :param connection: The HTTP connection to throttle.
         :param args: Additional positional arguments to pass to the throttled handler.
         :param kwargs: Additional keyword arguments to pass to the throttled handler.
@@ -135,16 +132,24 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
 class HTTPThrottle(BaseThrottle[Request]):
     """HTTP connection throttle"""
 
-    async def get_key(
-        self, request: Request, *args: typing.Any, **kwargs: typing.Any
-    ) -> str:
+    async def get_key(self, connection: Request) -> str:
+        """
+        Returns the unique throttling key for the HTTP connection.
+
+        :param connection: The HTTP connection to throttle.
+        :param args: Additional positional arguments to pass to the throttled handler.
+        :param kwargs: Additional keyword arguments to pass to the throttled handler.
+        """
         route_index = 0
         dependency_index = 0
-        for i, route in enumerate(request.app.routes):
+        for i, route in enumerate(connection.app.routes):
             if (route_dependencies := getattr(route, "dependencies", None)) is None:
                 # If the route has no dependencies, its mostlikely not a FastAPI route
                 break
-            if route.path == request.scope["path"] and request.method in route.methods:
+            if (
+                route.path == connection.scope["path"]
+                and connection.method in route.methods
+            ):
                 route_index = i
                 route_dependencies = typing.cast(
                     typing.Sequence[typing.Any], route_dependencies
@@ -178,7 +183,15 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
     async def get_key(
         self, connection: WebSocket, context_key: typing.Optional[str] = None
     ) -> str:
-        suffix = f"{connection.url.path}:{id(self)}:{context_key or ''}"
+        """
+        Returns the unique throttling key for the WebSocket connection.
+
+        :param connection: The WebSocket connection to throttle.
+        :param context_key: Optional context key to differentiate throttling
+            for different contexts within the same WebSocket connection.
+        :return: The unique throttling key for the WebSocket connection.
+        """
+        suffix = f"{connection.url.path}:{id(self)}:{context_key or ''}".rstrip(":")
         hashed_suffix = hashlib.md5(suffix.encode()).hexdigest()  # nosec
         throttle_key = f"ws:{hashed_suffix}"
         # Added id(self) to ensure unique key for each throttle instance

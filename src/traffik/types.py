@@ -8,7 +8,7 @@ Q = ParamSpec("Q")
 R = typing.TypeVar("R")
 S = typing.TypeVar("S")
 T = typing.TypeVar("T")
-
+Rco = typing.TypeVar("Rco", covariant=True)
 
 UNLIMITED = object()
 """
@@ -20,14 +20,13 @@ when the connection should not be subject to throttling.
 
 Function: TypeAlias = typing.Callable[P, R]
 CoroutineFunction: TypeAlias = typing.Callable[P, typing.Awaitable[R]]
-Decorated: TypeAlias = typing.Union[Function[P, R], CoroutineFunction[P, R]]
-Dependency: TypeAlias = typing.Union[Function[Q, S], CoroutineFunction[Q, S]]
 
 HTTPConnectionT = typing.TypeVar("HTTPConnectionT", bound=HTTPConnection)
 HTTPConnectionTcon = typing.TypeVar(
     "HTTPConnectionTcon", bound=HTTPConnection, contravariant=True
 )
 WaitPeriod: TypeAlias = int
+
 
 class Stringable(typing.Protocol):
     """Protocol for objects that can be converted to a string."""
@@ -59,3 +58,13 @@ class ConnectionThrottledHandler(typing.Protocol, typing.Generic[HTTPConnectionT
     ) -> typing.Any:
         """Handle a throttled connection."""
         ...
+
+
+class Dependency(typing.Protocol, typing.Generic[P, Rco]):
+    """Protocol for dependencies that can be used in FastAPI routes."""
+
+    def __call__(
+        self,
+        *args: P.args,
+        **kwargs: P.kwargs,  # Although FastAPI passes arguments as keyword arguments to dependencies
+    ) -> typing.Union[Rco, typing.Awaitable[Rco]]: ...

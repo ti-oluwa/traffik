@@ -34,7 +34,7 @@ end"""
 
     def __init__(
         self,
-        connection: typing.Union[Redis, str],
+        connection: Redis,
         *,
         prefix: str,
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
@@ -43,14 +43,6 @@ end"""
         ] = None,
         persistent: bool = False,
     ) -> None:
-        if isinstance(connection, str):
-            connection = Redis.from_url(url=connection)
-
-        elif not isinstance(connection, Redis):
-            raise TypeError(
-                f"Connection must be an instance of `{Redis!r}`, got {type(connection)!r}"
-            )
-
         super().__init__(
             connection,
             prefix=prefix,
@@ -58,7 +50,7 @@ end"""
             handle_throttled=handle_throttled,
             persistent=persistent,
         )
-        self._lua_sha = None  # SHA1 hash of the Lua script
+        self._lua_sha: typing.Optional[str] = None  # SHA1 hash of the Lua script
         self._session = self.connection
 
     async def initialize(self) -> None:

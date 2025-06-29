@@ -3,7 +3,7 @@ import math
 import re
 import typing
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 
 from starlette.exceptions import HTTPException
 from starlette.requests import HTTPConnection
@@ -198,7 +198,9 @@ class _ThrottleContext(typing.Generic[ThrottleBackendTco]):
         self.backend = backend
         self.persistent = persistent
         self.close_on_exit = close_on_exit
-        self._context_token = None
+        self._context_token: typing.Optional[
+            Token[typing.Optional[ThrottleBackend]]
+        ] = None
 
     async def __aenter__(self) -> ThrottleBackendTco:
         backend = self.backend

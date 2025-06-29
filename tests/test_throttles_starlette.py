@@ -6,6 +6,7 @@ from itertools import repeat
 import anyio
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
+from redis.asyncio import Redis
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.requests import HTTPConnection, Request
@@ -32,11 +33,8 @@ def inmemory_backend() -> InMemoryBackend:
 
 @pytest.fixture(scope="function")
 async def redis_backend() -> RedisBackend:
-    return RedisBackend(
-        connection=REDIS_URL,
-        prefix="redis-test",
-        persistent=False,
-    )
+    redis = Redis.from_url(REDIS_URL, decode_responses=True)
+    return RedisBackend(connection=redis, prefix="redis-test", persistent=False)
 
 
 async def _testclient_identifier(connection: HTTPConnection) -> str:

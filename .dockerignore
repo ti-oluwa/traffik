@@ -95,6 +95,7 @@ temp/
 *.tmp
 
 # Coverage reports
+htmlcov/
 .coverage.*
 coverage.xml
 *.cover
@@ -102,6 +103,9 @@ coverage.xml
 
 # Ruff cache
 .ruff_cache/
+
+# MyPy cache
+.mypy_cache/
 
 # UV cache
 .uv_cache/

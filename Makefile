@@ -1,6 +1,6 @@
 # Makefile for Traffik development and testing
 
-.PHONY: help install install-dev test test-fast test-slow test-unit test-integration test-backend test-redis test-no-redis test-native test-fastapi test-websocket test-concurrent test-coverage test-coverage-xml test-coverage-html lint lint-fix format format-check security type-check quality build upload upload-test dev-setup clean redis-start redis-stop ci docs debug-env example dev release-check
+.PHONY: help install install-dev install-test test test-fast test-slow test-native test-watch test-coverage test-coverage-xml test-coverage-html lint lint-fix format format-check security type-check quality build upload upload-test dev-setup clean redis-start redis-stop ci docs debug-env example dev release-check
 
 # Default target
 help: ## Show this help message
@@ -16,8 +16,11 @@ install: ## Install the package and all dependencies
 install-dev: ## Install development dependencies
 	uv sync --extra dev
 
+install-test: ## Install testing dependencies
+	uv sync --extra test
+
 # Testing targets
-test: ## Run full test suite. Use `make test m=marker_name` to filter by markers.
+test: ## Run full test suite. Requires all dependencies. Use `make test m=marker_name` to filter by markers.
 	@if [ -n "$(m)" ]; then \
 		echo "Running tests with marker: $(m)"; \
 		uv run pytest -m "$(m)" -v --tb=short; \
@@ -27,10 +30,16 @@ test: ## Run full test suite. Use `make test m=marker_name` to filter by markers
 	fi
 
 test-fast: ## Run tests not marked as slow
-	uv run pytest -m "not slow" -v --tb=short
+	uv run pytest -m -x "not slow" -v --tb=short
 
 test-slow: ## Run slow tests
 	uv run pytest -m "slow" -v --tb=short
+
+test-native: ## Run tests without external dependencies
+	uv run pytest -m "native" -v --tb=short
+
+test-watch: ## Run tests in watch mode
+	uv run pytest-watch --onpass "echo 'Tests passed'" --onfail "echo 'Tests failed'" -- -v --tb=short 
 
 test-coverage: ## Run tests with coverage
 	uv run pytest --cov=src/traffik --cov-branch --cov-report=term-missing --cov-fail-under=80

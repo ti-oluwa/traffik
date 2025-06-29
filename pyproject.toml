@@ -55,6 +55,8 @@ test = [
 ]
 dev = [
     "bandit>=1.7.10",
+    "mypy>=1.14.1",
+    "pytest-watch>=4.2.0",
     "ruff>=0.12.1",
     "safety>=3.5.2",
     "traffik[test]",
@@ -71,7 +73,7 @@ publish-url = "https://test.pypi.org/legacy/"
 explicit = true
 
 [tool.pytest.ini_options]
-addopts = ""
+addopts = []
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

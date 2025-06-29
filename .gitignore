@@ -1,8 +1,9 @@
-.vscode
+**/.vscode
 **/__pycache__/
 **/.venv/
 **/.ruff_cache/
 **/logs/
-.pytest_cache
+**/.*cache/
 .python-version
 issue.md
+feature.md

@@ -16,6 +16,9 @@ def backend() -> ThrottleBackend:
     return ThrottleBackend(connection=None, prefix="test")
 
 
+@pytest.mark.unit
+@pytest.mark.backend
+@pytest.mark.native
 def test_get_key_pattern(backend: ThrottleBackend) -> None:
     # Test the regular expression pattern
     pattern = backend.get_key_pattern()
@@ -27,6 +30,9 @@ def test_get_key_pattern(backend: ThrottleBackend) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.backend
+@pytest.mark.native
 async def test_check_key_pattern(backend: ThrottleBackend) -> None:
     # Test with a key that matches the pattern
     assert await backend.check_key_pattern("test:some_key") is True
@@ -34,6 +40,9 @@ async def test_check_key_pattern(backend: ThrottleBackend) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.backend
+@pytest.mark.native
 async def test_throttle_backend_context_management(backend: ThrottleBackend) -> None:
     # Test that the context variable is initialized to None
     assert get_throttle_backend() is None
@@ -48,6 +57,9 @@ async def test_throttle_backend_context_management(backend: ThrottleBackend) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.backend
+@pytest.mark.native
 async def test_throttle_backend_lifespan_management(backend: ThrottleBackend) -> None:
     """Test that backend context is properly managed through application lifespan."""
     app = Starlette()
@@ -78,4 +90,3 @@ async def test_throttle_backend_lifespan_management(backend: ThrottleBackend) ->
 
     # After lifespan ends, context should be reset
     assert get_throttle_backend() is None
-

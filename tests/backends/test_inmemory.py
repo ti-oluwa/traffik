@@ -12,6 +12,9 @@ async def backend() -> InMemoryBackend:
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.backend
+@pytest.mark.native
 async def test_backend_reset(backend: InMemoryBackend) -> None:
     await backend.initialize()
     await backend.reset()
@@ -20,6 +23,10 @@ async def test_backend_reset(backend: InMemoryBackend) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.backend
+@pytest.mark.throttle
+@pytest.mark.native
 async def test_get_wait_period(backend: InMemoryBackend) -> None:
     await backend.reset()
     async with backend():
@@ -42,6 +49,9 @@ async def test_get_wait_period(backend: InMemoryBackend) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.backend
+@pytest.mark.native
 async def test_backend_context_management(backend: InMemoryBackend) -> None:
     # Test that the context variable is initialized to None
     assert throttle_backend_ctx.get() is None
@@ -58,6 +68,9 @@ async def test_backend_context_management(backend: InMemoryBackend) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.backend
+@pytest.mark.native
 async def test_backend_persistence(backend: InMemoryBackend) -> None:
     # Test that the backend can be set to persistent
     backend.persistent = True

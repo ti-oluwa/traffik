@@ -16,6 +16,9 @@ async def backend() -> RedisBackend:
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.backend
+@pytest.mark.redis
 async def test_backend_reset(backend: RedisBackend) -> None:
     await backend.reset()
     keys = await backend.connection.keys(f"{backend.prefix}:*")
@@ -23,6 +26,10 @@ async def test_backend_reset(backend: RedisBackend) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.backend
+@pytest.mark.throttle
+@pytest.mark.redis
 async def test_get_wait_period(backend: RedisBackend) -> None:
     await backend.reset()
     async with backend():
@@ -45,6 +52,9 @@ async def test_get_wait_period(backend: RedisBackend) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
+@pytest.mark.backend
+@pytest.mark.redis
 async def test_backend_context_management(backend: RedisBackend) -> None:
     # Test that the context variable is initialized to None
     assert throttle_backend_ctx.get() is None
@@ -61,6 +71,9 @@ async def test_backend_context_management(backend: RedisBackend) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.backend
+@pytest.mark.redis
 async def test_backend_persistence(backend: RedisBackend) -> None:
     # Test that the backend can be set to persistent
     backend.persistent = True

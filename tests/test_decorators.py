@@ -22,6 +22,10 @@ async def throttle_backend() -> InMemoryBackend:
 
 
 @pytest.mark.anyio
+@pytest.mark.integration
+@pytest.mark.throttle
+@pytest.mark.decorator
+@pytest.mark.fastapi
 async def test_throttle_decorator_only(
     app: FastAPI, throttle_backend: InMemoryBackend
 ) -> None:
@@ -48,6 +52,10 @@ async def test_throttle_decorator_only(
 
 
 @pytest.mark.anyio
+@pytest.mark.integration
+@pytest.mark.throttle
+@pytest.mark.decorator
+@pytest.mark.fastapi
 async def test_throttle_decorator_with_dependency(
     app: FastAPI, throttle_backend: InMemoryBackend
 ) -> None:

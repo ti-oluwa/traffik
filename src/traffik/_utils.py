@@ -22,12 +22,11 @@ def get_ip_address(
         "x-forwarded-for"
     ) or connection.headers.get("remote-addr")
     if x_forwarded_for:
-        ip = x_forwarded_for.split(",")[0]
-    else:
-        ip = connection.client.host if connection.client else None
-    if not ip:
-        return None
-    return ipaddress.ip_address(ip)
+        return ipaddress.ip_address(x_forwarded_for.split(",")[0].strip())
+
+    if connection.client:
+        return ipaddress.ip_address(connection.client.host)
+    return None
 
 
 def add_parameter_to_signature(
@@ -104,4 +103,3 @@ def add_parameter_to_signature(
     new_sig = sig.replace(parameters=params)
     func.__signature__ = new_sig  # type: ignore
     return func
-

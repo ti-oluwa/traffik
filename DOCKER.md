@@ -10,7 +10,7 @@ This guide explains how to use Docker to test the traffik library across differe
    ./docker-test.sh test
    ```
 
-2. **Run fast tests (no Redis):**
+2. **Run fast tests:**
 
    ```bash
    ./docker-test.sh test-fast
@@ -26,13 +26,13 @@ This guide explains how to use Docker to test the traffik library across differe
 
 ### Testing Commands
 
-- `./docker-test.sh test` - Full test suite with Redis
-- `./docker-test.sh test-fast` - Fast tests without Redis
+- `./docker-test.sh test` - Full test suite
+- `./docker-test.sh test-native` - Tests without external dependencies
+- `./docker-test.sh test-fast` - Fast tests
 - `./docker-test.sh test-matrix` - Test across all Python versions
 - `./docker-test.sh test-py38` - Test on Python 3.8
 - `./docker-test.sh test-py312` - Test on Python 3.12
 - `./docker-test.sh coverage` - Generate coverage report
-- `./docker-test.sh ci` - Run full CI-like test suite
 
 ### Development Commands
 
@@ -45,56 +45,19 @@ This guide explains how to use Docker to test the traffik library across differe
 
 - `./docker-test.sh build` - Build Docker images
 - `./docker-test.sh quality` - Run code quality checks
+- `./docker-test.sh ci` - Run full CI-like suite
 - `./docker-test.sh logs` - Show service logs
 - `./docker-test.sh clean` - Clean up Docker resources
-
-## Docker Compose Files
-
-### `docker-compose.yml` (Main)
-
-Complete testing environment with Redis support and multiple Python versions.
-
-**Services:**
-
-- `redis` - Redis 7 Alpine for backend testing
-- `test` - Main test suite with Redis
-- `test-no-redis` - Tests without Redis dependency
-- `test-py38` - Python 3.8 testing
-- `test-py312` - Python 3.12 testing
-- `dev` - Development environment
-- `quality` - Code quality checks
-- `coverage` - Coverage analysis
-
-### `docker-compose.dev.yml` (Development)
-
-Optimized for fast development iteration.
-
-**Services:**
-
-- `test-fast` - Quick tests without Redis
-- `test-full` - Full tests with Redis
-- `redis-dev` - Development Redis instance
-- `shell` - Interactive development shell
-- `test-watch` - Continuous testing with file watching
-
-### `docker-compose.matrix.yml` (Cross-platform)
-
-Matrix testing across Python versions.
-
-**Services:**
-
-- `test-py38` through `test-py312` - Python version matrix
-- `redis-matrix` - Redis for matrix testing
 
 ## Usage Examples
 
 ### Basic Testing
 
 ```bash
-# Quick smoke test
+# Quick tests
 ./docker-test.sh test-fast
 
-# Full test with Redis
+# Full test suite
 ./docker-test.sh test
 
 # Test specific Python version
@@ -134,8 +97,7 @@ Matrix testing across Python versions.
 
 # This runs:
 # 1. Code quality checks
-# 2. Fast tests
-# 3. Full tests with Redis
+# 2. Test suite
 # 4. Coverage analysis
 ```
 
@@ -194,6 +156,12 @@ docker-compose logs redis
 
 # Test Redis connection
 docker-compose exec redis redis-cli ping
+
+# Check if Redis is accessible from test container
+docker-compose exec test nc -zv redis 6379
+
+# View network configuration
+docker-compose exec test cat /etc/hosts
 ```
 
 ### Build Issues
@@ -220,7 +188,7 @@ docker-compose run --user $(id -u):$(id -g) test
 
 ```bash
 # Use faster volume mounting (macOS)
-docker-compose -f docker-compose.dev.yml up shell
+docker-compose -f docker-compose.yml up shell
 
 # Reduce build context with .dockerignore
 # (already configured in the project)
@@ -239,21 +207,21 @@ docker-compose -f docker-compose.dev.yml up shell
 
 ```bash
 # Test with specific Python version
-PYTHON_VERSION=3.9 docker-compose -f docker-compose.matrix.yml up test-matrix
+docker-compose -f docker-compose.yml up test-py39
 ```
 
 ### Custom Redis Configuration
 
 ```bash
 # Use external Redis
-REDIS_HOST=external-redis.com docker-compose up test
+REDIS_HOST=external-redis.example.com docker-compose up test
 ```
 
 ### Parallel Testing
 
 ```bash
-# Run multiple Python versions in parallel
-docker-compose -f docker-compose.matrix.yml up \
+# Run test suite in different Python versions in parallel
+docker-compose -f docker-compose.yml up \
   test-py38 test-py39 test-py310 test-py311 test-py312
 ```
 
@@ -279,22 +247,17 @@ Add this to `.vscode/settings.json`:
 
 ## Best Practices
 
-1. **Use appropriate compose file:**
-   - `docker-compose.yml` for complete testing
-   - `docker-compose.dev.yml` for development
-   - `docker-compose.matrix.yml` for cross-platform testing
-
-2. **Optimize build times:**
+1. **Optimize build times:**
    - Use multi-stage builds
    - Leverage Docker layer caching
    - Keep .dockerignore updated
 
-3. **Resource management:**
+2. **Resource management:**
    - Clean up regularly with `./docker-test.sh clean`
    - Use `--abort-on-container-exit` for CI
    - Monitor disk usage with `docker system df`
 
-4. **Security:**
+3. **Security:**
    - Don't expose Redis ports in production
    - Use secrets for sensitive configuration
    - Keep base images updated

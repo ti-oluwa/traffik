@@ -1,16 +1,14 @@
 import asyncio
-import copy
 import functools
 import inspect
 import typing
 
 from fastapi.params import Depends
-from starlette.requests import HTTPConnection
 from typing_extensions import Annotated
 
 from traffik._utils import add_parameter_to_signature
 from traffik.throttles import BaseThrottle
-from traffik.types import UNLIMITED, HTTPConnectionT, P, Q, R, S
+from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S
 
 ThrottleT = typing.TypeVar("ThrottleT", bound=BaseThrottle)
 
@@ -34,15 +32,11 @@ class DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
         dependency_decorator: typing.Callable[
             [
                 typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
-                typing.Optional[
-                    typing.Callable[Q, typing.Union[S, typing.Awaitable[S]]]
-                ],
+                Dependency[Q, S],
             ],
             typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
         ],
-        dependency: typing.Optional[
-            typing.Callable[Q, typing.Union[S, typing.Awaitable[S]]]
-        ] = None,
+        dependency: typing.Optional[Dependency[Q, S]] = None,
         *,
         use_cache: bool = True,
     ) -> None:
@@ -52,16 +46,18 @@ class DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
     def __call__(
         self, decorated: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]
     ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
+        if self.dependency is None:
+            return decorated
         return self.dependency_decorator(decorated, self.dependency)
 
 
 # Is this worth it? Just because of the `throttle` decorator?
-def _wrap_route(
+def apply_throttle(
     route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
-    throttle: BaseThrottle,
+    throttle: BaseThrottle[HTTPConnectionT],
 ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
     """
-    Create an wrapper that applies throttling to an route
+    Create and returns an wrapper that applies throttling to an route
     by wrapping the route such that the route depends on the throttle.
 
     :param route: The route to wrap.
@@ -113,7 +109,7 @@ def route_wrapper(
         local_namespace,
     )
     route_wrapper = local_namespace["route_wrapper"]
-    route_wrapper = functools.wraps(route)(route_wrapper)
+    route_wrapper = functools.wraps(route)(route_wrapper)  # type: ignore[arg-type]
     # The resulting function from applying `functools.wraps(route)` on `route_wrapper`
     # would not have the throttle dependency in its signature, although it is present in `route_wrapper`'s definition,
     # because the result of `functools.wraps` assumes the signature of the original function (route in this case).
@@ -128,32 +124,17 @@ def route_wrapper(
         parameter=inspect.Parameter(
             name=throttle_dep_param_name,
             kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            annotation=Annotated[typing.Any, Depends(throttle)],
+            annotation=Annotated[HTTPConnectionT, Depends(throttle)], # type: ignore[misc]
         ),
         index=0,  # Since the throttle dependency was added as the first parameter
     )
     return route_wrapper
 
 
-def _throttle_route(
-    route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
-    throttle: BaseThrottle,
-) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
-    """
-    Returns wrapper that applies throttling to the given route
-    by wrapping the route such that the route depends on the throttle.
-
-    :param route: The route to be throttled.
-    :param throttle: The throttle to apply to the route.
-    """
-    wrapper = _wrap_route(route, throttle)
-    return wrapper
-
-
 @typing.overload
 def throttled(
     throttle: BaseThrottle[HTTPConnectionT],
-) -> DecoratorDepends[P, typing.Any, typing.Any, typing.Any]: ...
+) -> DecoratorDepends[typing.Any, typing.Any, typing.Any, HTTPConnectionT]: ...
 
 
 @typing.overload
@@ -178,7 +159,6 @@ def throttled(
     :param throttle: The throttle to apply to the route.
     :param route: The route to be throttled. If not provided, returns a decorator that can be used to apply throttling to routes.
     :return: A decorator that applies throttling to the route, or the wrapped route if `route` is provided.
-
 
     Example:
     ```python
@@ -205,9 +185,21 @@ def throttled(
 
     ```
     """
+    # Just to make the type checker happy
+    _apply_throttle = typing.cast(
+        typing.Callable[
+            [
+                typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
+                Dependency[Q, HTTPConnectionT],
+            ],
+            typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
+        ],
+        apply_throttle,
+    )
+    _throttle = typing.cast(Dependency[Q, HTTPConnectionT], throttle)
     decorator_dependency = DecoratorDepends[P, R, Q, HTTPConnectionT](
-        dependency_decorator=_throttle_route,  # type: ignore
-        dependency=throttle,
+        dependency_decorator=_apply_throttle,
+        dependency=_throttle,
     )
     if route is not None:
         decorated = decorator_dependency(route)
@@ -215,49 +207,4 @@ def throttled(
     return decorator_dependency
 
 
-def get_referrer(connection: HTTPConnection) -> str:
-    return (
-        (connection.headers.get("referer", "") or connection.headers.get("origin", ""))
-        .split("?")[0]
-        .strip("/")
-        .lower()
-    )
-
-
-def throttle_referers(
-    throttle: BaseThrottle[HTTPConnectionT],
-    referrers: typing.Sequence[str],
-):
-    """
-    Throttles request connections based on the referrer of the request.
-
-    This throttle is useful for limiting request connections referred from specific sources/origins.
-
-    :param referrer: The referrer/origin(s) to limit connections from.
-    :param throttle_kwargs: Keyword arguments to be used to instantiate the throttle type.
-    """
-    referrers = tuple(set(referrers))
-
-    async def _identifier(connection: HTTPConnection) -> typing.Any:
-        nonlocal referrers
-
-        referrer = get_referrer(connection)
-        if referrer not in referrers:
-            return UNLIMITED
-        return f"referer:{referrer}:{connection.scope['path']}"
-
-    copied_throttle = copy.copy(throttle)
-    copied_throttle.identifier = _identifier
-    return throttled(throttle=copied_throttle)
-
-
-async def user_agent_identifier(connection: HTTPConnection) -> str:
-    user_agent = connection.headers.get("user-agent", "UnknownAgent")
-    return f"{user_agent}:{connection.scope['path']}"
-
-
-__all__ = [
-    "throttled",
-    "throttle_referers",
-    "user_agent_identifier",
-]
+__all__ = ["throttled"]

@@ -1,3 +1,4 @@
+import re
 import typing
 
 from starlette.requests import HTTPConnection
@@ -26,6 +27,9 @@ HTTPConnectionTcon = typing.TypeVar(
     "HTTPConnectionTcon", bound=HTTPConnection, contravariant=True
 )
 WaitPeriod: TypeAlias = int
+
+Matchable: TypeAlias = typing.Union[str, re.Pattern[str]]
+"""A type alias for a matchable path, which can be a string or a compiled regex pattern."""
 
 
 class Stringable(typing.Protocol):

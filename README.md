@@ -740,24 +740,53 @@ app = FastAPI(lifespan=lifespan)
 
 Traffik provides specific exceptions for different error conditions:
 
-A `traffik.exceptions.ConfigurationError` is raised when a throttle or throttle backend configuration is invalid.
+### Exception Types
+
+- **`TraffikException`** - Base exception for all Traffik-related errors
+- **`ConfigurationError`** - Raised when throttle or backend configuration is invalid
+- **`AnonymousConnection`** - Raised when connection identifier cannot be determined  
+- **`ConnectionThrottled`** - HTTP 429 exception raised when rate limits are exceeded
+
+### Exception Handling Examples
+
+Handle configuration errors:
+
+```python
+from traffik.exceptions import ConfigurationError
+from traffik.backends.redis import RedisBackend
+
+try:
+    backend = RedisBackend(connection="invalid://url")
+    await backend.initialize()
+except ConfigurationError as e:
+    print(f"Backend configuration error: {e}")
+```
+
+Handle anonymous connections:
 
 ```python
 from starlette.requests import HTTPConnection
 from traffik.exceptions import AnonymousConnection
-from traffik import connection_identifier # Default identifier function
+from traffik.backends.base import connection_identifier
 
-
-# Custom identifier that handles anonymous users
 async def safe_identifier(connection: HTTPConnection) -> str:
-    """
-    Safely get the connection identifier, handling anonymous connections.
-    """
     try:
-        return connection_identifier(connection)
+        return await connection_identifier(connection)
     except AnonymousConnection:
-        # Fallback for anonymous connections
         return f"anonymous:{connection.scope['path']}"
+```
+
+Raise throttled exception:
+
+```python
+from traffik.exceptions import ConnectionThrottled
+
+async def custom_throttle_handler(connection, wait_period, *args, **kwargs):
+    raise ConnectionThrottled(
+        wait_period=wait_period,
+        detail=f"Rate limited. Retry in {wait_period}s",
+        headers={"X-Custom-Header": "throttled"}
+    )
 ```
 
 ## Testing

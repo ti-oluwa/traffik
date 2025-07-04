@@ -7,7 +7,7 @@ from starlette.websockets import WebSocket
 from typing_extensions import Annotated
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import ConfigurationError
+from traffik.exceptions import ConfigurationError, TraffikException
 from traffik.types import (
     UNLIMITED,
     ConnectionIdentifier,
@@ -88,12 +88,16 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         if self.limit == 0 or self.expires_after == 0:
             return connection  # No throttling applied if limit is 0
 
-        backend = self.backend = self.backend or get_throttle_backend(connection)
-        if backend is None:
-            raise ConfigurationError(
-                "No throttle backend configured. "
-                "Provide a backend to the throttle or set a default backend."
-            )
+        if self.backend is None:
+            backend = get_throttle_backend(connection)
+            if backend is None:
+                raise ConfigurationError(
+                    "No throttle backend configured. "
+                    "Provide a backend to the throttle or set a default backend."
+                )
+            self.backend = backend
+        else:
+            backend = self.backend
 
         identifier = self.identifier = self.identifier or backend.identifier
         if (connection_id := await identifier(connection)) is UNLIMITED:
@@ -102,7 +106,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         throttle_key = await self.get_key(connection, *args, **kwargs)
         backend_key = f"{backend.prefix}:{connection_id}:{throttle_key}"
         if not await backend.check_key_pattern(backend_key):
-            raise ValueError(
+            raise TraffikException(
                 "Invalid throttling key pattern. "
                 f"Key must be in the format: {backend.get_key_pattern()}"
             )

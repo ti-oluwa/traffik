@@ -1,45 +1,22 @@
-class NoLimit(Exception):
-    """
-    Exception raised when throttling should not be enforced.
+import typing
 
-    This exception is caught by the throttle and the client is allowed to proceed
-    without being throttled.
+from starlette.exceptions import HTTPException
+from starlette.status import HTTP_429_TOO_MANY_REQUESTS
 
-    In this example, the exception is raised when the request is from a trusted source
 
-    ```python
-    import fastapi
-    import starlette.requests import HTTPConnection
-
-    TRUSTED_IPS = {...,}
-
-    def get_ip(connection: HTTPConnection):
-        ...
-
-    def untrusted_ip_identifier(connection: HTTPConnection):
-        client_ip = get_ip(connection)
-        if client_ip in TRUSTED_IPS:
-            raise NoLimit()
-        return connection.client.host
-
-    router = fastapi.APIRouter(
-        dependencies=[
-            throttle(identifier=untrusted_ip_identifier)
-        ]
-    )
-    ```
-    """
+class TraffikException(Exception):
+    """Base exception for all Traffik-related errors."""
 
     pass
 
 
-class ConfigurationError(Exception):
+class ConfigurationError(TraffikException):
     """Exception raised when the throttle configuration is invalid."""
 
     pass
 
 
-class AnonymousConnection(Exception):
+class AnonymousConnection(TraffikException):
     """
     Exception raised when the connection identifier cannot be determined.
 
@@ -48,3 +25,34 @@ class AnonymousConnection(Exception):
     """
 
     pass
+
+
+class ConnectionThrottled(HTTPException, TraffikException):
+    """
+    `HTTPException` raised when a connection is throttled.
+
+    This exception is used to indicate that a connection has exceeded its allowed rate limit
+    and must wait before making further requests.
+
+    It includes a `wait_period` attribute that specifies how long in seconds, the client should wait
+    before retrying the request.
+    """
+
+    def __init__(
+        self,
+        wait_period: typing.Optional[int] = None,
+        status_code: int = HTTP_429_TOO_MANY_REQUESTS,
+        detail: typing.Optional[str] = None,
+        headers: typing.Optional[typing.Mapping[str, str]] = None,
+    ) -> None:
+        if detail is None:
+            if wait_period is not None:
+                detail = f"Too Many Requests. Retry after {wait_period} seconds."
+            else:
+                detail = "Too Many Requests"
+
+        if wait_period is not None:
+            headers = dict(headers or {})
+            headers["Retry-After"] = str(wait_period)
+        super().__init__(status_code, detail, headers)
+        self.wait_period = wait_period

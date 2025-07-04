@@ -6,6 +6,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from typing_extensions import TypeAlias
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
+from traffik.exceptions import ConfigurationError
 from traffik.throttles import BaseThrottle
 from traffik.types import HTTPConnectionT, Matchable
 
@@ -76,7 +77,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             Examples:
 
                 - "/api/" matches paths starting with "/api/"
-                - r"/api/\d+" matches "/api/" followed by digits
+                - r"/api/\\d+" matches "/api/" followed by digits
                 - None applies to all paths.
 
         :param methods: A set of HTTP methods (e.g., 'GET', 'POST') to apply the throttle to.
@@ -192,7 +193,7 @@ class ThrottleMiddleware:
         if self.backend is None:
             backend = get_throttle_backend(connection)
             if backend is None:
-                raise RuntimeError("No throttle backend configured.")
+                raise ConfigurationError("No throttle backend configured.")
             self.backend = backend
 
         async with self.backend(close_on_exit=False):

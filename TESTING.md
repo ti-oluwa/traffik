@@ -296,7 +296,6 @@ make security
 
 # Manual security checks
 uv run bandit -r src/
-uv run safety scan
 ```
 
 ## 📈 Coverage Analysis

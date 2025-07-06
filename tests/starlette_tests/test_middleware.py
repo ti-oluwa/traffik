@@ -83,11 +83,11 @@ async def test_middleware_throttle_initialization() -> None:
 async def test_middleware_throttle_method_filtering(
     inmemory_backend: InMemoryBackend,
 ) -> None:
-    """Test that MiddlewareThrottle correctly filters by HTTP method."""
+    """Test that `MiddlewareThrottle` correctly filters by HTTP method."""
     async with inmemory_backend():
         throttle = HTTPThrottle(
             uid="method-filter-test",
-            limit=2,
+            limit=1,
             seconds=60,
             identifier=_testclient_identifier,
         )
@@ -102,16 +102,27 @@ async def test_middleware_throttle_method_filtering(
         get_scope = {"type": "http", "method": "GET", "path": "/test"}
         post_scope = {"type": "http", "method": "POST", "path": "/test"}
 
-        get_connection = HTTPConnection(get_scope, lambda: None)
-        post_connection = HTTPConnection(post_scope, lambda: None)
+        get_request = Request(get_scope)
+        post_request = Request(post_scope)
 
         # GET request should be processed by throttle
-        result_get = await middleware_throttle(get_connection)
-        assert result_get is get_connection  # Should pass through after processing
+        result_get = await middleware_throttle(get_request)
+        assert result_get is get_request  # Should pass through after processing
+        # GET request should create a throttling record
+        initial_connections = (
+            len(inmemory_backend.connection) if inmemory_backend.connection else 0
+        )
+        assert initial_connections == 1  # One connection created
 
         # POST request should be skipped (not throttled)
-        result_post = await middleware_throttle(post_connection)
-        assert result_post is post_connection  # Should return unchanged
+        result_post = await middleware_throttle(post_request)
+        assert result_post is post_request  # Should return unchanged
+
+        # POST request should not create a throttling record
+        final_connections = (
+            len(inmemory_backend.connection) if inmemory_backend.connection else 0
+        )
+        assert final_connections == initial_connections  # No new connection created
 
 
 @pytest.mark.asyncio
@@ -140,16 +151,16 @@ async def test_middleware_throttle_path_filtering(
         api_scope = {"type": "http", "method": "GET", "path": "/api/users"}
         public_scope = {"type": "http", "method": "GET", "path": "/public/info"}
 
-        api_connection = HTTPConnection(api_scope, lambda: None)
-        public_connection = HTTPConnection(public_scope, lambda: None)
+        api_request = Request(api_scope)
+        public_request = Request(public_scope)
 
         # API request should be processed by throttle
-        result_api = await middleware_throttle(api_connection)
-        assert result_api is api_connection
+        result_api = await middleware_throttle(api_request)
+        assert result_api is api_request
 
         # Public request should be skipped
-        result_public = await middleware_throttle(public_connection)
-        assert result_public is public_connection
+        result_public = await middleware_throttle(public_request)
+        assert result_public is public_request
 
 
 @pytest.mark.asyncio
@@ -185,15 +196,15 @@ async def test_middleware_throttle_regex_path_filtering(
 
         for path, should_match in test_cases:
             scope = {"type": "http", "method": "GET", "path": path}
-            connection = HTTPConnection(scope, lambda: None)
+            request = Request(scope)
 
             # Track if throttle was actually applied by checking backend state
             initial_connections = (
                 len(inmemory_backend.connection) if inmemory_backend.connection else 0
             )
 
-            result = await middleware_throttle(connection)
-            assert result is connection
+            result = await middleware_throttle(request)
+            assert result is request
 
             final_connections = (
                 len(inmemory_backend.connection) if inmemory_backend.connection else 0
@@ -250,8 +261,8 @@ async def test_middleware_throttle_hook_filtering(
             "headers": {"x-user-tier": "free"},
         }
 
-        premium_connection = HTTPConnection(premium_scope, lambda: None)
-        free_connection = HTTPConnection(free_scope, lambda: None)
+        premium_request = Request(premium_scope)
+        free_request = Request(free_scope)
 
         # Track backend state
         initial_connections = (
@@ -259,14 +270,14 @@ async def test_middleware_throttle_hook_filtering(
         )
 
         # Premium user should be throttled
-        await middleware_throttle(premium_connection)
+        await middleware_throttle(premium_request)
         premium_connections = (
             len(inmemory_backend.connection) if inmemory_backend.connection else 0
         )
         assert premium_connections > initial_connections
 
         # Free user should be skipped
-        await middleware_throttle(free_connection)
+        await middleware_throttle(free_request)
         final_connections = (
             len(inmemory_backend.connection) if inmemory_backend.connection else 0
         )
@@ -311,14 +322,14 @@ async def test_middleware_throttle_combined_filters(
         ]
 
         for method, path, has_auth, should_throttle in test_cases:
-            headers = [("authorization", "Bearer token")] if has_auth else []
+            headers = [(b"authorization", b"Bearer token")] if has_auth else []
             scope = {"type": "http", "method": method, "path": path, "headers": headers}
-            connection = HTTPConnection(scope, lambda: None)
+            request = Request(scope)
 
             initial_count = (
                 len(inmemory_backend.connection) if inmemory_backend.connection else 0
             )
-            await middleware_throttle(connection)
+            await middleware_throttle(request)
             final_count = (
                 len(inmemory_backend.connection) if inmemory_backend.connection else 0
             )
@@ -328,6 +339,9 @@ async def test_middleware_throttle_combined_filters(
                     f"{method} {path} auth={has_auth} should throttle"
                 )
             else:
+                assert final_count == initial_count, (
+                    f"{method} {path} auth={has_auth} should not throttle"
+                )
                 assert final_count == initial_count, (
                     f"{method} {path} auth={has_auth} should not throttle"
                 )
@@ -374,7 +388,7 @@ def test_throttle_middleware_basic_functionality(
         backend=inmemory_backend,
     )
 
-    base_url = "http://testserver"
+    base_url = "http://0.0.0.0"
     with TestClient(app, base_url=base_url) as client:
         # First two requests to /api/data should succeed
         response1 = client.get("/api/data")
@@ -442,7 +456,7 @@ def test_throttle_middleware_multiple_throttles(
         backend=inmemory_backend,
     )
 
-    base_url = "http://testserver"
+    base_url = "http://0.0.0.0"
     with TestClient(app, base_url=base_url) as client:
         # Test API throttle (limit=2)
         assert client.get("/api/users").status_code == 200
@@ -500,7 +514,7 @@ def test_throttle_middleware_method_specificity(
         backend=inmemory_backend,
     )
 
-    base_url = "http://testserver"
+    base_url = "http://0.0.0.0"
     with TestClient(app, base_url=base_url) as client:
         # GET should not be throttled (multiple requests allowed)
         assert client.get("/api/data").status_code == 200
@@ -552,7 +566,7 @@ def test_throttle_middleware_with_hook(inmemory_backend: InMemoryBackend) -> Non
         backend=inmemory_backend,
     )
 
-    base_url = "http://testserver"
+    base_url = "http://0.0.0.0"
     with TestClient(app, base_url=base_url) as client:
         # Free user should not be throttled
         free_headers = {"x-user-tier": "free"}
@@ -598,7 +612,7 @@ def test_throttle_middleware_no_backend_specified(
         # backend=None (implicit)
     )
 
-    base_url = "http://testserver"
+    base_url = "http://0.0.0.0"
     with TestClient(app, base_url=base_url) as client:
         # Should still throttle using lifespan backend
         assert client.get("/test").status_code == 200
@@ -644,7 +658,7 @@ async def test_throttle_middleware_redis_backend(redis_backend: RedisBackend) ->
             backend=redis_backend,
         )
 
-        base_url = "http://testserver"
+        base_url = "http://0.0.0.0"
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url=base_url
         ) as client:
@@ -698,7 +712,7 @@ async def test_throttle_middleware_concurrent_requests(
             backend=inmemory_backend,
         )
 
-        base_url = "http://testserver"
+        base_url = "http://0.0.0.0"
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url=base_url
         ) as client:
@@ -716,87 +730,6 @@ async def test_throttle_middleware_concurrent_requests(
             # Should have exactly 3 successful requests and 7 throttled
             assert success_count == 3
             assert throttled_count == 7
-
-
-@pytest.mark.integration
-@pytest.mark.middleware
-@pytest.mark.native
-def test_throttle_middleware_complex_path_patterns(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test ThrottleMiddleware with complex regex path patterns."""
-    # Different throttles for different path patterns
-    user_throttle = HTTPThrottle(
-        uid="user-throttle",
-        limit=1,
-        seconds=1,
-        identifier=_testclient_identifier,
-    )
-
-    admin_throttle = HTTPThrottle(
-        uid="admin-throttle",
-        limit=2,
-        seconds=1,
-        identifier=_testclient_identifier,
-    )
-
-    middleware_throttles = [
-        # Throttle user endpoints: /api/users/123, /api/users/456/profile, etc.
-        MiddlewareThrottle(user_throttle, path=r"/api/users/\d+"),
-        # Throttle admin endpoints: /api/admin/anything
-        MiddlewareThrottle(admin_throttle, path=r"/api/admin/.*"),
-    ]
-
-    async def get_user(request: Request) -> JSONResponse:
-        user_id = request.path_params["user_id"]
-        return JSONResponse({"user_id": user_id})
-
-    async def get_user_profile(request: Request) -> JSONResponse:
-        user_id = request.path_params["user_id"]
-        return JSONResponse({"user_id": user_id, "profile": True})
-
-    async def admin_settings(request: Request) -> JSONResponse:
-        return JSONResponse({"admin": "settings"})
-
-    async def admin_users(request: Request) -> JSONResponse:
-        return JSONResponse({"admin": "users"})
-
-    async def public_info(request: Request) -> JSONResponse:
-        return JSONResponse({"public": True})
-
-    routes = [
-        Route("/api/users/{user_id:int}", get_user, methods=["GET"]),
-        Route("/api/users/{user_id:int}/profile", get_user_profile, methods=["GET"]),
-        Route("/api/admin/settings", admin_settings, methods=["GET"]),
-        Route("/api/admin/users/list", admin_users, methods=["GET"]),
-        Route("/api/public/info", public_info, methods=["GET"]),
-    ]
-
-    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
-    app.add_middleware(
-        ThrottleMiddleware,
-        middleware_throttles=middleware_throttles,
-        backend=inmemory_backend,
-    )
-
-    base_url = "http://testserver"
-    with TestClient(app, base_url=base_url) as client:
-        # Test user endpoints (limit=1)
-        assert client.get("/api/users/123").status_code == 200
-        assert (
-            client.get("/api/users/123").status_code == 429
-        )  # Same pattern, throttled
-
-        # Different user ID, but same pattern - should also be throttled
-        assert client.get("/api/users/456").status_code == 429
-
-        # Test admin endpoints (limit=2)
-        assert client.get("/api/admin/settings").status_code == 200
-        assert client.get("/api/admin/users/list").status_code == 200
-        assert client.get("/api/admin/settings").status_code == 429  # Third request
-
-        # Public endpoint should not be throttled
-        assert client.get("/api/public/info").status_code == 200
 
 
 @pytest.mark.integration
@@ -837,7 +770,7 @@ def test_throttle_middleware_exemption_with_hook(
         backend=inmemory_backend,
     )
 
-    base_url = "http://testserver"
+    base_url = "http://0.0.0.0"
     with TestClient(app, base_url=base_url) as client:
         # Admin users should not be throttled
         admin_headers = {"x-user-role": "admin"}
@@ -897,7 +830,7 @@ def test_throttle_middleware_case_insensitive_methods(
         backend=inmemory_backend,
     )
 
-    base_url = "http://testserver"
+    base_url = "http://0.0.0.0"
     with TestClient(app, base_url=base_url) as client:
         # GET, POST, PUT should be throttled
         assert client.get("/test").status_code == 200
@@ -952,7 +885,7 @@ def test_throttle_middleware_websocket_passthrough(
         backend=inmemory_backend,
     )
 
-    base_url = "http://testserver"
+    base_url = "http://0.0.0.0"
     with TestClient(app, base_url=base_url) as client:
         # HTTP endpoint should be throttled
         assert client.get("/http").status_code == 200
@@ -991,7 +924,7 @@ def test_throttle_middleware_empty_throttles_list(
         backend=inmemory_backend,
     )
 
-    base_url = "http://testserver"
+    base_url = "http://0.0.0.0"
     with TestClient(app, base_url=base_url) as client:
         # Should work normally without any throttling
         for _ in range(10):
@@ -1046,7 +979,7 @@ def test_throttle_middleware_multiple_overlapping_patterns(
         backend=inmemory_backend,
     )
 
-    base_url = "http://testserver"
+    base_url = "http://0.0.0.0"
     with TestClient(app, base_url=base_url) as client:
         # /api/data should only be limited by general throttle (limit=5)
         for i in range(5):

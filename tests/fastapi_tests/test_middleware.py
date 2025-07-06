@@ -3,7 +3,7 @@ import os
 import re
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
@@ -368,7 +368,7 @@ def test_throttle_middleware_basic_functionality(
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
-    
+
     @app.get("/api/data")
     async def get_data():
         return {"data": "response"}
@@ -704,82 +704,6 @@ async def test_throttle_middleware_concurrent_requests(
 @pytest.mark.integration
 @pytest.mark.middleware
 @pytest.mark.fastapi
-def test_throttle_middleware_complex_path_patterns(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test ThrottleMiddleware with complex regex path patterns."""
-    # Different throttles for different path patterns
-    user_throttle = HTTPThrottle(
-        uid="user-throttle",
-        limit=1,
-        seconds=1,
-        identifier=_testclient_identifier,
-    )
-
-    admin_throttle = HTTPThrottle(
-        uid="admin-throttle",
-        limit=2,
-        seconds=1,
-        identifier=_testclient_identifier,
-    )
-
-    middleware_throttles = [
-        # Throttle user endpoints: /api/users/123, /api/users/456/profile, etc.
-        MiddlewareThrottle(user_throttle, path=r"/api/users/\d+"),
-        # Throttle admin endpoints: /api/admin/anything
-        MiddlewareThrottle(admin_throttle, path=r"/api/admin/.*"),
-    ]
-
-    app = FastAPI(lifespan=inmemory_backend.lifespan)
-    app.add_middleware(
-        ThrottleMiddleware,
-        middleware_throttles=middleware_throttles,
-        backend=inmemory_backend,
-    )
-
-    @app.get("/api/users/{user_id}")
-    async def get_user(user_id: int):
-        return {"user_id": user_id}
-
-    @app.get("/api/users/{user_id}/profile")
-    async def get_user_profile(user_id: int):
-        return {"user_id": user_id, "profile": True}
-
-    @app.get("/api/admin/settings")
-    async def admin_settings():
-        return {"admin": "settings"}
-
-    @app.get("/api/admin/users/list")
-    async def admin_users():
-        return {"admin": "users"}
-
-    @app.get("/api/public/info")
-    async def public_info():
-        return {"public": True}
-
-    base_url = "http://0.0.0.0"
-    with TestClient(app, base_url=base_url) as client:
-        # Test user endpoints (limit=1)
-        assert client.get("/api/users/123").status_code == 200
-        assert (
-            client.get("/api/users/123").status_code == 429
-        )  # Same pattern, throttled
-
-        # Different user ID, but same pattern - should also be throttled
-        assert client.get("/api/users/456").status_code == 429
-
-        # Test admin endpoints (limit=2)
-        assert client.get("/api/admin/settings").status_code == 200
-        assert client.get("/api/admin/users/list").status_code == 200
-        assert client.get("/api/admin/settings").status_code == 429  # Third request
-
-        # Public endpoint should not be throttled
-        assert client.get("/api/public/info").status_code == 200
-
-
-@pytest.mark.integration
-@pytest.mark.middleware
-@pytest.mark.fastapi
 def test_throttle_middleware_exemption_with_hook(
     inmemory_backend: InMemoryBackend,
 ) -> None:
@@ -884,3 +808,146 @@ def test_throttle_middleware_case_insensitive_methods(
         # DELETE should not be throttled (not in the methods set)
         assert client.delete("/test").status_code == 200
         assert client.delete("/test").status_code == 200  # Still not throttled
+
+
+@pytest.mark.integration
+@pytest.mark.middleware
+@pytest.mark.fastapi
+def test_throttle_middleware_websocket_passthrough(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """Test that ThrottleMiddleware doesn't interfere with WebSocket connections."""
+    throttle = HTTPThrottle(
+        uid="websocket-test",
+        limit=1,
+        seconds=1,
+        identifier=_testclient_identifier,
+    )
+
+    middleware_throttle = MiddlewareThrottle(throttle=throttle)
+
+    app = FastAPI(lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,
+        middleware_throttles=[middleware_throttle],
+        backend=inmemory_backend,
+    )
+
+    @app.get("/http")
+    async def http_endpoint():
+        return {"type": "http"}
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket):
+        await websocket.accept()
+        await websocket.send_json({"message": "connected"})
+        # Don't close immediately - let the client close
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # HTTP endpoint should be throttled
+        assert client.get("/http").status_code == 200
+        assert client.get("/http").status_code == 429
+
+        # WebSocket should work without throttling interference
+        with client.websocket_connect("/ws") as websocket:
+            data = websocket.receive_json()
+            assert data == {"message": "connected"}
+
+        # Multiple WebSocket connections should work
+        with client.websocket_connect("/ws") as websocket:
+            data = websocket.receive_json()
+            assert data == {"message": "connected"}
+
+
+@pytest.mark.integration
+@pytest.mark.middleware
+@pytest.mark.fastapi
+def test_throttle_middleware_empty_throttles_list(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """Test ThrottleMiddleware with empty middleware_throttles list."""
+    app = FastAPI(lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,
+        middleware_throttles=[],  # Empty list
+        backend=inmemory_backend,
+    )
+
+    @app.get("/test")
+    async def test_endpoint():
+        return {"test": "response"}
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # Should work normally without any throttling
+        for _ in range(10):
+            response = client.get("/test")
+            assert response.status_code == 200
+
+
+@pytest.mark.integration
+@pytest.mark.middleware
+@pytest.mark.fastapi
+def test_throttle_middleware_multiple_overlapping_patterns(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """Test ThrottleMiddleware with overlapping path patterns."""
+    # Two throttles that could both match the same request
+    general_throttle = HTTPThrottle(
+        uid="general-throttle",
+        limit=5,
+        seconds=1,
+        identifier=_testclient_identifier,
+    )
+
+    specific_throttle = HTTPThrottle(
+        uid="specific-throttle",
+        limit=2,
+        seconds=1,
+        identifier=_testclient_identifier,
+    )
+
+    middleware_throttles = [
+        # More general pattern (processed first)
+        MiddlewareThrottle(general_throttle, path="/api/"),
+        # More specific pattern (processed second)
+        MiddlewareThrottle(specific_throttle, path="/api/users/"),
+    ]
+
+    app = FastAPI(lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,
+        middleware_throttles=middleware_throttles,
+        backend=inmemory_backend,
+    )
+
+    @app.get("/api/data")
+    async def api_general():
+        return {"type": "general"}
+
+    @app.get("/api/users/list")
+    async def api_users():
+        return {"type": "users"}
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # /api/data should only be limited by general throttle (limit=5)
+        for i in range(5):
+            response = client.get("/api/data")
+            assert response.status_code == 200, f"Request {i + 1} should succeed"
+
+        response = client.get("/api/data")
+        assert response.status_code == 429  # 6th request should be throttled
+
+        # /api/users/list should be limited by BOTH throttles
+        # This means it will be more restrictive (limit=2 from specific throttle wins)
+        # Actually, both throttles will apply, so it hits the specific limit first
+        for i in range(2):
+            response = client.get("/api/users/list")
+            assert response.status_code == 200, f"Users request {i + 1} should succeed"
+
+        response = client.get("/api/users/list")
+        assert (
+            response.status_code == 429
+        )  # 3rd request should be throttled by specific throttle

@@ -6,19 +6,60 @@
 <!-- [![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
 [![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/) -->
 
-Traffik provides rate limiting capabilities for starlette-based applications like FastAPI with support for both HTTP and WebSocket connections. It offers multiple backend options including in-memory storage for development and Redis for production environments. Customizable throttling strategies allow you to define limits based on time intervals, client identifiers, and more.
+Traffik provides rate limiting capabilities for starlette-based applications like FastAPI with support for both HTTP and WebSocket connections. It uses a **token bucket algorithm** for smooth, burst-friendly rate limiting and offers multiple backend options including in-memory storage for development and Redis for production environments.
 
-Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-limiter), and some of the code is adapted from it. However, Traffik aims to provide a more flexible and extensible solution with a focus on ease of use. Some of these differences are listed below.
+The library features a dynamic backend system for multi-tenant applications, customizable throttling strategies, and comprehensive error handling. Whether you need simple per-endpoint limits or complex multi-tenant rate limiting, Traffik provides the flexibility to handle your use case.
+
+Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-limiter), and some of the code is adapted from it. However, Traffik aims to provide a more flexible and extensible solution with a focus on ease of use and advanced features like dynamic backend resolution.
 
 ## Features
 
 - 🚀 **Easy Integration**: Simple decorator and dependency-based throttling
+- 🪣 **Token Bucket Algorithm**: Smooth, burst-friendly rate limiting with gradual token refill
 - 🔄 **Multiple Backends**: In-memory (development) and Redis (production) support
 - 🌐 **Protocol Support**: Both HTTP and WebSocket throttling
+- 🏢 **Dynamic Backend Resolution**: Multi-tenant support with runtime backend switching
 - 🔧 **Flexible Configuration**: Time-based limits with multiple time units
 - 🎯 **Per-Route Throttling**: Individual limits for different endpoints
 - 📊 **Client Identification**: Customizable client identification strategies
-****
+- 🛡️ **Thread-Safe Design**: Immutable throttles with proper async locking
+- ⚡ **High Performance**: Optimized Redis Lua scripts and efficient in-memory operations
+
+## How Token Bucket Algorithm Works
+
+Traffik uses a **token bucket algorithm** for rate limiting, which provides several advantages over traditional fixed-window approaches:
+
+### Token Bucket Concept
+
+Think of a bucket that holds tokens:
+
+- **Bucket Capacity**: Your rate limit (e.g., 100 requests)
+- **Token Refill Rate**: Tokens are added continuously over time
+- **Request Processing**: Each request consumes one token
+- **Burst Handling**: Allows temporary bursts up to bucket capacity
+
+### Example: 100 requests per hour
+
+```python
+# Configuration
+limit = 100        # Bucket holds 100 tokens max
+expires_after = 3600000  # 1 hour in milliseconds
+refill_rate = 100 / 3600000  # ≈ 0.0278 tokens per millisecond
+
+# Behavior:
+# - Bucket starts full (100 tokens)
+# - Client can make 100 requests immediately (burst)
+# - After burst, tokens refill at ~1.67 per minute
+# - Sustained rate: ~27.8 requests per 1000 seconds
+```
+
+### Advantages
+
+1. **Smooth Rate Limiting**: No sudden resets at window boundaries
+2. **Burst Tolerance**: Allows legitimate traffic spikes
+3. **Fairness**: Gradual token replenishment prevents starvation
+4. **Predictable**: Wait times are calculated precisely
+
 ## Installation
 
 We recommend using `uv`, however, it is not a strict requirement.
@@ -203,86 +244,55 @@ async def limited_endpoint():
 
 ### 3. WebSocket Throttling
 
-WebSocket throttling can be implemented using the `WebSocketThrottle` class. This allows you to limit the number of messages a client can send over a WebSocket connection.
+WebSocket throttling limits the rate of messages a client can send over a WebSocket connection:
 
 ```python
 from traffik.throttles import WebSocketThrottle
 from starlette.websockets import WebSocket
+from starlette.exceptions import HTTPException
 
-ws_throttle = WebSocketThrottle(
-    limit=3,
-    seconds=10,
-)
+ws_throttle = WebSocketThrottle(limit=3, seconds=10)
 
 async def ws_endpoint(websocket: WebSocket) -> None:
-    """
-    WebSocket endpoint with throttling.
-    """
     await websocket.accept()
-    print("ACCEPTED WEBSOCKET CONNECTION")
-    close_code = 1000  # Normal closure
-    close_reason = "Normal closure"
+    
     while True:
         try:
             data = await websocket.receive_json()
-            await ws_throttle(websocket)
-            await websocket.send_json(
-                {
-                    "status": "success",
-                    "status_code": 200,
-                    "headers": {},
-                    "detail": "Request successful",
-                    "data": data,
-                }
-            )
+            await ws_throttle(websocket)  # Check rate limit
+            
+            await websocket.send_json({
+                "status": "success",
+                "data": data,
+            })
         except HTTPException as exc:
-            print("HTTP EXCEPTION:", exc)
-            await websocket.send_json(
-                {
-                    "status": "error",
-                    "status_code": exc.status_code,
-                    "detail": exc.detail,
-                    "headers": exc.headers,
-                    "data": None,
-                }
-            )
-            close_reason = exc.detail
+            await websocket.send_json({
+                "status": "error", 
+                "status_code": exc.status_code,
+                "detail": exc.detail,
+            })
             break
-        except Exception as exc:
-            print("WEBSOCKET ERROR:", exc)
-            await websocket.send_json(
-                {
-                    "status": "error",
-                    "status_code": 500,
-                    "detail": "Operation failed",
-                    "headers": {},
-                    "data": None,
-                }
-            )
-            close_code = 1011  # Internal error
-            close_reason = "Internal error"
+        except Exception:
+            await websocket.send_json({
+                "status": "error",
+                "detail": "Internal error"
+            })
             break
-    await websocket.close(code=close_code, reason=close_reason)
+    
+    await websocket.close()
 ```
 
-You can then use this WebSocket endpoint in your Starlette application:
+Use this WebSocket endpoint in your application:
 
 ```python
 from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute
+from fastapi import FastAPI
 
-app = Starlette(
-    routes=[
-        WebSocketRoute("/ws/limited", ws_endpoint),
-    ]
-)
-```
+# For Starlette
+app = Starlette(routes=[WebSocketRoute("/ws/limited", ws_endpoint)])
 
-Or in a FastAPI application:
-
-```python
-from fastapi import FastAPI, WebSocket
-
+# For FastAPI  
 app = FastAPI()
 app.websocket("/ws/limited")(ws_endpoint)
 ```
@@ -349,173 +359,67 @@ redis_throttle_backend = RedisBackend(
 
 ### Custom Backends
 
-You can create custom backends by subclassing `ThrottleBackend` and implementing the required methods. This allows you to integrate with any storage system or caching layer. Let's look at an example of a custom SQLite backend.
+You can create custom backends by subclassing `ThrottleBackend` and implementing the token bucket algorithm. Here's a simplified example:
 
 ```python
-import typing
 import time
-import asyncio
-from contextlib import asynccontextmanager
+import typing
 from traffik.backends.base import ThrottleBackend
-from traffik.types import (
-    HTTPConnectionT,
-    ConnectionIdentifier,
-    ConnectionThrottledHandler,
-)
-from traffik.exceptions import ConfiguationError
-from aiosqlite import connect, Connection
+from traffik.types import HTTPConnectionT
 
-
-class SQLiteBackend(ThrottleBackend[Connection, HTTPConnectionT]):
-    """
-    SQLite-based throttle backend for persistent rate limiting.
+class CustomBackend(ThrottleBackend[typing.Dict, HTTPConnectionT]):
+    """Custom backend implementing token bucket algorithm"""
     
-    Suitable for single-process applications that need persistence
-    across restarts without requiring Redis infrastructure.
-    """
+    def __init__(self, storage_config: str = "custom://config", **kwargs):
+        # Initialize your storage connection
+        self._storage = {}
+        super().__init__(connection=self._storage, **kwargs)
     
-    def __init__(
-        self, 
-        connection_string: str = ":memory:", 
-        *,
-        prefix: str = "sqlite-throttle",
-        identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
-        handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[HTTPConnectionT]
-        ] = None,
-        persistent: bool = False,
-    ):
-        # Store connection string, don't create connection yet
-        self._connection_string = connection_string
-        self._connection: typing.Optional[Connection] = None
-        super().__init__(
-            connection=None,  # Will be set in initialize()
-            prefix=prefix,
-            identifier=identifier,
-            handle_throttled=handle_throttled,
-            persistent=persistent,
-        )
-
-    async def initialize(self) -> None:
-        """Initialize SQLite database and create required tables."""
-        self._connection = await aiosqlite.connect(self._connection_string)
-        self.connection = self._connection  # Set for base class
-        
-        # Enable WAL mode for better concurrency
-        await self._connection.execute("PRAGMA journal_mode=WAL")
-        
-        # Create throttles table with proper indexing
-        await self._connection.execute("""
-            CREATE TABLE IF NOT EXISTS throttle_records (
-                key TEXT PRIMARY KEY,
-                count INTEGER NOT NULL DEFAULT 1,
-                window_start INTEGER NOT NULL,
-                expires_at INTEGER NOT NULL
-            )
-        """)
-        
-        # Index for efficient cleanup of expired records
-        await self._connection.execute("""
-            CREATE INDEX IF NOT EXISTS idx_expires_at 
-            ON throttle_records(expires_at)
-        """)
-        
-        await self._connection.commit()
-        
-        # Start cleanup task for expired records
-        asyncio.create_task(self._cleanup_expired_records())
-
     async def get_wait_period(self, key: str, limit: int, expires_after: int) -> int:
-        """
-        Check throttle status and return wait period if throttled.
+        """Token bucket implementation for custom storage"""
+        now = int(time.monotonic() * 1000)
         
-        :param key: Throttle key (includes prefix)
-        :param limit: Maximum requests allowed
-        :param expires_after: Window duration in milliseconds 
-        :return: Wait period in milliseconds (0 if not throttled)
-        """
-        if not self._connection:
-            raise ConfiguationError("Backend not initialized")
-            
-        current_time_ms = int(time.time() * 1000)
-        window_start = current_time_ms
-        expires_at = current_time_ms + expires_after
+        # Get or create token bucket record
+        record = self._storage.get(key, {
+            "tokens": float(limit),
+            "last_refill": now
+        })
         
-        # Use a transaction for atomic read-modify-write
-        async with self._connection.execute("BEGIN IMMEDIATE"):
-            # Clean up expired record for this key
-            await self._connection.execute(
-                "DELETE FROM throttle_records WHERE key = ? AND expires_at <= ?",
-                (key, current_time_ms)
-            )
-            
-            # Get current count or insert new record
-            cursor = await self._connection.execute(
-                """
-                INSERT INTO throttle_records (key, count, window_start, expires_at)
-                VALUES (?, 1, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET
-                    count = count + 1
-                RETURNING count, window_start, expires_at
-                """,
-                (key, window_start, expires_at)
-            )
-            
-            row = await cursor.fetchone()
-            if not row:
-                await self._connection.commit()
-                return 0
-                
-            count, record_window_start, record_expires_at = row
-            await self._connection.commit()
-            
-            # Check if limit exceeded
-            if count > limit:
-                # Calculate remaining wait time
-                wait_time = record_expires_at - current_time_ms
-                return max(0, wait_time)
-                
-        return 0
-
+        # Calculate tokens to add based on elapsed time
+        time_elapsed = now - record["last_refill"]
+        refill_rate = limit / expires_after  # tokens per millisecond
+        tokens_to_add = time_elapsed * refill_rate
+        
+        # Refill tokens (capped at limit)
+        record["tokens"] = min(float(limit), record["tokens"] + tokens_to_add)
+        record["last_refill"] = now
+        
+        # Check if request can be served
+        if record["tokens"] >= 1.0:
+            record["tokens"] -= 1.0
+            self._storage[key] = record
+            return 0  # Allow request
+        
+        # Calculate wait time for next token
+        tokens_needed = 1.0 - record["tokens"]
+        wait_time = int(tokens_needed / refill_rate)
+        self._storage[key] = record
+        return wait_time
+    
     async def reset(self) -> None:
-        """Reset all throttle records."""
-        if not self._connection:
-            return
-        
-        # Default key pattern is "{self.prefix}:*"
-        pattern = str(self.key_pattern).replace("*", "%")
-        await self._connection.execute(
-            "DELETE FROM throttle_records WHERE key LIKE ?",
-            (pattern,)
-        )
-        await self._connection.commit()
-
+        """Reset all throttle records"""
+        pattern = str(self.key_pattern)
+        keys_to_delete = [k for k in self._storage.keys() if k.startswith(pattern.replace("*", ""))]
+        for key in keys_to_delete:
+            del self._storage[key]
+    
     async def close(self) -> None:
-        """Close the SQLite connection."""
-        if self._connection:
-            await self._connection.close()
-            self._connection = None
+        """Clean up resources"""
+        self._storage.clear()
 
-    async def _cleanup_expired_records(self) -> None:
-        """Background task to periodically clean up expired records."""
-        while self._connection:
-            try:
-                current_time = int(time.time() * 1000)
-                await self._connection.execute(
-                    "DELETE FROM throttle_records WHERE expires_at <= ?",
-                    (current_time,)
-                )
-                await self._connection.commit()
-                
-                # Clean up every 60 seconds
-                await asyncio.sleep(60)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as exc:
-                # Log error in production
-                print(f"Cleanup task error: {exc}")
-                await asyncio.sleep(60)
+# Usage
+custom_backend = CustomBackend(prefix="myapp")
+throttle = HTTPThrottle(limit=100, minutes=1, backend=custom_backend)
 ```
 
 ## Configuration Options
@@ -555,25 +459,40 @@ throttle = HTTPThrottle(
 )
 ```
 
-### Excluding connections from Throttling
+### Exempting connections from Throttling
 
-You can exclude certain connections from throttling by writing a custom identifier that raises `traffik.exceptions.NoLimit` for those connections. This is useful when you have throttles you want to skip for specific routes or clients.
+You can exclude certain connections from throttling by writing a custom identifier that returns `traffik.UNLIMITED` for those connections. This is useful when you have throttles you want to skip for specific clients and/or routes.
 
 ```python
+import typing
 from starlette.requests import HTTPConnection
-from traffik.exceptions import NoLimit
+from traffik import UNLIMITED, HTTPThrottle
 
-async def admin_identifier(connection: HTTPConnection):
+def extract_user_id(authorization: str) -> str:
+    # Dummy function to extract user ID from JWT token
+    # Replace with actual JWT decoding logic
+    return authorization.split(" ")[1] if authorization else "anonymous"
+
+def extract_user_role(authorization: str) -> str:
+    # Dummy function to extract user role from JWT token
+    # Replace with actual JWT decoding logic
+    return "admin" if "admin" in authorization else "user"
+
+async def user_identifier(connection: HTTPConnection) -> str:
     # Use user ID from JWT token
     user_id = extract_user_id(connection.headers.get("authorization"))
-    if user_id == "admin":
-        raise NoLimit()  # Skip throttling for admin users
     return f"user:{user_id}:{connection.scope['path']}"
+
+async def no_throttle_admin_identifier(connection: HTTPConnection) -> typing.Any:
+    user_role = extract_user_role(connection.headers.get("authorization"))
+    if user_role == "admin":
+        return UNLIMITED  # Skip throttling for admin users
+    return user_identifier(connection)
 
 throttle = HTTPThrottle(
     limit=10,
     minutes=1,
-    identifier=admin_identifier,  # Override default (backend) identifier
+    identifier=no_throttle_admin_identifier,  # Override default (backend) identifier
 )
 ```
 
@@ -587,7 +506,11 @@ from starlette.exceptions import HTTPException
 import traffik
 
 
-async def custom_throttled_handler(connection: HTTPConnection, wait_period: int):
+async def custom_throttled_handler(
+    connection: HTTPConnection, 
+    wait_period: int, 
+    *args, **kwargs
+):
     raise HTTPException(
         status_code=429,
         detail=f"Too many requests. Try again in {wait_period // 1000} seconds.",
@@ -656,7 +579,7 @@ async def get_user_id(request: Request):
     return request.state.user.id if hasattr(request.state, 'user') else None
 
 
-async def user_identifier(request: Request):
+async def user_identifier(request: Request) -> str:
     # Extract user ID from JWT or session
     user_id = await get_user_id(request)
     return f"user:{user_id}"
@@ -668,6 +591,172 @@ user_throttle = HTTPThrottle(
     identifier=user_identifier,
 )
 ```
+
+### Dynamic Backend Resolution for Multi-Tenant Applications
+
+The `dynamic_backend=True` feature enables runtime backend switching, perfect for multi-tenant SaaS applications where different tenants require isolated rate limiting storage.
+
+#### Real-World Multi-Tenant Example
+
+```python
+from fastapi import FastAPI, Request, Depends, HTTPException
+from traffik.throttles import HTTPThrottle
+from traffik.backends.redis import RedisBackend
+from traffik.backends.inmemory import InMemoryBackend
+import jwt
+
+# Shared throttle instance for all tenants
+api_quota_throttle = HTTPThrottle(
+    uid="api_quota",
+    limit=1000,  # 1000 requests
+    hours=1,     # per hour
+    dynamic_backend=True  # Enable runtime backend resolution
+)
+
+# Tenant configuration
+TENANT_CONFIG = {
+    "enterprise": {
+        "redis_url": "redis://enterprise-cluster:6379/0",
+        "quota_multiplier": 5.0,  # 5x higher limits
+    },
+    "premium": {
+        "redis_url": "redis://premium-redis:6379/0", 
+        "quota_multiplier": 2.0,  # 2x higher limits
+    },
+    "free": {
+        "redis_url": None,  # Use in-memory for free tier
+        "quota_multiplier": 1.0,
+    }
+}
+
+def extract_tenant_from_jwt(authorization: str) -> dict:
+    """Extract tenant info from JWT token"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Missing or invalid authorization")
+    
+    token = authorization.split(" ")[1]
+    try:
+        payload = jwt.decode(token, "your-secret", algorithms=["HS256"])
+        tenant_tier = payload.get("tenant_tier", "free")
+        tenant_id = payload.get("tenant_id", "unknown")
+        return {"tier": tenant_tier, "id": tenant_id}
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "Invalid token")
+
+async def tenant_middleware(request: Request, call_next):
+    """Middleware to set up tenant-specific backend context"""
+    # Extract tenant from request
+    auth_header = request.headers.get("authorization", "")
+    tenant_info = extract_tenant_from_jwt(auth_header)
+    
+    # Get tenant configuration
+    tenant_config = TENANT_CONFIG.get(tenant_info["tier"], TENANT_CONFIG["free"])
+    
+    # Create tenant-specific backend
+    if tenant_config["redis_url"]:
+        # Premium/Enterprise: Dedicated Redis instance
+        backend = RedisBackend(
+            connection=tenant_config["redis_url"],
+            prefix=f"tenant_{tenant_info['id']}",
+            persistent=True
+        )
+    else:
+        # Free tier: In-memory backend
+        backend = InMemoryBackend(
+            prefix=f"tenant_{tenant_info['id']}",
+            persistent=False
+        )
+    
+    # Set tenant context for request
+    request.state.tenant = tenant_info
+    
+    # Execute request within backend context
+    async with backend:
+        response = await call_next(request)
+        return response
+
+app = FastAPI()
+app.middleware("http")(tenant_middleware)
+
+@app.get("/api/data")
+async def get_data(request: Request, _: None = Depends(api_quota_throttle)):
+    """API endpoint with tenant-aware rate limiting"""
+    tenant = request.state.tenant
+    return {
+        "message": f"Data for {tenant['tier']} tenant {tenant['id']}",
+        "remaining_quota": "Calculated based on tenant tier"
+    }
+
+# Usage example:
+# curl -H "Authorization: Bearer <jwt-with-tenant-info>" http://localhost:8000/api/data
+```
+
+#### Multi-Environment Testing Example
+
+```python
+from traffik.throttles import HTTPThrottle
+from traffik.backends.redis import RedisBackend
+from traffik.backends.inmemory import InMemoryBackend
+
+# Shared throttle for testing different backends
+test_throttle = HTTPThrottle(
+    uid="test_throttle",
+    limit=5,
+    seconds=10,
+    dynamic_backend=True
+)
+
+async def test_backend_switching():
+    """Test the same throttle with different backends"""
+    
+    # Test with Redis backend
+    redis_backend = RedisBackend("redis://localhost:6379/1", prefix="test_redis")
+    async with redis_backend:
+        for i in range(3):
+            await test_throttle(mock_request)
+            print(f"Redis backend - Request {i+1} successful")
+    
+    # Test with in-memory backend (completely separate state)
+    inmemory_backend = InMemoryBackend(prefix="test_memory")
+    async with inmemory_backend:
+        for i in range(3):
+            await test_throttle(mock_request)  # Fresh counter
+            print(f"In-memory backend - Request {i+1} successful")
+            
+    # Nested contexts for A/B testing
+    backend_a = InMemoryBackend(prefix="variant_a")
+    backend_b = InMemoryBackend(prefix="variant_b")
+    
+    async with backend_a:
+        await test_throttle(mock_request)  # Uses backend_a
+        
+        async with backend_b:
+            await test_throttle(mock_request)  # Switches to backend_b
+            await test_throttle(mock_request)  # Still backend_b
+            
+        await test_throttle(mock_request)  # Back to backend_a
+```
+
+#### Important Considerations
+
+**When to Use Dynamic Backends:**
+
+- ✅ Multi-tenant SaaS with tenant-specific storage requirements
+- ✅ A/B testing different rate limiting strategies
+- ✅ Environment-specific backend selection (dev/staging/prod)
+- ✅ Request-type based storage (e.g., different limits for API vs Web requests)
+
+**When NOT to Use:**
+
+- ❌ Simple shared storage across services (use explicit `backend` parameter)
+- ❌ Single-tenant applications (adds unnecessary complexity)
+- ❌ When backend choice is known at application startup
+
+**Performance Impact:**
+
+- Small overhead: Backend resolution on each request
+- Memory efficiency: Only one throttle instance needed per limit type
+- Context switching: May cause data fragmentation if inconsistent
 
 ### Application Lifespan Management
 
@@ -721,24 +810,53 @@ app = FastAPI(lifespan=lifespan)
 
 Traffik provides specific exceptions for different error conditions:
 
-A `traffik.exceptions.ConfigurationError` is raised when a throttle or throttle backend configuration is invalid.
+### Exception Types
+
+- **`TraffikException`** - Base exception for all Traffik-related errors
+- **`ConfigurationError`** - Raised when throttle or backend configuration is invalid
+- **`AnonymousConnection`** - Raised when connection identifier cannot be determined  
+- **`ConnectionThrottled`** - HTTP 429 exception raised when rate limits are exceeded
+
+### Exception Handling Examples
+
+Handle configuration errors:
+
+```python
+from traffik.exceptions import ConfigurationError
+from traffik.backends.redis import RedisBackend
+
+try:
+    backend = RedisBackend(connection="invalid://url")
+    await backend.initialize()
+except ConfigurationError as e:
+    print(f"Backend configuration error: {e}")
+```
+
+Handle anonymous connections:
 
 ```python
 from starlette.requests import HTTPConnection
 from traffik.exceptions import AnonymousConnection
-from traffik import connection_identifier # Default identifier function
+from traffik.backends.base import connection_identifier
 
-
-# Custom identifier that handles anonymous users
-async def safe_identifier(connection: HTTPConnection):
-    """
-    Safely get the connection identifier, handling anonymous connections.
-    """
+async def safe_identifier(connection: HTTPConnection) -> str:
     try:
-        return connection_identifier(connection)
+        return await connection_identifier(connection)
     except AnonymousConnection:
-        # Fallback for anonymous connections
         return f"anonymous:{connection.scope['path']}"
+```
+
+Raise throttled exception:
+
+```python
+from traffik.exceptions import ConnectionThrottled
+
+async def custom_throttle_handler(connection, wait_period, *args, **kwargs):
+    raise ConnectionThrottled(
+        wait_period=wait_period,
+        detail=f"Rate limited. Retry in {wait_period}s",
+        headers={"X-Custom-Header": "throttled"}
+    )
 ```
 
 ## Testing
@@ -794,35 +912,6 @@ async def test_throttling(backend: InMemoryBackend):
         # Third request should be throttled
         response3 = await client.get("/throttled")
         assert response3.status_code == 429
-```
-
-## Performance Considerations
-
-### Redis Backend Implementation
-
-The Redis backend uses optimized Lua scripts to minimize round trips:
-
-```lua
--- Atomic increment with expiration
-local current = redis.call('GET', key) or "0"
-if current + 1 > limit then
-    return redis.call("PTTL", key)  -- Return remaining time
-else
-    redis.call("INCR", key)
-    if current == "0" then
-        redis.call("PEXPIRE", key, expire_time)
-    end
-    return 0  -- Allow request
-end
-```
-
-### In-Memory Backend Implementation
-
-Uses efficient dictionary lookups with monotonic time for accuracy:
-
-```python
-now = int(time.monotonic() * 1000)  # Monotonic milliseconds
-record = store.get(key, {"count": 0, "start": now})
 ```
 
 ## API Reference

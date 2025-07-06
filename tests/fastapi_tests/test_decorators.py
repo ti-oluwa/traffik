@@ -22,11 +22,15 @@ async def throttle_backend() -> InMemoryBackend:
 
 
 @pytest.mark.anyio
+@pytest.mark.integration
+@pytest.mark.throttle
+@pytest.mark.decorator
+@pytest.mark.fastapi
 async def test_throttle_decorator_only(
     app: FastAPI, throttle_backend: InMemoryBackend
 ) -> None:
     async with throttle_backend(app):
-        throttle = HTTPThrottle(limit=3, seconds=5)
+        throttle = HTTPThrottle("test-decorator", limit=3, seconds=5)
 
         @app.get("/throttled", status_code=200)
         @throttled(throttle)
@@ -48,12 +52,16 @@ async def test_throttle_decorator_only(
 
 
 @pytest.mark.anyio
+@pytest.mark.integration
+@pytest.mark.throttle
+@pytest.mark.decorator
+@pytest.mark.fastapi
 async def test_throttle_decorator_with_dependency(
     app: FastAPI, throttle_backend: InMemoryBackend
 ) -> None:
     async with throttle_backend(app):
-        burst_throttle = HTTPThrottle(limit=3, seconds=5)
-        sustained_throttle = HTTPThrottle(limit=5, seconds=10)
+        burst_throttle = HTTPThrottle("test-burst", limit=3, seconds=5)
+        sustained_throttle = HTTPThrottle("test-sustained", limit=5, seconds=10)
 
         def random_value() -> str:
             return "random_value"

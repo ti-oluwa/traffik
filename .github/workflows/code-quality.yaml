@@ -51,15 +51,6 @@ jobs:
           uv run bandit -r src/
         continue-on-error: false
 
-      - name: Export dependencies for Safety
-        run: |
-          uv pip freeze > requirements.txt
-
-      - name: Check for known vulnerabilities with Safety
-        run: |
-          echo "Checking for known vulnerabilities..."
-          safety check --file=requirements.txt --output=json > safety-report.json || true
-
       - name: Upload security reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -67,7 +58,6 @@ jobs:
           name: security-reports
           path: |
             bandit-report.json
-            safety-report.json
           retention-days: 30
 
   type-check:

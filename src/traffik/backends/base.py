@@ -3,16 +3,14 @@ import math
 import re
 import typing
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 
-from starlette.exceptions import HTTPException
 from starlette.requests import HTTPConnection
-from starlette.status import HTTP_429_TOO_MANY_REQUESTS
 from starlette.types import ASGIApp
 from typing_extensions import Self
 
 from traffik._utils import get_ip_address
-from traffik.exceptions import AnonymousConnection
+from traffik.exceptions import AnonymousConnection, ConnectionThrottled
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -39,12 +37,8 @@ async def connection_throttled(
     :param wait_period: The wait period in milliseconds before the next connection can be made
     :return: None
     """
-    expire = math.ceil(wait_period / 1000)
-    raise HTTPException(
-        status_code=HTTP_429_TOO_MANY_REQUESTS,
-        detail="Too Many Requests",
-        headers={"Retry-After": str(expire)},
-    )
+    wait_seconds = math.ceil(wait_period / 1000)
+    raise ConnectionThrottled(wait_period=wait_seconds)
 
 
 throttle_backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVar(
@@ -198,7 +192,9 @@ class _ThrottleContext(typing.Generic[ThrottleBackendTco]):
         self.backend = backend
         self.persistent = persistent
         self.close_on_exit = close_on_exit
-        self._context_token = None
+        self._context_token: typing.Optional[
+            Token[typing.Optional[ThrottleBackend]]
+        ] = None
 
     async def __aenter__(self) -> ThrottleBackendTco:
         backend = self.backend

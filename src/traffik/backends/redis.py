@@ -1,3 +1,4 @@
+import time
 import typing
 
 from redis.asyncio import Redis
@@ -13,28 +14,50 @@ from traffik.types import (
 
 
 class RedisBackend(ThrottleBackend[Redis, HTTPConnectionT]):
-    """Redis backend for API throttling"""
+    """
+    Redis backend for API throttling
 
-    lua_script: typing.ClassVar[str] = """local key = KEYS[1]
-local limit = tonumber(ARGV[1])
-local expire_time = ARGV[2]
+    Implements a token-bucket algorithm using Redis Lua scripts.
+    """
 
-local current = tonumber(redis.call('get', key) or "0")
-if current > 0 then
- if current + 1 > limit then
- return redis.call("PTTL",key)
- else
-        redis.call("INCR", key)
- return 0
- end
-else
-    redis.call("SET", key, 1,"px",expire_time)
- return 0
-end"""
+    lua_script: typing.ClassVar[str] = """
+    local key = KEYS[1]
+    local limit = tonumber(ARGV[1])
+    local expire_time = tonumber(ARGV[2])
+    local now = tonumber(ARGV[3])
+
+    -- Get current token data
+    local data = redis.call('HMGET', key, 'tokens', 'last_refill')
+    local tokens = tonumber(data[1]) or limit
+    local last_refill = tonumber(data[2]) or now
+
+    -- Calculate tokens to add
+    local time_passed = now - last_refill
+    local refill_rate = limit / expire_time
+    local tokens_to_add = time_passed * refill_rate
+
+    -- Refill tokens (capped at limit)
+    tokens = math.min(limit, tokens + tokens_to_add)
+
+    -- Check if we can consume a token
+    if tokens >= 1 then
+        tokens = tokens - 1
+        redis.call('HMSET', key, 'tokens', tokens, 'last_refill', now)
+        redis.call('PEXPIRE', key, expire_time * 2)  -- Keep some buffer
+        return 0
+    else
+        -- Calculate wait time
+        local tokens_needed = 1 - tokens
+        local wait_time = math.ceil(tokens_needed / refill_rate)
+        redis.call('HMSET', key, 'tokens', tokens, 'last_refill', now)
+        redis.call('PEXPIRE', key, expire_time * 2)
+        return wait_time
+    end
+    """
 
     def __init__(
         self,
-        connection: typing.Union[Redis, str],
+        connection: Redis,
         *,
         prefix: str,
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
@@ -43,14 +66,6 @@ end"""
         ] = None,
         persistent: bool = False,
     ) -> None:
-        if isinstance(connection, str):
-            connection = Redis.from_url(url=connection)
-
-        elif not isinstance(connection, Redis):
-            raise TypeError(
-                f"Connection must be an instance of `{Redis!r}`, got {type(connection)!r}"
-            )
-
         super().__init__(
             connection,
             prefix=prefix,
@@ -58,7 +73,7 @@ end"""
             handle_throttled=handle_throttled,
             persistent=persistent,
         )
-        self._lua_sha = None  # SHA1 hash of the Lua script
+        self._lua_sha: typing.Optional[str] = None  # SHA1 hash of the Lua script
         self._session = self.connection
 
     async def initialize(self) -> None:
@@ -86,6 +101,7 @@ end"""
                 "Lua script SHA is not initialized. Call `initialize` first."
             )
 
+        now = int(time.monotonic() * 1000)
         try:
             wait_period = await self.connection.evalsha(  # type: ignore
                 self._lua_sha,
@@ -93,6 +109,7 @@ end"""
                 key,
                 str(limit),
                 str(expires_after),
+                str(now),
             )
         except NoScriptError:
             self._lua_sha = await self.connection.script_load(self.lua_script)

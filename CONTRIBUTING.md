@@ -83,7 +83,6 @@ By participating in this project, you agree to abide by our Code of Conduct. We 
    
    # Run security checks
    uv run bandit -r src/
-   uv run safety scan
    ```
 
 4. **Set Up Redis (Optional)**
@@ -159,7 +158,7 @@ We welcome several types of contributions:
 - [ ] New code has appropriate test coverage
 - [ ] Documentation has been updated (if applicable)
 - [ ] Commit messages are clear and descriptive
-- [ ] Security checks pass (bandit and safety)
+- [ ] Security checks pass (bandit)
 - [ ] Code formatting is correct (ruff format)
 
 ### PR Description Template
@@ -279,11 +278,6 @@ ruff format src/ tests/
 uv run bandit -r src/
 # or
 bandit -r src/
-
-# Dependency vulnerability checks
-uv run safety scan
-# or
-safety scan
 ```
 
 ### Style Guidelines
@@ -295,7 +289,7 @@ safety scan
 - **Import sorting**: Use isort-compatible import ordering
 - **Variable naming**: Use descriptive names, avoid abbreviations
 - **Security**: Follow secure coding practices, avoid common vulnerabilities
-- **Dependencies**: Regular security audits with safety and bandit
+- **Dependencies**: Regular security audits with `bandit`
 
 ### Example Code Style
 
@@ -507,7 +501,7 @@ Maintainers follow this process for releases:
 
 1. Update version in `pyproject.toml`
 2. Update `CHANGELOG.md` with new features and fixes
-3. Run security audits: `uv run bandit -r src/ && uv run safety scan`
+3. Run security audits: `uv run bandit -r src/`
 4. Create release PR for review
 5. Tag release and publish to PyPI
 6. Update GitHub release with changelog

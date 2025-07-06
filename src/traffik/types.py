@@ -1,32 +1,79 @@
-import sys
 import typing
 
 from starlette.requests import HTTPConnection
-from typing_extensions import ParamSpec, TypeAlias, Unpack
+from starlette.responses import Response
+from typing_extensions import ParamSpec, TypeAlias
 
 P = ParamSpec("P")
 Q = ParamSpec("Q")
 R = typing.TypeVar("R")
 S = typing.TypeVar("S")
 T = typing.TypeVar("T")
+Rco = typing.TypeVar("Rco", covariant=True)
+
+UNLIMITED = object()
+"""
+A sentinel value to identify that a connection should not be throttled.
+
+This value should be returned by the connection identifier function
+when the connection should not be subject to throttling.
+"""
 
 Function: TypeAlias = typing.Callable[P, R]
 CoroutineFunction: TypeAlias = typing.Callable[P, typing.Awaitable[R]]
-Decorated: TypeAlias = typing.Union[Function[P, R], CoroutineFunction[P, R]]
-Dependency: TypeAlias = typing.Union[Function[Q, S], CoroutineFunction[Q, S]]
 
 HTTPConnectionT = typing.TypeVar("HTTPConnectionT", bound=HTTPConnection)
-ConnectionIdentifier: TypeAlias = typing.Callable[
-    [HTTPConnectionT], typing.Awaitable[typing.Any]
+HTTPConnectionTcon = typing.TypeVar(
+    "HTTPConnectionTcon", bound=HTTPConnection, contravariant=True
+)
+WaitPeriod: TypeAlias = int
+
+Matchable: TypeAlias = typing.Union[str, typing.Pattern[str]]
+"""A type alias for a matchable path, which can be a string or a compiled regex pattern."""
+ExceptionHandler: TypeAlias = typing.Callable[
+    [HTTPConnection, Exception], typing.Union[Response, typing.Awaitable[Response]]
 ]
 
-WaitPeriod: TypeAlias = int
-if sys.version_info >= (3, 12):
-    _Args = typing.Tuple[typing.Any, ...]
-    ConnectionThrottledHandler: TypeAlias = typing.Callable[
-        [HTTPConnectionT, WaitPeriod, Unpack[_Args]], typing.Awaitable[typing.Any]
-    ]
-else:
-    ConnectionThrottledHandler: TypeAlias = typing.Callable[
-        [HTTPConnectionT, WaitPeriod], typing.Awaitable[typing.Any]
-    ]
+AwaitableCallable = typing.Callable[..., typing.Awaitable[T]]
+
+
+class Stringable(typing.Protocol):
+    """Protocol for objects that can be converted to a string."""
+
+    def __str__(self) -> str:
+        """Return a string representation of the object."""
+        ...
+
+
+class ConnectionIdentifier(typing.Protocol, typing.Generic[HTTPConnectionTcon]):
+    """Protocol for connection identifier functions."""
+
+    async def __call__(
+        self, connection: HTTPConnectionTcon, *args: typing.Any, **kwargs: typing.Any
+    ) -> typing.Union[Stringable, typing.Any]:
+        """Identify a connection for throttling purposes."""
+        ...
+
+
+class ConnectionThrottledHandler(typing.Protocol, typing.Generic[HTTPConnectionTcon]):
+    """Protocol for connection throttled handlers."""
+
+    async def __call__(
+        self,
+        connection: HTTPConnectionTcon,
+        wait_period: WaitPeriod,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> typing.Any:
+        """Handle a throttled connection."""
+        ...
+
+
+class Dependency(typing.Protocol, typing.Generic[P, Rco]):
+    """Protocol for dependencies that can be used in FastAPI routes."""
+
+    def __call__(
+        self,
+        *args: P.args,
+        **kwargs: P.kwargs,  # Although FastAPI passes arguments as keyword arguments to dependencies
+    ) -> typing.Union[Rco, typing.Awaitable[Rco]]: ...

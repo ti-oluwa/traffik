@@ -1,291 +1,336 @@
-# Quick Testing Guide
+# Traffik Library - Complete Testing & Docker Guide
 
-This guide provides multiple ways to test the traffik library across different platforms and environments.
+This comprehensive guide covers all testing approaches for the Traffik FastAPI throttling library, including Docker-based cross-platform testing and local development options.
 
-## Prerequisites
+## 🚀 Quick Start
 
-- Python 3.8+ installed
-- [uv](https://docs.astral.sh/uv/) package manager (recommended) or pip
+Choose the testing approach that works best for your environment:
 
-## Installation & Quick Test
+### Option 1: Fast Local Testing
 
 ```bash
-# Clone the repository
 git clone https://github.com/ti-oluwa/traffik.git
 cd traffik
-
-# Install dependencies
 uv sync --extra test
-
-# Quick smoke test
-uv run python -c "import traffik; print('✅ Traffik works!')"
-```
-
-## Testing Options
-
-### 1. Using Makefile (Recommended)
-
-The Makefile provides convenient commands for different testing scenarios:
-
-```bash
-# Show all available commands
-make help
-
-# Run fast tests (no Redis required)
 make test-fast
-
-# Run only in-memory backend tests
-make test-inmemory
-
-# Run code quality checks
-make quality
-
-# Quick development workflow
-make dev
 ```
 
-### 2. Using Docker (Full Testing)
-
-If you have Docker available, use the comprehensive Docker testing setup:
+### Option 2: Docker Testing (Full Features)
 
 ```bash
-# Fast tests without Redis
-./docker-test.sh test-fast
+git clone https://github.com/ti-oluwa/traffik.git
+cd traffik
+./docker-test.sh test-fast  # Quick Docker test
+./docker-test.sh test       # Full test suite
+```
 
-# Full test suite with Redis
-./docker-test.sh test
+### Option 3: Manual Testing
 
-# Test across Python versions
-./docker-test.sh test-matrix
+```bash
+git clone https://github.com/ti-oluwa/traffik.git
+cd traffik
+uv sync --extra test
+uv run pytest -v -k "not backend"  # Skip throttle backend tests
+```
 
-# Development environment
+## 🐳 Docker Testing (Recommended for Full Testing)
+
+### Available Docker Testing Commands
+
+| Command | Description | Redis Required |
+|---------|-------------|----------------|
+| `./docker-test.sh test-fast` | Quick tests | No |
+| `./docker-test.sh test` | Full test suite | Yes |
+| `./docker-test.sh test-matrix` | Test all Python versions | Yes |
+| `./docker-test.sh dev` | Development environment | Yes |
+| `./docker-test.sh quality` | Code quality checks | No |
+| `./docker-test.sh coverage` | Coverage analysis | Yes |
+| `./docker-test.sh ci` | Full CI simulation | Yes |
+
+### Docker Setup
+
+```bash
+# Build images
+./docker-test.sh build
+
+# Run full CI pipeline
+./docker-test.sh ci
+
+# Development workflow
 ./docker-test.sh dev
 ```
 
-### 3. Manual Testing
+See [DOCKER.md](DOCKER.md) for complete Docker documentation.
+
+## 🔧 Local Testing with Makefile
+
+The Makefile provides convenient commands for local development:
+
+### Core Testing Commands
+
+```bash
+make test-fast      # Basic tests
+make test m=backends  # All backend tests
+make test-coverage  # With coverage analysis
+```
+
+### Code Quality Commands
+
+```bash
+make lint          # Check code style
+make format        # Format code
+make quality       # All quality checks
+make security      # Security analysis
+```
+
+### Development Commands
+
+```bash
+make dev-setup     # Set up development environment
+make dev           # Quick dev workflow
+make example       # Run example code
+make debug-env     # Show environment info
+```
+
+### All Available Makefile Targets
+
+Run `make help` to see all available commands:
+
+```text
+Available targets:
+  help            Show this help message
+  install         Install the package
+  install-dev     Install development dependencies
+  install-test    Install test dependencies
+  test            Run full test suite (requires all depencies)
+  test-fast       Run tests without Redis dependency
+  test-native     Run test without external dependencies
+  test-coverage   Run tests with coverage
+  lint            Run linting
+  lint-fix        Run linting with auto-fix
+  format          Format code
+  format-check    Check code formatting
+  security        Run security analysis
+  type-check      Run type checking
+  quality         Run all quality checks
+  build           Build the package
+  upload-test     Upload to Test PyPI
+  upload          Upload to PyPI
+  dev-setup       Set up development environment
+  clean           Clean up build artifacts and cache
+  redis-start     Start Redis using Docker
+  redis-stop      Stop Redis container
+  ci              Run CI-like checks locally
+  debug-env       Show environment information
+  example         Run example usage tests
+  dev             Quick development workflow
+  release-check   Pre-release checks
+```
+
+## 🧪 Manual Testing
 
 For manual testing without automation tools:
 
+### Basic Functionality
+
 ```bash
-# Install dependencies
+# Install and test
 uv sync --extra test
-
-# Run specific test categories
-uv run pytest tests/backends/test_inmemory.py -v
-uv run pytest tests/test_decorators.py -v
-uv run pytest tests/test_throttles.py -k "not redis" -v
-
-# Run with coverage
-uv run pytest --cov=src/traffik --cov-report=term-missing
+uv run python -c "import traffik; print('✅ Import successful')"
 ```
 
-## Platform-Specific Testing
-
-### Linux/macOS
+### Specific Test Categories
 
 ```bash
-# Full test suite (if Redis is available)
-make test
+# Backend tests
+uv run pytest tests/backends/ -v
 
-# Without Redis
+# Throttle mechanism tests
+uv run pytest tests/test_throttles*.py -k "not redis" -v
+
+# Decorator tests
+uv run pytest tests/test_decorators.py -v
+```
+
+### With Coverage
+
+```bash
+uv run pytest --cov=src/traffik --cov-report=html
+```
+
+## 🚢 CI/CD Integration
+
+### GitHub Actions
+
+The project includes three workflows:
+
+1. **`test.yaml`** - Testing suite
+2. **`code-quality.yaml`** - Code quality checks
+3. **`publish.yaml`** - Package publishing
+
+### Local CI Simulation
+
+```bash
+# Simulate complete CI pipeline
+make ci
+
+# Or with Docker
+./docker-test.sh ci
+```
+
+## 🔍 Testing Scenarios
+
+### 1. Development Testing
+
+Quick iteration during development:
+
+```bash
 make test-fast
 ```
 
-### Windows
+### 2. Feature Testing
+
+Test specific functionality:
 
 ```bash
-# Use Windows-compatible commands
-uv run pytest -v -k "not redis and not Redis"
-
-# Or use the cross-platform target
-make test-cross-platform
+make test m=throttle   # Throttling mechanisms
+make test m=decorator  # Decorator functionality
 ```
 
-### CI/CD Environment
+### 3. Integration Testing
+
+Full system testing:
 
 ```bash
-# Simulate CI pipeline locally
-make ci
-
-# This runs:
-# - Code quality checks
-# - Fast tests without Redis
-# - Coverage analysis
+./docker-test.sh test
+make test-coverage           # With coverage
+./docker-test.sh test-matrix # Multiple Python versions
 ```
 
-## Testing Different Scenarios
+### 4. Pre-commit Testing
 
-### Without Redis
+Before committing changes:
 
 ```bash
-# Test only in-memory backend
-make test-inmemory
-
-# Test decorators and basic functionality
-make test-decorators
-
-# Test throttle mechanisms
-uv run pytest tests/test_throttles.py -k "not redis" -v
+make quality        # Code quality
+make test-fast      # Quick functionality test
+make ci             # Full CI simulation
 ```
 
-### With Redis (if available)
+### 5. Release Testing
+
+Before releasing:
 
 ```bash
-# Start Redis (if Docker available)
-make redis-start
-
-# Run Redis-specific tests
-make test-redis
-
-# Stop Redis
-make redis-stop
+make release-check        # Pre-release validation
+./docker-test.sh ci      # Full Docker CI
+make build               # Package building
 ```
 
-### Concurrent/Stress Testing
-
-```bash
-# Run concurrent tests
-make test-concurrent
-
-# Or manually
-uv run pytest -v -k "concurrent"
-```
-
-## Troubleshooting
+## 🐛 Troubleshooting
 
 ### Common Issues
 
-1. **Import Errors**
+1. **Docker not available**
 
    ```bash
-   # Ensure dependencies are installed
-   uv sync --extra test
-   
-   # Check Python path
-   uv run python -c "import sys; print(sys.path)"
-   ```
-
-2. **Redis Connection Issues**
-
-   ```bash
-   # Skip Redis tests
+   # Use local testing
    make test-fast
-   
-   # Or use specific exclusion
-   uv run pytest -k "not redis and not Redis"
    ```
 
-3. **Permission Issues**
+2. **Import errors**
 
    ```bash
-   # Make scripts executable
-   chmod +x docker-test.sh
-   
-   # Or use uv directly
-   uv run pytest
+   # Reinstall dependencies
+   uv sync --extra test
+   make debug-env
    ```
 
-### Environment Information
+3. **Permission errors**
+
+   ```bash
+   chmod +x docker-test.sh
+   sudo chown -R $(id -u):$(id -g) .
+   ```
+
+### Environment Debugging
 
 ```bash
-# Check environment setup
+# Check environment
 make debug-env
 
-# Manual environment check
+# Manual checks
 uv run python --version
 uv --version
+docker --version  # If available
+redis-cli ping    # If Redis installed
 ```
 
-## Example Usage Verification
+## 📊 Performance Testing
 
-Test that the library works correctly:
-
-```bash
-# Run example demonstration
-make example
-
-# Manual verification
-uv run python -c "
-import asyncio
-from traffik.backends.inmemory import InMemoryBackend
-from traffik.throttles import HTTPThrottle
-
-async def demo():
-    backend = InMemoryBackend()
-    async with backend:
-        throttle = HTTPThrottle(limit=5, seconds=10)
-        print('✅ Backend and throttle configured successfully!')
-
-asyncio.run(demo())
-"
-```
-
-## Performance Testing
+### Benchmarking
 
 ```bash
-# Manual performance test
+# Custom performance test
 uv run python -c "
-import asyncio
-import time
+import asyncio, time
 from traffik.backends.inmemory import InMemoryBackend
 
-async def perf_test():
+async def benchmark():
     backend = InMemoryBackend()
-    async with backend:
+    async with backend():
         start = time.time()
         for i in range(1000):
-            await backend.get_wait_period(f'test:key:{i}', 10, 60000)
-        end = time.time()
-        print(f'✅ 1000 operations in {end-start:.2f}s')
+            await backend.get_wait_period(f'key{i}', 10, 60000)
+        print(f'1000 ops: {time.time()-start:.2f}s')
 
-asyncio.run(perf_test())
+asyncio.run(benchmark())
 "
-
 ```
 
-## Cross-Platform Compatibility
-
-The library is designed to work across platforms:
-
-- **Linux**: Full functionality including Redis
-- **macOS**: Full functionality including Redis  
-- **Windows**: Core functionality (Redis requires WSL or Docker)
-
-Test cross-platform compatibility:
+## 🔐 Security Testing
 
 ```bash
-# Test core functionality (works everywhere)
-make test-cross-platform
+# Security analysis
+make security
 
-# Test platform-specific features
-make test-linux  # For Linux-like environments
+# Manual security checks
+uv run bandit -r src/
 ```
 
-## Continuous Integration
-
-For CI/CD pipelines, use the appropriate workflow based on platform:
+## 📈 Coverage Analysis
 
 ```bash
-# Linux CI (with Redis)
-make ci
+# Generate HTML coverage report
+make test-coverage-html
 
-# Windows/macOS CI (without Redis)
-make test-fast && make quality
+# View coverage
+open htmlcov/index.html  # macOS
+xdg-open htmlcov/index.html  # Linux
 ```
 
-## Next Steps
+## 🚀 Next Steps
 
-After testing locally:
+After testing:
 
-1. **Review Results**: Check test output for any failures
-2. **Coverage**: Run `make test-coverage` to see code coverage
-3. **Quality**: Run `make quality` to check code quality
-4. **Build**: Run `make build` to create distribution packages
-5. **Contribute**: See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines
+1. **Review Results**: Check all test outputs
+2. **Fix Issues**: Address any test failures
+3. **Quality Check**: Ensure code quality standards
+4. **Documentation**: Update docs if needed
+5. **Contribute**: Submit pull requests
+6. **Release**: Follow release process
 
-## Getting Help
+## 📚 Additional Resources
 
-- Check the [README.md](README.md) for usage examples
-- Review [DOCKER.md](DOCKER.md) for Docker-specific testing
-- See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines
-- Open an issue for bug reports or feature requests
+- [README.md](README.md) - Main documentation
+- [DOCKER.md](DOCKER.md) - Docker-specific guide
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Development guidelines
+
+## 💡 Tips for Contributors
+
+1. **Start with fast tests**: `make test-fast`
+2. **Use Docker for full testing**: `./docker-test.sh test`
+3. **Check quality early**: `make quality`
+4. **Test cross-versions**: Use CI or Docker matrix
+5. **Document changes**: Update relevant docs
+

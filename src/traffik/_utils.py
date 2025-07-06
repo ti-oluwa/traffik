@@ -1,8 +1,13 @@
+import asyncio
+import functools
 import inspect
 import ipaddress
 import typing
 
 from starlette.requests import HTTPConnection
+from typing_extensions import TypeGuard
+
+from traffik.types import AwaitableCallable, T
 
 
 def get_ip_address(
@@ -22,12 +27,11 @@ def get_ip_address(
         "x-forwarded-for"
     ) or connection.headers.get("remote-addr")
     if x_forwarded_for:
-        ip = x_forwarded_for.split(",")[0]
-    else:
-        ip = connection.client.host if connection.client else None
-    if not ip:
-        return None
-    return ipaddress.ip_address(ip)
+        return ipaddress.ip_address(x_forwarded_for.split(",")[0].strip())
+
+    if connection.client:
+        return ipaddress.ip_address(connection.client.host)
+    return None
 
 
 def add_parameter_to_signature(
@@ -105,3 +109,20 @@ def add_parameter_to_signature(
     func.__signature__ = new_sig  # type: ignore
     return func
 
+
+# Borrowed from Starlette's is_async_callable utility
+@typing.overload
+def is_async_callable(obj: AwaitableCallable[T]) -> TypeGuard[AwaitableCallable[T]]: ...
+
+
+@typing.overload
+def is_async_callable(obj: typing.Any) -> TypeGuard[AwaitableCallable[typing.Any]]: ...
+
+
+def is_async_callable(obj: typing.Any) -> typing.Any:
+    while isinstance(obj, functools.partial):
+        obj = obj.func
+
+    return asyncio.iscoroutinefunction(obj) or (
+        callable(obj) and asyncio.iscoroutinefunction(obj.__call__)  # type: ignore
+    )

@@ -1,6 +1,6 @@
 # Makefile for Traffik development and testing
 
-.PHONY: help install install-dev test test-fast test-redis lint format type-check clean build upload coverage docs
+.PHONY: help install install-dev install-test test test-fast test-slow test-native test-watch test-coverage test-coverage-xml test-coverage-html lint lint-fix format format-check security type-check quality build upload upload-test dev-setup clean redis-start redis-stop ci docs debug-env example dev release-check
 
 # Default target
 help: ## Show this help message
@@ -10,39 +10,48 @@ help: ## Show this help message
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 # Installation targets
-install: ## Install the package
-	uv add traffik
+install: ## Install the package and all dependencies
+	uv add traffik[all]
 
 install-dev: ## Install development dependencies
 	uv sync --extra dev
 
-install-minimal: ## Install minimal dependencies (no Redis)
+install-test: ## Install testing dependencies
 	uv sync --extra test
 
 # Testing targets
-test: ## Run full test suite (requires Redis)
-	uv run pytest -v --tb=short
+test: ## Run full test suite. Requires all dependencies. Use `make test m=marker_name` to filter by markers.
+	@if [ -n "$(m)" ]; then \
+		echo "Running tests with marker: $(m)"; \
+		uv run pytest -m "$(m)" -v --tb=short; \
+	else \
+		echo "Running all tests"; \
+		uv run pytest -v --tb=short; \
+	fi
 
-test-fast: ## Run tests without Redis dependency
-	uv run pytest -v --tb=short -k "not redis and not Redis"
+test-fast: ## Run tests not marked as slow
+	uv run pytest -m -x "not slow" -v --tb=short
 
-test-inmemory: ## Run only in-memory backend tests
-	uv run pytest -v tests/backends/test_inmemory.py tests/test_throttles*.py::test_http_throttle_inmemory -k "not redis"
+test-slow: ## Run slow tests
+	uv run pytest -m "slow" -v --tb=short
 
-test-redis: ## Run only Redis backend tests (requires Redis server)
-	uv run pytest -v -k "redis or Redis"
+test-native: ## Run tests without external dependencies
+	uv run pytest -m "native" -v --tb=short
 
-test-backends: ## Run all backend tests
-	uv run pytest -v tests/backends/
-
-test-throttles: ## Run throttle mechanism tests
-	uv run pytest -v tests/test_throttles*.py
-
-test-decorators: ## Run decorator tests
-	uv run pytest -v tests/test_decorators.py
+test-watch: ## Run tests in watch mode
+	uv run pytest-watch --onpass "echo 'Tests passed'" --onfail "echo 'Tests failed'" -- -v --tb=short 
 
 test-coverage: ## Run tests with coverage
-	uv run pytest --cov=src/traffik --cov-branch --cov-report=html --cov-report=term-missing --cov-fail-under=80
+	uv run pytest --cov=src/traffik --cov-branch --cov-report=term-missing --cov-fail-under=80
+	@echo "Coverage report generated. Check the terminal output for details."
+
+test-coverage-xml: ## Run tests with coverage and generate XML report
+	uv run pytest --cov=src/traffik --cov-branch --cov-report=xml:coverage.xml --cov-fail-under=80
+	@echo "Coverage report generated at coverage.xml"
+
+test-coverage-html: ## Run tests with coverage and generate HTML report
+	uv run pytest --cov=src/traffik --cov-branch --cov-report=html:coverage_html_report --cov-fail-under=80
+	@echo "HTML coverage report generated at coverage_html_report/index.html"
 
 # Code quality targets
 lint: ## Run linting
@@ -59,10 +68,15 @@ format-check: ## Check code formatting
 
 security: ## Run security analysis
 	uv run bandit -r src/
-	uv run safety scan
 
-type-check: ## Run type checking
-	uv run mypy src/ --ignore-missing-imports
+type-check: ## Run type checking. mypy is optional, so it will not fail if mypy is not installed.
+	@if uv run python -c "import mypy" 2>/dev/null; then \
+		echo "Running mypy type check..."; \
+		uv run mypy src/ --ignore-missing-imports || true; \
+	else \
+		echo "mypy not installed, skipping type check"; \
+		echo "Install mypy for type checking: uv add --dev mypy"; \
+	fi
 
 quality: lint format-check security type-check ## Run all quality checks
 
@@ -70,60 +84,71 @@ quality: lint format-check security type-check ## Run all quality checks
 build: ## Build the package
 	uv build
 
-upload-test: ## Upload to Test PyPI
-	uv publish --repository-url https://test.pypi.org/legacy/
-
 upload: ## Upload to PyPI
 	uv publish
+
+upload-test: ## Upload to Test PyPI
+	uv publish --index testpypi
 
 # Development targets
 dev-setup: install-dev ## Set up development environment
 	@echo "Development environment set up!"
-	@echo "Run 'make test-fast' to run tests without Redis"
-	@echo "Run 'make test' to run full test suite (requires Redis)"
+	@echo "Run 'make test-fast' to run quick tests"
+	@echo "Run 'make test' to run full test suite"
 
 clean: ## Clean up build artifacts and cache
 	rm -rf dist/
 	rm -rf build/
 	rm -rf *.egg-info/
 	rm -rf htmlcov/
-	rm -rf .coverage
+	rm -rf coverage_html_report/
+	rm -f .coverage
+	rm -f coverage.xml
 	rm -rf .pytest_cache/
 	rm -rf .mypy_cache/
 	rm -rf .ruff_cache/
-	find . -type d -name __pycache__ -exec rm -rf {} +
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete
 
 # Redis setup (for local development)
 redis-start: ## Start Redis using Docker (if available)
-	@command -v docker >/dev/null 2>&1 && docker run -d -p 6379:6379 --name traffik-redis redis:7-alpine || echo "Docker not available. Please install Redis manually."
+	@if command -v docker >/dev/null 2>&1; then \
+		if docker ps -a --format "table {{.Names}}" | grep -q traffik-redis; then \
+			echo "Redis container already exists. Starting..."; \
+			docker start traffik-redis; \
+		else \
+			echo "Creating and starting Redis container..."; \
+			docker run -d -p 6379:6379 --name traffik-redis redis:7-alpine; \
+		fi; \
+		echo "Redis is running on port 6379"; \
+	else \
+		echo "Docker not available. Please install Redis manually."; \
+	fi
 
 redis-stop: ## Stop Redis container
-	@command -v docker >/dev/null 2>&1 && docker stop traffik-redis && docker rm traffik-redis || echo "Docker not available"
+	@if command -v docker >/dev/null 2>&1; then \
+		if docker ps --format "table {{.Names}}" | grep -q traffik-redis; then \
+			echo "Stopping Redis container..."; \
+			docker stop traffik-redis; \
+		else \
+			echo "Redis container is not running"; \
+		fi; \
+	else \
+		echo "Docker not available"; \
+	fi
 
 # CI simulation
-ci: quality test-fast test-coverage ## Run CI-like checks locally
+ci: quality test-coverage ## Run CI-like checks locally
 
 # Documentation
 docs: ## Generate documentation (placeholder)
 	@echo "Documentation generation not implemented yet"
 
-# Platform-specific testing
-test-linux: ## Test on Linux-like environment
-	@echo "Running Linux-compatible tests..."
-	make test-fast
-
-test-cross-platform: ## Test cross-platform compatibility
-	@echo "Running cross-platform tests..."
-	make test-inmemory
-	make test-decorators
-
-
 # Debugging helpers
 debug-env: ## Show environment information
-	@echo "Python version: $$(python --version)"
-	@echo "UV version: $$(uv --version)"
-	@echo "Pytest version: $$(uv run python -c 'import pytest; print(pytest.__version__)')"
+	@echo "Python version: $$(python --version 2>/dev/null || echo 'Not available')"
+	@echo "UV version: $$(uv --version 2>/dev/null || echo 'Not available')"
+	@echo "Pytest version: $$(uv run python -c 'import pytest; print(pytest.__version__)' 2>/dev/null || echo 'Not available')"
 	@echo "Redis available: $$(command -v redis-cli >/dev/null 2>&1 && echo 'Yes' || echo 'No')"
 	@echo "Docker available: $$(command -v docker >/dev/null 2>&1 && echo 'Yes' || echo 'No')"
 

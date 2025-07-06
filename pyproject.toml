@@ -90,6 +90,7 @@ markers = [
     "websocket: tests that involve WebSocket functionality",
     "decorator: tests that test decorator functionality",
     "concurrent: tests that test concurrent/parallel behavior",
+    "middleware: tests that test middleware functionality",
 ]
 
 [tool.coverage.run]

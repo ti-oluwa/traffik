@@ -1,12 +1,14 @@
 import re
 import typing
 
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Receive, Scope, Send
 from typing_extensions import TypeAlias
 
+from traffik._utils import is_async_callable
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import ConfigurationError
+from traffik.exceptions import ConfigurationError, build_exception_handler_getter
 from traffik.throttles import BaseThrottle
 from traffik.types import HTTPConnectionT, Matchable
 
@@ -89,6 +91,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         """
         self.throttle = throttle
 
+        self.path: typing.Optional[re.Pattern[str]]
         if isinstance(path, str):
             self.path = re.compile(path)
         else:
@@ -125,7 +128,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         return await self.throttle(connection)
 
 
-class ThrottleMiddleware:
+class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
     """
     ASGI middleware that applies throttling to HTTP connections.
 
@@ -163,8 +166,8 @@ class ThrottleMiddleware:
     def __init__(
         self,
         app: ASGIApp,
-        middleware_throttles: typing.Sequence[MiddlewareThrottle[HTTPConnection]],
-        backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnection]] = None,
+        middleware_throttles: typing.Sequence[MiddlewareThrottle[HTTPConnectionT]],
+        backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]] = None,
     ) -> None:
         """
         Initialize the middleware with the application and throttles.
@@ -176,6 +179,7 @@ class ThrottleMiddleware:
         self.app = app
         self.middleware_throttles = middleware_throttles
         self.backend = backend or get_throttle_backend()
+        self.get_exception_handler = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """
@@ -189,15 +193,44 @@ class ThrottleMiddleware:
             await self.app(scope, receive, send)
             return
 
-        connection = HTTPConnection(scope, receive)
+        connection = typing.cast(HTTPConnectionT, HTTPConnection(scope, receive))
         if self.backend is None:
             backend = get_throttle_backend(connection)
             if backend is None:
                 raise ConfigurationError("No throttle backend configured.")
             self.backend = backend
 
-        async with self.backend(close_on_exit=False):
+        # The backend context must be not closed on context exit.
+        # It must also be persistent to ensure throttles can maintain
+        # state across multiple connections.
+        async with self.backend(close_on_exit=False, persistent=True):
             for throttle in self.middleware_throttles:
-                connection = await throttle(connection)
+                try:
+                    connection = await throttle(connection)
+                except Exception as exc:
+                    # This approach allows custom throttles to raise custom exceptions
+                    # that will be handled if they register an exception handler with
+                    # the application. If not, the exception will propagate and the
+                    # `ServerErrorMiddleware` will properly handle it.
+                    if self.get_exception_handler is None:
+                        self.get_exception_handler = build_exception_handler_getter(
+                            connection.app
+                        )
+                    handler = self.get_exception_handler(exc)
+                    if handler is not None:
+                        if is_async_callable(handler):
+                            response = await handler(connection, exc)
+                        else:
+                            response = await run_in_threadpool(handler, connection, exc)
 
+                        if response is not None:
+                            await response(scope, receive, send)  # type: ignore[call-arg]
+                            return
+
+                    raise exc
+
+        # Ensure that the next middleware or application call is not nested
+        # within this middleware's backend context. Else, it would cause
+        # the next backend to use the same backend context as this middleware,
+        # even when it supposed to use the backend context set on lifespan.
         await self.app(scope, receive, send)

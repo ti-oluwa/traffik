@@ -16,7 +16,7 @@ class InMemoryBackend(
         typing.Optional[
             typing.MutableMapping[
                 str,
-                typing.MutableMapping[str, int],
+                typing.MutableMapping[str, float],
             ]
         ],
         HTTPConnectionT,

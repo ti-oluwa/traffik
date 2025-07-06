@@ -23,7 +23,7 @@ Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-li
 - 🎯 **Per-Route Throttling**: Individual limits for different endpoints
 - 📊 **Client Identification**: Customizable client identification strategies
 - 🛡️ **Thread-Safe Design**: Immutable throttles with proper async locking
-- ⚡ **High Performance**: Optimized Redis Lua scripts and efficient in-memory operations
+- ⚡ **High Performance**: Optimized scripts and efficient in-memory operations
 
 ## How Token Bucket Algorithm Works
 
@@ -805,6 +805,486 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 ```
+
+## Throttle Middleware
+
+Traffik provides powerful middleware capabilities that allow you to apply rate limiting across multiple endpoints with sophisticated filtering and routing logic. The middleware system is ideal for applying consistent rate limiting policies across your application while maintaining flexibility for specific requirements.
+
+### Basic Middleware Setup
+
+#### For FastAPI Applications
+
+```python
+from fastapi import FastAPI
+from traffik.middleware import ThrottleMiddleware, MiddlewareThrottle
+from traffik.throttles import HTTPThrottle
+from traffik.backends.inmemory import InMemoryBackend
+
+app = FastAPI()
+backend = InMemoryBackend(prefix="api")
+
+# Create a throttle instance
+api_throttle = HTTPThrottle(
+    uid="api_global",
+    limit=100,
+    minutes=1
+)
+
+# Wrap it in middleware throttle - applies to all endpoints
+basic_middleware_throttle = MiddlewareThrottle(api_throttle)
+
+# Add middleware
+app.add_middleware(
+    ThrottleMiddleware,
+    middleware_throttles=[basic_middleware_throttle],
+    backend=backend
+)
+
+@app.get("/api/users")
+async def get_users():
+    return {"users": []}
+
+@app.get("/api/posts") 
+async def get_posts():
+    return {"posts": []}
+```
+
+#### For Starlette Applications
+
+```python
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.responses import JSONResponse
+from traffik.middleware import ThrottleMiddleware, MiddlewareThrottle
+from traffik.throttles import HTTPThrottle
+from traffik.backends.inmemory import InMemoryBackend
+
+async def users_endpoint(request):
+    return JSONResponse({"users": []})
+
+async def posts_endpoint(request): 
+    return JSONResponse({"posts": []})
+
+backend = InMemoryBackend(prefix="api")
+
+# Create throttle instance
+api_throttle = HTTPThrottle(
+    uid="api_throttle",
+    limit=50,
+    minutes=1
+)
+
+# Wrap in middleware throttle
+middleware_throttle = MiddlewareThrottle(api_throttle)
+
+app = Starlette(
+    routes=[
+        Route("/api/users", users_endpoint),
+        Route("/api/posts", posts_endpoint),
+    ],
+    middleware=[
+        (ThrottleMiddleware, {
+            "middleware_throttles": [middleware_throttle],
+            "backend": backend
+        })
+    ]
+)
+```
+
+### Advanced Filtering Options
+
+#### Method-Based Filtering
+
+Apply different limits to different HTTP methods:
+
+```python
+# Strict limits for write operations
+write_throttle = HTTPThrottle(
+    uid="write_operations",
+    limit=10,
+    minutes=1
+)
+
+# Generous limits for read operations  
+read_throttle = HTTPThrottle(
+    uid="read_operations", 
+    limit=1000,
+    minutes=1
+)
+
+# Create middleware throttles with method filtering
+write_middleware = MiddlewareThrottle(
+    write_throttle,
+    methods={"POST", "PUT", "DELETE"}  # Only write methods
+)
+
+read_middleware = MiddlewareThrottle(
+    read_throttle,
+    methods={"GET", "HEAD"}  # Only read methods
+)
+
+app.add_middleware(
+    ThrottleMiddleware,
+    middleware_throttles=[write_middleware, read_middleware],
+    backend=backend
+)
+```
+
+#### Path Pattern Filtering
+
+Use string patterns or regex to target specific endpoints:
+
+```python
+# Create throttle instances
+api_throttle = HTTPThrottle(uid="api_endpoints", limit=100, minutes=1)
+admin_throttle = HTTPThrottle(uid="admin_endpoints", limit=5, minutes=1)
+static_throttle = HTTPThrottle(uid="static_files", limit=10000, minutes=1)
+
+# Create middleware throttles with path filtering
+api_middleware = MiddlewareThrottle(
+    api_throttle,
+    path="/api/"  # Matches paths starting with /api/
+)
+
+admin_middleware = MiddlewareThrottle(
+    admin_throttle,
+    path="/admin/"  # Matches paths starting with /admin/
+)
+
+# For complex patterns, use regex strings
+static_middleware = MiddlewareThrottle(
+    static_throttle,
+    path=r"^/(static|assets|media)/.*"  # Regex pattern for static files
+)
+
+app.add_middleware(
+    ThrottleMiddleware,
+    middleware_throttles=[admin_middleware, api_middleware, static_middleware],
+    backend=backend
+)
+```
+
+#### Custom Hook-Based Filtering
+
+Implement complex business logic with custom hooks:
+
+```python
+from starlette.requests import HTTPConnection
+
+# Create throttle instances  
+auth_throttle = HTTPThrottle(uid="authenticated_users", limit=200, minutes=1)
+intensive_throttle = HTTPThrottle(uid="intensive_operations", limit=20, minutes=1)
+external_throttle = HTTPThrottle(uid="external_api_calls", limit=50, minutes=5)
+
+async def authenticated_users_only(connection: HTTPConnection) -> bool:
+    """Only apply throttle to authenticated users"""
+    auth_header = connection.headers.get("authorization")
+    return auth_header is not None and auth_header.startswith("Bearer ")
+
+async def high_priority_endpoints(connection: HTTPConnection) -> bool:
+    """Apply strict limits to resource-intensive endpoints"""
+    intensive_paths = ["/api/reports/", "/api/analytics/", "/api/exports/", "/api/search"]
+    path = connection.scope["path"]
+    return any(path.startswith(intensive_path) for intensive_path in intensive_paths)
+
+async def external_api_calls(connection: HTTPConnection) -> bool:
+    """Identify requests that trigger external API calls"""
+    headers = dict(connection.headers)
+    return "x-external-api" in headers
+
+# Create middleware throttles with custom hooks
+auth_middleware = MiddlewareThrottle(
+    auth_throttle,
+    hook=authenticated_users_only
+)
+
+intensive_middleware = MiddlewareThrottle(
+    intensive_throttle,
+    hook=high_priority_endpoints
+)
+
+external_middleware = MiddlewareThrottle(
+    external_throttle,
+    hook=external_api_calls
+)
+
+app.add_middleware(
+    ThrottleMiddleware,
+    middleware_throttles=[intensive_middleware, external_middleware, auth_middleware],
+    backend=backend
+)
+```
+
+### Combined Filtering Logic
+
+Combine multiple filters for precise targeting:
+
+```python
+# Create throttle instance
+complex_throttle = HTTPThrottle(
+    uid="authenticated_api_posts",
+    limit=25,
+    minutes=1
+)
+
+async def authenticated_users_only(connection: HTTPConnection) -> bool:
+    auth_header = connection.headers.get("authorization")
+    return auth_header is not None and auth_header.startswith("Bearer ")
+
+# Complex middleware: POST requests to API endpoints by authenticated users
+complex_middleware = MiddlewareThrottle(
+    complex_throttle,
+    path="/api/",                        # Path starts with /api/
+    methods={"POST"},                    # Only POST requests
+    hook=authenticated_users_only        # Only authenticated users
+)
+
+# This throttle will only apply to requests that match ALL criteria:
+# - Path starts with /api/
+# - Method is POST 
+# - Hook function returns True (user is authenticated)
+```
+
+### Multi-Tenant Middleware
+
+Use middleware with dynamic backends for multi-tenant applications:
+
+```python
+from fastapi import FastAPI, Request
+from traffik.middleware import ThrottleMiddleware, MiddlewareThrottle
+from traffik.throttles import HTTPThrottle
+from traffik.backends.redis import RedisBackend
+from traffik.backends.inmemory import InMemoryBackend
+import jwt
+
+# Create tenant-aware throttles
+api_throttle = HTTPThrottle(
+    uid="api_quota",
+    limit=1000,
+    hours=1,
+    dynamic_backend=True  # Enable dynamic backend resolution
+)
+
+admin_throttle = HTTPThrottle(
+    uid="admin_quota", 
+    limit=100,
+    hours=1,
+    dynamic_backend=True
+)
+
+# Create middleware throttles with path filtering
+api_middleware = MiddlewareThrottle(api_throttle, path="/api/")
+admin_middleware = MiddlewareThrottle(admin_throttle, path="/admin/")
+
+async def tenant_context_middleware(request: Request, call_next):
+    """Set up tenant-specific backend context"""
+    # Extract tenant from JWT (simplified)
+    auth_header = request.headers.get("authorization", "")
+    tenant_id = "default"
+    
+    if auth_header.startswith("Bearer "):
+        try:
+            token = auth_header.split(" ")[1]
+            payload = jwt.decode(token, "secret", algorithms=["HS256"])
+            tenant_id = payload.get("tenant_id", "default")
+        except jwt.InvalidTokenError:
+            pass
+    
+    # Choose backend based on tenant
+    if tenant_id.startswith("enterprise_"):
+        backend = RedisBackend(
+            connection="redis://enterprise-redis:6379/0",
+            prefix=f"tenant_{tenant_id}"
+        )
+    else:
+        backend = InMemoryBackend(prefix=f"tenant_{tenant_id}")
+    
+    # Execute request within tenant's backend context
+    async with backend:
+        response = await call_next(request)
+        return response
+
+app = FastAPI()
+
+# Add tenant middleware first
+app.middleware("http")(tenant_context_middleware)
+
+# Add throttle middleware
+app.add_middleware(
+    ThrottleMiddleware,
+    middleware_throttles=[admin_middleware, api_middleware],
+    # No backend specified - uses dynamic backend from context
+)
+```
+
+### WebSocket Handling
+
+The middleware automatically handles WebSocket connections properly:
+
+```python
+from fastapi import FastAPI, WebSocket
+
+# Create throttle for WebSocket connections
+ws_throttle = WebSocketThrottle(
+    uid="websocket_connections",
+    limit=10,
+    minutes=1
+)
+
+# Create middleware throttle
+ws_middleware = MiddlewareThrottle(ws_throttle)
+
+app = FastAPI()
+app.add_middleware(
+    ThrottleMiddleware,
+    middleware_throttles=[ws_middleware],
+    backend=backend
+)
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    # WebSocket throttling is handled by middleware
+    await websocket.send_text("Hello WebSocket!")
+    await websocket.close()
+
+# Regular HTTP endpoints also covered
+@app.get("/api/data")
+async def get_data():
+    return {"data": "value"}
+```
+
+### Error Handling and Exemptions
+
+#### Custom Exemption Logic
+
+Create sophisticated exemption rules:
+
+```python
+async def admin_exemption_hook(connection: HTTPConnection) -> bool:
+    """Exempt admin users from rate limiting"""
+    auth_header = connection.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return True  # Apply throttle to non-authenticated users
+    
+    try:
+        token = auth_header.split(" ")[1]
+        payload = jwt.decode(token, "secret", algorithms=["HS256"])
+        user_role = payload.get("role", "user")
+        return user_role != "admin"  # False = exempt admin, True = throttle others
+    except jwt.InvalidTokenError:
+        return True  # Apply throttle to invalid tokens
+
+# Create throttle for non-admin users
+user_throttle = HTTPThrottle(uid="non_admin_users", limit=100, minutes=1)
+
+# Throttle that exempts admin users
+user_middleware = MiddlewareThrottle(
+    user_throttle,
+    hook=admin_exemption_hook
+)
+```
+
+#### Throttled Response Customization
+
+The middleware uses the same exception handling as individual throttles:
+
+```python
+from traffik.exceptions import ConnectionThrottled
+from starlette.responses import JSONResponse
+
+# Custom exception handler for middleware throttling
+@app.exception_handler(ConnectionThrottled)
+async def throttled_handler(request: Request, exc: ConnectionThrottled):
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "Rate limit exceeded",
+            "message": f"Too many requests. Try again in {exc.retry_after} seconds.",
+            "retry_after": exc.retry_after,
+            "limit_type": "middleware_throttle"
+        },
+        headers={"Retry-After": str(int(exc.retry_after))}
+    )
+```
+
+### Performance Considerations
+
+#### Middleware Order
+
+Place throttle middleware early in the stack for optimal performance:
+
+```python
+from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
+
+app = FastAPI()
+
+# Create throttle
+api_throttle = HTTPThrottle(uid="api_rate_limit", limit=1000, minutes=1)
+api_middleware = MiddlewareThrottle(api_throttle)
+
+# Add throttling early to reject requests before heavy processing
+app.add_middleware(
+    ThrottleMiddleware,
+    middleware_throttles=[api_middleware],
+    backend=backend
+)
+
+# Add other middleware after throttling
+app.add_middleware(GZipMiddleware)
+app.add_middleware(CORSMiddleware, allow_origins=["*"])
+```
+
+#### Redis Backend for Production
+
+Use Redis backend for production middleware deployments:
+
+```python
+from traffik.backends.redis import RedisBackend
+
+# Production Redis setup
+production_backend = RedisBackend(
+    connection="redis://redis-cluster:6379/0",
+    prefix="prod_api",
+    persistent=True
+)
+
+# Create production throttles
+production_api_throttle = HTTPThrottle(
+    uid="production_api",
+    limit=10000,
+    hours=1
+)
+
+expensive_operations_throttle = HTTPThrottle(
+    uid="expensive_operations",
+    limit=100,
+    minutes=1
+)
+
+# Create middleware throttles with filtering
+api_middleware = MiddlewareThrottle(production_api_throttle, path="/api/")
+expensive_middleware = MiddlewareThrottle(
+    expensive_operations_throttle,
+    path=r"^/api/(search|analytics)/.*"  # Expensive endpoints
+)
+
+app.add_middleware(
+    ThrottleMiddleware,
+    middleware_throttles=[expensive_middleware, api_middleware],  # Order matters!
+    backend=production_backend
+)
+```
+
+### Best Practices
+
+1. **Specific Before General**: Place more specific throttles before general ones in the middleware_throttles list
+2. **Early Placement**: Add throttle middleware early in the middleware stack
+3. **Production Backends**: Use Redis for multi-instance deployments
+4. **Monitoring**: Log throttle hits for monitoring and tuning
+5. **Graceful Degradation**: Provide meaningful error messages to clients
+6. **Testing**: Thoroughly test filter combinations and edge cases
 
 ## Error Handling
 

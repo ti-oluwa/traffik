@@ -124,7 +124,7 @@ def route_wrapper(
         parameter=inspect.Parameter(
             name=throttle_dep_param_name,
             kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            annotation=Annotated[HTTPConnectionT, Depends(throttle)], # type: ignore[misc]
+            annotation=Annotated[HTTPConnectionT, Depends(throttle)],  # type: ignore[misc]
         ),
         index=0,  # Since the throttle dependency was added as the first parameter
     )

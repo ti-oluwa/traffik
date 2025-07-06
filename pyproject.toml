@@ -58,7 +58,6 @@ dev = [
     "mypy>=1.14.1",
     "pytest-watch>=4.2.0",
     "ruff>=0.12.1",
-    "safety>=3.5.2",
     "traffik[test]",
 ]
 
@@ -91,6 +90,7 @@ markers = [
     "websocket: tests that involve WebSocket functionality",
     "decorator: tests that test decorator functionality",
     "concurrent: tests that test concurrent/parallel behavior",
+    "middleware: tests that test middleware functionality",
 ]
 
 [tool.coverage.run]

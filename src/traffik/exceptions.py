@@ -1,45 +1,28 @@
-class NoLimit(Exception):
-    """
-    Exception raised when throttling should not be enforced.
+import http
+import typing
 
-    This exception is caught by the throttle and the client is allowed to proceed
-    without being throttled.
+from starlette.applications import Starlette
+from starlette.exceptions import HTTPException
+from starlette.middleware.exceptions import ExceptionMiddleware
+from starlette.status import HTTP_429_TOO_MANY_REQUESTS
+from starlette.types import ExceptionHandler as StarletteExceptionHandler
 
-    In this example, the exception is raised when the request is from a trusted source
+from traffik.types import ExceptionHandler as TraffikExceptionHandler
 
-    ```python
-    import fastapi
-    import starlette.requests import HTTPConnection
 
-    TRUSTED_IPS = {...,}
-
-    def get_ip(connection: HTTPConnection):
-        ...
-
-    def untrusted_ip_identifier(connection: HTTPConnection):
-        client_ip = get_ip(connection)
-        if client_ip in TRUSTED_IPS:
-            raise NoLimit()
-        return connection.client.host
-
-    router = fastapi.APIRouter(
-        dependencies=[
-            throttle(identifier=untrusted_ip_identifier)
-        ]
-    )
-    ```
-    """
+class TraffikException(Exception):
+    """Base exception for all Traffik-related errors."""
 
     pass
 
 
-class ConfigurationError(Exception):
+class ConfigurationError(TraffikException):
     """Exception raised when the throttle configuration is invalid."""
 
     pass
 
 
-class AnonymousConnection(Exception):
+class AnonymousConnection(TraffikException):
     """
     Exception raised when the connection identifier cannot be determined.
 
@@ -48,3 +31,81 @@ class AnonymousConnection(Exception):
     """
 
     pass
+
+
+class ConnectionThrottled(HTTPException, TraffikException):
+    """
+    `HTTPException` raised when a connection is throttled.
+
+    This exception is used to indicate that a connection has exceeded its allowed rate limit
+    and must wait before making further requests.
+
+    It includes a `wait_period` attribute that specifies how long in seconds, the client should wait
+    before retrying the request.
+    """
+
+    def __init__(
+        self,
+        wait_period: typing.Optional[int] = None,
+        status_code: int = HTTP_429_TOO_MANY_REQUESTS,
+        detail: typing.Optional[str] = None,
+        headers: typing.Optional[typing.Mapping[str, str]] = None,
+    ) -> None:
+        if detail is None:
+            detail = http.HTTPStatus(status_code).phrase
+            if wait_period is not None:
+                detail += f" Retry after {wait_period} second(s)."
+
+        if wait_period is not None:
+            headers = dict(headers or {})
+            headers["Retry-After"] = str(wait_period)
+        super().__init__(status_code, detail, headers)
+        self.wait_period = wait_period
+
+
+# Borrowed from Starlette's exception handling utilities
+def _lookup_exception_handler(
+    exc_handlers: typing.Mapping[typing.Type[typing.Any], StarletteExceptionHandler],
+    exc: Exception,
+) -> typing.Optional[StarletteExceptionHandler]:
+    for cls in type(exc).__mro__:
+        if cls in exc_handlers:
+            return exc_handlers[cls]
+    return None
+
+
+def build_exception_handler_getter(
+    app: Starlette,
+) -> typing.Callable[[Exception], typing.Optional[TraffikExceptionHandler]]:
+    """
+    Build an exception handler getter for the given Starlette app.
+    """
+    # Here we use a neat trick to retrieve the exception handlers from the app
+    # by creating an instance of ExceptionMiddleware with the app and its handlers,
+    # and trying to resolve the handler from both the status handlers and the exception handlers.
+    exception_middleware = ExceptionMiddleware(
+        app,
+        handlers=app.exception_handlers,  # type: ignore[call-arg]
+        debug=app.debug,
+    )
+
+    def handler_getter(exc: Exception) -> typing.Optional[TraffikExceptionHandler]:
+        """
+        Get the exception handler for the given exception.
+
+        :param exc: The exception for which to retrieve the handler.
+        :return: The exception handler function.
+        """
+        nonlocal exception_middleware
+
+        handler: typing.Optional[StarletteExceptionHandler] = None
+        if isinstance(exc, HTTPException):
+            handler = exception_middleware._status_handlers.get(exc.status_code)
+
+        if handler is None:
+            handler = _lookup_exception_handler(
+                exception_middleware._exception_handlers, exc
+            )
+        return typing.cast(typing.Optional[TraffikExceptionHandler], handler)
+
+    return handler_getter

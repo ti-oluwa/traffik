@@ -64,7 +64,7 @@ async def _unlimited_identifier(connection: HTTPConnection) -> object:
 @pytest.mark.fastapi
 async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> None:
     with pytest.raises(ValueError):
-        BaseThrottle(limit=-1)
+        BaseThrottle("test-init-1", limit=-1)
 
     async def _throttle_handler(
         connection: HTTPConnection,
@@ -76,6 +76,7 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
     # Test initialization behaviour
     async with inmemory_backend():
         throttle = BaseThrottle(
+            "test-init-2",
             limit=2,
             milliseconds=10,
             seconds=50,
@@ -96,6 +97,7 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
 @pytest.mark.fastapi
 def test_throttle_with_app_lifespan(lifespan_app: FastAPI) -> None:
     throttle = HTTPThrottle(
+        "test-throttle-app-lifespan",
         limit=2,
         milliseconds=10,
         seconds=50,
@@ -134,6 +136,7 @@ def test_throttle_exemption_with_identifier(
     inmemory_backend: InMemoryBackend, app: FastAPI
 ) -> None:
     throttle = HTTPThrottle(
+        "test-throttle-exemption",
         limit=2,
         milliseconds=10,
         seconds=50,
@@ -179,6 +182,7 @@ async def test_http_throttle_inmemory(
 ) -> None:
     async with inmemory_backend(app):
         throttle = HTTPThrottle(
+            "test-http-throttle-inmemory",
             limit=3,
             seconds=3,
             milliseconds=5,
@@ -198,21 +202,23 @@ async def test_http_throttle_inmemory(
             transport=ASGITransport(app=app),
             base_url=base_url,
         ) as client:
-            for count, name in enumerate(repeat("test-client", 5), start=1):
-                if count == 4:
-                    await anyio.sleep(sleep_time)
-                response = await client.get(f"{base_url}/{name}")
-                assert response.status_code == 200
-                assert response.json() == {"message": f"PONG: {name}"}
-
-            await inmemory_backend.reset()
-            for count, name in enumerate(repeat("test-client", 5), start=1):
-                response = await client.get(f"/{name}")
-                if count > 3:
-                    assert response.status_code == 429
-                    assert response.headers["Retry-After"] is not None
-                else:
+            async with inmemory_backend(persistent=False):
+                for count, name in enumerate(repeat("test-client", 5), start=1):
+                    if count == 4:
+                        await anyio.sleep(sleep_time)
+                    response = await client.get(f"{base_url}/{name}")
                     assert response.status_code == 200
+                    assert response.json() == {"message": f"PONG: {name}"}
+            # Backend reset on exit here
+
+            async with inmemory_backend(persistent=False):
+                for count, name in enumerate(repeat("test-client", 5), start=1):
+                    response = await client.get(f"/{name}")
+                    if count > 3:
+                        assert response.status_code == 429
+                        assert response.headers["Retry-After"] is not None
+                    else:
+                        assert response.status_code == 200
 
 
 @pytest.mark.anyio
@@ -223,6 +229,7 @@ async def test_http_throttle_inmemory(
 async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) -> None:
     async with redis_backend(app):
         throttle = HTTPThrottle(
+            "test-http-throttle-redis",
             limit=3,
             seconds=3,
             milliseconds=5,
@@ -242,21 +249,23 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
             transport=ASGITransport(app=app),
             base_url=base_url,
         ) as client:
-            for count, name in enumerate(repeat("test-client", 5), start=1):
-                if count == 4:
-                    await anyio.sleep(sleep_time)
-                response = await client.get(f"{base_url}/{name}")
-                assert response.status_code == 200
-                assert response.json() == {"message": f"PONG: {name}"}
-
-            await redis_backend.reset()
-            for count, name in enumerate(repeat("test-client", 5), start=1):
-                response = await client.get(f"/{name}")
-                if count > 3:
-                    assert response.status_code == 429
-                    assert response.headers["Retry-After"] is not None
-                else:
+            async with redis_backend(persistent=False):
+                for count, name in enumerate(repeat("test-client", 5), start=1):
+                    if count == 4:
+                        await anyio.sleep(sleep_time)
+                    response = await client.get(f"{base_url}/{name}")
                     assert response.status_code == 200
+                    assert response.json() == {"message": f"PONG: {name}"}
+            # Backend reset on exit here
+
+            async with redis_backend(persistent=False):
+                for count, name in enumerate(repeat("test-client", 5), start=1):
+                    response = await client.get(f"/{name}")
+                    if count > 3:
+                        assert response.status_code == 429
+                        assert response.headers["Retry-After"] is not None
+                    else:
+                        assert response.status_code == 200
 
 
 @pytest.mark.anyio
@@ -269,6 +278,7 @@ async def test_http_throttle_inmemory_concurrent(
 ) -> None:
     async with inmemory_backend(app):
         throttle = HTTPThrottle(
+            "test-http-throttle-inmemory-concurrent",
             limit=3,
             seconds=5,
             milliseconds=5,
@@ -310,6 +320,7 @@ async def test_http_throttle_redis_concurrent(
 ) -> None:
     async with redis_backend(app):
         throttle = HTTPThrottle(
+            "test-http-throttle-redis-concurrent",
             limit=3,
             seconds=5,
             milliseconds=5,
@@ -350,6 +361,7 @@ async def test_websocket_throttle_inmemory(
 ) -> None:
     async with inmemory_backend(app):
         throttle = WebSocketThrottle(
+            "test-websocket-throttle-inmemory",
             limit=3,
             seconds=5,
             milliseconds=5,
@@ -419,41 +431,40 @@ async def test_websocket_throttle_inmemory(
             # as connecting to the websocket already counts as a request
             # and we want to start fresh.
             await inmemory_backend.reset()
+            async with inmemory_backend(persistent=False):
 
-            async def make_ws_request() -> typing.Tuple[str, int]:
-                try:
-                    await ws.send_json({"message": "ping"})
-                    response = await ws.receive_json()
-                    return response["status"], response["status_code"]
-                except WebSocketDisconnect as exc:
-                    print("WEBSOCKET DISCONNECT:", exc)
-                    return "disconnected", 1000
+                async def make_ws_request() -> typing.Tuple[str, int]:
+                    try:
+                        await ws.send_json({"message": "ping"})
+                        response = await ws.receive_json()
+                        return response["status"], response["status_code"]
+                    except WebSocketDisconnect as exc:
+                        print("WEBSOCKET DISCONNECT:", exc)
+                        return "disconnected", 1000
 
-            for count in range(1, 6):
-                result = await make_ws_request()
-                assert result[0] == "success"
-                assert result[1] == 200
-                if count == 3:
-                    sleep_time = (
-                        5 + (5 / 1000) + 2
-                    )  # For the last request, we wait a bit longer
-                    await asyncio.sleep(sleep_time)
-
-            await inmemory_backend.reset()
-            # Ensure the reset is processed, especially for in-memory backends
-            # as it uses an `asyncio.Lock` internally to prevent race conditions
-            # so the reset might not be immediate.
-            await asyncio.sleep(0.01)
-            for count in range(1, 4):
-                result = await make_ws_request()
-                if count > 3:
-                    # After the third request, the throttle should kick in
-                    # and subsequent requests should fail
-                    assert result[0] == "error"
-                    assert result[1] == 429
-                else:
+                for count in range(1, 6):
+                    result = await make_ws_request()
                     assert result[0] == "success"
                     assert result[1] == 200
+                    if count == 3:
+                        sleep_time = (
+                            5 + (5 / 1000) + 2
+                        )  # For the last request, we wait a bit longer
+                        await asyncio.sleep(sleep_time)
+            # Backend reset on exit here
+
+            await asyncio.sleep(0.01)
+            async with inmemory_backend(persistent=False):
+                for count in range(1, 4):
+                    result = await make_ws_request()
+                    if count > 3:
+                        # After the third request, the throttle should kick in
+                        # and subsequent requests should fail
+                        assert result[0] == "error"
+                        assert result[1] == 429
+                    else:
+                        assert result[0] == "success"
+                        assert result[1] == 200
 
 
 @pytest.mark.asyncio
@@ -467,6 +478,7 @@ async def test_websocket_throttle_redis(
 ) -> None:
     async with redis_backend(app):
         throttle = WebSocketThrottle(
+            "test-websocket-throttle-redis",
             limit=3,
             seconds=5,
             milliseconds=5,
@@ -537,33 +549,36 @@ async def test_websocket_throttle_redis(
             # and we want to start fresh.
             await redis_backend.reset()
 
-            async def make_ws_request() -> typing.Tuple[str, int]:
-                try:
-                    await ws.send_json({"message": "ping"})
-                    response = await ws.receive_json()
-                    return response["status"], response["status_code"]
-                except WebSocketDisconnect as exc:
-                    print("WEBSOCKET DISCONNECT:", exc)
-                    return "disconnected", 1000
+            async with redis_backend(persistent=False):
 
-            for count in range(1, 6):
-                result = await make_ws_request()
-                assert result[0] == "success"
-                assert result[1] == 200
-                if count == 3:
-                    sleep_time = (
-                        5 + (5 / 1000) + 1
-                    )  # For the last request, we wait a bit longer
-                    await asyncio.sleep(sleep_time)
+                async def make_ws_request() -> typing.Tuple[str, int]:
+                    try:
+                        await ws.send_json({"message": "ping"})
+                        response = await ws.receive_json()
+                        return response["status"], response["status_code"]
+                    except WebSocketDisconnect as exc:
+                        print("WEBSOCKET DISCONNECT:", exc)
+                        return "disconnected", 1000
 
-            await redis_backend.reset()
-            for count in range(1, 4):
-                result = await make_ws_request()
-                if count > 3:
-                    # After the third request, the throttle should kick in
-                    # and subsequent requests should fail
-                    assert result[0] == "error"
-                    assert result[1] == 429
-                else:
+                for count in range(1, 6):
+                    result = await make_ws_request()
                     assert result[0] == "success"
                     assert result[1] == 200
+                    if count == 3:
+                        sleep_time = (
+                            5 + (5 / 1000) + 1
+                        )  # For the last request, we wait a bit longer
+                        await asyncio.sleep(sleep_time)
+            # Backend reset on exit here
+
+            async with redis_backend(persistent=False):
+                for count in range(1, 4):
+                    result = await make_ws_request()
+                    if count > 3:
+                        # After the third request, the throttle should kick in
+                        # and subsequent requests should fail
+                        assert result[0] == "error"
+                        assert result[1] == 429
+                    else:
+                        assert result[0] == "success"
+                        assert result[1] == 200

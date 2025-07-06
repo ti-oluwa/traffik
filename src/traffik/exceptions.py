@@ -78,7 +78,7 @@ def build_exception_handler_getter(
     app: Starlette,
 ) -> typing.Callable[[Exception], typing.Optional[TraffikExceptionHandler]]:
     """
-    Build 
+    Build an exception handler getter for the given Starlette app.
     """
     # Here we use a neat trick to retrieve the exception handlers from the app
     # by creating an instance of ExceptionMiddleware with the app and its handlers,

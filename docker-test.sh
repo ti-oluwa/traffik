@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Traffik Docker Testing Script
-# This script provides easy commands to test the traffik library using Docker
+# Provides quick commands to test the traffik library using Docker
 
 set -e
 

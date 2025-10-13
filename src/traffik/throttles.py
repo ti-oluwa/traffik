@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 import hashlib
 import typing
 
@@ -13,13 +14,25 @@ from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
+    Rate,
+    Stringable,
 )
+from traffik.strategies import default_strategy
 
 __all__ = [
     "BaseThrottle",
     "HTTPThrottle",
     "WebSocketThrottle",
 ]
+
+ThrottleStrategy = typing.Callable[
+    [Stringable, Rate, ThrottleBackend], typing.Awaitable[float]
+]
+"""
+A callable that implements a throttling strategy.
+
+Takes a key, a Rate object, the throttle backend, and returns the wait period in seconds.
+"""
 
 
 class BaseThrottle(typing.Generic[HTTPConnectionT]):
@@ -28,15 +41,12 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
     def __init__(
         self,
         uid: str,
-        limit: Annotated[int, Ge(0)] = 0,
-        milliseconds: Annotated[int, Ge(0)] = 0,
-        seconds: Annotated[int, Ge(0)] = 0,
-        minutes: Annotated[int, Ge(0)] = 0,
-        hours: Annotated[int, Ge(0)] = 0,
+        rate: typing.Union[Rate, str],
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
             ConnectionThrottledHandler[HTTPConnectionT]
         ] = None,
+        strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]] = None,
         dynamic_backend: bool = False,
     ) -> None:
@@ -47,11 +57,9 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             multiple instances of the same throttle can coexist without conflicts.
             It also allows for persistent storage of throttle state across application
             restarts or deployments.
-        :param limit: Maximum number of times the route can be accessed within specified time period
-        :param milliseconds: Time period in milliseconds
-        :param seconds: Time period in seconds
-        :param minutes: Time period in minutes
-        :param hours: Time period in hours
+        :param rate: Rate limit definition. This can be provided as a Rate object
+            or as a string in the format "limit/period" (e.g., "100/m" for 100 requests
+            per minute).
         :param identifier: Connected client identifier generator.
             If not provided, the throttle backend's identifier will be used.
             This identifier is used to uniquely identify the client connection
@@ -61,6 +69,9 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             defined for the throttle backend.
             This handler is responsible for notifying the client about the throttling
             and can implement custom logic, such as sending a specific response or logging.
+        :param strategy: Throttling strategy to use. If not provided, the default strategy will be used.
+            The strategy defines how the throttling is applied, such as fixed window,
+            sliding window, or token bucket.
         :param backend: The throttle backend to use for storing throttling data.
             If not provided, the default backend will be used.
             The backend is responsible for managing the throttling state,
@@ -84,8 +95,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             # Tenant determined at runtime from request headers
             tenant_throttle = HTTPThrottle(
                 uid="api_quota",
-                limit=100,
-                minutes=1,
+                rate="1000/h",
                 dynamic_backend=True
             )
 
@@ -122,10 +132,10 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             ```python
             # GOOD - Explicit shared backend
             shared_backend = RedisBackend("redis://shared-redis:6379/0")
-            user_quota = HTTPThrottle(uid="user_quota", limit=1000, hours=1, backend=shared_backend)
+            user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", backend=shared_backend)
 
             # BAD - Unnecessary dynamic resolution
-            user_quota = HTTPThrottle(uid="user_quota", limit=1000, hours=1, dynamic_backend=True)
+            user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", dynamic_backend=True)
             ```
 
             **WARNING:** This feature adds complexity and slight performance overhead.
@@ -140,28 +150,15 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         if not uid or not isinstance(uid, str):
             raise ValueError("uid is required and must be a non-empty string")
 
-        if limit < 0:
-            raise ValueError("Limit must be non-negative")
-
         if dynamic_backend and backend is not None:
             raise ValueError(
                 "Cannot specify explicit backend with dynamic_backend=True"
             )
 
-        expires_after = (
-            milliseconds + 1000 * seconds + 60000 * minutes + 3600000 * hours
-        )
-        if expires_after < 0:
-            raise ValueError("Time period must be non-negative")
-
         self.uid = uid
-        self.limit = limit
-        self.milliseconds = milliseconds
-        self.seconds = seconds
-        self.minutes = minutes
-        self.hours = hours
-        self.expires_after = expires_after
+        self.rate = Rate.from_string(rate) if isinstance(rate, str) else rate
         self.dynamic_backend = dynamic_backend
+        self.strategy = strategy or default_strategy
 
         # Only set backend for non-dynamic throttles
         if not dynamic_backend:
@@ -192,8 +189,8 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         :param kwargs: Additional keyword arguments to pass to the throttled handler.
         :return: The throttled HTTP connection.
         """
-        if self.limit == 0 or self.expires_after == 0:
-            return connection  # No throttling applied if limit is 0
+        if self.rate.unlimited:
+            return connection  # No throttling applied
 
         if self.backend is None:
             backend = get_throttle_backend(connection)
@@ -212,20 +209,13 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         if (connection_id := await identifier(connection)) is UNLIMITED:
             return connection
 
-        throttle_key = await self.get_key(connection, *args, **kwargs)
-        backend_key = f"{backend.prefix}:{self.uid}:{connection_id}:{throttle_key}"
-        if not await backend.check_key_pattern(backend_key):
-            raise TraffikException(
-                "Invalid throttling key pattern. "
-                f"Key must be in the format: {backend.get_key_pattern()}"
-            )
+        base_key = await self.get_key(connection, *args, **kwargs)
+        throttle_key = f"{self.uid}:{connection_id}:{base_key}"
 
-        wait_period = await backend.get_wait_period(
-            backend_key, self.limit, self.expires_after
-        )
+        wait_period = await self.strategy(throttle_key, self.rate, backend)
         if wait_period != 0:
             handle_throttled = self.handle_throttled or backend.handle_throttled
-            await handle_throttled(connection, wait_period, *args, **kwargs)
+            await handle_throttled(connection, int(wait_period), *args, **kwargs)
         return connection
 
     async def get_key(

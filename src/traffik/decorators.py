@@ -12,6 +12,8 @@ from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S
 
 ThrottleT = typing.TypeVar("ThrottleT", bound=BaseThrottle)
 
+__all__ = ["throttled"]
+
 
 class DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
     """
@@ -165,8 +167,8 @@ def throttled(
     import fastapi
     from fastapi_throttle import throttled, HTTPThrottle
 
-    sustained_throttle = HTTPThrottle(limit=10, seconds=60)
-    burst_throttle = HTTPThrottle(limit=5, seconds=10)
+    sustained_throttle = HTTPThrottle(uid="sustained", rate="100/min")
+    burst_throttle = HTTPThrottle(uid="burst", rate="20/sec")
 
     router = fastapi.APIRouter(
         dependencies=[
@@ -205,6 +207,3 @@ def throttled(
         decorated = decorator_dependency(route)
         return decorated
     return decorator_dependency
-
-
-__all__ = ["throttled"]

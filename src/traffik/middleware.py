@@ -45,7 +45,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         return connection.headers.get("X-User-Tier") == "premium"
 
     middleware_throttle = MiddlewareThrottle(
-        HTTPThrottle(limit=10, seconds=60),
+        HTTPThrottle(uid="...", rate="10/min"),
         path="/api/",
         methods={"GET", "POST"},
         hook=premium_user_hook,
@@ -151,7 +151,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
         ThrottleMiddleware,
         middleware_throttles=[
             MiddlewareThrottle(
-                HTTPThrottle(limit=10, seconds=60),
+                HTTPThrottle(rate="5/min", uid="..."),
                 path="/api/",
                 methods={"GET", "POST"},
             )

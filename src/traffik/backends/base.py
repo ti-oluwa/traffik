@@ -1,9 +1,10 @@
+from contextlib import asynccontextmanager
+from contextvars import ContextVar, Token
 import functools
+import hashlib
 import math
 import re
 import typing
-from contextlib import asynccontextmanager
-from contextvars import ContextVar, Token
 
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
@@ -48,6 +49,16 @@ throttle_backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVa
 BACKEND_STATE_KEY = "__traffik_throttle_backend"
 
 
+def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
+    """Builds a key using the provided parameters."""
+    key_parts = [str(arg) for arg in args]
+    key_parts.extend(f"{k}={v}" for k, v in kwargs.items())
+    if not key_parts:
+        return "*"
+    key_parts.sort()  # Sort to ensure consistent ordering
+    return hashlib.md5(":".join(key_parts).encode()).hexdigest()
+
+
 class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     """
     Base class for throttle backends
@@ -57,7 +68,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         self,
         connection: T,
         *,
-        prefix: str,
+        namespace: str,
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
             ConnectionThrottledHandler[HTTPConnectionT]
@@ -68,75 +79,85 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         Initialize the throttle backend with a prefix.
 
         :param connection: The connection to the backend (e.g., Redis).
-        :param prefix: The prefix to be prepended to all throttling keys.
+        :param namespace: The namespace to be used for all throttling keys.
         :param identifier: The connected client identifier generator.
         :param handle_throttled: The handler to call when the client connection is throttled.
         :param persistent: Whether to persist throttling data across application restarts.
         """
         self.connection = connection
-        self.prefix = prefix
+        self.namespace = namespace
         self.identifier = identifier or connection_identifier
         self.handle_throttled = handle_throttled or connection_throttled
         self.persistent = persistent
 
-    @functools.cached_property
-    def key_pattern(self) -> re.Pattern:
+    async def get_key(self, key: str, *args, **kwargs) -> str:
         """
-        Regular expression pattern for throttling keys
+        Get the full key for the given throttling key.
 
-        All rate keys are expected to follow this pattern.
+        :param key: The throttling key.
+        :return: The full key with namespace.
         """
-        return self.get_key_pattern()
-
-    def get_key_pattern(self) -> re.Pattern:
-        """
-        Regular expression pattern for throttling keys
-
-        All rate keys are expected to follow this pattern.
-        """
-        return re.compile(rf"{self.prefix}:*")
-
-    async def check_key_pattern(self, key: str) -> bool:
-        """Check if the key matches the throttling key pattern"""
-        return re.match(self.key_pattern, key) is not None
+        if args or kwargs:
+            base_key = build_key(key, *args, **kwargs)
+            return f"{self.namespace}:{base_key}"
+        return f"{self.namespace}:{key}"
 
     async def initialize(self) -> None:
         """
         Initialize the throttle backend ensuring it is ready for use.
         """
-        raise NotImplementedError(
-            "The initialize method must be implemented by the backend."
-        )
+        raise NotImplementedError("`initialize()` must be implemented by the backend.")
 
-    async def get_wait_period(
-        self,
-        key: str,
-        limit: int,
-        expires_after: int,
-    ) -> int:
+    async def get(self, key: str, *args, **kwargs) -> typing.Optional[typing.Any]:
         """
-        Get the wait period for the given key.
+        Get the value for the given key.
 
         :param key: The throttling key.
-        :param limit: The maximum number of requests allowed within the time period.
-        :param expire_time: The time period in milliseconds for which the key is valid.
-        :return: The wait period in milliseconds.
+        :return: The value associated with the key or None if not found.
+        """
+        raise NotImplementedError
+
+    async def set(
+        self,
+        key: str,
+        value: typing.Any,
+        expire: typing.Optional[int] = None,
+        *args,
+        **kwargs,
+    ) -> None:
+        """
+        Set the value for the given key.
+
+        :param key: The throttling key.
+        :param value: The value to set.
+        """
+        raise NotImplementedError
+
+    async def delete(self, key: str, *args, **kwargs) -> None:
+        """
+        Delete the given key.
+
+        :param key: The throttling key to delete.
+        """
+        raise NotImplementedError
+
+    async def clear(self) -> None:
+        """
+        Clear all keys in the backend.
+
+        This function clears all keys in the backend.
         """
         raise NotImplementedError
 
     async def reset(self) -> None:
         """
-        Reset the throttling keys.
-
-        This function clears all throttling keys in the backend.
-
-        :param keys: The throttling keys to reset.
+        Reset the throttle backend.
         """
-        raise NotImplementedError
+        await self.clear()
 
     async def close(self) -> None:
-        """Close the backend connection."""
-        raise NotImplementedError
+        """Close the backend. Perform cleanup if necessary."""
+        pass
 
     @asynccontextmanager
     async def lifespan(self, app: ASGIApp) -> typing.AsyncIterator[None]:
@@ -151,7 +172,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         app: typing.Optional[ASGIApp] = None,
         persistent: typing.Optional[bool] = None,
         close_on_exit: bool = True,
-    ) -> "_ThrottleContext[Self]":
+    ) -> "ThrottleContext[Self]":
         """
         Create a throttle context for the backend.
 
@@ -166,7 +187,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             app.state = getattr(app, "state", {})  # type: ignore
             setattr(app.state, BACKEND_STATE_KEY, self)  # type: ignore
 
-        return _ThrottleContext(
+        return ThrottleContext(
             backend=self,
             persistent=persistent if persistent is not None else self.persistent,
             close_on_exit=close_on_exit,
@@ -178,7 +199,7 @@ ThrottleBackendTco = typing.TypeVar(
 )
 
 
-class _ThrottleContext(typing.Generic[ThrottleBackendTco]):
+class ThrottleContext(typing.Generic[ThrottleBackendTco]):
     """
     Context manager for throttle backends.
     """

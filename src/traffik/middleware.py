@@ -6,11 +6,11 @@ from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Receive, Scope, Send
 from typing_extensions import TypeAlias
 
-from traffik._utils import is_async_callable
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import ConfigurationError, build_exception_handler_getter
 from traffik.throttles import BaseThrottle
 from traffik.types import HTTPConnectionT, Matchable
+from traffik.utils import is_async_callable
 
 ThrottleHook: TypeAlias = typing.Callable[[HTTPConnectionT], typing.Awaitable[bool]]
 """
@@ -195,7 +195,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
 
         connection = typing.cast(HTTPConnectionT, HTTPConnection(scope, receive))
         if self.backend is None:
-            backend = get_throttle_backend(connection)
+            backend = get_throttle_backend(connection.app)
             if backend is None:
                 raise ConfigurationError("No throttle backend configured.")
             self.backend = backend

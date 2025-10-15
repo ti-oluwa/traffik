@@ -1,90 +1,39 @@
-import collections.abc
-
 import pytest
 
-from traffik.backends.base import throttle_backend_ctx
 from traffik.backends.inmemory import InMemoryBackend
 
 
-@pytest.fixture(scope="function")
-async def backend() -> InMemoryBackend:
-    return InMemoryBackend()
-
-
 @pytest.mark.asyncio
-@pytest.mark.unit
 @pytest.mark.backend
 @pytest.mark.native
-async def test_backend_reset(backend: InMemoryBackend) -> None:
-    await backend.initialize()
-    assert backend.connection is not None
-    await backend.reset()
-    assert backend.connection is None
+async def test_persistence(inmemory_backend: InMemoryBackend) -> None:
+    """Test that the backend persists data when set to persistent."""
+    # Add some keys to the backend within the context
+    async with inmemory_backend(persistent=True):
+        key = await inmemory_backend.get_key("key1")
+        await inmemory_backend.set(key, "value1")
 
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-@pytest.mark.backend
-@pytest.mark.throttle
-@pytest.mark.native
-async def test_get_wait_period(backend: InMemoryBackend) -> None:
-    await backend.reset()
-    async with backend():
-        wait_period = await backend.get_wait_period(
-            f"{backend.prefix}:test_key", limit=3, expires_after=5000
-        )
-        assert wait_period == 0
-        wait_period = await backend.get_wait_period(
-            f"{backend.prefix}:test_key", limit=3, expires_after=5000
-        )
-        assert wait_period == 0
-        wait_period = await backend.get_wait_period(
-            f"{backend.prefix}:test_key", limit=3, expires_after=5000
-        )
-        assert wait_period == 0
-        wait_period = await backend.get_wait_period(
-            f"{backend.prefix}:test_key", limit=3, expires_after=5000
-        )
-        assert wait_period != 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.unit
-@pytest.mark.backend
-@pytest.mark.native
-async def test_backend_context_management(backend: InMemoryBackend) -> None:
-    # Test that the context variable is initialized to None
-    assert throttle_backend_ctx.get() is None
-
-    assert backend.connection is None
-    async with backend():
-        # Test the lua script has been loaded
-        assert isinstance(backend.connection, collections.abc.MutableMapping)
-        # Test that the context variable is set within the context
-        assert throttle_backend_ctx.get() is backend
-
-    # Test that the context variable is reset after exiting the context
-    assert throttle_backend_ctx.get() is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-@pytest.mark.backend
-@pytest.mark.native
-async def test_backend_persistence(backend: InMemoryBackend) -> None:
-    # Test that the backend can be set to persistent
-    backend.persistent = True
-    assert backend.persistent
-
-    # Add some keys to the backend
-    async with backend():
-        await backend.get_wait_period(
-            f"{backend.prefix}:test_key", limit=3, expires_after=5000
-        )
     # Test that the backend persists the keys even after exiting the context
-    assert backend.connection is not None
-    assert len(backend.connection.keys()) > 0
-    # Reset the backend
-    await backend.reset()
+    assert inmemory_backend.connection is not None
+    key = await inmemory_backend.get_key("key1")
+    value = await inmemory_backend.get(key)
+    assert value == "value1"
+
     # Test that the backend can be reset
-    assert backend.connection is None
+    await inmemory_backend.reset()
+    assert inmemory_backend.connection is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.backend
+@pytest.mark.native
+async def test_reset_with_data(inmemory_backend: InMemoryBackend) -> None:
+    """Test backend reset properly clears data."""
+    key = await inmemory_backend.get_key("test_key")
+    async with inmemory_backend(persistent=False):
+        await inmemory_backend.set(key, "test_value")
+        # Verify data exists
+        value = await inmemory_backend.get(key)
+        assert value == "test_value"
+
+    assert inmemory_backend.connection is None

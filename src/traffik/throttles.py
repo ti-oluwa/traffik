@@ -1,29 +1,26 @@
-from dataclasses import dataclass, field
 import hashlib
 import typing
+import logging
 
-from annotated_types import Ge
 from starlette.requests import Request
 from starlette.websockets import WebSocket
-from typing_extensions import Annotated
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import ConfigurationError, TraffikException
+from traffik.exceptions import ConfigurationError, LockTimeoutError, TraffikException
+from traffik.rates import Rate
+from traffik.strategies import default_strategy
 from traffik.types import (
-    UNLIMITED,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
-    Rate,
     Stringable,
+    UNLIMITED,
 )
-from traffik.strategies import default_strategy
 
-__all__ = [
-    "BaseThrottle",
-    "HTTPThrottle",
-    "WebSocketThrottle",
-]
+logger = logging.getLogger(__name__)
+
+
+__all__ = ["BaseThrottle", "HTTPThrottle", "WebSocketThrottle"]
 
 ThrottleStrategy = typing.Callable[
     [Stringable, Rate, ThrottleBackend], typing.Awaitable[float]
@@ -49,6 +46,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]] = None,
         dynamic_backend: bool = False,
+        min_wait_period: typing.Optional[int] = None,
     ) -> None:
         """
         Initialize the throttle.
@@ -146,6 +144,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
 
             For most use cases, explicit backend configuration is simpler and more efficient.
 
+        :param min_wait_period: The minimum allowable wait period for a throttled connection.
         """
         if not uid or not isinstance(uid, str):
             raise ValueError("uid is required and must be a non-empty string")
@@ -156,9 +155,10 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             )
 
         self.uid = uid
-        self.rate = Rate.from_string(rate) if isinstance(rate, str) else rate
+        self.rate = Rate.parse(rate) if isinstance(rate, str) else rate
         self.dynamic_backend = dynamic_backend
         self.strategy = strategy or default_strategy
+        self.min_wait_period = min_wait_period
 
         # Only set backend for non-dynamic throttles
         if not dynamic_backend:
@@ -193,15 +193,22 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             return connection  # No throttling applied
 
         if self.backend is None:
-            backend = get_throttle_backend(connection)
+            try:
+                app = getattr(connection, "app", None)
+            except Exception as exc:
+                raise TraffikException(
+                    "Failed to access `connection.app` for dynamic backend resolution"
+                ) from exc
+
+            backend = get_throttle_backend(app)
             if backend is None:
                 raise ConfigurationError(
                     "No throttle backend configured. "
                     "Provide a backend to the throttle or set a default backend."
                 )
-            # Only set the backend if the throttle is not dynamic.
+            # Only set/cache the backend if the throttle is not dynamic.
             if not self.dynamic_backend:
-                object.__setattr__(self, "backend", backend)
+                self.backend = backend
         else:
             backend = self.backend
 
@@ -210,9 +217,18 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             return connection
 
         base_key = await self.get_key(connection, *args, **kwargs)
-        throttle_key = f"{self.uid}:{connection_id}:{base_key}"
+        throttle_key = f"{self.uid}:{str(connection_id)}:{base_key}"
+        try:
+            wait_period = await self.strategy(throttle_key, self.rate, backend)
+        except TimeoutError as exc:
+            logging.warning(
+                f"An error occured while utilizing strategy '{self.strategy!r}': {exc}",
+            )
+            wait_period = self.min_wait_period or 1.0
 
-        wait_period = await self.strategy(throttle_key, self.rate, backend)
+        if self.min_wait_period is not None:
+            wait_period = max(wait_period, self.min_wait_period)
+
         if wait_period != 0:
             handle_throttled = self.handle_throttled or backend.handle_throttled
             await handle_throttled(connection, int(wait_period), *args, **kwargs)

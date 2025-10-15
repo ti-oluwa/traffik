@@ -2,14 +2,15 @@ import asyncio
 import os
 import typing
 
-import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
+import pytest
 from redis.asyncio import Redis
 from starlette.requests import HTTPConnection
 
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.redis import RedisBackend
+from traffik.rates import Rate
 from traffik.throttles import HTTPThrottle
 from traffik.types import UNLIMITED
 
@@ -32,7 +33,7 @@ def inmemory_backend() -> InMemoryBackend:
 @pytest.fixture(scope="function")
 async def redis_backend() -> RedisBackend:
     redis = Redis.from_url(REDIS_URL, decode_responses=True)
-    return RedisBackend(connection=redis, prefix="redis-test", persistent=False)
+    return RedisBackend(connection=redis, namespace="redis-test", persistent=False)
 
 
 @pytest.fixture(scope="function")
@@ -44,11 +45,11 @@ def lifespan_app(inmemory_backend: InMemoryBackend) -> FastAPI:
     return app
 
 
-async def _testclient_identifier(connection: HTTPConnection) -> str:
+async def default_client_identifier(connection: HTTPConnection) -> str:
     return "testclient"
 
 
-async def _unlimited_identifier(connection: HTTPConnection) -> object:
+async def unlimited_identifier(connection: HTTPConnection) -> object:
     return UNLIMITED
 
 
@@ -58,7 +59,6 @@ async def _unlimited_identifier(connection: HTTPConnection) -> object:
 
 
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.redis
 @pytest.mark.fastapi
@@ -72,7 +72,7 @@ async def test_multi_service_shared_redis_backend(redis_backend: RedisBackend) -
         "uid": "shared_api_limit",
         "limit": 3,
         "milliseconds": 200,
-        "identifier": _testclient_identifier,
+        "identifier": default_client_identifier,
     }
 
     # Service A
@@ -125,7 +125,6 @@ async def test_multi_service_shared_redis_backend(redis_backend: RedisBackend) -
 
 
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.redis
 @pytest.mark.fastapi
@@ -141,7 +140,7 @@ async def test_multi_service_different_paths_redis_backend(
         "uid": "same_uid_different_paths",
         "limit": 2,
         "milliseconds": 200,
-        "identifier": _testclient_identifier,
+        "identifier": default_client_identifier,
     }
 
     # Service A
@@ -197,7 +196,6 @@ async def test_multi_service_different_paths_redis_backend(
 
 
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.redis
 @pytest.mark.fastapi
@@ -223,8 +221,7 @@ async def test_multi_service_microservices_pattern_redis(
         # Use a logical path that represents the shared operation
         user_throttle = HTTPThrottle(
             uid="tenant_api_operations",
-            limit=3,
-            milliseconds=200,
+            rate=Rate(limit=3, milliseconds=200),
             identifier=tenant_identifier,
         )
 
@@ -238,8 +235,7 @@ async def test_multi_service_microservices_pattern_redis(
     async with redis_backend(order_app):
         order_throttle = HTTPThrottle(
             uid="tenant_api_operations",  # Same UID
-            limit=3,
-            milliseconds=200,
+            rate=Rate(limit=3, milliseconds=200),
             identifier=tenant_identifier,
         )
 
@@ -288,7 +284,6 @@ async def test_multi_service_microservices_pattern_redis(
 
 
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.redis
 @pytest.mark.fastapi
@@ -306,16 +301,14 @@ async def test_multi_service_path_specific_limits_redis(
 
         read_throttle = HTTPThrottle(
             uid=shared_uid,
-            limit=2,
-            milliseconds=200,
-            identifier=_testclient_identifier,
+            rate=Rate(limit=2, milliseconds=200),
+            identifier=default_client_identifier,
         )
 
         write_throttle = HTTPThrottle(
             uid=shared_uid,  # Same UID
-            limit=1,  # Different limit to test isolation
-            milliseconds=200,
-            identifier=_testclient_identifier,
+            rate=Rate(limit=1, milliseconds=200),
+            identifier=default_client_identifier,
         )
 
         @app.get("/api/read", dependencies=[Depends(read_throttle)])
@@ -356,33 +349,31 @@ async def test_multi_service_path_specific_limits_redis(
 
 
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.redis
 @pytest.mark.fastapi
-async def test_multi_service_prefix_isolation_redis() -> None:
+async def test_multi_service_namespace_isolation_redis() -> None:
     """
-    Test multiple services using different Redis prefixes for complete isolation.
+    Test multiple services using different Redis namespacees for complete isolation.
     """
-    # Create separate Redis backends with different prefixes
+    # Create separate Redis backends with different namespacees
     redis_service_a = Redis.from_url(REDIS_URL, decode_responses=True)
     redis_service_b = Redis.from_url(REDIS_URL, decode_responses=True)
 
     backend_a = RedisBackend(
-        connection=redis_service_a, prefix="service-a", persistent=False
+        connection=redis_service_a, namespace="service-a", persistent=False
     )
     backend_b = RedisBackend(
-        connection=redis_service_b, prefix="service-b", persistent=False
+        connection=redis_service_b, namespace="service-b", persistent=False
     )
 
     # Service A
     app_a = FastAPI()
     async with backend_a(app_a):
         throttle_a = HTTPThrottle(
-            uid="api_limit",  # Same UID but different prefixes
-            limit=2,
-            milliseconds=200,
-            identifier=_testclient_identifier,
+            uid="api_limit",  # Same UID but different namespacees
+            rate=Rate(limit=2, milliseconds=200),
+            identifier=default_client_identifier,
         )
 
         @app_a.get("/data", dependencies=[Depends(throttle_a)])
@@ -393,10 +384,9 @@ async def test_multi_service_prefix_isolation_redis() -> None:
     app_b = FastAPI()
     async with backend_b(app_b):
         throttle_b = HTTPThrottle(
-            uid="api_limit",  # Same UID but different prefixes
-            limit=2,
-            milliseconds=200,
-            identifier=_testclient_identifier,
+            uid="api_limit",  # Same UID but different namespacees
+            rate=Rate(limit=2, milliseconds=200),
+            identifier=default_client_identifier,
         )
 
         @app_b.get("/data", dependencies=[Depends(throttle_b)])
@@ -411,7 +401,7 @@ async def test_multi_service_prefix_isolation_redis() -> None:
         ) as client_a, AsyncClient(
             transport=ASGITransport(app=app_b), base_url=base_url
         ) as client_b:
-            # Each service should have independent limits due to different prefixes
+            # Each service should have independent limits due to different namespacees
 
             # Exhaust service A's limit
             response1 = await client_a.get("/data")
@@ -446,7 +436,6 @@ async def test_multi_service_prefix_isolation_redis() -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.redis
 @pytest.mark.fastapi
@@ -461,7 +450,7 @@ async def test_multi_service_concurrent_access_redis(
         "uid": "concurrent_test",
         "limit": 5,
         "milliseconds": 500,
-        "identifier": _testclient_identifier,
+        "identifier": default_client_identifier,
     }
 
     # Service A

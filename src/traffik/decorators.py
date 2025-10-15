@@ -6,7 +6,7 @@ import typing
 from fastapi.params import Depends
 from typing_extensions import Annotated
 
-from traffik._utils import add_parameter_to_signature
+from traffik.utils import add_parameter_to_signature
 from traffik.throttles import BaseThrottle
 from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S
 

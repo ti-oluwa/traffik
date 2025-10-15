@@ -11,6 +11,7 @@ from starlette.requests import HTTPConnection, Request
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.redis import RedisBackend
 from traffik.throttles import HTTPThrottle
+from traffik.rates import Rate
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
@@ -31,7 +32,7 @@ def inmemory_backend() -> InMemoryBackend:
 @pytest.fixture(scope="function")
 async def redis_backend() -> RedisBackend:
     redis = Redis.from_url(REDIS_URL, decode_responses=True)
-    return RedisBackend(connection=redis, prefix="redis-test", persistent=False)
+    return RedisBackend(connection=redis, namespace="redis-test", persistent=False)
 
 
 @pytest.fixture(scope="function")
@@ -43,7 +44,7 @@ def lifespan_app(inmemory_backend: InMemoryBackend) -> FastAPI:
     return app
 
 
-async def _testclient_identifier(connection: HTTPConnection) -> str:
+async def default_client_identifier(connection: HTTPConnection) -> str:
     return "testclient"
 
 
@@ -53,7 +54,6 @@ async def _testclient_identifier(connection: HTTPConnection) -> str:
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
 @pytest.mark.throttle
 @pytest.mark.fastapi
 async def test_throttle_dynamic_backend(
@@ -64,11 +64,13 @@ async def test_throttle_dynamic_backend(
     with pytest.raises(ValueError):
         throttle = HTTPThrottle(
             "test-dynamic-backend-with-backend",
-            limit=2,
-            milliseconds=10,
-            seconds=50,
-            minutes=2,
-            hours=1,
+            rate=Rate(
+                limit=2,
+                milliseconds=10,
+                seconds=50,
+                minutes=2,
+                hours=1,
+            ),
             dynamic_backend=True,
             backend=inmemory_backend,
         )
@@ -77,13 +79,9 @@ async def test_throttle_dynamic_backend(
     # and should use the backend from the context if available.
     throttle = HTTPThrottle(
         "test-dynamic-backend-no-backend",
-        limit=2,
-        milliseconds=10,
-        seconds=50,
-        minutes=2,
-        hours=1,
+        rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
         dynamic_backend=True,
-        identifier=_testclient_identifier,
+        identifier=default_client_identifier,
     )
     assert throttle.dynamic_backend is True
     assert throttle.backend is None
@@ -128,7 +126,6 @@ async def test_throttle_dynamic_backend(
         assert throttle.backend is None
 
 
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.fastapi
 def test_throttle_dynamic_backend_with_lifespan_and_endpoint_context(
@@ -142,10 +139,9 @@ def test_throttle_dynamic_backend_with_lifespan_and_endpoint_context(
     """
     throttle = HTTPThrottle(
         "test-dynamic-lifespan-endpoint",
-        limit=2,
-        milliseconds=200,
+        rate=Rate(limit=2, milliseconds=200),
         dynamic_backend=True,
-        identifier=_testclient_identifier,
+        identifier=default_client_identifier,
     )
 
     # Create app with lifespan using inmemory_backend
@@ -214,7 +210,6 @@ def test_throttle_dynamic_backend_with_lifespan_and_endpoint_context(
         assert throttle.backend is None
 
 
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.fastapi
 def test_throttle_dynamic_backend_with_middleware(
@@ -223,10 +218,9 @@ def test_throttle_dynamic_backend_with_middleware(
     # Shared throttle for all tenants
     api_quota_throttle = HTTPThrottle(
         uid="api_quota",
-        limit=2,
-        milliseconds=100,  # Short window for testing
+        rate=Rate(limit=2, milliseconds=100),  # Short window for testing
         dynamic_backend=True,
-        identifier=_testclient_identifier,
+        identifier=default_client_identifier,
     )
 
     # Different backends for different tenant tiers
@@ -320,7 +314,6 @@ def test_throttle_dynamic_backend_with_middleware(
         assert api_quota_throttle.backend is None
 
 
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.fastapi
 def test_throttle_dynamic_backend_environment_switching(
@@ -329,10 +322,9 @@ def test_throttle_dynamic_backend_environment_switching(
     # Throttle for environment-based rate limiting
     env_throttle = HTTPThrottle(
         uid="environment_throttle",
-        limit=2,
-        milliseconds=100,
+        rate=Rate(limit=2, milliseconds=100),
         dynamic_backend=True,
-        identifier=_testclient_identifier,
+        identifier=default_client_identifier,
     )
 
     # Different backends for different environments
@@ -418,7 +410,6 @@ def test_throttle_dynamic_backend_environment_switching(
         assert env_throttle.backend is None
 
 
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.fastapi
 def test_throttle_dynamic_backend_nested_contexts(
@@ -427,18 +418,16 @@ def test_throttle_dynamic_backend_nested_contexts(
     # Multiple throttles for different purposes
     api_throttle = HTTPThrottle(
         uid="api_requests",
-        limit=3,
-        milliseconds=100,
+        rate=Rate(limit=3, milliseconds=100),
         dynamic_backend=True,
-        identifier=_testclient_identifier,
+        identifier=default_client_identifier,
     )
 
     feature_throttle = HTTPThrottle(
         uid="feature_usage",
-        limit=2,
-        milliseconds=100,
+        rate=Rate(limit=2, milliseconds=100),
         dynamic_backend=True,
-        identifier=_testclient_identifier,
+        identifier=default_client_identifier,
     )
 
     # Different tenant backends

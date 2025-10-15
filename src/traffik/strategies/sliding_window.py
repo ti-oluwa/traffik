@@ -1,170 +1,229 @@
-import time
+from dataclasses import dataclass
+import json
+import typing
 
 from traffik.backends.base import ThrottleBackend
-from traffik.types import Rate, Stringable
+from traffik.rates import Rate
+from traffik.types import Stringable
+from traffik.utils import time
 
-__all__ = ["sliding_window_strategy", "sliding_window_counter_strategy"]
+
+__all__ = ["SlidingWindowLogStrategy", "SlidingWindowCounterStrategy"]
 
 
-async def sliding_window_strategy(
-    key: Stringable, rate: Rate, backend: ThrottleBackend
-) -> float:
+@dataclass(frozen=True)
+class SlidingWindowLogStrategy:
     """
-    Sliding Window rate limiting strategy (also known as Sliding Log).
+    Sliding Window Log rate limiting (most accurate).
 
-    The sliding window algorithm works by:
-    1. Maintaining a log of request timestamps
-    2. For each request, removing timestamps older than the window
-    3. Counting remaining timestamps to enforce the limit
+    Maintains a log of request timestamps and evaluates rate limit over
+    a continuously sliding time window. This is the most accurate rate
+    limiting algorithm but uses more memory.
+
+    **How it works:**
+    1. Store timestamp of each request in a log
+    2. On new request, remove timestamps older than window duration
+    3. Count remaining timestamps and compare to limit
     4. Window slides continuously with each request (no fixed boundaries)
 
-    Pros:
-    - Very accurate - always enforces exact rate in any time window
-    - No double-spending at boundaries (unlike fixed window)
-    - Smooth rate limiting without sudden resets
+    **Pros:**
+    - Most accurate rate limiting (true sliding window)
+    - No burst traffic at boundaries
+    - Always enforces exact rate in any time window
+    - Smooth and predictable behavior
 
-    Cons:
-    - Higher memory usage (stores timestamp for each request)
-    - More CPU intensive (must parse and filter timestamps)
-    - Memory grows with request rate (O(limit) per key)
+    **Cons:**
+    - Memory intensive (stores one timestamp per request)
+    - Memory grows with rate limit (O(limit) space per key)
+    - Slightly slower than counter-based strategies
 
-    Example:
-        With limit=10 requests per minute:
-        - At any moment, only 10 requests allowed in the past 60 seconds
-        - If 10 requests at 00:00, next allowed at 00:06 (after oldest expires)
-        - Provides true rate limiting without boundary exploitation
+    **When to use:**
+    - When accuracy is critical
+    - When you need to prevent boundary exploitation
+    - Financial APIs, payment processing, security-critical endpoints
+    - When memory usage is not a concern
 
-    Storage format per key:
-    - log: Comma-separated list of request timestamps (milliseconds)
+    **Storage format:**
+    - Key: `{namespace}:{key}:slidinglog`
+    - Value: JSON array of request timestamps in milliseconds
+    - TTL: Window duration + 1 second buffer
 
-    :param key: The throttling key.
+    **Example:**
+
+    ```python
+    from traffik.rates import Rate
+    from traffik.strategies import sliding_window_log_strategy
+
+    # Strict limit: exactly 100 requests per minute, no bursts
+    rate = Rate.parse("100/1m")
+    wait = await sliding_window_log_strategy("user:123", rate, backend)
+
+    if wait > 0:
+        raise HTTPException(429, f"Rate limited. Retry in {wait}s")
+    ```
+
+    :param key: The throttling key (e.g., user ID, IP address).
     :param rate: The rate limit definition.
     :param backend: The throttle backend instance.
-    :return: The wait period in seconds if throttled, 0 otherwise.
+    :return: Wait time in seconds if throttled, 0.0 if allowed.
     """
-    if rate.unlimited:
-        return 0.0
 
-    now = int(time.time() * 1000)
-    window_start = now - int(rate.expire)
+    async def __call__(
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend,
+    ) -> float:
+        if rate.unlimited:
+            return 0.0
 
-    full_key = await backend.get_key(str(key))
-    log_key = f"{full_key}:log"
+        now = int(time() * 1000)
+        window_duration_ms = int(rate.expire)
+        window_start = now - window_duration_ms
 
-    # Get request log
-    log_data = await backend.get(log_key)
-    if log_data is None:
-        request_log = []
-    else:
-        # Parse log: comma-separated timestamps
-        request_log = [int(ts) for ts in log_data.split(",") if ts]
+        full_key = await backend.get_key(str(key))
+        log_key = f"{full_key}:slidinglog"
+        ttl_seconds = (window_duration_ms // 1000) + 1
 
-    # Remove expired entries (outside the sliding window)
-    request_log = [ts for ts in request_log if ts > window_start]
+        async with await backend.lock(f"lock:{log_key}", blocking=True, blocking_timeout=1):
+            old_log_json = await backend.get(log_key)
+            if old_log_json and old_log_json != "":
+                try:
+                    timestamps: typing.List[int] = json.loads(old_log_json)
+                except json.JSONDecodeError:
+                    timestamps = []
+            else:
+                timestamps = []
 
-    # Check if limit exceeded
-    if len(request_log) >= rate.limit:
-        # Calculate wait time based on oldest request in window
-        oldest_request = min(request_log)
-        wait_ms = int(rate.expire) - (now - oldest_request)
-        return max(1, int(wait_ms / 1000) + 1)
+            valid_timestamps = [ts for ts in timestamps if ts > window_start]
+            if len(valid_timestamps) >= rate.limit:
+                oldest_timestamp = min(valid_timestamps)
+                wait_ms = (oldest_timestamp + window_duration_ms) - now
+                await backend.set(
+                    log_key, json.dumps(valid_timestamps), expire=ttl_seconds
+                )
+                return max(1.0, wait_ms / 1000.0)
 
-    # Add current request
-    request_log.append(now)
-
-    # Store updated log
-    log_data = ",".join(str(ts) for ts in request_log)
-    expire_seconds = int(rate.expire * 2) // 1000  # Convert to seconds, 2x for safety
-    await backend.set(log_key, log_data, expire=expire_seconds)
-
-    return 0.0  # Request allowed
+            valid_timestamps.append(now)
+            await backend.set(log_key, json.dumps(valid_timestamps), expire=ttl_seconds)
+            return 0.0
 
 
-async def sliding_window_counter_strategy(
-    key: Stringable, rate: Rate, backend: ThrottleBackend
-) -> float:
+@dataclass(frozen=True)
+class SlidingWindowCounterStrategy:
     """
-    Sliding Window Counter strategy (weighted approach).
+    Sliding Window Counter rate limiting (hybrid approach).
 
-    A memory-efficient alternative to sliding window log that uses counters
-    instead of individual timestamps. It works by:
-    1. Maintaining counters for current and previous fixed windows
-    2. Calculating a weighted count based on overlap with sliding window
-    3. Less accurate but much more memory efficient than sliding log
+    Combines fixed window counters with weighted calculation to approximate
+    a sliding window. Offers good accuracy with low memory usage.
 
-    Formula:
-        weighted_count = (prev_window_count * overlap_percentage) + current_window_count
+    **How it works:**
+    1. Maintain counters for current and previous fixed windows
+    2. Calculate weighted count based on position in current window
+    3. Formula: `weighted_count = (prev_count * overlap%) + curr_count`
+    4. Overlap% decreases as we move through current window
 
-    Pros:
-    - Memory efficient (only 2 counters instead of N timestamps)
-    - Better than fixed window (smoother rate limiting)
-    - Good approximation of true sliding window
+    **Pros:**
+    - Better accuracy than fixed window
+    - Memory efficient (only 2 counters per key)
+    - Good balance between performance and accuracy
+    - Significantly reduces boundary burst issues
 
-    Cons:
-    - Less accurate than pure sliding window log
-    - Assumes even distribution of requests within windows
-    - Can still allow slightly over the limit in edge cases
+    **Cons:**
+    - Not as accurate as sliding window log
+    - Assumes even request distribution within windows
+    - Still allows small bursts in edge cases
 
-    Example:
-        With limit=10 per minute at timestamp 00:30 (halfway through window):
-        - Previous window (23:00-00:00): 6 requests
-        - Current window (00:00-01:00): 5 requests
-        - Weighted count: (6 * 0.5) + 5 = 8 requests
-        - 2 more requests allowed
+    **When to use:**
+    - General purpose rate limiting
+    - When you need better accuracy than fixed window
+    - High-traffic APIs where memory is a concern
+    - Good default choice for most applications
 
-    :param key: The throttling key.
+    **Storage format:**
+    - Key: `{namespace}:{key}:slidingcounter:{window_id}`
+    - Value: Request counter (integer)
+    - Uses two consecutive windows for weighted calculation
+    - TTL: Window duration + 1 second buffer
+
+    **Algorithm example:**
+        At timestamp 00:30 (halfway through 1-minute window):
+        - Previous window (23:00-00:00): 60 requests
+        - Current window (00:00-01:00): 50 requests
+        - Overlap: 30s out of 60s = 50%
+        - Weighted count: (60 * 0.5) + 50 = 80 requests
+        - If limit is 100, 20 more requests allowed
+
+    **Example:**
+
+    ```python
+    from traffik.rates import Rate
+    from traffik.strategies import sliding_window_counter_strategy
+
+    # Balanced approach: good accuracy with low memory
+    rate = Rate.parse("100/1m")
+    wait = await sliding_window_counter_strategy("user:123", rate, backend)
+
+    if wait > 0:
+        raise HTTPException(429, f"Rate limited. Retry in {wait}s")
+    ```
+
+    :param key: The throttling key (e.g., user ID, IP address).
     :param rate: The rate limit definition.
     :param backend: The throttle backend instance.
-    :return: The wait period in seconds if throttled, 0 otherwise.
+    :return: Wait time in seconds if throttled, 0.0 if allowed.
     """
-    if rate.unlimited:
-        return 0.0
 
-    now = int(time.time() * 1000)
+    async def __call__(
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend,
+    ) -> float:
+        if rate.unlimited:
+            return 0.0
 
-    # Calculate current window boundaries
-    window_size = int(rate.expire)
-    current_window_start = (now // window_size) * window_size
-    previous_window_start = current_window_start - window_size
+        now = int(time() * 1000)
+        window_duration_ms = int(rate.expire)
 
-    full_key = await backend.get_key(str(key))
-    current_counter_key = f"{full_key}:current:{current_window_start}"
-    previous_counter_key = f"{full_key}:previous:{previous_window_start}"
+        current_window_id = now // window_duration_ms
+        previous_window_id = current_window_id - 1
 
-    # Get counters
-    current_count_str = await backend.get(current_counter_key)
-    previous_count_str = await backend.get(previous_counter_key)
+        time_in_current_window = now % window_duration_ms
+        overlap_percentage = 1.0 - (time_in_current_window / window_duration_ms)
 
-    current_count = int(current_count_str) if current_count_str else 0
-    previous_count = int(previous_count_str) if previous_count_str else 0
+        full_key = await backend.get_key(str(key))
+        current_window_key = f"{full_key}:slidingcounter:{current_window_id}"
+        previous_window_key = f"{full_key}:slidingcounter:{previous_window_id}"
 
-    # Calculate how far into the current window we are (0.0 to 1.0)
-    time_in_current_window = now - current_window_start
-    window_progress = time_in_current_window / window_size
+        ttl_seconds = (window_duration_ms // 1000) + 1
 
-    # Calculate weighted count
-    # As we progress through current window, previous window has less weight
-    previous_weight = 1.0 - window_progress
-    weighted_count = (previous_count * previous_weight) + current_count
+        async with await backend.lock(
+            f"lock:{previous_window_key}", blocking=True, blocking_timeout=1
+        ):
+            current_count = await backend.increment_with_ttl(
+                current_window_key, amount=1, ttl=ttl_seconds
+            )
 
-    # Check if limit exceeded
-    if weighted_count >= rate.limit:
-        # Calculate wait time
-        # We need to wait until enough of the previous window has expired
-        if previous_count > 0:
-            # Calculate when previous window contribution becomes acceptable
-            needed_progress = 1.0 - ((rate.limit - current_count) / previous_count)
-            needed_progress = max(window_progress, min(needed_progress, 1.0))
-            wait_ms = (needed_progress - window_progress) * window_size
-        else:
-            # Wait until next window
-            wait_ms = window_size - time_in_current_window
+            previous_count_str = await backend.get(previous_window_key)
+            if previous_count_str and previous_count_str != "":
+                try:
+                    previous_count = int(previous_count_str)
+                    await backend.set(
+                        previous_window_key, previous_count_str, expire=None
+                    )
+                except (ValueError, TypeError):
+                    previous_count = 0
+            else:
+                previous_count = 0
 
-        return max(1, int(wait_ms / 1000) + 1)
-
-    # Increment current window counter
-    new_count = current_count + 1
-    expire_seconds = int(window_size * 2) // 1000  # 2x window size for safety
-    await backend.set(current_counter_key, str(new_count), expire=expire_seconds)
-
-    return 0.0  # Request allowed
+            weighted_count = (previous_count * overlap_percentage) + current_count
+            if weighted_count > rate.limit:
+                requests_over = weighted_count - rate.limit
+                if previous_count > 0:
+                    wait_ratio = requests_over / previous_count
+                    wait_ms = wait_ratio * time_in_current_window
+                else:
+                    wait_ms = window_duration_ms - time_in_current_window
+                return max(1.0, wait_ms / 1000.0)
+            return 0.0

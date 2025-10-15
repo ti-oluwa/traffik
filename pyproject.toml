@@ -17,7 +17,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -27,7 +26,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Networking",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 dependencies = [
     "starlette>=0.14.0",
     "annotated-types>=0.7.0",
@@ -41,9 +40,9 @@ Repository = "https://github.com/ti-oluwa/traffik.git"
 Changelog = "https://github.com/ti-oluwa/traffik/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-all = ["fastapi>=0.68.0", "redis>=5.0.0"]
+all = ["traffik[fastapi]", "traffik[redis]", "traffik[memcached]"]
 fastapi = ["fastapi>=0.68.0"]
-redis = ["redis>=5.0.0"]
+redis = ["pottery>=3.0.1", "redis>=5.0.0"]
 test = [
     "traffik[all]",
     "pytest>=8.0.0",
@@ -59,6 +58,9 @@ dev = [
     "pytest-watch>=4.2.0",
     "ruff>=0.12.1",
     "traffik[test]",
+]
+memcached = [
+    "aiomcache>=0.8.2",
 ]
 
 [build-system]
@@ -78,15 +80,13 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "slow: marks tests as slow",
-    "integration: marks integration tests",
-    "unit: marks unit tests",
     "benchmark: marks tests that benchmark performance",
     "backend: tests that test a throttle backend",
     "throttle: tests that test throttling functionality",
-    "db: tests that require database access",
-    "redis: tests that require Redis access",
+    "redis: Redis related tests",
+    "memcached: Memcached related tests",
     "native: tests that use native Starlette/ASGI features, no external dependencies",
-    "fastapi: tests that use FastAPI features",
+    "fastapi: tests that are specific to FastAPI",
     "websocket: tests that involve WebSocket functionality",
     "decorator: tests that test decorator functionality",
     "concurrent: tests that test concurrent/parallel behavior",

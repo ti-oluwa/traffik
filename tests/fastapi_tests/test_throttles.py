@@ -1,13 +1,13 @@
 import asyncio
+from itertools import repeat
 import os
 import typing
-from itertools import repeat
 
 import anyio
-import pytest
 from fastapi import Depends, FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient, Response
+import pytest
 from redis.asyncio import Redis
 from starlette.exceptions import HTTPException
 from starlette.requests import HTTPConnection
@@ -16,6 +16,7 @@ from starlette.websockets import WebSocket
 from tests.asyncio_client import AsyncioTestClient
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.redis import RedisBackend
+from traffik.rates import Rate
 from traffik.throttles import BaseThrottle, HTTPThrottle, WebSocketThrottle
 from traffik.types import UNLIMITED
 
@@ -38,7 +39,7 @@ def inmemory_backend() -> InMemoryBackend:
 @pytest.fixture(scope="function")
 async def redis_backend() -> RedisBackend:
     redis = Redis.from_url(REDIS_URL, decode_responses=True)
-    return RedisBackend(connection=redis, prefix="redis-test", persistent=False)
+    return RedisBackend(connection=redis, namespace="redis-test", persistent=False)
 
 
 @pytest.fixture(scope="function")
@@ -50,21 +51,20 @@ def lifespan_app(inmemory_backend: InMemoryBackend) -> FastAPI:
     return app
 
 
-async def _testclient_identifier(connection: HTTPConnection) -> str:
+async def default_client_identifier(connection: HTTPConnection) -> str:
     return "testclient"
 
 
-async def _unlimited_identifier(connection: HTTPConnection) -> object:
+async def unlimited_identifier(connection: HTTPConnection) -> object:
     return UNLIMITED
 
 
 @pytest.mark.asyncio
-@pytest.mark.unit
 @pytest.mark.throttle
 @pytest.mark.fastapi
 async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> None:
     with pytest.raises(ValueError):
-        BaseThrottle("test-init-1", limit=-1)
+        BaseThrottle("test-init-1", rate="-1/s")
 
     async def _throttle_handler(
         connection: HTTPConnection,
@@ -77,33 +77,24 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
     async with inmemory_backend():
         throttle = BaseThrottle(
             "test-init-2",
-            limit=2,
-            milliseconds=10,
-            seconds=50,
-            minutes=2,
-            hours=1,
+            rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
             handle_throttled=_throttle_handler,
         )
         time_in_ms = 10 + (50 * 1000) + (2 * 60 * 1000) + (1 * 3600 * 1000)
-        assert throttle.expires_after == time_in_ms
+        assert throttle.rate.expire == time_in_ms
         assert throttle.backend is inmemory_backend
         assert throttle.identifier is inmemory_backend.identifier
         # Test that provided throttle handler is used
         assert throttle.handle_throttled is not inmemory_backend.handle_throttled
 
 
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.fastapi
 def test_throttle_with_app_lifespan(lifespan_app: FastAPI) -> None:
     throttle = HTTPThrottle(
         "test-throttle-app-lifespan",
-        limit=2,
-        milliseconds=10,
-        seconds=50,
-        minutes=2,
-        hours=1,
-        identifier=_testclient_identifier,
+        rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
+        identifier=default_client_identifier,
     )
 
     @lifespan_app.get(
@@ -137,12 +128,8 @@ def test_throttle_exemption_with_identifier(
 ) -> None:
     throttle = HTTPThrottle(
         "test-throttle-exemption",
-        limit=2,
-        milliseconds=10,
-        seconds=50,
-        minutes=2,
-        hours=1,
-        identifier=_unlimited_identifier,
+        rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
+        identifier=unlimited_identifier,
         backend=inmemory_backend,
     )
 
@@ -174,7 +161,6 @@ def test_throttle_exemption_with_identifier(
 
 
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.fastapi
 async def test_http_throttle_inmemory(
@@ -183,9 +169,7 @@ async def test_http_throttle_inmemory(
     async with inmemory_backend(app):
         throttle = HTTPThrottle(
             "test-http-throttle-inmemory",
-            limit=3,
-            seconds=3,
-            milliseconds=5,
+            rate=Rate(limit=3, seconds=3, milliseconds=5),
         )
         sleep_time = 4 + (5 / 1000)
 
@@ -222,7 +206,6 @@ async def test_http_throttle_inmemory(
 
 
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.redis
 @pytest.mark.fastapi
@@ -230,9 +213,7 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
     async with redis_backend(app):
         throttle = HTTPThrottle(
             "test-http-throttle-redis",
-            limit=3,
-            seconds=3,
-            milliseconds=5,
+            rate=Rate(limit=3, seconds=3, milliseconds=5),
         )
         sleep_time = 4 + (5 / 1000)
 
@@ -269,7 +250,6 @@ async def test_http_throttle_redis(redis_backend: RedisBackend, app: FastAPI) ->
 
 
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.concurrent
 @pytest.mark.fastapi
@@ -279,9 +259,7 @@ async def test_http_throttle_inmemory_concurrent(
     async with inmemory_backend(app):
         throttle = HTTPThrottle(
             "test-http-throttle-inmemory-concurrent",
-            limit=3,
-            seconds=5,
-            milliseconds=5,
+            rate=Rate(limit=3, seconds=5, milliseconds=5),
         )
 
         @app.get(
@@ -310,7 +288,6 @@ async def test_http_throttle_inmemory_concurrent(
 
 
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.concurrent
 @pytest.mark.redis
@@ -321,9 +298,7 @@ async def test_http_throttle_redis_concurrent(
     async with redis_backend(app):
         throttle = HTTPThrottle(
             "test-http-throttle-redis-concurrent",
-            limit=3,
-            seconds=5,
-            milliseconds=5,
+            rate=Rate(limit=3, seconds=5, milliseconds=5),
         )
 
         @app.get(
@@ -352,7 +327,6 @@ async def test_http_throttle_redis_concurrent(
 
 
 @pytest.mark.asyncio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.websocket
 @pytest.mark.fastapi
@@ -362,10 +336,8 @@ async def test_websocket_throttle_inmemory(
     async with inmemory_backend(app):
         throttle = WebSocketThrottle(
             "test-websocket-throttle-inmemory",
-            limit=3,
-            seconds=5,
-            milliseconds=5,
-            identifier=_testclient_identifier,
+            rate=Rate(limit=3, seconds=5, milliseconds=5),
+            identifier=default_client_identifier,
         )
 
         @app.websocket("/ws/")
@@ -468,7 +440,6 @@ async def test_websocket_throttle_inmemory(
 
 
 @pytest.mark.asyncio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.websocket
 @pytest.mark.redis
@@ -479,10 +450,8 @@ async def test_websocket_throttle_redis(
     async with redis_backend(app):
         throttle = WebSocketThrottle(
             "test-websocket-throttle-redis",
-            limit=3,
-            seconds=5,
-            milliseconds=5,
-            identifier=_testclient_identifier,
+            rate=Rate(limit=3, seconds=5, milliseconds=5),
+            identifier=default_client_identifier,
         )
 
         @app.websocket("/ws/")

@@ -22,6 +22,18 @@ class ConfigurationError(TraffikException):
     pass
 
 
+class BackendError(TraffikException):
+    """Exception raised for backend related errors."""
+
+    pass
+
+
+class LockTimeoutError(TraffikException, TimeoutError):
+    """Exception raised when a lock timeout occurs"""
+
+    pass
+
+
 class AnonymousConnection(TraffikException):
     """
     Exception raised when the connection identifier cannot be determined.

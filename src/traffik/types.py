@@ -1,10 +1,7 @@
-from dataclasses import dataclass, field
 import typing
-
-from annotated_types import Ge
+import types
 from starlette.requests import HTTPConnection
 from starlette.responses import Response
-from typing_extensions import Annotated
 from typing_extensions import ParamSpec, TypeAlias
 
 P = ParamSpec("P")
@@ -82,103 +79,25 @@ class Dependency(typing.Protocol, typing.Generic[P, Rco]):
     ) -> typing.Union[Rco, typing.Awaitable[Rco]]: ...
 
 
-@dataclass(frozen=True)
-class Rate:
-    """Rate limit definition"""
+class AsyncLock(typing.Protocol):
+    """Protocol for asynchronous lock objects."""
 
-    limit: Annotated[int, Ge(0)] = 0
-    """Maximum number of allowed requests in the time window. 0 means no limit."""
-    milliseconds: Annotated[int, Ge(0)] = 0
-    """Time period in milliseconds"""
-    seconds: Annotated[int, Ge(0)] = 0
-    """Time period in seconds"""
-    minutes: Annotated[int, Ge(0)] = 0
-    """Time period in minutes"""
-    hours: Annotated[int, Ge(0)] = 0
-    """Time period in hours"""
-    _expire: float = field(init=False, repr=False)
+    def locked(self) -> bool:
+        """Check if the lock is currently held."""
+        ...
 
-    def __post_init__(self) -> None:
-        if self.limit < 0:
-            raise ValueError("Limit must be non-negative")
-        expire = (
-            self.milliseconds
-            + 1000 * self.seconds
-            + 60000 * self.minutes
-            + 3600000 * self.hours
-        )
-        if expire < 0:
-            raise ValueError("Time period must be non-negative")
-        if self.limit == 0 and expire != 0:
-            raise ValueError("Expire must be 0 when limit is 0")
-        if self.limit != 0 and expire == 0:
-            raise ValueError("Expire must be greater than 0 when limit is set")
-
-        object.__setattr__(self, "_expire", expire)
-
-    @property
-    def expire(self) -> float:
-        """Total time period in milliseconds, per limit"""
-        return self._expire
-
-    @property
-    def unlimited(self) -> bool:
-        """Whether the rate limit is unlimited"""
-        return self.limit == 0 and self.expire == 0
-
-    @property
-    def rps(self) -> float:
-        """Requests per second"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 1000)
-
-    @property
-    def rpm(self) -> float:
-        """Requests per minute"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 60000)
-
-    @property
-    def rph(self) -> float:
-        """Requests per hour"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 3600000)
-
-    @property
-    def rpd(self) -> float:
-        """Requests per day"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 86400000)
-
-    @classmethod
-    def from_string(cls, rate: str) -> "Rate":
+    async def acquire(
+        self, blocking: bool, blocking_timeout: typing.Optional[float]
+    ) -> bool:
         """
-        Create a ``z`` object from a string representation.
+        Acquire the lock.
 
-        The string should be in the format "<number>/<period>",
-        where <period> can be "s" (seconds), "m" (minutes), "h" (hours), or "d" (days).
-        For example, "5/m" means 5 requests per minute.
-
-        :param rate: The string representation of the rate limit.
-        :return: A `Rate` object.
+        :param blocking: If False, return immediately if the lock is held.
+        :param blocking_timeout: Max time (seconds) to wait if blocking is True.
+        :return: True if the lock was acquired, False otherwise.
         """
-        try:
-            limit_str, period_str = rate.split("/")
-            limit = int(limit_str)
-            period_str = period_str.strip().lower()
-            if period_str in ("sec", "s", "second", "seconds"):
-                return cls(limit=limit, seconds=1)
-            elif period_str in ("min", "m", "minute", "minutes"):
-                return cls(limit=limit, minutes=1)
-            elif period_str in ("h", "hour", "hours"):
-                return cls(limit=limit, hours=1)
-            elif period_str in ("d", "day", "days"):
-                return cls(limit=limit, hours=24)
-            else:
-                raise ValueError(f"Invalid period '{period_str}' in rate string")
-        except Exception as exc:
-            raise ValueError(f"Invalid rate string '{rate}': {exc}") from exc
+        ...
+
+    async def release(self) -> None:
+        """Release the lock."""
+        ...

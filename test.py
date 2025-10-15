@@ -1,28 +1,24 @@
-import asyncio
+# traffik/backends/base.py
+
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
-import functools
 import hashlib
 import math
 import typing
-import inspect
 
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
 from typing_extensions import Self
 
-from traffik.exceptions import AnonymousConnection, BackendError, ConnectionThrottled
+from traffik._utils import get_ip_address
+from traffik.exceptions import AnonymousConnection, ConnectionThrottled
 from traffik.types import (
-    AsyncLock,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
-    P,
-    R,
     T,
     WaitPeriod,
 )
-from traffik.utils import AsyncLockContext, get_ip_address
 
 
 async def connection_identifier(connection: HTTPConnection) -> str:
@@ -63,101 +59,23 @@ def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
     return hashlib.md5(":".join(key_parts).encode()).hexdigest()
 
 
-def _raises_error(
-    func: typing.Callable[P, R],
-    target_exc_type: typing.Type[BaseException] = BaseException,
-) -> typing.Callable[P, R]:
-    """Decorator"""
-    if getattr(func, "_error_wrapped_", None):
-        # Already wrapped
-        return func
-
-    if inspect.iscoroutinefunction(func):
-
-        async def _wrapper(*args: P.args, **kwargs: P.kwargs) -> R:  # type: ignore[no-redefined]
-            try:
-                return await func(*args, **kwargs)
-            except asyncio.CancelledError:
-                raise
-            except target_exc_type as exc:
-                raise BackendError("Error occurred in backend operation") from exc
-    else:
-
-        def _wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            try:
-                return func(*args, **kwargs)
-            except asyncio.CancelledError:
-                raise
-            except target_exc_type as exc:
-                if isinstance(exc, BackendError):
-                    raise
-                raise BackendError("Error occurred in backend operation") from exc
-
-    _wrapper._error_wrapped_ = True  # type: ignore
-    return functools.update_wrapper(_wrapper, func)  # type: ignore
-
-
 class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     """
     Base class for throttle backends.
-
-    Subclasses must implement the following methods:
-
+    
+    Subclasses must implement atomic operations only:
     - initialize(): Setup backend connection/resources
-    - get(key): Get value for key (Must not implement implicit locking).
-    - set(key, value, expire): Set value for key with optional expiration (Must not implement implicit locking).
-    - delete(key): Remove key (Must not implement implicit locking).
-    - get_lock(key, timeout): Acquire a distributed lock for key
     - increment(key, amount): Atomically increment counter
     - decrement(key, amount): Atomically decrement counter
+    - set_if_not_exists(key, value, expire): Atomically set key only if it doesn't exist
+    - get_and_set(key, value, expire): Atomically get old value and set new value
+    - compare_and_set(key, expected, new, expire): Atomically compare and swap
     - expire(key, seconds): Set expiration on existing key
-    - reset(): Clear all throttling data
-
-    The `get()`, `set()`, and `delete()` methods need explicit locking when utilized in racy conditions.
-    Hence, locks should not be implemented implicitly in these methods.
+    - delete(key): Remove key
+    - clear(): Remove all keys
+    
+    Non-atomic operations (get/set) are intentionally excluded to prevent race conditions.
     """
-
-    base_exception_type: typing.ClassVar[typing.Type[BaseException]] = BaseException
-    """
-    The base exception type that backend operations may raise.
-
-    This is used to wrap backend methods to (re)raise `traffik.exceptions.BackendError`
-    """
-    _default_wrap_methods: typing.ClassVar[typing.Tuple[str, ...]] = (
-        "initialize",
-        "get",
-        "set",
-        "delete",
-        "get_lock",
-        "increment",
-        "decrement",
-        "expire",
-        "reset",
-        "multi_get",
-        "increment_with_ttl",
-        "close",
-    )
-    """Default methods to wrap for error handling."""
-    wrap_methods: typing.Tuple[str, ...] = ()
-    """Additional methods to wrap for error handling. Meant to be overridden/defined by subclasses."""
-
-    def __init_subclass__(cls) -> None:
-        method_names = set(cls._default_wrap_methods).union(cls.wrap_methods)
-        for method_name in method_names:
-            method = getattr(cls, method_name, None)
-            if method is not None and callable(method):
-                setattr(
-                    cls,
-                    method_name,
-                    _raises_error(
-                        func=method,
-                        target_exc_type=cls.base_exception_type,
-                    ),
-                )
-            else:
-                raise RuntimeError(
-                    f"Cannot wrap method {method_name!r}. Ensure {method_name!r} is a defined method on {cls.__name__!r}."
-                )
 
     def __init__(
         self,
@@ -187,7 +105,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
     async def get_key(self, key: str, *args, **kwargs) -> str:
         """
-        Return a namespaced key.
+        Get the full key for the given throttling key.
 
         :param key: The throttling key.
         :return: The full key with namespace.
@@ -200,32 +118,11 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     async def initialize(self) -> None:
         """
         Initialize the throttle backend ensuring it is ready for use.
-
+        
         Subclasses must implement this method to set up connections,
         create tables/collections, or perform any necessary setup.
         """
         raise NotImplementedError("`initialize()` must be implemented by the backend.")
-
-    async def get(self, key: str, *args, **kwargs) -> typing.Optional[str]:
-        """
-        Get the value for the given key.
-
-        :param key: The throttling key to retrieve.
-        :return: The value associated with the key, or None if key doesn't exist.
-        """
-        raise NotImplementedError("`get()` must be implemented by the backend.")
-
-    async def set(
-        self, key: str, value: str, expire: typing.Optional[int] = None
-    ) -> None:
-        """
-        Set the value for the given key with optional expiration.
-
-        :param key: The throttling key to set.
-        :param value: The value to set.
-        :param expire: Optional expiration time in seconds.
-        """
-        raise NotImplementedError("`set()` must be implemented by the backend.")
 
     async def delete(self, key: str, *args, **kwargs) -> bool:
         """
@@ -236,65 +133,32 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         raise NotImplementedError("`delete()` must be implemented by the backend.")
 
-    async def get_lock(self, name: str) -> AsyncLock:
+    async def clear(self) -> None:
         """
-        Acquire a distributed lock with the given name.
+        Clear all keys in the backend namespace.
 
-        :param name: The name of the lock.
-        :return: An asynchronous lock object that implements the `traffik.types.AsyncLock` protocol.
+        This function clears all keys that match the backend's namespace.
+        Useful for testing or resetting rate limits.
         """
-        raise NotImplementedError("`lock()` must be implemented by the backend.")
+        raise NotImplementedError("`clear()` must be implemented by the backend.")
 
-    async def lock(
-        self,
-        name: str,
-        release_timeout: typing.Optional[int] = None,
-        blocking: bool = True,
-        blocking_timeout: typing.Optional[float] = None,
-    ) -> AsyncLockContext[AsyncLock]:
-        """
-        Context manager to acquire a distributed lock for the given key.
-
-        :param name: The name of the lock.
-        :param release_timeout: Lock timeout in seconds. If the lock is not released within this time, it will be automatically released.
-        :param blocking: If False, do not wait for the lock if it's already held.
-        :param blocking_timeout: Maximum time in seconds to wait for the lock if blocking is True. None means wait indefinitely.
-        :return: An asynchronous context manager that acquires/releases the lock.
-        """
-        lock_name = await self.get_key(name)
-        lock = await self.get_lock(lock_name)
-        return AsyncLockContext(
-            lock,
-            release_timeout=release_timeout,
-            blocking=blocking,
-            blocking_timeout=blocking_timeout,
-        )
-
-    async def reset(self) -> None:
-        """
-        Atomic reset of all throttling data for this backend.
-
-        Call `initialize()` to continue using the backend after this method has been called.
-        """
-        raise NotImplementedError("`reset()` must be implemented by the backend.")
+    # ===== ATOMIC OPERATIONS (Required for thread-safe rate limiting) =====
 
     async def increment(self, key: str, amount: int = 1) -> int:
         """
         Atomically increment a counter and return the NEW value.
-
+        
         This operation MUST be atomic (thread-safe across processes).
         If key doesn't exist, initialize to 0 then increment.
-
+        
         :param key: Counter key
         :param amount: Amount to increment by (default 1)
         :return: New value after increment
-
+        
         Example:
-        ```python
-        counter = await backend.increment("user:123:counter")
-        # If counter was 5, returns 6
-        # If counter didn't exist, returns 1
-        ```
+            counter = await backend.increment("user:123:counter")
+            # If counter was 5, returns 6
+            # If counter didn't exist, returns 1
         """
         raise NotImplementedError(
             "`increment()` must be implemented by the backend for atomic operations."
@@ -303,27 +167,26 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     async def decrement(self, key: str, amount: int = 1) -> int:
         """
         Atomically decrement a counter and return the NEW value.
-
+        
         This operation MUST be atomic (thread-safe across processes).
         If key doesn't exist, initialize to 0 then decrement.
-
+        
         :param key: Counter key
         :param amount: Amount to decrement by (default 1)
         :return: New value after decrement
-
+        
         Example:
-        ```python
-        counter = await backend.decrement("user:123:counter")
-        # If counter was 5, returns 4
-        # If counter didn't exist, returns -1
-        ```
+            counter = await backend.decrement("user:123:counter")
+            # If counter was 5, returns 4
+            # If counter didn't exist, returns -1
         """
-        return await self.increment(key, -amount)
+        new_value = await self.increment(key, -amount)
+        return new_value
 
     async def expire(self, key: str, seconds: int) -> bool:
         """
         Set expiration time on an existing key.
-
+        
         :param key: Key to set expiration on
         :param seconds: TTL in seconds
         :return: True if expiration was set, False if key doesn't exist
@@ -332,13 +195,110 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             "`expire()` must be implemented by the backend for atomic operations."
         )
 
-    async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int = 60) -> int:
+    async def set_if_not_exists(
+        self, 
+        key: str, 
+        value: str, 
+        expire: typing.Optional[int] = None
+    ) -> bool:
+        """
+        Set key only if it doesn't exist (atomic operation).
+        
+        This operation MUST be atomic.
+        
+        :param key: Key to set
+        :param value: Value to set
+        :param expire: Optional TTL in seconds
+        :return: True if key was set, False if key already existed
+        
+        Example:
+            # Try to claim a window
+            success = await backend.set_if_not_exists("window:user123", "12345", 60)
+            if success:
+                # We claimed the window
+            else:
+                # Someone else has the window
+        """
+        raise NotImplementedError(
+            "`set_if_not_exists()` must be implemented by the backend for atomic operations."
+        )
+
+    async def get_and_set(
+        self,
+        key: str,
+        value: str,
+        expire: typing.Optional[int] = None
+    ) -> typing.Optional[str]:
+        """
+        Atomically get the old value and set new value.
+        
+        This operation MUST be atomic (read-modify-write in one operation).
+        
+        :param key: Key to get and set
+        :param value: New value to set
+        :param expire: Optional TTL in seconds
+        :return: Old value if key existed, None if key didn't exist
+        
+        Example:
+            # Atomically swap token bucket state
+            old_state = await backend.get_and_set("bucket:user123", new_state_json, 60)
+            if old_state:
+                # Parse old state and calculate tokens
+            else:
+                # First request, bucket is full
+        """
+        raise NotImplementedError(
+            "`get_and_set()` must be implemented by the backend for atomic operations."
+        )
+
+    async def compare_and_set(
+        self,
+        key: str,
+        expected: str,
+        new_value: str,
+        expire: typing.Optional[int] = None
+    ) -> bool:
+        """
+        Atomically compare and set (CAS operation).
+        
+        Only sets new_value if current value equals expected.
+        This operation MUST be atomic.
+        
+        :param key: Key to compare and set
+        :param expected: Expected current value
+        :param new_value: New value to set if current matches expected
+        :param expire: Optional TTL in seconds
+        :return: True if value was set (current == expected), False otherwise
+        
+        Example:
+            # Optimistic locking for token bucket
+            success = await backend.compare_and_set(
+                "bucket:user123",
+                old_state_json,
+                new_state_json,
+                60
+            )
+            if not success:
+                # Value changed, retry
+        """
+        raise NotImplementedError(
+            "`compare_and_set()` must be implemented by the backend for atomic operations."
+        )
+
+    # ===== OPTIONAL OPTIMIZATIONS =====
+
+    async def increment_with_ttl(
+        self, 
+        key: str, 
+        amount: int = 1, 
+        ttl: int = 60
+    ) -> int:
         """
         Atomically increment and set TTL if key doesn't exist.
-
+        
         Default implementation uses increment() + expire(), but backends
         can override for better performance (e.g., Redis pipeline).
-
+        
         :param key: Counter key
         :param amount: Amount to increment
         :param ttl: TTL to set if key is new (seconds)
@@ -350,29 +310,52 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             await self.expire(key, ttl)
         return value
 
-    async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
+    async def multi_get_atomic(
+        self, 
+        keys: typing.Sequence[str]
+    ) -> typing.List[typing.Optional[str]]:
         """
         Atomically get multiple keys in one operation.
-
+        
         This should be a snapshot of all keys at a single point in time.
+        Default implementation calls get_and_set with same value (no-op swap),
         but backends can override for better performance.
-
-        :param keys: Sequence of keys to retrieve
+        
+        :param keys: List of keys to get
         :return: List of values (None for missing keys), same order as keys
-
+        
         Note: This is different from non-atomic batch get - values should be
         consistent snapshot, not interleaved with writes.
         """
         results = []
         for key in keys:
-            value = await self.get(key)
-            results.append(value)
+            # Get by swapping with same value (no-op but atomic)
+            value = await self.get_and_set(key, "", None)
+            if value == "":
+                # Key didn't exist
+                results.append(None)
+            elif value is not None:
+                # Restore original value
+                await self.get_and_set(key, value, None)
+                results.append(value)
+            else:
+                results.append(None)
         return results
+
+    # ===== LIFECYCLE METHODS =====
+
+    async def reset(self) -> None:
+        """
+        Reset the throttle backend by clearing all keys.
+        
+        Calls clear() by default. Override if additional cleanup is needed.
+        """
+        await self.clear()
 
     async def close(self) -> None:
         """
         Close the backend connection and perform cleanup.
-
+        
         Override this to close connections, flush buffers, etc.
         """
         pass
@@ -410,11 +393,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             persistent=persistent if persistent is not None else self.persistent,
             close_on_exit=close_on_exit
             if close_on_exit is not None
-            else (
-                get_throttle_backend() is self
-                if app is None
-                else get_throttle_backend(app) is self
-            ),
+            else (get_throttle_backend() is self if app is None else get_throttle_backend(app) is self),
         )
 
 
@@ -463,24 +442,20 @@ class ThrottleContext(typing.Generic[ThrottleBackendTco]):
 
 
 def get_throttle_backend(
-    app: typing.Optional[ASGIApp] = None,
-) -> typing.Optional[ThrottleBackend[typing.Any, HTTPConnection]]:
+    connection: typing.Optional[HTTPConnectionT] = None,
+) -> typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]]:
     """
-    Get the current context's throttle backend or provided app's throttle backend.
+    Get the current context's throttle backend or provided connection's throttle backend.
 
-    :param app: The ASGI application to check for a throttle backend.
+    :param connection: The HTTP connection to check for a throttle backend.
     :return: The current throttle backend or None if not set.
     """
-    # Try to get from contextvar, then check `app.state`
+    # Try to get from contextvar, then check `connection.app.state`
     backend = throttle_backend_ctx.get(None)
-    if (
-        backend is None
-        and app is not None
-        and (app_state := getattr(app, "state", None)) is not None
-    ):
-        backend = getattr(app_state, BACKEND_STATE_KEY, None)
+    if backend is None and connection is not None:
+        backend = getattr(connection.app.state, BACKEND_STATE_KEY, None)
     return typing.cast(
-        typing.Optional[ThrottleBackend[typing.Any, HTTPConnection]], backend
+        typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]], backend
     )
 
 

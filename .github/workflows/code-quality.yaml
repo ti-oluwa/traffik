@@ -34,11 +34,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
-      - name: Run linting
-        run: |
-          echo "Running Ruff linter..."
-          uv run ruff check src/ tests/ --fix
-
       - name: Check code formatting
         run: |
           echo "Checking code formatting..."

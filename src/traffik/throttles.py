@@ -230,7 +230,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             wait_ms = await self.strategy(throttle_key, self.rate, backend)
         except TimeoutError as exc:
             logging.warning(
-                f"An error occured while utilizing strategy '{self.strategy!r}': {exc}",
+                f"An error occurred while utilizing strategy '{self.strategy!r}': {exc}",
             )
             wait_ms = self.min_wait_period or 1000  # Default to 1000ms
 

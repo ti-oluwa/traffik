@@ -220,7 +220,7 @@ class SlidingWindowCounterStrategy:
                 try:
                     previous_count = int(previous_count_str)
                     await backend.set(
-                        previous_window_key, previous_count_str, expire=None
+                        previous_window_key, previous_count_str, expire=ttl_seconds
                     )
                 except (ValueError, TypeError):
                     previous_count = 0

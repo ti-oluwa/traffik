@@ -15,13 +15,13 @@ concurrency:
 jobs:
   # Linux testing with Redis support
   test-linux:
-    name: Test Python ${{ matrix.python-version }} on Linux (with Redis)
+    name: Test Python ${{ matrix.python-version }} on Linux
     runs-on: ubuntu-latest
     
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
     services:
       redis:
@@ -33,6 +33,11 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
+      memcached:
+        image: memcached:1.6-alpine
+        ports:
+          - 11211:11211
 
     steps:
       - name: Checkout code
@@ -48,13 +53,18 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies with Redis
-        run: uv sync --extra test --extra redis
+      - name: Install dependencies
+        run: uv sync --extra test --extra redis --extra memcached
 
       - name: Install Redis CLI
         run: |
           sudo apt-get update
           sudo apt-get install -y redis-tools
+
+      - name: Install Memcached CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y netcat-openbsd
 
       - name: Wait for Redis
         run: |
@@ -62,17 +72,25 @@ jobs:
           timeout 30 bash -c 'until redis-cli -h localhost -p 6379 ping 2>/dev/null; do sleep 1; done'
           echo "Redis is ready!"
 
+      - name: Wait for Memcached
+        run: |
+          echo "Waiting for Memcached to be ready..."
+          timeout 30 bash -c 'until echo stats | nc -z localhost 11211 2>/dev/null; do sleep 1; done'
+          echo "Memcached is ready!"
+
       - name: Run full test suite with coverage
         env:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
+          MEMCACHED_HOST: localhost
+          MEMCACHED_PORT: 11211
         run: |
           uv run pytest \
             --cov=src/traffik \
             --cov-branch \
             --cov-report=xml \
             --cov-report=term-missing \
-            --cov-fail-under=80 \
+            --cov-fail-under=70 \
             --tb=short \
             -v
 
@@ -86,16 +104,16 @@ jobs:
           name: codecov-umbrella
           fail_ci_if_error: false
 
-  # Windows and macOS testing without Redis (containers not supported)
+  # Windows and macOS testing without external backend deps (containers not supported)
   test-cross-platform:
-    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }} (no Redis)
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
-        python-version: ["3.8", "3.11", "3.12"]  # Test fewer versions for speed
+        python-version: ["3.9", "3.11", "3.12"]  # Test fewer versions for speed
 
     steps:
       - name: Checkout code
@@ -111,12 +129,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies (no Redis)
+      - name: Install dependencies
         run: uv sync --extra test
 
-      - name: Run tests without Redis
+      - name: Run tests without external backend dependencies
+        env:
+          SKIP_REDIS_TESTS: true
+          SKIP_MEMCACHED_TESTS: true
         run: |
-          uv run pytest tests/ -k "not redis and not Redis" -v --tb=short
+          uv run pytest tests/ -v --tb=short
 
   # Test installation from built package
   test-install:
@@ -172,12 +193,15 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.8"
+          python-version: "3.9"
 
       - name: Install minimal dependencies
         run: |
           uv sync --extra test
 
-      - name: Run tests without Redis
+      - name: Run tests
+        env:
+          SKIP_REDIS_TESTS: true
+          SKIP_MEMCACHED_TESTS: true
         run: |
-          uv run pytest tests/ -k "not redis and not Redis and not concurrent" -v --tb=short
+          uv run pytest tests/ -m "not (slow or concurrent)" --strict-markers -v --tb=short

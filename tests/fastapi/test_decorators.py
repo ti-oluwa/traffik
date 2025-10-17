@@ -1,13 +1,18 @@
+"""Tests for FastAPI decorator-based throttling."""
+
 import typing
 
 import anyio
-import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
+import pytest
 
+from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.decorators import throttled
+from traffik.rates import Rate
 from traffik.throttles import HTTPThrottle
+from traffik import strategies
 
 
 @pytest.fixture(scope="function")
@@ -16,21 +21,19 @@ async def app() -> FastAPI:
     return app
 
 
-@pytest.fixture(scope="function")
-async def throttle_backend() -> InMemoryBackend:
-    return InMemoryBackend(prefix="test", persistent=False)
-
-
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.decorator
 @pytest.mark.fastapi
 async def test_throttle_decorator_only(
-    app: FastAPI, throttle_backend: InMemoryBackend
+    app: FastAPI, inmemory_backend: InMemoryBackend
 ) -> None:
-    async with throttle_backend(app):
-        throttle = HTTPThrottle("test-decorator", limit=3, seconds=5)
+    async with inmemory_backend(app, persistent=True, close_on_exit=True):
+        throttle = HTTPThrottle(
+            uid="test-decorator",
+            rate=Rate(limit=3, seconds=5),
+            identifier=default_client_identifier,
+        )
 
         @app.get("/throttled", status_code=200)
         @throttled(throttle)
@@ -52,30 +55,38 @@ async def test_throttle_decorator_only(
 
 
 @pytest.mark.anyio
-@pytest.mark.integration
 @pytest.mark.throttle
 @pytest.mark.decorator
 @pytest.mark.fastapi
 async def test_throttle_decorator_with_dependency(
-    app: FastAPI, throttle_backend: InMemoryBackend
+    app: FastAPI, inmemory_backend: InMemoryBackend
 ) -> None:
-    async with throttle_backend(app):
-        burst_throttle = HTTPThrottle("test-burst", limit=3, seconds=5)
-        sustained_throttle = HTTPThrottle("test-sustained", limit=5, seconds=10)
+    async with inmemory_backend(app, persistent=False, close_on_exit=True):
+        burst_throttle = HTTPThrottle(
+            uid="test-burst",
+            rate=Rate(limit=3, seconds=5),
+            identifier=default_client_identifier,
+            headers={"X-RateLimit-Mode": "burst"},
+            strategy=strategies.TokenBucketWithDebtStrategy(),
+        )
+        sustained_throttle = HTTPThrottle(
+            uid="test-sustained",
+            rate=Rate(limit=5, seconds=10),
+            identifier=default_client_identifier,
+            headers={"X-RateLimit-Mode": "sustained"},
+        )
 
         def random_value() -> str:
             return "random_value"
 
         @app.get(
-            "/throttled",
-            status_code=200,
-            dependencies=[Depends(sustained_throttle)],
+            "/throttled", status_code=200, dependencies=[Depends(sustained_throttle)]
         )
         @throttled(burst_throttle)
         async def throttled_endpoint(
-            random_value: str = Depends(random_value),
+            value: str = Depends(random_value),
         ) -> typing.Dict[str, str]:
-            return {"message": random_value}
+            return {"message": value}
 
         base_url = "http://0.0.0.0"
         async with AsyncClient(
@@ -92,7 +103,10 @@ async def test_throttle_decorator_with_dependency(
             assert response.headers.get("Retry-After") is not None
 
             # Wait for burst window to clear
-            await anyio.sleep(int(response.headers.get("Retry-After")))
+            wait_period = int(response.headers.get("Retry-After")) + 1
+            mode = response.headers.get("X-RateLimit-Mode", "unknown")
+            print(f"Waiting {wait_period}s for {mode} window to clear...")
+            await anyio.sleep(wait_period)
 
             # Sustained rate test — allow 1 more (total: 5 in 10s)
             response = await client.get("/throttled")

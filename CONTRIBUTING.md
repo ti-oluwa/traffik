@@ -30,10 +30,9 @@ By participating in this project, you agree to abide by our Code of Conduct. We 
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.9 or higher
 - Git
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
-- Redis server (for Redis backend testing)
 
 ### Development Setup
 
@@ -85,20 +84,6 @@ By participating in this project, you agree to abide by our Code of Conduct. We 
    uv run bandit -r src/
    ```
 
-4. **Set Up Redis (Optional)**
-
-   For testing Redis backend functionality:
-
-   ```bash
-   # Using Docker
-   docker run -d -p 6379:6379 redis:latest
-
-   # Or install Redis locally
-   # Ubuntu/Debian: sudo apt-get install redis-server
-   # macOS: brew install redis
-   # Start Redis: redis-server
-   ```
-
 ## Contributing Guidelines
 
 ### Types of Contributions
@@ -120,7 +105,7 @@ We welcome several types of contributions:
 
 ### Contribution Workflow
 
-1. **Create a new branch** from `main` for your changes:
+1. **Create a new branch** from `develop` for your changes:
 
    ```bash
    git checkout -b feature/your-feature-name
@@ -138,7 +123,7 @@ We welcome several types of contributions:
 
    ```bash
    git add .
-   git commit -m "feat: add Redis cluster support for high availability"
+   git commit -m "feat: Some feature description"
    ```
 
 6. **Push to your fork**:
@@ -216,17 +201,10 @@ uv run pytest tests/test_throttles.py
 pytest tests/test_throttles.py
 
 # Run tests matching a pattern
-uv run pytest -k "test_redis"
+uv run pytest -k "test_middleware"
 # or
-pytest -k "test_redis"
+pytest -k "test_middleware"
 ```
-
-### Test Categories
-
-- **Unit Tests**: Test individual components in isolation
-- **Integration Tests**: Test interaction between components
-- **Backend Tests**: Test different throttle backends (in-memory, Redis)
-- **Concurrency Tests**: Test behavior under concurrent load
 
 ### Writing Tests
 
@@ -247,7 +225,7 @@ from traffik.throttles import HTTPThrottle
 async def test_throttle_allows_requests_within_limit():
     """Test that throttle allows requests within the specified limit."""
     backend = InMemoryBackend()
-    async with backend:
+    async with backend(close_on_exit=True):
         throttle = HTTPThrottle(limit=3, seconds=1)
         # Test implementation...
 ```
@@ -290,45 +268,6 @@ bandit -r src/
 - **Variable naming**: Use descriptive names, avoid abbreviations
 - **Security**: Follow secure coding practices, avoid common vulnerabilities
 - **Dependencies**: Regular security audits with `bandit`
-
-### Example Code Style
-
-```python
-import asyncio
-import typing
-from typing import Optional
-
-from starlette.requests import Request
-
-
-class HTTPThrottle:
-    """
-    HTTP request throttle implementation.
-    
-    This class provides rate limiting capabilities for HTTP requests
-    in FastAPI applications.
-    
-    Args:
-        limit: Maximum number of requests allowed in the time window.
-        seconds: Time window duration in seconds.
-        identifier: Custom function to identify clients.
-    """
-    
-    def __init__(
-        self,
-        limit: int,
-        seconds: int,
-        identifier: Optional[typing.Callable[[Request], str]] = None,
-    ) -> None:
-        self.limit = limit
-        self.seconds = seconds
-        self.identifier = identifier or self._default_identifier
-    
-    async def _default_identifier(self, request: Request) -> str:
-        """Generate default client identifier from request."""
-        client_ip = request.client.host if request.client else "unknown"
-        return f"{client_ip}:{request.url.path}"
-```
 
 ## Documentation
 
@@ -423,7 +362,7 @@ Add any other context or screenshots about the feature request here.
 Here are some areas where contributions would be especially valuable:
 
 - **New Backends**: Support for other databases (PostgreSQL, MongoDB, etc.)
-- **Advanced Strategies**: Sliding window, token bucket algorithms
+- **Advanced Strategies**: More throttling algorithms
 - **Monitoring**: Integration with metrics systems (Prometheus, etc.)
 - **Performance**: Optimization for high-throughput scenarios
 - **Documentation**: More examples, tutorials, and use cases
@@ -461,13 +400,14 @@ We follow a structured Git workflow inspired by Git Flow to manage code changes 
 | `chore/*`        | `develop`  | `develop`      | Maintenance tasks (linting, config, etc.) |
 | `docs/*`         | `develop`  | `develop`      | Documentation updates                     |
 | `test/*`         | `develop`  | `develop`      | CI tests and experimentation              |
+| `fix/*`          | `develop`  | `develop`      | Bug fixes                                 |
 
 ---
 
 ### ✅ Pull Request Rules
 
 - PRs to `main` **must** come from `release/*` or `hotfix/*` branches.
-- PRs to `develop` **must** come from `feature/*`, `chore/*`, `docs/*`, or `test/*` branches.
+- PRs to `develop` **must** come from `feature/*`, `chore/*`, `docs/*`, `test/*`, or `fix/*` branches.
 - All PRs must:
   - Be up to date with the target branch
   - Pass all CI checks
@@ -508,7 +448,7 @@ Maintainers follow this process for releases:
 
 ---
 
-Thank you for contributing to Traffik! Your efforts help make rate limiting in FastAPI applications better for everyone. 🚀
+Thank you for contributing to Traffik! Your efforts help make rate limiting in Starlette applications better for everyone. 🚀
 
 ## Questions?
 

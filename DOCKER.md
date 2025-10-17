@@ -61,7 +61,7 @@ This guide explains how to use Docker to test the traffik library across differe
 ./docker-test.sh test
 
 # Test specific Python version
-./docker-test.sh test-py38
+./docker-test.sh test-py39
 ```
 
 ### Development Workflow
@@ -256,8 +256,3 @@ Add this to `.vscode/settings.json`:
    - Clean up regularly with `./docker-test.sh clean`
    - Use `--abort-on-container-exit` for CI
    - Monitor disk usage with `docker system df`
-
-3. **Security:**
-   - Don't expose Redis ports in production
-   - Use secrets for sensitive configuration
-   - Keep base images updated

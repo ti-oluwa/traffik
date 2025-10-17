@@ -1,7 +1,7 @@
 [project]
 name = "traffik"
-version = "0.1.0"
-description = "A Starlette throttling library"
+version = "1.0.0b1"
+description = "Distributed rate limiting for Starlette applications."
 readme = "README.md"
 authors = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
@@ -10,24 +10,24 @@ maintainers = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
 ]
 license = { file = "LICENSE" }
-keywords = ["starlette", "fastapi", "throttling", "rate-limiting", "api"]
+keywords = ["starlette", "fastapi", "throttling", "rate-limiting", "api", "distributed-rate-limiting"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Framework :: FastAPI",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Networking",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 dependencies = [
     "starlette>=0.14.0",
     "annotated-types>=0.7.0",
@@ -41,9 +41,9 @@ Repository = "https://github.com/ti-oluwa/traffik.git"
 Changelog = "https://github.com/ti-oluwa/traffik/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-all = ["fastapi>=0.68.0", "redis>=5.0.0"]
+all = ["traffik[fastapi]", "traffik[redis]", "traffik[memcached]"]
 fastapi = ["fastapi>=0.68.0"]
-redis = ["redis>=5.0.0"]
+redis = ["pottery>=3.0.1", "redis>=5.0.0"]
 test = [
     "traffik[all]",
     "pytest>=8.0.0",
@@ -56,9 +56,13 @@ test = [
 dev = [
     "bandit>=1.7.10",
     "mypy>=1.14.1",
+    "orjson>=3.11.3",
     "pytest-watch>=4.2.0",
     "ruff>=0.12.1",
     "traffik[test]",
+]
+memcached = [
+    "aiomcache>=0.8.2",
 ]
 
 [build-system]
@@ -78,19 +82,17 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "slow: marks tests as slow",
-    "integration: marks integration tests",
-    "unit: marks unit tests",
     "benchmark: marks tests that benchmark performance",
     "backend: tests that test a throttle backend",
     "throttle: tests that test throttling functionality",
-    "db: tests that require database access",
-    "redis: tests that require Redis access",
-    "native: tests that use native Starlette/ASGI features, no external dependencies",
-    "fastapi: tests that use FastAPI features",
+    "redis: Redis related tests",
+    "memcached: tests that require Memcached access",
+    "fastapi: tests that are specific to FastAPI",
     "websocket: tests that involve WebSocket functionality",
     "decorator: tests that test decorator functionality",
     "concurrent: tests that test concurrent/parallel behavior",
     "middleware: tests that test middleware functionality",
+    "multithreaded: test that test multithreading functionality",
 ]
 
 [tool.coverage.run]
@@ -103,5 +105,5 @@ show_missing = true
 
 [tool.ruff]
 line-length = 88
-target-version = "py38"
+target-version = "py39"
 lint.extend-select = ["I", "UP", "TID", "F"]

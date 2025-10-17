@@ -1,6 +1,6 @@
 # Makefile for Traffik development and testing
 
-.PHONY: help install install-dev install-test test test-fast test-slow test-native test-watch test-coverage test-coverage-xml test-coverage-html lint lint-fix format format-check security type-check quality build upload upload-test dev-setup clean redis-start redis-stop ci docs debug-env example dev release-check
+.PHONY: help install install-dev install-test test test-fast test-slow test-watch test-coverage test-coverage-xml test-coverage-html lint lint-fix format format-check security type-check quality build upload upload-test dev-setup clean redis-start redis-stop ci docs debug-env example dev release-check
 
 # Default target
 help: ## Show this help message
@@ -34,9 +34,6 @@ test-fast: ## Run tests not marked as slow
 
 test-slow: ## Run slow tests
 	uv run pytest -m "slow" -v --tb=short
-
-test-native: ## Run tests without external dependencies
-	uv run pytest -m "native" -v --tb=short
 
 test-watch: ## Run tests in watch mode
 	uv run pytest-watch --onpass "echo 'Tests passed'" --onfail "echo 'Tests failed'" -- -v --tb=short 

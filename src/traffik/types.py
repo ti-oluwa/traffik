@@ -1,3 +1,5 @@
+"""Type definitions and protocols for the traffik package."""
+
 import typing
 
 from starlette.requests import HTTPConnection
@@ -26,7 +28,7 @@ HTTPConnectionT = typing.TypeVar("HTTPConnectionT", bound=HTTPConnection)
 HTTPConnectionTcon = typing.TypeVar(
     "HTTPConnectionTcon", bound=HTTPConnection, contravariant=True
 )
-WaitPeriod: TypeAlias = int
+WaitPeriod: TypeAlias = float
 
 Matchable: TypeAlias = typing.Union[str, typing.Pattern[str]]
 """A type alias for a matchable path, which can be a string or a compiled regex pattern."""
@@ -61,11 +63,17 @@ class ConnectionThrottledHandler(typing.Protocol, typing.Generic[HTTPConnectionT
     async def __call__(
         self,
         connection: HTTPConnectionTcon,
-        wait_period: WaitPeriod,
+        wait_ms: WaitPeriod,
         *args: typing.Any,
         **kwargs: typing.Any,
     ) -> typing.Any:
-        """Handle a throttled connection."""
+        """
+        Handle a throttled connection.
+
+        :param connection: The HTTP connection that was throttled.
+        :param wait_ms: The wait time in milliseconds before the next allowed request.
+        :return: A response or action to take when throttled.
+        """
         ...
 
 
@@ -77,3 +85,27 @@ class Dependency(typing.Protocol, typing.Generic[P, Rco]):
         *args: P.args,
         **kwargs: P.kwargs,  # Although FastAPI passes arguments as keyword arguments to dependencies
     ) -> typing.Union[Rco, typing.Awaitable[Rco]]: ...
+
+
+class AsyncLock(typing.Protocol):
+    """Protocol for asynchronous lock objects."""
+
+    def locked(self) -> bool:
+        """Check if the lock is currently held."""
+        ...
+
+    async def acquire(
+        self, blocking: bool, blocking_timeout: typing.Optional[float]
+    ) -> bool:
+        """
+        Acquire the lock.
+
+        :param blocking: If False, return immediately if the lock is held.
+        :param blocking_timeout: Max time (seconds) to wait if blocking is True.
+        :return: True if the lock was acquired, False otherwise.
+        """
+        ...
+
+    async def release(self) -> None:
+        """Release the lock."""
+        ...

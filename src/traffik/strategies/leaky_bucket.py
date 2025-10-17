@@ -53,11 +53,12 @@ class LeakyBucketStrategy:
 
     ```python
     from traffik.rates import Rate
-    from traffik.strategies import leaky_bucket_strategy
+    from traffik.strategies import LeakyBucketStrategy
 
     # Smooth traffic: 100 requests per minute, no bursts
     rate = Rate.parse("100/1m")
-    wait_ms = await leaky_bucket_strategy("user:123", rate, backend)
+    strategy = LeakyBucketStrategy()
+    wait_ms = await strategy("user:123", rate, backend)
 
     if wait_ms > 0:
         wait_seconds = max(wait_ms / 1000, 1)
@@ -167,11 +168,12 @@ class LeakyBucketWithQueueStrategy:
 
     ```python
     from traffik.rates import Rate
-    from traffik.strategies import leaky_bucket_with_queue_strategy
+    from traffik.strategies import LeakyBucketWithQueueStrategy
 
     # Strict FIFO processing: 100 requests per minute
     rate = Rate.parse("100/1m")
-    wait_ms = await leaky_bucket_with_queue_strategy("user:123", rate, backend)
+    strategy = LeakyBucketWithQueueStrategy()
+    wait_ms = await strategy("user:123", rate, backend)
 
     if wait_ms > 0:
         wait_seconds = max(wait_ms / 1000, 1)

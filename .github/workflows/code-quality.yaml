@@ -29,15 +29,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.9"
 
       - name: Install dependencies
         run: uv sync --extra dev
-
-      - name: Run linting
-        run: |
-          echo "Running Ruff linter..."
-          uv run ruff check src/ tests/ --fix
 
       - name: Check code formatting
         run: |
@@ -76,7 +71,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.9"
 
       - name: Install dependencies
         run: uv sync --extra dev

@@ -1,3 +1,5 @@
+"""`traffik` exceptions and exception handling utilities."""
+
 import http
 import typing
 
@@ -18,6 +20,24 @@ class TraffikException(Exception):
 
 class ConfigurationError(TraffikException):
     """Exception raised when the throttle configuration is invalid."""
+
+    pass
+
+
+class BackendError(TraffikException):
+    """Exception raised for backend related errors."""
+
+    pass
+
+
+class BackendConnectionError(BackendError):
+    """Backend connection error"""
+
+    pass
+
+
+class LockTimeoutError(TraffikException, TimeoutError):
+    """Exception raised when a lock timeout occurs"""
 
     pass
 

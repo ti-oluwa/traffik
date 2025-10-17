@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Traffik Docker Testing Script
-# This script provides easy commands to test the traffik library using Docker
+# Provides quick commands to test the traffik library using Docker
 
 set -e
 
@@ -42,7 +42,6 @@ Available commands:
   test-fast          Run fast tests
   test-native        Run native tests
   test-matrix        Run tests across all Python versions
-  test-py38          Run tests on Python 3.8
   test-py39          Run tests on Python 3.9
   test-py310         Run tests on Python 3.10
   test-py311         Run tests on Python 3.11
@@ -104,15 +103,8 @@ run_native_tests() {
 run_tests_matrix() {
     print_info "Running tests across Python versions..."
     docker compose -f docker-compose.yml up --build --abort-on-container-exit \
-        test-py38 test-py39 test-py310 test-py311 test-py312
+        test-py39 test-py310 test-py311 test-py312
     print_success "Matrix tests completed"
-}
-
-# Run Python 3.8 tests
-run_py38_tests() {
-    print_info "Running tests on Python 3.8..."
-    docker compose -f docker-compose.yml up --build --abort-on-container-exit test-py38
-    print_success "Python 3.8 tests completed"
 }
 
 run_py39_tests() {
@@ -215,9 +207,6 @@ test-fast)
     ;;
 test-matrix)
     run_tests_matrix
-    ;;
-test-py38)
-    run_py38_tests
     ;;
 test-py39)
     run_py39_tests

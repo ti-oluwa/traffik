@@ -1,9 +1,10 @@
 """
-*Traffik* - A rate limiting library for `starlette` and `fastapi`.
+*Traffik* - Rate limiting for `starlette` applications.
 """
 
-from traffik._utils import get_ip_address  # noqa
+from traffik.utils import get_ip_address  # noqa
 from traffik.types import UNLIMITED  # noqa
+from traffik.rates import Rate  # noqa
 from traffik.backends.base import (
     ThrottleBackend as ThrottleBackend,
     connection_identifier as connection_identifier,
@@ -17,4 +18,4 @@ from traffik.throttles import (
     WebSocketThrottle as WebSocketThrottle,
 )
 
-__version__ = "0.1.0"
+__version__ = "1.0.0b1"

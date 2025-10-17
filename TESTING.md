@@ -1,4 +1,4 @@
-# Traffik Library - Complete Testing & Docker Guide
+# Traffik Library Testing Guide
 
 This comprehensive guide covers all testing approaches for the Traffik FastAPI throttling library, including Docker-based cross-platform testing and local development options.
 
@@ -70,7 +70,7 @@ The Makefile provides convenient commands for local development:
 
 ```bash
 make test-fast      # Basic tests
-make test m=backends  # All backend tests
+make test m=backends  # All test with the `backends` marker
 make test-coverage  # With coverage analysis
 ```
 
@@ -146,10 +146,10 @@ uv run python -c "import traffik; print('✅ Import successful')"
 uv run pytest tests/backends/ -v
 
 # Throttle mechanism tests
-uv run pytest tests/test_throttles*.py -k "not redis" -v
+uv run pytest tests/*/test_throttles*.py -k "not concurrency" -v
 
 # Decorator tests
-uv run pytest tests/test_decorators.py -v
+uv run pytest tests/*/test_decorators.py -v
 ```
 
 ### With Coverage
@@ -266,28 +266,6 @@ docker --version  # If available
 redis-cli ping    # If Redis installed
 ```
 
-## 📊 Performance Testing
-
-### Benchmarking
-
-```bash
-# Custom performance test
-uv run python -c "
-import asyncio, time
-from traffik.backends.inmemory import InMemoryBackend
-
-async def benchmark():
-    backend = InMemoryBackend()
-    async with backend():
-        start = time.time()
-        for i in range(1000):
-            await backend.get_wait_period(f'key{i}', 10, 60000)
-        print(f'1000 ops: {time.time()-start:.2f}s')
-
-asyncio.run(benchmark())
-"
-```
-
 ## 🔐 Security Testing
 
 ```bash
@@ -333,4 +311,3 @@ After testing:
 3. **Check quality early**: `make quality`
 4. **Test cross-versions**: Use CI or Docker matrix
 5. **Document changes**: Update relevant docs
-

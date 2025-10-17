@@ -1,3 +1,5 @@
+"""Throttle and ASGI middleware for throttling HTTP connections."""
+
 import re
 import typing
 
@@ -6,11 +8,11 @@ from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Receive, Scope, Send
 from typing_extensions import TypeAlias
 
-from traffik._utils import is_async_callable
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import ConfigurationError, build_exception_handler_getter
 from traffik.throttles import BaseThrottle
 from traffik.types import HTTPConnectionT, Matchable
+from traffik.utils import is_async_callable
 
 ThrottleHook: TypeAlias = typing.Callable[[HTTPConnectionT], typing.Awaitable[bool]]
 """
@@ -45,7 +47,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         return connection.headers.get("X-User-Tier") == "premium"
 
     middleware_throttle = MiddlewareThrottle(
-        HTTPThrottle(limit=10, seconds=60),
+        HTTPThrottle(uid="...", rate="10/min"),
         path="/api/",
         methods={"GET", "POST"},
         hook=premium_user_hook,
@@ -151,7 +153,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
         ThrottleMiddleware,
         middleware_throttles=[
             MiddlewareThrottle(
-                HTTPThrottle(limit=10, seconds=60),
+                HTTPThrottle(rate="5/min", uid="..."),
                 path="/api/",
                 methods={"GET", "POST"},
             )
@@ -195,7 +197,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
 
         connection = typing.cast(HTTPConnectionT, HTTPConnection(scope, receive))
         if self.backend is None:
-            backend = get_throttle_backend(connection)
+            backend = get_throttle_backend(connection.app)
             if backend is None:
                 raise ConfigurationError("No throttle backend configured.")
             self.backend = backend
@@ -212,11 +214,13 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
                     # that will be handled if they register an exception handler with
                     # the application. If not, the exception will propagate and the
                     # `ServerErrorMiddleware` will properly handle it.
-                    if self.get_exception_handler is None:
-                        self.get_exception_handler = build_exception_handler_getter(
-                            connection.app
-                        )
-                    handler = self.get_exception_handler(exc)
+                    exc_handler = self.get_exception_handler
+                    if exc_handler is None:
+                        exc_handler = build_exception_handler_getter(connection.app)
+                        # Cache the exception handler getter for future use
+                        self.get_exception_handler = exc_handler  # type: ignore[assignment]
+
+                    handler = exc_handler(exc)
                     if handler is not None:
                         if is_async_callable(handler):
                             response = await handler(connection, exc)

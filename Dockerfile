@@ -38,10 +38,6 @@ ARG PYTHON_VERSION=3.11
 RUN make install-test
 CMD ["make", "test"]
 
-# Native tests stage (tests without external dependencies)
-FROM test as test-native
-CMD ["make", "test-native"]
-
 # Fast tests stage (fast tests only)
 FROM test as test-fast
 CMD ["make", "test-fast"]

@@ -1,8 +1,10 @@
+"""Fixed Window rate limiting strategy implementation."""
+
 from dataclasses import dataclass
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import Stringable
+from traffik.types import Stringable, WaitPeriod
 from traffik.utils import time
 
 
@@ -49,48 +51,52 @@ class FixedWindowStrategy:
 
     ```python
     from traffik.rates import Rate
-    from traffik.strategies import fixed_window_strategy
+    from traffik.strategies import FixedWindowStrategy
 
     # Allow 100 requests per minute
-    rate = Rate.parse("100/1m")
-    wait = await fixed_window_strategy("user:123", rate, backend)
+    rate = Rate.parse("100/m")
+    fixed_window_strategy = FixedWindowStrategy()
+    wait_ms = await fixed_window_strategy("user:123", rate, backend)
 
-    if wait > 0:
-        raise HTTPException(429, f"Rate limited. Retry in {wait}s")
+    if wait_ms > 0:
+        wait_seconds = max(wait_ms / 1000, 1)
+        raise HTTPException(429, f"Rate limited. Retry in {wait_seconds}s")
     ```
-
-    :param key: The throttling key (e.g., user ID, IP address).
-    :param rate: The rate limit definition.
-    :param backend: The throttle backend instance.
-    :return: Wait time in seconds if throttled, 0.0 if allowed.
     """
 
     async def __call__(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend,
-    ) -> float:
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> WaitPeriod:
+        """
+        Apply fixed window rate limiting strategy.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: Wait time in milliseconds if throttled, 0.0 if allowed.
+        """
         if rate.unlimited:
             return 0.0
 
-        now = int(time() * 1000)
-        window_duration_ms = int(rate.expire)
+        now = time() * 1000
+        window_duration_ms = rate.expire
         current_window_start = (now // window_duration_ms) * window_duration_ms
 
         full_key = await backend.get_key(str(key))
         window_key = f"{full_key}:fixedwindow:{current_window_start}"
+        # Add plus one buffer second, just to insure TTL covers the window
+        # Especially important for very short windows
         ttl_seconds = (window_duration_ms // 1000) + 1
 
         async with await backend.lock(
             f"lock:{window_key}", blocking=True, blocking_timeout=1
         ):
             counter = await backend.increment_with_ttl(
-                window_key, amount=1, ttl=ttl_seconds
+                window_key, amount=1, ttl=int(ttl_seconds)
             )
 
         if counter > rate.limit:
             time_in_window = now - current_window_start
             wait_ms = window_duration_ms - time_in_window
-            return max(1.0, wait_ms / 1000.0)
+            return wait_ms
         return 0.0

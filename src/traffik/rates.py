@@ -5,7 +5,7 @@ from annotated_types import Ge
 from typing_extensions import Annotated
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Rate:
     """Rate limit definition"""
 
@@ -76,6 +76,9 @@ class Rate:
         if self.limit == 0 or self.expire == 0:
             return float("inf")
         return self.limit / (self.expire / 86400000)
+
+    def __eq__(self, other: object, /) -> bool:
+        return isinstance(other, Rate) and self.rps == other.rps
 
     @classmethod
     def parse(cls, rate: str) -> "Rate":

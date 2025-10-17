@@ -1,3 +1,5 @@
+"""`traffik` exceptions and exception handling utilities."""
+
 import http
 import typing
 
@@ -24,6 +26,12 @@ class ConfigurationError(TraffikException):
 
 class BackendError(TraffikException):
     """Exception raised for backend related errors."""
+
+    pass
+
+
+class BackendConnectionError(BackendError):
+    """Backend connection error"""
 
     pass
 

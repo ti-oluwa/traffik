@@ -17,7 +17,6 @@ def backend() -> ThrottleBackend:
 
 @pytest.mark.asyncio
 @pytest.mark.backend
-@pytest.mark.native
 async def test_get_key(backend: ThrottleBackend) -> None:
     key1 = await backend.get_key("test_key")
     assert isinstance(key1, str)
@@ -26,7 +25,6 @@ async def test_get_key(backend: ThrottleBackend) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.backend
-@pytest.mark.native
 async def test_context_management(backend: ThrottleBackend) -> None:
     # Test that the context variable is initialized to None
     assert get_throttle_backend() is None
@@ -42,7 +40,6 @@ async def test_context_management(backend: ThrottleBackend) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.backend
-@pytest.mark.native
 async def test_lifespan_management(backend: ThrottleBackend) -> None:
     """Test that backend context is properly managed through application lifespan."""
     app = Starlette()

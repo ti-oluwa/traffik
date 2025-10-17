@@ -1,5 +1,5 @@
 """
-*Traffik* - A rate limiting library for `starlette`.
+*Traffik* - Rate limiting for `starlette` applications.
 """
 
 from traffik.utils import get_ip_address  # noqa
@@ -19,4 +19,4 @@ from traffik.throttles import (
 )
 from traffik.decorators import throttled as throttled
 
-__version__ = "0.1.0"
+__version__ = "1.0.0b1"

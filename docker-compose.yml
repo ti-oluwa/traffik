@@ -15,6 +15,16 @@ services:
       timeout: 5s
       retries: 5
 
+  memcached:
+    image: memcached:1.6-alpine
+    ports:
+      - "11211:11211"
+    healthcheck:
+      test: ["CMD", "echo", "stats", "|", "nc", "localhost", "11211"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # Main (full) test service (Python 3.11)
   test: &test
     build:
@@ -22,6 +32,8 @@ services:
       target: test
     depends_on:
       redis:
+        condition: service_healthy
+      memcached:
         condition: service_healthy
     environment:
       - REDIS_HOST=redis
@@ -49,9 +61,13 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      memcached:
+        condition: service_healthy
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - MEMCACHED_HOST=memcached
+      - MEMCACHED_PORT=11211
     volumes:
       - .:/app
       - /app/.pytest_cache
@@ -64,23 +80,18 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      memcached:
+        condition: service_healthy
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - MEMCACHED_HOST=memcached
+      - MEMCACHED_PORT=11211
     volumes:
       - .:/app:delegated
       - /app/.pytest_cache
     command: |
       bash -c "make test-watch"
-
-  # Python 3.8 testing
-  test-py38:
-    <<: *test
-    build:
-      context: .
-      target: test
-      args:
-        PYTHON_VERSION: "3.8"  # override python version
 
   # Python 3.9 testing
   test-py39:
@@ -117,6 +128,15 @@ services:
       target: test
       args:
         PYTHON_VERSION: "3.12"
+
+  # Python 3.13 testing
+  test-py313:
+    <<: *test
+    build:
+      context: .
+      target: test
+      args:
+        PYTHON_VERSION: "3.13"
 
   # Development environment
   dev: &dev
@@ -159,9 +179,13 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      memcached:
+        condition: service_healthy
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - MEMCACHED_HOST=memcached
+      - MEMCACHED_PORT=11211
     volumes:
       - .:/app
       - /app/.pytest_cache
@@ -178,9 +202,13 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      memcached:
+        condition: service_healthy
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - MEMCACHED_HOST=memcached
+      - MEMCACHED_PORT=11211
     volumes:
       - .:/app
       - /app/.pytest_cache
@@ -190,3 +218,4 @@ services:
 
 volumes:
   redis_data:
+

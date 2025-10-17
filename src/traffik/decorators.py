@@ -1,3 +1,5 @@
+"""Throttle decorators. FastAPI only."""
+
 import asyncio
 import functools
 import inspect
@@ -6,9 +8,9 @@ import typing
 from fastapi.params import Depends
 from typing_extensions import Annotated
 
-from traffik.utils import add_parameter_to_signature
 from traffik.throttles import BaseThrottle
 from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S
+from traffik.utils import add_parameter_to_signature
 
 ThrottleT = typing.TypeVar("ThrottleT", bound=BaseThrottle)
 

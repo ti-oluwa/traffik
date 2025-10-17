@@ -1,10 +1,12 @@
+"""Leaky Bucket rate limiting strategies."""
+
 from dataclasses import dataclass
-import json
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import Stringable
-from traffik.utils import time
+from traffik.types import Stringable, WaitPeriod
+from traffik.utils import time, dump_json, load_json, JSONDecodeError
+
 
 __all__ = ["LeakyBucketStrategy", "LeakyBucketWithQueueStrategy"]
 
@@ -55,34 +57,35 @@ class LeakyBucketStrategy:
 
     # Smooth traffic: 100 requests per minute, no bursts
     rate = Rate.parse("100/1m")
-    wait = await leaky_bucket_strategy("user:123", rate, backend)
+    wait_ms = await leaky_bucket_strategy("user:123", rate, backend)
 
-    if wait > 0:
+    if wait_ms > 0:
+        wait_seconds = max(wait_ms / 1000, 1)
         # Bucket is full, must wait
-        raise HTTPException(429, f"Rate limited. Retry in {wait}s")
+        raise HTTPException(429, f"Rate limited. Retry in {wait_seconds}s")
     ```
-
-    :param key: The throttling key (e.g., user ID, IP address).
-    :param rate: The rate limit definition.
-    :param backend: The throttle backend instance.
-    :return: Wait time in seconds if throttled, 0.0 if allowed.
     """
 
     async def __call__(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend,
-    ) -> float:
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> WaitPeriod:
+        """
+        Apply leaky bucket rate limiting strategy.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: Wait time in milliseconds if throttled, 0.0 if allowed.
+        """
         if rate.unlimited:
             return 0.0
 
-        now = int(time() * 1000)
+        now = time() * 1000
         full_key = await backend.get_key(str(key))
         state_key = f"{full_key}:leakybucket:state"
 
         leak_rate = rate.limit / rate.expire
-        expire_seconds = int(rate.expire / 1000 * 2)
+        expire_seconds = int(rate.expire / 1000) * 2  # 2x window duration for safety
 
         async with await backend.lock(
             f"lock:{state_key}", blocking=True, blocking_timeout=1
@@ -91,18 +94,18 @@ class LeakyBucketStrategy:
             if old_state_json is None or old_state_json == "":
                 new_state = {"level": 1.0, "last_leak": now}
                 await backend.set(
-                    state_key, json.dumps(new_state), expire=expire_seconds
+                    state_key, dump_json(new_state), expire=expire_seconds
                 )
                 return 0.0
 
             try:
-                state = json.loads(old_state_json)
+                state = load_json(old_state_json)
                 level = float(state["level"])
                 last_leak_time = int(state["last_leak"])
-            except (json.JSONDecodeError, KeyError, ValueError):
+            except (JSONDecodeError, KeyError, ValueError):
                 new_state = {"level": 1.0, "last_leak": now}
                 await backend.set(
-                    state_key, json.dumps(new_state), expire=expire_seconds
+                    state_key, dump_json(new_state), expire=expire_seconds
                 )
                 return 0.0
 
@@ -112,13 +115,12 @@ class LeakyBucketStrategy:
 
             if level >= rate.limit:
                 await backend.set(state_key, old_state_json, expire=expire_seconds)
-                wait_needed = (level - rate.limit + 1) / leak_rate
-                wait_seconds = int(wait_needed / 1000) + 1
-                return float(wait_seconds)
+                wait_ms = (level - rate.limit + 1) / leak_rate
+                return wait_ms
 
             level += 1.0
             new_state = {"level": level, "last_leak": now}
-            await backend.set(state_key, json.dumps(new_state), expire=expire_seconds)
+            await backend.set(state_key, dump_json(new_state), expire=expire_seconds)
             return 0.0
 
 
@@ -169,34 +171,35 @@ class LeakyBucketWithQueueStrategy:
 
     # Strict FIFO processing: 100 requests per minute
     rate = Rate.parse("100/1m")
-    wait = await leaky_bucket_with_queue_strategy("user:123", rate, backend)
+    wait_ms = await leaky_bucket_with_queue_strategy("user:123", rate, backend)
 
-    if wait > 0:
+    if wait_ms > 0:
+        wait_seconds = max(wait_ms / 1000, 1)
         # Queue is full, requests processed in order
-        raise HTTPException(429, f"Queue full. Retry in {wait}s")
+        raise HTTPException(429, f"Queue full. Retry in {wait_seconds}s")
     ```
-
-    :param key: The throttling key (e.g., user ID, IP address).
-    :param rate: The rate limit definition.
-    :param backend: The throttle backend instance.
-    :return: Wait time in seconds if throttled, 0.0 if allowed.
     """
 
     async def __call__(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend,
-    ) -> float:
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> WaitPeriod:
+        """
+        Apply leaky bucket with queue rate limiting strategy.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: Wait time in milliseconds if throttled, 0.0 if allowed.
+        """
         if rate.unlimited:
             return 0.0
 
-        now = int(time() * 1000)
+        now = time() * 1000
         full_key = await backend.get_key(str(key))
         state_key = f"{full_key}:leakybucketqueue:state"
 
         leak_rate = rate.limit / rate.expire
-        expire_seconds = int(rate.expire / 1000 * 2)
+        expire_seconds = int(rate.expire / 1000) * 2  # 2x window duration for safety
 
         async with await backend.lock(
             f"lock:{state_key}", blocking=True, blocking_timeout=1
@@ -205,18 +208,18 @@ class LeakyBucketWithQueueStrategy:
             if old_state_json is None or old_state_json == "":
                 new_state = {"queue": [now], "last_leak": now}
                 await backend.set(
-                    state_key, json.dumps(new_state), expire=expire_seconds
+                    state_key, dump_json(new_state), expire=expire_seconds
                 )
                 return 0.0
 
             try:
-                state = json.loads(old_state_json)
-                queue = [int(ts) for ts in state["queue"]]
-                last_leak_time = int(state["last_leak"])
-            except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                state = load_json(old_state_json)
+                queue = [float(ts) for ts in state["queue"]]
+                last_leak_time = float(state["last_leak"])
+            except (JSONDecodeError, KeyError, ValueError, TypeError):
                 new_state = {"queue": [now], "last_leak": now}
                 await backend.set(
-                    state_key, json.dumps(new_state), expire=expire_seconds
+                    state_key, dump_json(new_state), expire=expire_seconds
                 )
                 return 0.0
 
@@ -231,9 +234,10 @@ class LeakyBucketWithQueueStrategy:
                 oldest_request = queue[0]
                 time_since_oldest = now - oldest_request
                 time_until_leak = rate.expire - time_since_oldest
-                return max(1.0, float(int(time_until_leak / 1000) + 1))
+                wait_ms = time_until_leak + 1000.0  # Add 1 second buffer
+                return wait_ms
 
             queue.append(now)
             new_state = {"queue": queue, "last_leak": last_leak_time}
-            await backend.set(state_key, json.dumps(new_state), expire=expire_seconds)
+            await backend.set(state_key, dump_json(new_state), expire=expire_seconds)
             return 0.0

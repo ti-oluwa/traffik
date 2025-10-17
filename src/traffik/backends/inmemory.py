@@ -1,9 +1,15 @@
+"""
+In-memory implementation of a throttle backend using an `OrderedDict` for storage.
+
+NOTE: This is NOT suitable for multi-process or distributed setups.
+"""
+
 import asyncio
 from collections import OrderedDict
 import typing
 
 from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import BackendError
+from traffik.exceptions import BackendConnectionError
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -14,6 +20,8 @@ from traffik.utils import AsyncRLock, time
 
 class AsyncInMemoryLock:
     """Lock for in-memory backend."""
+
+    __slots__ = "_lock"
 
     def __init__(self) -> None:
         self._lock = AsyncRLock()
@@ -30,29 +38,58 @@ class AsyncInMemoryLock:
         Acquire the lock.
 
         :param blocking: If False, return immediately if the lock is held.
-        :param blocking_timeout: Max time (seconds) to wait if blocking is True.
+        :param blocking_timeout: Max time (seconds) to wait if blocking is True (Not supported).
         :return: True if the lock was acquired, False otherwise.
         """
         if not blocking:
+            current_task = asyncio.current_task()
             # Non-blocking. Try to acquire immediately
-            # Use asyncio.Lock's locked() in `AsyncRLock` instance which is atomic
-            if (
-                self._lock._lock.locked()
-                and self._lock._owner != asyncio.current_task()
-            ):
+            if self._lock.locked() and not self._lock.is_owner(task=current_task):
                 return False
             return await self._lock.acquire()
 
-        if blocking_timeout is None:
-            # Normal blocking acquire (no timeout)
-            return await self._lock.acquire()
+        return await self._lock.acquire()
 
-        try:
-            # Blocking with timeout
-            await asyncio.wait_for(self._lock.acquire(), timeout=blocking_timeout)
-            return True
-        except asyncio.TimeoutError:
-            return False
+        # This segment has issues
+        # if blocking_timeout is None:
+        #     # Normal blocking acquire (no timeout)
+        #     return await self._lock.acquire()
+
+        # # Check if this is a reentrant acquisition
+        # current_task = asyncio.current_task()
+        # if self._lock.is_owner(task=current_task):
+        #     # Acquire lock without timeout to avoid cancellation issues
+        #     return await self._lock.acquire()
+
+        # # Blocking with timeout. Can't use `asyncio.wait_for` as `AsyncRLock.acquire()`
+        # # cancellation on timeout leads to a corrupted state in the lock.
+        # # Hence we use a separate timeout task.
+        # acquire_task = asyncio.create_task(self._lock.acquire())
+        # timeout_task = asyncio.create_task(asyncio.sleep(blocking_timeout))
+
+        # done, _ = await asyncio.wait(
+        #     {acquire_task, timeout_task}, return_when=asyncio.FIRST_COMPLETED
+        # )
+        # if acquire_task in done:
+        #     # Lock acquired successfully
+        #     timeout_task.cancel()
+        #     try:
+        #         await timeout_task
+        #     except asyncio.CancelledError:
+        #         pass
+        #     return True
+
+        # # Timeout occurred. Cancel the acquire task
+        # acquire_task.cancel()
+        # try:
+        #     await acquire_task
+        # except asyncio.CancelledError:
+        #     # Lock acquisition was cancelled, but it might have succeeded
+        #     # just before cancellation. Check if we got it.
+        #     if self._lock.is_owner(task=current_task):
+        #         # We got the lock right before timeout, we keep it
+        #         return True
+        # return False
 
     async def release(self) -> None:
         """Release the lock."""
@@ -61,11 +98,9 @@ class AsyncInMemoryLock:
 
 class InMemoryBackend(
     ThrottleBackend[
-        typing.Optional[
-            typing.MutableMapping[
-                str,
-                typing.Tuple[str, typing.Optional[float]],
-            ]
+        typing.MutableMapping[
+            str,
+            typing.Tuple[str, typing.Optional[float]],
         ],
         HTTPConnectionT,
     ]
@@ -81,6 +116,7 @@ class InMemoryBackend(
     Warning: Only use for testing or single-process applications.
     Does not work across multiple processes/servers.
     """
+
     wrap_methods = ("clear",)
 
     def __init__(
@@ -141,14 +177,16 @@ class InMemoryBackend(
     async def get(self, key: str) -> typing.Optional[str]:
         """Get value by key."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         async with self._global_lock:
             await self._cleanup_expired()
             entry = self.connection.get(key)
             if entry is None:
                 return None
-            
+
             value, expires_at = entry
             # Check if expired
             if expires_at is not None and expires_at < time():
@@ -161,7 +199,9 @@ class InMemoryBackend(
     ) -> None:
         """Set value by key."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         async with self._global_lock:
             expires_at = None
@@ -172,7 +212,9 @@ class InMemoryBackend(
     async def delete(self, key: str) -> bool:
         """Delete key if exists."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         async with self._global_lock:
             if key in self.connection:
@@ -189,7 +231,9 @@ class InMemoryBackend(
         :return: New value after increment
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         async with self._global_lock:
             await self._cleanup_expired()
@@ -228,7 +272,9 @@ class InMemoryBackend(
         :return: True if expiration was set, False if key doesn't exist
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         async with self._global_lock:
             entry = self.connection.get(key)
@@ -251,7 +297,9 @@ class InMemoryBackend(
         :return: New value after increment
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         async with self._global_lock:
             await self._cleanup_expired()
@@ -297,7 +345,9 @@ class InMemoryBackend(
         :return: List of values (None for missing keys), same order as keys
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         if not keys:
             return []
@@ -306,7 +356,7 @@ class InMemoryBackend(
             await self._cleanup_expired()
 
             now = time()
-            results = []
+            results: typing.List[typing.Optional[str]] = []
 
             for key in keys:
                 entry = self.connection.get(key)
@@ -342,8 +392,7 @@ class InMemoryBackend(
         async with self._global_lock:
             if self.connection is not None:
                 self.connection.clear()
-            self.connection = None
 
     async def close(self) -> None:
-        """Close the backend (no-op for in-memory)."""
-        pass
+        """Close the backend."""
+        self.connection = None

@@ -1,12 +1,14 @@
+"""Redis implementation of the throttle backend using `redis.asyncio`."""
 import asyncio
 import contextvars
 import typing
+from typing_extensions import TypeAlias
 
 import redis.asyncio as aioredis
 from pottery import AIORedlock
 
 from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import BackendError
+from traffik.exceptions import BackendError, BackendConnectionError
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -109,6 +111,8 @@ class AsyncRedisLock:
             else:
                 return False
 
+        except asyncio.CancelledError:
+            raise
         except (asyncio.TimeoutError, Exception):
             # Any exception during acquisition means we didn't get the lock
             return False
@@ -135,6 +139,8 @@ class AsyncRedisLock:
         # Fully release the lock
         try:
             await lock_obj.release()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             # Lock might have expired or been released already
             pass
@@ -149,6 +155,9 @@ class AsyncRedisLock:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.release()
+
+
+ConnectionGetter: TypeAlias = typing.Callable[[], typing.Awaitable[aioredis.Redis]]
 
 
 class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
@@ -185,7 +194,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
 
     def __init__(
         self,
-        connection: aioredis.Redis,
+        connection: typing.Union[str, ConnectionGetter],
         *,
         namespace: str,
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
@@ -194,8 +203,17 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         ] = None,
         persistent: bool = False,
     ) -> None:
+        if isinstance(connection, str):
+
+            async def _getter():
+                return await aioredis.from_url(connection, decode_responses=False)
+
+            self._get_connection = _getter
+        else:
+            self._get_connection = connection
+
         super().__init__(
-            connection,
+            None,
             namespace=namespace,
             identifier=identifier,
             handle_throttled=handle_throttled,
@@ -207,24 +225,27 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     async def initialize(self) -> None:
         """Ensure the Redis connection is ready and register Lua scripts."""
         if self.connection is None:
-            raise BackendError("Redis connection not provided")
-
-        await self.connection.ping()
-        # Register the increment_with_ttl Lua script
-        self._increment_with_ttl_sha = await self.connection.script_load(
-            self._INCREMENT_WITH_TTL_SCRIPT
-        )
+            self.connection = await self._get_connection()
+            await self.connection.ping()
+            # Register the increment_with_ttl Lua script
+            self._increment_with_ttl_sha = await self.connection.script_load(
+                self._INCREMENT_WITH_TTL_SCRIPT
+            )
 
     async def get_lock(self, name: str) -> AsyncRedisLock:
         """Returns a distributed Redis lock for the given name."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
         return AsyncRedisLock(name, redis=self.connection, blocking_timeout=10.0)
 
     async def get(self, key: str) -> typing.Optional[str]:
         """Get value by key."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         value = await self.connection.get(key)
         if value is None:
@@ -236,7 +257,9 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     ) -> None:
         """Set value by key with optional expiration."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         if expire is not None:
             await self.connection.set(key, value, ex=expire)
@@ -246,7 +269,9 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     async def delete(self, key: str) -> bool:
         """Delete key."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         deleted_count = await self.connection.delete(key)
         return deleted_count > 0
@@ -254,7 +279,9 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     async def increment(self, key: str, amount: int = 1) -> int:
         """Atomically increment using Redis INCR/INCRBY."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         if amount == 1:
             return await self.connection.incr(key)
@@ -263,7 +290,9 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     async def decrement(self, key: str, amount: int = 1) -> int:
         """Atomically decrement using Redis DECR/DECRBY."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         if amount == 1:
             return await self.connection.decr(key)
@@ -272,7 +301,9 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     async def expire(self, key: str, seconds: int) -> bool:
         """Set expiration using Redis EXPIRE."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         result = await self.connection.expire(key, seconds)
         return bool(result)
@@ -294,7 +325,9 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         :return: New value after increment
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         if self._increment_with_ttl_sha is None:
             raise BackendError("Lua script not registered. Call initialize() first.")
@@ -336,13 +369,15 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         MGET is atomic in Redis - all values are retrieved at the same instant.
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         if not keys:
             return []
 
         values = await self.connection.mget(keys)
-        result = []
+        result: typing.List[typing.Optional[str]] = []
         for value in values:
             if value is None:
                 result.append(None)
@@ -355,7 +390,9 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     async def clear(self) -> None:
         """Clear all keys in the namespace."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         keys = await self.connection.keys(f"{self.namespace}:*")
         if not keys:
@@ -370,3 +407,4 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         """Close the Redis connection."""
         if self.connection is not None:
             await self.connection.aclose()
+            self.connection = None

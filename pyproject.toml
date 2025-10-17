@@ -1,7 +1,7 @@
 [project]
 name = "traffik"
-version = "0.1.0"
-description = "A Starlette throttling library"
+version = "1.0.0b1"
+description = "Distributed rate limiting for Starlette applications."
 readme = "README.md"
 authors = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
@@ -10,7 +10,7 @@ maintainers = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
 ]
 license = { file = "LICENSE" }
-keywords = ["starlette", "fastapi", "throttling", "rate-limiting", "api"]
+keywords = ["starlette", "fastapi", "throttling", "rate-limiting", "api", "distributed-rate-limiting"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Framework :: FastAPI",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -55,6 +56,7 @@ test = [
 dev = [
     "bandit>=1.7.10",
     "mypy>=1.14.1",
+    "orjson>=3.11.3",
     "pytest-watch>=4.2.0",
     "ruff>=0.12.1",
     "traffik[test]",
@@ -84,13 +86,13 @@ markers = [
     "backend: tests that test a throttle backend",
     "throttle: tests that test throttling functionality",
     "redis: Redis related tests",
-    "memcached: Memcached related tests",
-    "native: tests that use native Starlette/ASGI features, no external dependencies",
+    "memcached: tests that require Memcached access",
     "fastapi: tests that are specific to FastAPI",
     "websocket: tests that involve WebSocket functionality",
     "decorator: tests that test decorator functionality",
     "concurrent: tests that test concurrent/parallel behavior",
     "middleware: tests that test middleware functionality",
+    "multithreaded: test that test multithreading functionality",
 ]
 
 [tool.coverage.run]
@@ -103,5 +105,5 @@ show_missing = true
 
 [tool.ruff]
 line-length = 88
-target-version = "py38"
+target-version = "py39"
 lint.extend-select = ["I", "UP", "TID", "F"]

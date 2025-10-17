@@ -14,7 +14,7 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from tests.asyncio_client import AsyncioTestClient
-from tests.conftest import BackendsGen
+from tests.conftest import BackendGen
 from tests.utils import default_client_identifier, unlimited_identifier
 from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
@@ -24,20 +24,16 @@ from traffik.throttles import BaseThrottle, HTTPThrottle, WebSocketThrottle
 
 @pytest.mark.asyncio
 @pytest.mark.throttle
-@pytest.mark.native
 async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> None:
     with pytest.raises(ValueError):
         BaseThrottle("test-init-1", rate=Rate(limit=-1))
 
-    async def _throttle_handler(
-        connection: Request,
-        wait_period: int,
-    ) -> None:
+    async def _throttle_handler(connection: Request, wait_ms: float) -> None:
         # do nothing, just a placeholder for testing
         return
 
     # Test initialization behaviour
-    async with inmemory_backend():
+    async with inmemory_backend(close_on_exit=True):
         throttle = BaseThrottle(
             "test-init-2",
             rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
@@ -52,8 +48,7 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
 
 
 @pytest.mark.throttle
-@pytest.mark.native
-def test_throttle_with_app_lifespan(inmemory_backend: InMemoryBackend) -> None:
+def test_throttle_with_lifespan(inmemory_backend: InMemoryBackend) -> None:
     throttle = HTTPThrottle(
         "test-throttle-app-lifespan",
         rate="2/s",
@@ -64,9 +59,7 @@ def test_throttle_with_app_lifespan(inmemory_backend: InMemoryBackend) -> None:
         await throttle(request)
         return JSONResponse({"message": "PONG"})
 
-    routes = [
-        Route("/", ping_endpoint, methods=["GET"]),
-    ]
+    routes = [Route("/", ping_endpoint, methods=["GET"])]
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
 
     base_url = "http://0.0.0.0"
@@ -88,8 +81,7 @@ def test_throttle_with_app_lifespan(inmemory_backend: InMemoryBackend) -> None:
 
 
 @pytest.mark.throttle
-@pytest.mark.native
-def test_throttle_exemption_withunlimited_identifier(
+def test_throttle_exemption_with_unlimited_identifier(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     throttle = HTTPThrottle(
@@ -127,10 +119,9 @@ def test_throttle_exemption_withunlimited_identifier(
 
 @pytest.mark.anyio
 @pytest.mark.throttle
-@pytest.mark.native
-async def test_http_throttle(backends: BackendsGen) -> None:
-    for backend in backends(persistent=False, namespace="http-throttle-test"):
-        async with backend():
+async def test_http_throttle(backends: BackendGen) -> None:
+    for backend in backends(persistent=False, namespace="http_throttle_test"):
+        async with backend(close_on_exit=True):
             throttle = HTTPThrottle(
                 "test-http-throttle",
                 rate="3/3005ms",
@@ -171,14 +162,13 @@ async def test_http_throttle(backends: BackendsGen) -> None:
 @pytest.mark.anyio
 @pytest.mark.throttle
 @pytest.mark.concurrent
-@pytest.mark.native
-async def test_http_throttle_concurrent(backends: BackendsGen) -> None:
-    for backend in backends(persistent=False, namespace="http-throttle-concurrent"):
-        async with backend():
+async def test_http_throttle_concurrent(backends: BackendGen) -> None:
+    for backend in backends(persistent=False, namespace="http_throttle_concurrent"):
+        async with backend(close_on_exit=True):
             throttle = HTTPThrottle(
                 "http-throttle-concurrent",
                 rate="3/s",
-                strategy=strategies.TokenBucketStrategy()
+                strategy=strategies.TokenBucketStrategy(),
             )
 
             async def ping_endpoint(request: Request) -> JSONResponse:
@@ -209,10 +199,9 @@ async def test_http_throttle_concurrent(backends: BackendsGen) -> None:
 @pytest.mark.asyncio
 @pytest.mark.throttle
 @pytest.mark.websocket
-@pytest.mark.native
-async def test_websocket_throttle(backends: BackendsGen) -> None:
-    for backend in backends(persistent=False, namespace="ws-throttle-test"):
-        async with backend():
+async def test_websocket_throttle(backends: BackendGen) -> None:
+    for backend in backends(persistent=False, namespace="ws_throttle_test"):
+        async with backend(close_on_exit=True):
             throttle = WebSocketThrottle(
                 "test-websocket-throttle-inmemory",
                 rate="3/5005ms",

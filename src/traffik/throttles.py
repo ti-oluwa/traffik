@@ -1,12 +1,14 @@
+"""Throttles for HTTP and WebSocket connections."""
+
 import hashlib
-import typing
 import logging
+import typing
 
 from starlette.requests import Request
 from starlette.websockets import WebSocket
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import ConfigurationError, LockTimeoutError, TraffikException
+from traffik.exceptions import ConfigurationError, TraffikException
 from traffik.rates import Rate
 from traffik.strategies import default_strategy
 from traffik.types import (
@@ -15,6 +17,7 @@ from traffik.types import (
     HTTPConnectionT,
     Stringable,
     UNLIMITED,
+    WaitPeriod,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,7 +26,8 @@ logger = logging.getLogger(__name__)
 __all__ = ["BaseThrottle", "HTTPThrottle", "WebSocketThrottle"]
 
 ThrottleStrategy = typing.Callable[
-    [Stringable, Rate, ThrottleBackend], typing.Awaitable[float]
+    [Stringable, Rate, ThrottleBackend[typing.Any, HTTPConnectionT]],
+    typing.Awaitable[WaitPeriod],
 ]
 """
 A callable that implements a throttling strategy.
@@ -47,6 +51,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]] = None,
         dynamic_backend: bool = False,
         min_wait_period: typing.Optional[int] = None,
+        headers: typing.Optional[typing.Mapping[str, str]] = None,
     ) -> None:
         """
         Initialize the throttle.
@@ -144,7 +149,9 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
 
             For most use cases, explicit backend configuration is simpler and more efficient.
 
-        :param min_wait_period: The minimum allowable wait period for a throttled connection.
+        :param min_wait_period: The minimum allowable wait period (in milliseconds) for a throttled connection.
+        :param headers: Optional headers to include in throttling responses. A use case can
+            be to include additional throttle/throttling information in the response headers.
         """
         if not uid or not isinstance(uid, str):
             raise ValueError("uid is required and must be a non-empty string")
@@ -159,6 +166,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         self.dynamic_backend = dynamic_backend
         self.strategy = strategy or default_strategy
         self.min_wait_period = min_wait_period
+        self.headers = dict(headers or {})
 
         # Only set backend for non-dynamic throttles
         if not dynamic_backend:
@@ -210,7 +218,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             if not self.dynamic_backend:
                 self.backend = backend
         else:
-            backend = self.backend
+            backend = self.backend # type: ignore[assignment]
 
         identifier = self.identifier or backend.identifier
         if (connection_id := await identifier(connection)) is UNLIMITED:
@@ -219,19 +227,20 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         base_key = await self.get_key(connection, *args, **kwargs)
         throttle_key = f"{self.uid}:{str(connection_id)}:{base_key}"
         try:
-            wait_period = await self.strategy(throttle_key, self.rate, backend)
+            wait_ms = await self.strategy(throttle_key, self.rate, backend)
         except TimeoutError as exc:
             logging.warning(
                 f"An error occured while utilizing strategy '{self.strategy!r}': {exc}",
             )
-            wait_period = self.min_wait_period or 1.0
+            wait_ms = self.min_wait_period or 1000  # Default to 1000ms
 
         if self.min_wait_period is not None:
-            wait_period = max(wait_period, self.min_wait_period)
+            wait_ms = max(wait_ms, self.min_wait_period)
 
-        if wait_period != 0:
+        if wait_ms != 0:
             handle_throttled = self.handle_throttled or backend.handle_throttled
-            await handle_throttled(connection, int(wait_period), *args, **kwargs)
+            kwargs.setdefault("headers", self.headers)
+            await handle_throttled(connection, wait_ms, *args, **kwargs)
         return connection
 
     async def get_key(

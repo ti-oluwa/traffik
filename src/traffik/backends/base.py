@@ -1,11 +1,13 @@
+"""Base classes and utilities for throttle backends."""
+
 import asyncio
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
 import functools
 import hashlib
+import inspect
 import math
 import typing
-import inspect
 
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
@@ -33,17 +35,24 @@ async def connection_identifier(connection: HTTPConnection) -> str:
 
 
 async def connection_throttled(
-    connection: HTTPConnection, wait_period: WaitPeriod, *args, **kwargs
+    connection: HTTPConnection, wait_ms: WaitPeriod, *args, **kwargs
 ) -> typing.NoReturn:
     """
     Handler for throttled HTTP connections
 
     :param connection: The HTTP connection
-    :param wait_period: The wait period in milliseconds before the next connection can be made
+    :param wait_ms: The wait period in milliseconds before the next connection can be made
     :return: None
     """
-    wait_seconds = math.ceil(wait_period / 1000)
-    raise ConnectionThrottled(wait_period=wait_seconds)
+    wait_seconds = math.ceil(wait_ms / 1000)
+    raise ConnectionThrottled(
+        wait_period=wait_seconds,
+        detail=kwargs.get(
+            "detail", f"Too many requests. Retry in {wait_seconds} seconds."
+        ),
+        status_code=kwargs.get("status_code", 429),
+        headers=kwargs.get("headers", None),
+    )
 
 
 throttle_backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVar(
@@ -72,18 +81,27 @@ def _raises_error(
         # Already wrapped
         return func
 
+    wrapper: typing.Union[
+        typing.Callable[P, R], typing.Callable[P, typing.Awaitable[R]]
+    ]
     if inspect.iscoroutinefunction(func):
 
-        async def _wrapper(*args: P.args, **kwargs: P.kwargs) -> R:  # type: ignore[no-redefined]
+        async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:  # type: ignore[no-redefined]
             try:
                 return await func(*args, **kwargs)
             except asyncio.CancelledError:
                 raise
             except target_exc_type as exc:
-                raise BackendError("Error occurred in backend operation") from exc
+                if isinstance(exc, BackendError):
+                    raise
+                raise BackendError(
+                    f"Error occurred in backend operation. {exc}"
+                ) from exc
+
+        wrapper = async_wrapper
     else:
 
-        def _wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             try:
                 return func(*args, **kwargs)
             except asyncio.CancelledError:
@@ -91,10 +109,14 @@ def _raises_error(
             except target_exc_type as exc:
                 if isinstance(exc, BackendError):
                     raise
-                raise BackendError("Error occurred in backend operation") from exc
+                raise BackendError(
+                    f"Error occurred in backend operation. {exc}"
+                ) from exc
 
-    _wrapper._error_wrapped_ = True  # type: ignore
-    return functools.update_wrapper(_wrapper, func)  # type: ignore
+        wrapper = sync_wrapper
+
+    wrapper._error_wrapped_ = True  # type: ignore
+    return functools.update_wrapper(wrapper, func)  # type: ignore
 
 
 class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
@@ -121,7 +143,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     """
     The base exception type that backend operations may raise.
 
-    This is used to wrap backend methods to (re)raise `traffik.exceptions.BackendError`
+    This is used to wrap backend methods to re-raise exceptions as `traffik.exceptions.BackendError`
     """
     _default_wrap_methods: typing.ClassVar[typing.Tuple[str, ...]] = (
         "initialize",
@@ -161,7 +183,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
     def __init__(
         self,
-        connection: T,
+        connection: typing.Optional[T],
         *,
         namespace: str,
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
@@ -248,7 +270,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     async def lock(
         self,
         name: str,
-        release_timeout: typing.Optional[int] = None,
+        release_timeout: typing.Optional[float] = None,
         blocking: bool = True,
         blocking_timeout: typing.Optional[float] = None,
     ) -> AsyncLockContext[AsyncLock]:
@@ -257,7 +279,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
         :param name: The name of the lock.
         :param release_timeout: Lock timeout in seconds. If the lock is not released within this time, it will be automatically released.
-        :param blocking: If False, do not wait for the lock if it's already held.
+        :param blocking: If False, do not wait for the lock if it's already held, raise a timeout error instead.
         :param blocking_timeout: Maximum time in seconds to wait for the lock if blocking is True. None means wait indefinitely.
         :return: An asynchronous context manager that acquires/releases the lock.
         """
@@ -273,8 +295,6 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     async def reset(self) -> None:
         """
         Atomic reset of all throttling data for this backend.
-
-        Call `initialize()` to continue using the backend after this method has been called.
         """
         raise NotImplementedError("`reset()` must be implemented by the backend.")
 
@@ -373,6 +393,8 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         Close the backend connection and perform cleanup.
 
+        This should always set `connection` to None.
+
         Override this to close connections, flush buffers, etc.
         """
         pass
@@ -394,10 +416,19 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         Create a throttle context for the backend.
 
+        **Warning!!!**: Avoid nesting a non-persistent context inside a persistent context from the
+        same backend. This could lead to unexpected behaviour and data losss due to nested non-persistence.
+
         :param app: The ASGI application to assign the backend to.
         :param persistent: Whether to keep the backend state across application restarts.
             This overrides the backend's persistent setting if set.
+            If None, for non-nested contexts, the backend's persistence settings is used.
+            For nested contexts, context is persistent if outer context's backend
+            is the same as this context's backend.
+            This is so the inner context does not clear the outer context's data unintentionally.
+
         :param close_on_exit: Whether to close the backend when exiting the context.
+            If None, context will auto-close on exit, except if nested within another context.
         :return: A context manager for the throttle backend.
         """
         if app is not None:
@@ -405,16 +436,30 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             app.state = getattr(app, "state", {})  # type: ignore
             setattr(app.state, BACKEND_STATE_KEY, self)  # type: ignore
 
+        parent_backend = get_throttle_backend(app)
+        is_inner_context = parent_backend is not None
+
+        if persistent is not None:
+            context_persistence = persistent
+
+        # For non-nested contexts, use the backend's persistence settings.
+        # For nested contexts, context is persistent if outer context's backend
+        # is the same as this context's backend.
+        # This is so the inner context does not clear the outer context's data unintentionally.
+        elif is_inner_context is False or parent_backend is not self:
+            context_persistence = self.persistent
+        else:
+            context_persistence = True
+
+        if close_on_exit is not None:
+            context_close_on_exit = close_on_exit
+        else:
+            # Context should not close on exit if it is nested inside another context
+            context_close_on_exit = is_inner_context is False
         return ThrottleContext(
             backend=self,
-            persistent=persistent if persistent is not None else self.persistent,
-            close_on_exit=close_on_exit
-            if close_on_exit is not None
-            else (
-                get_throttle_backend() is self
-                if app is None
-                else get_throttle_backend(app) is self
-            ),
+            persistent=context_persistence,
+            close_on_exit=context_close_on_exit,
         )
 
 
@@ -455,7 +500,6 @@ class ThrottleContext(typing.Generic[ThrottleBackendTco]):
 
         backend = self.backend
         if not self.persistent:
-            # Reset the backend if not persistent
             await backend.reset()
 
         if self.close_on_exit:

@@ -1,5 +1,7 @@
+"""Type definitions and protocols for the traffik package."""
+
 import typing
-import types
+
 from starlette.requests import HTTPConnection
 from starlette.responses import Response
 from typing_extensions import ParamSpec, TypeAlias
@@ -26,7 +28,7 @@ HTTPConnectionT = typing.TypeVar("HTTPConnectionT", bound=HTTPConnection)
 HTTPConnectionTcon = typing.TypeVar(
     "HTTPConnectionTcon", bound=HTTPConnection, contravariant=True
 )
-WaitPeriod: TypeAlias = int
+WaitPeriod: TypeAlias = float
 
 Matchable: TypeAlias = typing.Union[str, typing.Pattern[str]]
 """A type alias for a matchable path, which can be a string or a compiled regex pattern."""
@@ -61,11 +63,17 @@ class ConnectionThrottledHandler(typing.Protocol, typing.Generic[HTTPConnectionT
     async def __call__(
         self,
         connection: HTTPConnectionTcon,
-        wait_period: WaitPeriod,
+        wait_ms: WaitPeriod,
         *args: typing.Any,
         **kwargs: typing.Any,
     ) -> typing.Any:
-        """Handle a throttled connection."""
+        """
+        Handle a throttled connection.
+
+        :param connection: The HTTP connection that was throttled.
+        :param wait_ms: The wait time in milliseconds before the next allowed request.
+        :return: A response or action to take when throttled.
+        """
         ...
 
 

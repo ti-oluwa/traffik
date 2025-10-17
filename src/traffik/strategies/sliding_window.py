@@ -1,11 +1,12 @@
+"""Sliding Window Rate Limiting Strategies"""
+
 from dataclasses import dataclass
-import json
 import typing
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import Stringable
-from traffik.utils import time
+from traffik.types import Stringable, WaitPeriod
+from traffik.utils import JSONDecodeError, dump_json, load_json, time
 
 
 __all__ = ["SlidingWindowLogStrategy", "SlidingWindowCounterStrategy"]
@@ -56,56 +57,64 @@ class SlidingWindowLogStrategy:
 
     # Strict limit: exactly 100 requests per minute, no bursts
     rate = Rate.parse("100/1m")
-    wait = await sliding_window_log_strategy("user:123", rate, backend)
+    wait_ms = await sliding_window_log_strategy("user:123", rate, backend)
 
-    if wait > 0:
-        raise HTTPException(429, f"Rate limited. Retry in {wait}s")
+    if wait_ms > 0:
+        wait_seconds = int(wait_ms / 1000)
+        raise HTTPException(429, f"Rate limited. Retry in {wait_seconds}s")
     ```
 
     :param key: The throttling key (e.g., user ID, IP address).
     :param rate: The rate limit definition.
     :param backend: The throttle backend instance.
-    :return: Wait time in seconds if throttled, 0.0 if allowed.
+    :return: Wait time in milliseconds if throttled, 0.0 if allowed.
     """
 
     async def __call__(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend,
-    ) -> float:
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> WaitPeriod:
+        """
+        Apply sliding window log rate limiting strategy.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: Wait time in milliseconds if throttled, 0.0 if allowed.
+        """
         if rate.unlimited:
             return 0.0
 
-        now = int(time() * 1000)
-        window_duration_ms = int(rate.expire)
+        now = time() * 1000
+        window_duration_ms = rate.expire
         window_start = now - window_duration_ms
 
         full_key = await backend.get_key(str(key))
         log_key = f"{full_key}:slidinglog"
-        ttl_seconds = (window_duration_ms // 1000) + 1
+        ttl_seconds = int(window_duration_ms // 1000) + 1  # +1 second buffer
 
-        async with await backend.lock(f"lock:{log_key}", blocking=True, blocking_timeout=1):
+        async with await backend.lock(
+            f"lock:{log_key}", blocking=True, blocking_timeout=1
+        ):
             old_log_json = await backend.get(log_key)
             if old_log_json and old_log_json != "":
                 try:
-                    timestamps: typing.List[int] = json.loads(old_log_json)
-                except json.JSONDecodeError:
+                    timestamps: typing.List[float] = load_json(old_log_json)
+                except JSONDecodeError:
                     timestamps = []
             else:
                 timestamps = []
 
-            valid_timestamps = [ts for ts in timestamps if ts > window_start]
+            valid_timestamps = [float(ts) for ts in timestamps if ts > window_start]
             if len(valid_timestamps) >= rate.limit:
                 oldest_timestamp = min(valid_timestamps)
                 wait_ms = (oldest_timestamp + window_duration_ms) - now
                 await backend.set(
-                    log_key, json.dumps(valid_timestamps), expire=ttl_seconds
+                    log_key, dump_json(valid_timestamps), expire=ttl_seconds
                 )
-                return max(1.0, wait_ms / 1000.0)
+                return wait_ms
 
             valid_timestamps.append(now)
-            await backend.set(log_key, json.dumps(valid_timestamps), expire=ttl_seconds)
+            await backend.set(log_key, dump_json(valid_timestamps), expire=ttl_seconds)
             return 0.0
 
 
@@ -162,31 +171,32 @@ class SlidingWindowCounterStrategy:
 
     # Balanced approach: good accuracy with low memory
     rate = Rate.parse("100/1m")
-    wait = await sliding_window_counter_strategy("user:123", rate, backend)
+    wait_ms = await sliding_window_counter_strategy("user:123", rate, backend)
 
-    if wait > 0:
-        raise HTTPException(429, f"Rate limited. Retry in {wait}s")
+    if wait_ms > 0:
+        wait_seconds = int(wait_ms / 1000)
+        raise HTTPException(429, f"Rate limited. Retry in {wait_seconds}s")
     ```
-
-    :param key: The throttling key (e.g., user ID, IP address).
-    :param rate: The rate limit definition.
-    :param backend: The throttle backend instance.
-    :return: Wait time in seconds if throttled, 0.0 if allowed.
     """
 
     async def __call__(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend,
-    ) -> float:
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> WaitPeriod:
+        """
+        Apply sliding window counter rate limiting strategy.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: Wait time in milliseconds if throttled, 0.0 if allowed.
+        """
         if rate.unlimited:
             return 0.0
 
-        now = int(time() * 1000)
-        window_duration_ms = int(rate.expire)
+        now = time() * 1000
+        window_duration_ms = rate.expire
 
-        current_window_id = now // window_duration_ms
+        current_window_id = int(now // window_duration_ms)
         previous_window_id = current_window_id - 1
 
         time_in_current_window = now % window_duration_ms
@@ -196,7 +206,7 @@ class SlidingWindowCounterStrategy:
         current_window_key = f"{full_key}:slidingcounter:{current_window_id}"
         previous_window_key = f"{full_key}:slidingcounter:{previous_window_id}"
 
-        ttl_seconds = (window_duration_ms // 1000) + 1
+        ttl_seconds = int(window_duration_ms // 1000) + 1  # +1 second buffer
 
         async with await backend.lock(
             f"lock:{previous_window_key}", blocking=True, blocking_timeout=1
@@ -225,5 +235,5 @@ class SlidingWindowCounterStrategy:
                     wait_ms = wait_ratio * time_in_current_window
                 else:
                     wait_ms = window_duration_ms - time_in_current_window
-                return max(1.0, wait_ms / 1000.0)
+                return wait_ms
             return 0.0

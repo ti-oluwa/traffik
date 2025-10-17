@@ -1,3 +1,5 @@
+"""Throttle and ASGI middleware for throttling HTTP connections."""
+
 import re
 import typing
 
@@ -212,11 +214,13 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
                     # that will be handled if they register an exception handler with
                     # the application. If not, the exception will propagate and the
                     # `ServerErrorMiddleware` will properly handle it.
-                    if self.get_exception_handler is None:
-                        self.get_exception_handler = build_exception_handler_getter(
-                            connection.app
-                        )
-                    handler = self.get_exception_handler(exc)
+                    exc_handler = self.get_exception_handler
+                    if exc_handler is None:
+                        exc_handler = build_exception_handler_getter(connection.app)
+                        # Cache the exception handler getter for future use
+                        self.get_exception_handler = exc_handler  # type: ignore[assignment]
+
+                    handler = exc_handler(exc)
                     if handler is not None:
                         if is_async_callable(handler):
                             response = await handler(connection, exc)

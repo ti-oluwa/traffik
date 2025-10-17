@@ -1,7 +1,6 @@
-import os
+"""Tests for dynamic backend switching for throttles in Starlette."""
 
 import pytest
-from redis.asyncio import Redis
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -12,27 +11,14 @@ from starlette.testclient import TestClient
 
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.backends.redis import RedisBackend
 from traffik.rates import Rate
 from traffik.throttles import HTTPThrottle
-
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = os.getenv("REDIS_PORT", "6379")
-REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
-
-
-@pytest.fixture(scope="function")
-async def redis_backend() -> RedisBackend:
-    redis = Redis.from_url(REDIS_URL, decode_responses=True)
-    return RedisBackend(connection=redis, namespace="redis-test", persistent=False)
 
 
 @pytest.mark.asyncio
 @pytest.mark.throttle
-@pytest.mark.native
-async def test_throttle_dynamic_backend(
-    inmemory_backend: InMemoryBackend,
-) -> None:
+async def test_throttle_with_dynamic_backend(inmemory_backend: InMemoryBackend) -> None:
+    """Test dynamic backend switching for `HTTPThrottle` in Starlette."""
     # This throttle should raise an error if dynamic_backend is True
     # and a backend is provided
     with pytest.raises(ValueError):
@@ -64,7 +50,7 @@ async def test_throttle_dynamic_backend(
         }
     )
 
-    async with inmemory_backend():
+    async with inmemory_backend(close_on_exit=True):
         # Use the throttle in context to trigger the backend context detection
         await throttle(dummy_request)
         # Check that the throttle uses the backend from the main context
@@ -75,7 +61,9 @@ async def test_throttle_dynamic_backend(
         assert throttle.backend is None
 
         # Check that the throttle uses the backend from the inner context
-        async with InMemoryBackend(persistent=True)() as inner_backend:
+        async with InMemoryBackend(persistent=True)(
+            close_on_exit=False
+        ) as inner_backend:
             await throttle(dummy_request)
             # Connection should be registered in the inner backend
             # And the main inmemory backend should still have a connection registered
@@ -97,8 +85,7 @@ async def test_throttle_dynamic_backend(
 
 
 @pytest.mark.throttle
-@pytest.mark.native
-def test_throttle_dynamic_backend_with_lifespan_and_endpoint_context(
+def test_throttle_with_dynamic_backend_and_lifespan(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     """
@@ -107,7 +94,6 @@ def test_throttle_dynamic_backend_with_lifespan_and_endpoint_context(
     - App lifespan uses one backend (inmemory_backend)
     - Specific endpoint uses a different backend context
     """
-
     throttle = HTTPThrottle(
         "test-dynamic-lifespan-endpoint-starlette",
         rate="2/s",
@@ -116,7 +102,7 @@ def test_throttle_dynamic_backend_with_lifespan_and_endpoint_context(
     )
 
     # Create a separate backend for endpoint-specific usage
-    endpoint_backend = InMemoryBackend(persistent=True)
+    endpoint_backend = InMemoryBackend(persistent=True)  # Ensure its state persists
 
     async def normal_endpoint(request):
         """Uses the lifespan backend (inmemory_backend)"""
@@ -125,7 +111,9 @@ def test_throttle_dynamic_backend_with_lifespan_and_endpoint_context(
 
     async def special_endpoint(request):
         """Uses a different backend context within the endpoint"""
-        async with endpoint_backend():
+        async with endpoint_backend(
+            close_on_exit=False
+        ):  # Ensure that the connection stays alive across requests
             await throttle(request)
             return JSONResponse({"message": "special endpoint", "backend": "endpoint"})
 
@@ -133,7 +121,6 @@ def test_throttle_dynamic_backend_with_lifespan_and_endpoint_context(
         Route("/normal", normal_endpoint, methods=["GET"]),
         Route("/special", special_endpoint, methods=["GET"]),
     ]
-
     # Create Starlette app with lifespan using inmemory_backend
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
 
@@ -159,7 +146,7 @@ def test_throttle_dynamic_backend_with_lifespan_and_endpoint_context(
             endpoint_backend.connection is None
         )  # No connections in endpoint backend yet
 
-        # Test special endpoint uses different backend - should not be throttled
+        # Test special endpoint uses different backend. We should not be throttled
         # even though we hit the limit on the lifespan backend
         response4 = client.get("/special")
         assert response4.status_code == 200
@@ -186,14 +173,13 @@ def test_throttle_dynamic_backend_with_lifespan_and_endpoint_context(
 
 
 @pytest.mark.throttle
-@pytest.mark.native
-def test_throttle_dynamic_backend_with_middleware(
+def test_throttle_with_dynamic_backend_and_middleware(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     # Shared throttle for all tenants
     quota_throttle = HTTPThrottle(
         uid="api_quota",
-        rate="2/s",  # Short window for testing
+        rate="2/min",
         dynamic_backend=True,
         identifier=default_client_identifier,
     )
@@ -207,11 +193,11 @@ def test_throttle_dynamic_backend_with_middleware(
             # Extract tenant tier from Authorization header
             auth_header = request.headers.get("authorization", "")
             if "premium" in auth_header:
-                async with premium_backend():
+                async with premium_backend(close_on_exit=False):
                     response = await call_next(request)
                     return response
             elif "free" in auth_header:
-                async with free_backend():
+                async with free_backend(close_on_exit=False):
                     response = await call_next(request)
                     return response
             else:

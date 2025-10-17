@@ -1,13 +1,14 @@
+"""Memcached implementation of a throttle backend using `aiomcache`."""
+
 import asyncio
 import functools
-import hashlib
 import logging
 import typing
 
 from aiomcache import Client as MemcachedClient, ClientException
 
 from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import BackendError
+from traffik.exceptions import BackendConnectionError
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -62,22 +63,26 @@ class AsyncMemcachedLock:
     This provides a lightweight distributed locking mechanism.
     """
 
+    __slots__ = ("_name", "_client", "_release_timeout", "_acquired")
+
     def __init__(
         self,
         name: str,
         client: MemcachedClient,
-        timeout: typing.Optional[float] = None,
+        release_timeout: typing.Optional[float] = None,
     ) -> None:
         """
         Initialize the lock.
 
         :param name: Unique lock name.
         :param client: `aiomcache.Client` instance.
-        :param timeout: Lock expiration time in seconds (default 10s).
+        :param release_timeout: Lock expiration time in seconds (default 10s).
         """
         self._name = name
         self._client = client
-        self._timeout = int(timeout) if timeout is not None else 10
+        self._release_timeout = (
+            int(release_timeout) if release_timeout is not None else 5
+        )
         self._acquired = False
 
     def locked(self) -> bool:
@@ -107,7 +112,7 @@ class AsyncMemcachedLock:
             added = await self._client.add(
                 self._name.encode(),
                 b"locked",
-                exptime=self._timeout,
+                exptime=self._release_timeout,
             )
             if added:
                 self._acquired = True
@@ -124,17 +129,19 @@ class AsyncMemcachedLock:
                     return False
 
             # Wait a bit before retrying
-            await asyncio.sleep(0.0001)
+            await asyncio.sleep(1e-9)
 
     async def release(self) -> None:
         """Release the lock."""
         if not self._acquired:
-            raise BackendError(
+            raise RuntimeError(
                 f"Cannot release lock '{self._name}' - not owned by this instance"
             )
 
         try:
             await self._client.delete(self._name.encode())
+        except asyncio.CancelledError:
+            raise
         except Exception:
             # Lock might have expired or been deleted
             pass
@@ -151,9 +158,7 @@ class AsyncMemcachedLock:
         await self.release()
 
 
-class MemcachedBackend(
-    ThrottleBackend[typing.Optional[MemcachedClient], HTTPConnectionT]
-):
+class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
     """
     Memcached-based throttle backend with distributed locking support.
 
@@ -274,8 +279,10 @@ class MemcachedBackend(
         :return: AsyncMemcachedLock instance.
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
-        return AsyncMemcachedLock(name, self.connection, timeout=10.0)
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
+        return AsyncMemcachedLock(name, self.connection, release_timeout=10.0)
 
     async def get(self, key: str) -> typing.Optional[str]:
         """
@@ -285,7 +292,9 @@ class MemcachedBackend(
         :return: Value as string, or None if not found.
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         value = await self.connection.get(key.encode())
         if value is None:
@@ -303,7 +312,9 @@ class MemcachedBackend(
         :param expire: Optional TTL in seconds.
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         exptime = int(expire) if expire is not None else 0
         await self.connection.set(
@@ -321,7 +332,9 @@ class MemcachedBackend(
         :return: True if deleted, False if not found.
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         deleted = await self.connection.delete(key.encode())
         if deleted:
@@ -339,7 +352,9 @@ class MemcachedBackend(
         :return: New value after increment.
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         # Try to increment existing counter
         incr = _on_error_return(
@@ -378,7 +393,9 @@ class MemcachedBackend(
         :return: New value after decrement.
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         # Try to decrement existing counter
         # If key doesn't exist, decr raises ClientException
@@ -419,7 +436,9 @@ class MemcachedBackend(
         :return: True if expiration was set, False if key doesn't exist.
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         # Get current value
         value = await self.connection.get(key.encode())
@@ -447,7 +466,9 @@ class MemcachedBackend(
         :return: New value after increment.
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         # Try to increment
         incr = _on_error_return(
@@ -484,7 +505,9 @@ class MemcachedBackend(
         :return: List of values (None for missing keys), same order as keys.
         """
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         if not keys:
             return []
@@ -502,7 +525,9 @@ class MemcachedBackend(
     async def clear(self) -> None:
         """Clear all tracked keys in the namespace."""
         if self.connection is None:
-            raise BackendError("Backend not initialized")
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
         tracking_key = self._get_tracking_key()
         tracked = await self.connection.get(tracking_key.encode())
@@ -519,7 +544,7 @@ class MemcachedBackend(
         await self.connection.delete(tracking_key.encode())
 
     async def reset(self) -> None:
-        """Reset the backend (no-op for Memcached)."""
+        """Reset the backend."""
         await self.clear()
 
     async def close(self) -> None:

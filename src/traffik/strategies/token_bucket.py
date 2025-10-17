@@ -1,11 +1,12 @@
+"""Token Bucket rate limiting strategies."""
+
 from dataclasses import dataclass
-import json
 import typing
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import Stringable
-from traffik.utils import time
+from traffik.types import Stringable, WaitPeriod
+from traffik.utils import JSONDecodeError, dump_json, load_json, time
 
 
 __all__ = ["TokenBucketStrategy", "TokenBucketWithDebtStrategy"]
@@ -71,10 +72,11 @@ class TokenBucketStrategy:
     # Allow 100 requests/minute with burst up to 150
     rate = Rate.parse("100/1m")
     strategy = TokenBucketStrategy(burst_size=150)
-    wait = await strategy("user:123", rate, backend)
+    wait_ms = await strategy("user:123", rate, backend)
 
-    if wait > 0:
-        raise HTTPException(429, f"Rate limited. Retry in {wait}s")
+    if wait_ms > 0:
+        wait_seconds = int(wait_ms / 1000)
+        raise HTTPException(429, f"Rate limited. Retry in {wait_seconds}s")
 
     # Or use default singleton (no burst)
     wait = await token_bucket_strategy("user:123", rate, backend)
@@ -88,28 +90,33 @@ class TokenBucketStrategy:
         - After 30s: Bucket has refilled 50 tokens, can burst again
 
     :param burst_size: Maximum bucket capacity. If None, defaults to rate.limit
-                       (no burst allowance beyond rate limit).
+        (no burst allowance beyond rate limit).
     """
 
     burst_size: typing.Optional[int] = None
 
     async def __call__(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend,
-    ) -> float:
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> WaitPeriod:
+        """
+        Apply Token Bucket rate limiting.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: Wait time in milliseconds if throttled, 0.0 if allowed.
+        """
         if rate.unlimited:
             return 0.0
 
-        now = int(time() * 1000)
-        refill_period_ms = int(rate.expire)
+        now = time() * 1000
+        refill_period_ms = rate.expire
         refill_rate = rate.limit / refill_period_ms
         capacity = self.burst_size if self.burst_size is not None else rate.limit
 
         full_key = await backend.get_key(str(key))
         bucket_key = f"{full_key}:tokenbucket"
-        ttl_seconds = (refill_period_ms // 1000) * 2
+        ttl_seconds = int(refill_period_ms // 1000) * 2  # 2x refill period for safety
 
         async with await backend.lock(
             f"lock:{bucket_key}", blocking=True, blocking_timeout=1
@@ -117,12 +124,12 @@ class TokenBucketStrategy:
             old_state_json = await backend.get(bucket_key)
             if old_state_json and old_state_json != "":
                 try:
-                    bucket_state: typing.Dict[str, typing.Any] = json.loads(
+                    bucket_state: typing.Dict[str, typing.Any] = load_json(
                         old_state_json
                     )
                     tokens = float(bucket_state.get("tokens", capacity))
-                    last_refill = int(bucket_state.get("last_refill", now))
-                except (json.JSONDecodeError, ValueError, KeyError):
+                    last_refill = float(bucket_state.get("last_refill", now))
+                except (JSONDecodeError, ValueError, KeyError):
                     tokens = float(capacity)
                     last_refill = now
             else:
@@ -139,7 +146,7 @@ class TokenBucketStrategy:
             if tokens > 0.999:
                 # Consume 1 token
                 tokens -= 1.0
-                new_state = json.dumps({"tokens": tokens, "last_refill": now})
+                new_state = dump_json({"tokens": tokens, "last_refill": now})
                 await backend.set(bucket_key, new_state, expire=ttl_seconds)
                 return 0.0
 
@@ -148,9 +155,9 @@ class TokenBucketStrategy:
             wait_ms = tokens_needed / refill_rate
 
             # Save current state without consuming token
-            new_state = json.dumps({"tokens": tokens, "last_refill": now})
+            new_state = dump_json({"tokens": tokens, "last_refill": now})
             await backend.set(bucket_key, new_state, expire=ttl_seconds)
-            return max(1.0, wait_ms / 1000.0)
+            return wait_ms
 
 
 @dataclass(frozen=True)
@@ -218,12 +225,13 @@ class TokenBucketWithDebtStrategy:
     from traffik.strategies import token_bucket_with_debt_strategy
 
     # 100 req/min, burst=150, allow 50 requests of debt
-    rate = Rate.parse("100/1m")
+    rate = Rate.parse("100/m")
     strategy = TokenBucketWithDebtStrategy(burst_size=150, max_debt=50)
-    wait = await strategy("user:123", rate, backend)
+    wait_ms = await strategy("user:123", rate, backend)
 
-    if wait > 0:
-        raise HTTPException(429, f"Rate limited. Retry in {wait}s")
+    if wait_ms > 0:
+        wait_seconds = int(wait_ms / 1000)
+        raise HTTPException(429, f"Rate limited. Retry in {wait_seconds}s")
     ```
 
     **Real-world scenario:**
@@ -239,31 +247,36 @@ class TokenBucketWithDebtStrategy:
         - User experience: "Why did it suddenly stop working?"
 
     :param burst_size: Maximum bucket capacity (positive tokens).
-                       If None, defaults to rate.limit.
+        If None, defaults to rate.limit.
     :param max_debt: Maximum negative tokens allowed (overdraft limit).
-                     Set to 0 for standard token bucket behavior.
+        Set to 0 for standard token bucket behavior.
     """
 
     burst_size: typing.Optional[int] = None
     max_debt: int = 0
 
     async def __call__(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend,
-    ) -> float:
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> WaitPeriod:
+        """
+        Apply Token Bucket with Debt rate limiting.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: Wait time in milliseconds if throttled, 0.0 if allowed.
+        """
         if rate.unlimited:
             return 0.0
 
-        now = int(time() * 1000)
-        refill_period_ms = int(rate.expire)
+        now = time() * 1000
+        refill_period_ms = rate.expire
         refill_rate = rate.limit / refill_period_ms
         capacity = self.burst_size if self.burst_size is not None else rate.limit
 
         full_key = await backend.get_key(str(key))
         bucket_key = f"{full_key}:tokenbucket:debt"
-        ttl_seconds = (refill_period_ms // 1000) * 2
+        ttl_seconds = int(refill_period_ms // 1000) * 2  # 2x refill period for safety
 
         async with await backend.lock(
             f"lock:{bucket_key}", blocking=True, blocking_timeout=1
@@ -271,10 +284,10 @@ class TokenBucketWithDebtStrategy:
             old_state_json = await backend.get(bucket_key)
             if old_state_json and old_state_json != "":
                 try:
-                    bucket_state = json.loads(old_state_json)
+                    bucket_state = load_json(old_state_json)
                     tokens = float(bucket_state.get("tokens", capacity))
-                    last_refill = int(bucket_state.get("last_refill", now))
-                except (json.JSONDecodeError, ValueError, KeyError):
+                    last_refill = float(bucket_state.get("last_refill", now))
+                except (JSONDecodeError, ValueError, KeyError):
                     tokens = float(capacity)
                     last_refill = now
             else:
@@ -291,7 +304,7 @@ class TokenBucketWithDebtStrategy:
             if tokens - 1.0 >= -self.max_debt:
                 # Allow request and consume token
                 tokens -= 1.0
-                new_state = json.dumps({"tokens": tokens, "last_refill": now})
+                new_state = dump_json({"tokens": tokens, "last_refill": now})
                 await backend.set(bucket_key, new_state, expire=ttl_seconds)
                 return 0.0
 
@@ -303,6 +316,6 @@ class TokenBucketWithDebtStrategy:
             wait_ms = tokens_needed / refill_rate
 
             # Save current state without consuming token
-            new_state = json.dumps({"tokens": tokens, "last_refill": now})
+            new_state = dump_json({"tokens": tokens, "last_refill": now})
             await backend.set(bucket_key, new_state, expire=ttl_seconds)
-            return max(1.0, wait_ms / 1000.0)
+            return wait_ms

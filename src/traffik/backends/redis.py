@@ -141,7 +141,7 @@ class AsyncRedisLock:
             await lock_obj.release()
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception: # nosec
             # Lock might have expired or been released already
             pass
         finally:

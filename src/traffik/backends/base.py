@@ -69,7 +69,7 @@ def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
     if not key_parts:
         return "*"
     key_parts.sort()  # Sort to ensure consistent ordering
-    return hashlib.md5(":".join(key_parts).encode()).hexdigest()
+    return hashlib.md5(":".join(key_parts).encode()).hexdigest() # nosec
 
 
 def _raises_error(

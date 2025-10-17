@@ -144,7 +144,7 @@ class AsyncMemcachedLock:
             raise
         except Exception:
             # Lock might have expired or been deleted
-            pass
+            pass # nosec
         finally:
             self._acquired = False
 

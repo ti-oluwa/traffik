@@ -17,6 +17,5 @@ from traffik.throttles import (
     HTTPThrottle as HTTPThrottle,
     WebSocketThrottle as WebSocketThrottle,
 )
-from traffik.decorators import throttled as throttled
 
 __version__ = "1.0.0b1"

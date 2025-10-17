@@ -252,13 +252,13 @@ async def test_multi_service_endpoint_isolation(backends: BackendGen) -> None:
             shared_uid = "endpoint_specific_limits"
             read_throttle = HTTPThrottle(
                 uid=shared_uid,
-                rate="2/s",
+                rate="2/min",
                 identifier=default_client_identifier,
             )
             write_throttle = HTTPThrottle(
                 uid=shared_uid,  # Same UID
                 # Different limit to test isolation
-                rate="1/s",
+                rate="1/min",
                 identifier=default_client_identifier,
             )
 

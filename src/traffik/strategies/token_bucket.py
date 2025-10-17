@@ -67,7 +67,7 @@ class TokenBucketStrategy:
 
     ```python
     from traffik.rates import Rate
-    from traffik.strategies import token_bucket_strategy
+    from traffik.strategies import TokenBucketStrategy
 
     # Allow 100 requests/minute with burst up to 150
     rate = Rate.parse("100/1m")
@@ -77,9 +77,6 @@ class TokenBucketStrategy:
     if wait_ms > 0:
         wait_seconds = int(wait_ms / 1000)
         raise HTTPException(429, f"Rate limited. Retry in {wait_seconds}s")
-
-    # Or use default singleton (no burst)
-    wait = await token_bucket_strategy("user:123", rate, backend)
     ```
 
     **Real-world scenario:**
@@ -222,7 +219,7 @@ class TokenBucketWithDebtStrategy:
 
     ```python
     from traffik.rates import Rate
-    from traffik.strategies import token_bucket_with_debt_strategy
+    from traffik.strategies import TokenBucketWithDebtStrategy
 
     # 100 req/min, burst=150, allow 50 requests of debt
     rate = Rate.parse("100/m")

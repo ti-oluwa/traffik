@@ -197,7 +197,7 @@ jobs:
           
           async def test():
               backend = InMemoryBackend()
-              async with backend:
+              async with backend():
                   throttle = HTTPThrottle(limit=5, seconds=60)
                   print('✅ Basic functionality works')
           

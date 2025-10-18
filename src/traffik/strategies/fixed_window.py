@@ -55,8 +55,8 @@ class FixedWindowStrategy:
 
     # Allow 100 requests per minute
     rate = Rate.parse("100/m")
-    fixed_window_strategy = FixedWindowStrategy()
-    wait_ms = await fixed_window_strategy("user:123", rate, backend)
+    strategy = FixedWindowStrategy()
+    wait_ms = await strategy("user:123", rate, backend)
 
     if wait_ms > 0:
         wait_seconds = max(wait_ms / 1000, 1)

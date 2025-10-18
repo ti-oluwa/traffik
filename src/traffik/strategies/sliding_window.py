@@ -53,11 +53,12 @@ class SlidingWindowLogStrategy:
 
     ```python
     from traffik.rates import Rate
-    from traffik.strategies import sliding_window_log_strategy
+    from traffik.strategies import SlidingWindowLogStrategy
 
     # Strict limit: exactly 100 requests per minute, no bursts
     rate = Rate.parse("100/1m")
-    wait_ms = await sliding_window_log_strategy("user:123", rate, backend)
+    strategy = SlidingWindowLogStrategy()
+    wait_ms = await strategy("user:123", rate, backend)
 
     if wait_ms > 0:
         wait_seconds = int(wait_ms / 1000)
@@ -167,11 +168,12 @@ class SlidingWindowCounterStrategy:
 
     ```python
     from traffik.rates import Rate
-    from traffik.strategies import sliding_window_counter_strategy
+    from traffik.strategies import SlidingWindowCounterStrategy
 
     # Balanced approach: good accuracy with low memory
     rate = Rate.parse("100/1m")
-    wait_ms = await sliding_window_counter_strategy("user:123", rate, backend)
+    strategy = SlidingWindowCounterStrategy()
+    wait_ms = await strategy("user:123", rate, backend)
 
     if wait_ms > 0:
         wait_seconds = int(wait_ms / 1000)

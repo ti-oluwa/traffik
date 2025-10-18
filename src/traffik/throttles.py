@@ -112,7 +112,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
                 else:
                     backend = InMemoryBackend()  # Free tier
 
-                async with backend:
+                async with backend():
                     return await call_next(request)
             ```
 
@@ -120,10 +120,10 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             ```python
             throttle = HTTPThrottle(uid="test", limit=3, seconds=5, dynamic_backend=True)
 
-            async with backend_a:
+            async with backend_a():
                 await throttle(request)  # Uses backend_a
 
-                async with backend_b:
+                async with backend_b():
                     await throttle(request)  # Switches to backend_b
 
                 await throttle(request)  # Back to backend_a

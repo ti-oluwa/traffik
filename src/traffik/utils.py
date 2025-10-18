@@ -184,7 +184,7 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
     """
     Asynchronous context manager for locks with optional timeout auto-release.
 
-    Thread-safety depends on the underlying `AsyncLock` implementation.
+    Muilti-threaded or Distributed safety depends on the underlying `AsyncLock` implementation.
 
     Warning: Using `release_timeout` or `blocking_timeout` with reentrant locks may cause unexpected behavior
     if nested contexts share the same lock instance.

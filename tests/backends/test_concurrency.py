@@ -3,7 +3,6 @@ Concurrency Tests for Backend Operations
 """
 
 import asyncio
-import re
 
 import pytest
 

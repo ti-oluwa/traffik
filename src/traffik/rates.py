@@ -1,8 +1,8 @@
 import re
 from dataclasses import dataclass, field
+from typing import Annotated
 
 from annotated_types import Ge
-from typing_extensions import Annotated
 
 
 @dataclass(frozen=True, eq=False)

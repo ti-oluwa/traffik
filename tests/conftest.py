@@ -9,7 +9,6 @@ import pytest
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.inmemory import InMemoryBackend
 
-
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
 REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
@@ -111,3 +110,9 @@ def backends() -> BackendGen:
 @pytest.fixture(scope="function")
 def inmemory_backend() -> InMemoryBackend:
     return InMemoryBackend()
+
+
+@pytest.fixture(scope="function")
+async def backend() -> InMemoryBackend:
+    backend = InMemoryBackend(persistent=False)
+    return backend

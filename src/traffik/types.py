@@ -4,7 +4,22 @@ import typing
 
 from starlette.requests import HTTPConnection
 from starlette.responses import Response
-from typing_extensions import ParamSpec, TypeAlias
+from typing_extensions import ParamSpec, TypeAlias, TypedDict
+
+__all__ = [
+    "UNLIMITED",
+    "HTTPConnectionT",
+    "HTTPConnectionTcon",
+    "WaitPeriod",
+    "Matchable",
+    "ExceptionHandler",
+    "LockConfig",
+    "Stringable",
+    "ConnectionIdentifier",
+    "ConnectionThrottledHandler",
+    "Dependency",
+    "AsyncLock",
+]
 
 P = ParamSpec("P")
 Q = ParamSpec("Q")
@@ -37,6 +52,17 @@ ExceptionHandler: TypeAlias = typing.Callable[
 ]
 
 AwaitableCallable = typing.Callable[..., typing.Awaitable[T]]
+
+
+class LockConfig(TypedDict, total=False):
+    """TypedDict for lock configuration parameters."""
+
+    blocking: bool
+    """Whether to block when acquiring the lock."""
+    blocking_timeout: typing.Optional[float]
+    """Maximum time to wait for the lock in seconds."""
+    release_timeout: typing.Optional[float]
+    """Maximum time to wait for the lock to be released in seconds."""
 
 
 class Stringable(typing.Protocol):

@@ -5,7 +5,8 @@ import functools
 import logging
 import typing
 
-from aiomcache import Client as MemcachedClient, ClientException
+from aiomcache import Client as MemcachedClient
+from aiomcache import ClientException
 
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError
@@ -144,7 +145,7 @@ class AsyncMemcachedLock:
             raise
         except Exception:
             # Lock might have expired or been deleted
-            pass # nosec
+            pass  # nosec
         finally:
             self._acquired = False
 

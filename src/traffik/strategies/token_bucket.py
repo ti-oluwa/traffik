@@ -1,13 +1,12 @@
 """Token Bucket rate limiting strategies."""
 
-from dataclasses import dataclass
 import typing
+from dataclasses import dataclass, field
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import Stringable, WaitPeriod
+from traffik.types import LockConfig, Stringable, WaitPeriod
 from traffik.utils import JSONDecodeError, dump_json, load_json, time
-
 
 __all__ = ["TokenBucketStrategy", "TokenBucketWithDebtStrategy"]
 
@@ -91,6 +90,14 @@ class TokenBucketStrategy:
     """
 
     burst_size: typing.Optional[int] = None
+    """Maximum bucket capacity (positive tokens). If None, defaults to `rate.limit`."""
+    lock_config: LockConfig = field(
+        default_factory=lambda: LockConfig(
+            blocking=True,
+            blocking_timeout=1.5,
+        )
+    )
+    """Configuration for backend locking during rate limit checks."""
 
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
@@ -113,11 +120,11 @@ class TokenBucketStrategy:
 
         full_key = await backend.get_key(str(key))
         bucket_key = f"{full_key}:tokenbucket"
-        ttl_seconds = int(refill_period_ms // 1000) * 2  # 2x refill period for safety
+        ttl_seconds = max(
+            int((refill_period_ms * 2) // 1000), 1
+        )  # 2x refill period for safety, at least 1s
 
-        async with await backend.lock(
-            f"lock:{bucket_key}", blocking=True, blocking_timeout=1
-        ):
+        async with await backend.lock(f"lock:{bucket_key}", **self.lock_config):
             old_state_json = await backend.get(bucket_key)
             if old_state_json and old_state_json != "":
                 try:
@@ -250,7 +257,15 @@ class TokenBucketWithDebtStrategy:
     """
 
     burst_size: typing.Optional[int] = None
+    """Maximum bucket capacity (positive tokens). If None, defaults to `rate.limit`."""
     max_debt: int = 0
+    """Maximum negative tokens allowed (overdraft limit). Set to 0 for standard behavior."""
+    lock_config: LockConfig = field(
+        default_factory=lambda: LockConfig(
+            blocking=True,
+            blocking_timeout=1.5,
+        )
+    )
 
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
@@ -273,11 +288,11 @@ class TokenBucketWithDebtStrategy:
 
         full_key = await backend.get_key(str(key))
         bucket_key = f"{full_key}:tokenbucket:debt"
-        ttl_seconds = int(refill_period_ms // 1000) * 2  # 2x refill period for safety
+        ttl_seconds = max(
+            int((refill_period_ms * 2) // 1000), 1
+        )  # 2x refill period for safety, at least 1s
 
-        async with await backend.lock(
-            f"lock:{bucket_key}", blocking=True, blocking_timeout=1
-        ):
+        async with await backend.lock(f"lock:{bucket_key}", **self.lock_config):
             old_state_json = await backend.get(bucket_key)
             if old_state_json and old_state_json != "":
                 try:

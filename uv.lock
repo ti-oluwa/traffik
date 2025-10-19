@@ -1050,7 +1050,6 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "aiomcache" },
-    { name = "fastapi" },
     { name = "pottery" },
     { name = "redis" },
 ]
@@ -1070,9 +1069,6 @@ dev = [
     { name = "redis" },
     { name = "requests" },
     { name = "ruff" },
-]
-fastapi = [
-    { name = "fastapi" },
 ]
 memcached = [
     { name = "aiomcache" },
@@ -1100,7 +1096,7 @@ requires-dist = [
     { name = "annotated-types", specifier = ">=0.7.0" },
     { name = "anyio", marker = "extra == 'test'", specifier = ">=4.0.0" },
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.10" },
-    { name = "fastapi", marker = "extra == 'fastapi'", specifier = ">=0.68.0" },
+    { name = "fastapi", marker = "extra == 'test'", specifier = ">=0.68.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14.1" },
     { name = "orjson", marker = "extra == 'dev'", specifier = ">=3.11.3" },
@@ -1114,12 +1110,11 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.1" },
     { name = "starlette", specifier = ">=0.14.0" },
     { name = "traffik", extras = ["all"], marker = "extra == 'test'" },
-    { name = "traffik", extras = ["fastapi"], marker = "extra == 'all'" },
     { name = "traffik", extras = ["memcached"], marker = "extra == 'all'" },
     { name = "traffik", extras = ["redis"], marker = "extra == 'all'" },
     { name = "traffik", extras = ["test"], marker = "extra == 'dev'" },
 ]
-provides-extras = ["all", "fastapi", "redis", "test", "dev", "memcached"]
+provides-extras = ["all", "test", "dev", "redis", "memcached"]
 
 [[package]]
 name = "typing-extensions"

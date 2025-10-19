@@ -1,16 +1,15 @@
 import asyncio
 
-from httpx import ASGITransport, AsyncClient
 import pytest
+from httpx import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from tests.conftest import BackendGen
-from traffik.rates import Rate
-from traffik.throttles import HTTPThrottle
 from tests.utils import default_client_identifier
+from traffik.throttles import HTTPThrottle
 
 
 @pytest.mark.anyio
@@ -50,11 +49,14 @@ async def test_multi_service_shared_backend(backends: BackendGen) -> None:
             app_b = Starlette(routes=routes_b)
 
             base_url = "http://0.0.0.0"
-            async with AsyncClient(
-                transport=ASGITransport(app=app_a), base_url=base_url
-            ) as client_a, AsyncClient(
-                transport=ASGITransport(app=app_b), base_url=base_url
-            ) as client_b:
+            async with (
+                AsyncClient(
+                    transport=ASGITransport(app=app_a), base_url=base_url
+                ) as client_a,
+                AsyncClient(
+                    transport=ASGITransport(app=app_b), base_url=base_url
+                ) as client_b,
+            ):
                 # Make 2 requests to service A
                 response1 = await client_a.get("/api/shared")
                 assert response1.status_code == 200
@@ -114,11 +116,14 @@ async def test_multi_service_path_isolation(backends: BackendGen) -> None:
             app_b = Starlette(routes=routes_b)
 
             base_url = "http://0.0.0.0"
-            async with AsyncClient(
-                transport=ASGITransport(app=app_a), base_url=base_url
-            ) as client_a, AsyncClient(
-                transport=ASGITransport(app=app_b), base_url=base_url
-            ) as client_b:
+            async with (
+                AsyncClient(
+                    transport=ASGITransport(app=app_a), base_url=base_url
+                ) as client_a,
+                AsyncClient(
+                    transport=ASGITransport(app=app_b), base_url=base_url
+                ) as client_b,
+            ):
                 # Exhaust service A's limit (different path: /service-a/data)
                 response1 = await client_a.get("/service-a/data")
                 assert response1.status_code == 200
@@ -197,11 +202,14 @@ async def test_microservices_pattern(backends: BackendGen) -> None:
             order_app = Starlette(routes=order_routes)
 
             base_url = "http://0.0.0.0"
-            async with AsyncClient(
-                transport=ASGITransport(app=user_app), base_url=base_url
-            ) as user_client, AsyncClient(
-                transport=ASGITransport(app=order_app), base_url=base_url
-            ) as order_client:
+            async with (
+                AsyncClient(
+                    transport=ASGITransport(app=user_app), base_url=base_url
+                ) as user_client,
+                AsyncClient(
+                    transport=ASGITransport(app=order_app), base_url=base_url
+                ) as order_client,
+            ):
                 tenant_a_headers = {"authorization": "Bearer tenant-a-token"}
                 tenant_b_headers = {"authorization": "Bearer tenant-b-token"}
 
@@ -263,13 +271,13 @@ async def test_multi_service_endpoint_isolation(backends: BackendGen) -> None:
             shared_uid = "endpoint_specific_limits"
             read_throttle = HTTPThrottle(
                 uid=shared_uid,
-                rate="2/s",
+                rate="2/1020ms",
                 identifier=default_client_identifier,
             )
             write_throttle = HTTPThrottle(
                 uid=shared_uid,  # Same UID
                 # Different limit to test isolation
-                rate="1/s",
+                rate="1/1020ms",
                 identifier=default_client_identifier,
             )
 
@@ -357,11 +365,14 @@ async def test_multi_service_namespace_isolation(backends: BackendGen) -> None:
             app_b = Starlette(routes=routes_b)
 
             base_url = "http://0.0.0.0"
-            async with AsyncClient(
-                transport=ASGITransport(app=app_a), base_url=base_url
-            ) as client_a, AsyncClient(
-                transport=ASGITransport(app=app_b), base_url=base_url
-            ) as client_b:
+            async with (
+                AsyncClient(
+                    transport=ASGITransport(app=app_a), base_url=base_url
+                ) as client_a,
+                AsyncClient(
+                    transport=ASGITransport(app=app_b), base_url=base_url
+                ) as client_b,
+            ):
                 # Each service should have independent limits due to different prefixes
 
                 # Exhaust service A's limit
@@ -439,13 +450,17 @@ async def test_multi_service_concurrency(backends: BackendGen) -> None:
             app_c = Starlette(routes=routes_c)
 
             base_url = "http://0.0.0.0"
-            async with AsyncClient(
-                transport=ASGITransport(app=app_a), base_url=base_url
-            ) as client_a, AsyncClient(
-                transport=ASGITransport(app=app_b), base_url=base_url
-            ) as client_b, AsyncClient(
-                transport=ASGITransport(app=app_c), base_url=base_url
-            ) as client_c:
+            async with (
+                AsyncClient(
+                    transport=ASGITransport(app=app_a), base_url=base_url
+                ) as client_a,
+                AsyncClient(
+                    transport=ASGITransport(app=app_b), base_url=base_url
+                ) as client_b,
+                AsyncClient(
+                    transport=ASGITransport(app=app_c), base_url=base_url
+                ) as client_c,
+            ):
 
                 async def make_request(client: AsyncClient, service_name: str):
                     try:

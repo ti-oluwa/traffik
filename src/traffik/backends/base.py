@@ -1,13 +1,13 @@
 """Base classes and utilities for throttle backends."""
 
 import asyncio
-from contextlib import asynccontextmanager
-from contextvars import ContextVar, Token
 import functools
 import hashlib
 import inspect
 import math
 import typing
+from contextlib import asynccontextmanager
+from contextvars import ContextVar, Token
 
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
@@ -69,7 +69,7 @@ def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
     if not key_parts:
         return "*"
     key_parts.sort()  # Sort to ensure consistent ordering
-    return hashlib.md5(":".join(key_parts).encode()).hexdigest() # nosec
+    return hashlib.md5(":".join(key_parts).encode()).hexdigest()  # nosec
 
 
 def _raises_error(

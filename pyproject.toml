@@ -41,11 +41,10 @@ Repository = "https://github.com/ti-oluwa/traffik.git"
 Changelog = "https://github.com/ti-oluwa/traffik/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-all = ["traffik[fastapi]", "traffik[redis]", "traffik[memcached]"]
-fastapi = ["fastapi>=0.68.0"]
-redis = ["pottery>=3.0.1", "redis>=5.0.0"]
+all = ["traffik[redis]", "traffik[memcached]"]
 test = [
     "traffik[all]",
+    "fastapi>=0.68.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=5.0.0",
@@ -61,6 +60,7 @@ dev = [
     "ruff>=0.12.1",
     "traffik[test]",
 ]
+redis = ["pottery>=3.0.1", "redis>=5.0.0"]
 memcached = [
     "aiomcache>=0.8.2",
 ]
@@ -84,6 +84,7 @@ markers = [
     "slow: marks tests as slow",
     "benchmark: marks tests that benchmark performance",
     "backend: tests that test a throttle backend",
+    "strategy: tests that test a throttling strategy",
     "throttle: tests that test throttling functionality",
     "redis: Redis related tests",
     "memcached: tests that require Memcached access",

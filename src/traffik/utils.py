@@ -1,13 +1,13 @@
 """`traffik` utilities."""
 
 import asyncio
-from collections import deque
 import functools
 import inspect
 import ipaddress
 import logging
-from types import TracebackType
 import typing
+from collections import deque
+from types import TracebackType
 
 from starlette.requests import HTTPConnection
 from typing_extensions import Self, TypeGuard

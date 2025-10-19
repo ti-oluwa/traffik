@@ -3,16 +3,16 @@
 import typing
 
 import anyio
+import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
-import pytest
 
 from tests.utils import default_client_identifier
+from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.decorators import throttled
 from traffik.rates import Rate
 from traffik.throttles import HTTPThrottle
-from traffik import strategies
 
 
 @pytest.fixture(scope="function")

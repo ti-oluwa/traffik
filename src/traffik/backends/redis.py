@@ -1,14 +1,15 @@
 """Redis implementation of the throttle backend using `redis.asyncio`."""
+
 import asyncio
 import contextvars
 import typing
-from typing_extensions import TypeAlias
 
 import redis.asyncio as aioredis
 from pottery import AIORedlock
+from typing_extensions import TypeAlias
 
 from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import BackendError, BackendConnectionError
+from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -141,7 +142,7 @@ class AsyncRedisLock:
             await lock_obj.release()
         except asyncio.CancelledError:
             raise
-        except Exception: # nosec
+        except Exception:  # nosec
             # Lock might have expired or been released already
             pass
         finally:

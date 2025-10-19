@@ -1,12 +1,12 @@
 import asyncio
-from itertools import repeat
 import typing
+from itertools import repeat
 
 import anyio
+import pytest
 from fastapi import Depends, FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient, Response
-import pytest
 from starlette.exceptions import HTTPException
 from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocket
@@ -281,11 +281,14 @@ async def test_websocket_throttle(backends: BackendGen) -> None:
 
             base_url = "http://0.0.0.0"
             running_loop = asyncio.get_running_loop()
-            async with AsyncioTestClient(
-                app=app,
-                base_url=base_url,
-                event_loop=running_loop,
-            ) as client, client.websocket_connect(url="/ws/") as ws:
+            async with (
+                AsyncioTestClient(
+                    app=app,
+                    base_url=base_url,
+                    event_loop=running_loop,
+                ) as client,
+                client.websocket_connect(url="/ws/") as ws,
+            ):
                 # Reset the backend before starting the test
                 # as connecting to the websocket already counts as a request
                 # and we want to start fresh.

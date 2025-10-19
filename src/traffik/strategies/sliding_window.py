@@ -1,13 +1,12 @@
 """Sliding Window Rate Limiting Strategies"""
 
-from dataclasses import dataclass
 import typing
+from dataclasses import dataclass, field
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import Stringable, WaitPeriod
+from traffik.types import LockConfig, Stringable, WaitPeriod
 from traffik.utils import JSONDecodeError, dump_json, load_json, time
-
 
 __all__ = ["SlidingWindowLogStrategy", "SlidingWindowCounterStrategy"]
 
@@ -71,6 +70,14 @@ class SlidingWindowLogStrategy:
     :return: Wait time in milliseconds if throttled, 0.0 if allowed.
     """
 
+    lock_config: LockConfig = field(
+        default_factory=lambda: LockConfig(
+            blocking=True,
+            blocking_timeout=1.5,
+        )
+    )
+    """Configuration for backend locking during log updates."""
+
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
     ) -> WaitPeriod:
@@ -93,9 +100,7 @@ class SlidingWindowLogStrategy:
         log_key = f"{full_key}:slidinglog"
         ttl_seconds = max(int(window_duration_ms // 1000), 1)  # At least 1s
 
-        async with await backend.lock(
-            f"lock:{log_key}", blocking=True, blocking_timeout=1
-        ):
+        async with await backend.lock(f"lock:{log_key}", **self.lock_config):
             old_log_json = await backend.get(log_key)
             if old_log_json and old_log_json != "":
                 try:
@@ -181,6 +186,14 @@ class SlidingWindowCounterStrategy:
     ```
     """
 
+    lock_config: LockConfig = field(
+        default_factory=lambda: LockConfig(
+            blocking=True,
+            blocking_timeout=1.5,
+        )
+    )
+    """Configuration for backend locking during counter updates."""
+
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
     ) -> WaitPeriod:
@@ -209,11 +222,11 @@ class SlidingWindowCounterStrategy:
         previous_window_key = f"{full_key}:slidingcounter:{previous_window_id}"
 
         # TTL must be 2x window duration so previous window is available
-        # throughout the entire current window. Add buffer for safety.
+        # throughout the entire current window. Minimum 1 second for cleanup.
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
 
         async with await backend.lock(
-            f"lock:{previous_window_key}", blocking=True, blocking_timeout=1
+            f"lock:{previous_window_key}", **self.lock_config
         ):
             current_count = await backend.increment_with_ttl(
                 current_window_key, amount=1, ttl=ttl_seconds
@@ -223,6 +236,10 @@ class SlidingWindowCounterStrategy:
             if previous_count_str and previous_count_str != "":
                 try:
                     previous_count = int(previous_count_str)
+                    # Refresh TTL to keep previous window alive
+                    await backend.set(
+                        previous_window_key, previous_count_str, expire=ttl_seconds
+                    )
                 except (ValueError, TypeError):
                     previous_count = 0
             else:

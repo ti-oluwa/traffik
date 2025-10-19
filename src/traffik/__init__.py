@@ -1,9 +1,9 @@
 """
-*Traffik* - Rate limiting for `starlette` applications.
+`Traffik` - Rate limiting for `starlette` applications.
 """
 
 from traffik.utils import get_ip_address  # noqa
-from traffik.types import UNLIMITED  # noqa
+from traffik.types import *  # noqa
 from traffik.rates import Rate  # noqa
 from traffik.backends.base import (
     ThrottleBackend as ThrottleBackend,

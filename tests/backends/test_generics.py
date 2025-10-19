@@ -1,8 +1,8 @@
 """Generic tests (that should pass) for all backend implementations."""
 
 import asyncio
-from collections import defaultdict, deque
 import threading
+from collections import defaultdict, deque
 
 import pytest
 

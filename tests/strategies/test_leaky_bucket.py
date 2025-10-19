@@ -27,7 +27,7 @@ class TestLeakyBucketStrategy:
             # First 5 requests should succeed (bucket starts empty)
             for i in range(5):
                 wait = await strategy(key, rate, backend)
-                assert wait == 0.0, f"Request {i+1} should be allowed"
+                assert wait == 0.0, f"Request {i + 1} should be allowed"
 
             # 6th request should be throttled (bucket full)
             wait = await strategy(key, rate, backend)
@@ -62,7 +62,9 @@ class TestLeakyBucketStrategy:
                     break
 
             # Should allow at least 4 requests (accounting for timing variance)
-            assert allowed_count >= 4, f"Should allow ~5 requests after leak, got {allowed_count}"
+            assert allowed_count >= 4, (
+                f"Should allow ~5 requests after leak, got {allowed_count}"
+            )
 
     @pytest.mark.anyio
     @pytest.mark.strategy
@@ -145,7 +147,7 @@ class TestLeakyBucketStrategy:
             # User 2 should have empty bucket
             for i in range(3):
                 wait = await strategy("user:2", rate, backend)
-                assert wait == 0.0, f"User 2 request {i+1} should be allowed"
+                assert wait == 0.0, f"User 2 request {i + 1} should be allowed"
 
     @pytest.mark.anyio
     @pytest.mark.strategy
@@ -207,7 +209,9 @@ class TestLeakyBucketStrategy:
                     break
 
             # Should allow roughly half (~5 requests)
-            assert 3 <= allowed_count <= 7, f"Should allow ~5 requests, got {allowed_count}"
+            assert 3 <= allowed_count <= 7, (
+                f"Should allow ~5 requests, got {allowed_count}"
+            )
 
 
 class TestLeakyBucketWithQueueStrategy:
@@ -225,7 +229,7 @@ class TestLeakyBucketWithQueueStrategy:
             # First 5 requests should succeed
             for i in range(5):
                 wait = await strategy(key, rate, backend)
-                assert wait == 0.0, f"Request {i+1} should be allowed"
+                assert wait == 0.0, f"Request {i + 1} should be allowed"
 
             # 6th request should be throttled
             wait = await strategy(key, rate, backend)
@@ -325,7 +329,7 @@ class TestLeakyBucketWithQueueStrategy:
             # User 2 should be unaffected
             for i in range(3):
                 wait = await strategy("user:2", rate, backend)
-                assert wait == 0.0, f"User 2 request {i+1} should be allowed"
+                assert wait == 0.0, f"User 2 request {i + 1} should be allowed"
 
     @pytest.mark.anyio
     @pytest.mark.strategy

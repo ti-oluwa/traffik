@@ -1,13 +1,11 @@
 """Leaky Bucket rate limiting strategies."""
 
-from dataclasses import dataclass
-import math
+from dataclasses import dataclass, field
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import Stringable, WaitPeriod
+from traffik.types import LockConfig, Stringable, WaitPeriod
 from traffik.utils import JSONDecodeError, dump_json, load_json, time
-
 
 __all__ = ["LeakyBucketStrategy", "LeakyBucketWithQueueStrategy"]
 
@@ -68,6 +66,14 @@ class LeakyBucketStrategy:
     ```
     """
 
+    lock_config: LockConfig = field(
+        default_factory=lambda: LockConfig(
+            blocking=True,
+            blocking_timeout=1.5,
+        )
+    )
+    """Configuration for the lock used during rate limit checks."""
+
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
     ) -> WaitPeriod:
@@ -90,9 +96,7 @@ class LeakyBucketStrategy:
         # TTL should be 2x window duration, with minimum of 1 second
         ttl_seconds = max(int((2 * rate.expire) / 1000), 1)
 
-        async with await backend.lock(
-            f"lock:{state_key}", blocking=True, blocking_timeout=1
-        ):
+        async with await backend.lock(f"lock:{state_key}", **self.lock_config):
             old_state_json = await backend.get(state_key)
             if old_state_json is None or old_state_json == "":
                 new_state = {"level": 1.0, "last_leak": now}
@@ -183,6 +187,14 @@ class LeakyBucketWithQueueStrategy:
     ```
     """
 
+    lock_config: LockConfig = field(
+        default_factory=lambda: LockConfig(
+            blocking=True,
+            blocking_timeout=1.5,
+        )
+    )
+    """Configuration for the lock used during rate limit checks."""
+
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
     ) -> WaitPeriod:
@@ -205,9 +217,7 @@ class LeakyBucketWithQueueStrategy:
         # TTL should be 2x window duration, with minimum of 1 second
         ttl_seconds = max(int((2 * rate.expire) / 1000), 1)
 
-        async with await backend.lock(
-            f"lock:{state_key}", blocking=True, blocking_timeout=1
-        ):
+        async with await backend.lock(f"lock:{state_key}", **self.lock_config):
             old_state_json = await backend.get(state_key)
             if old_state_json is None or old_state_json == "":
                 new_state = {"queue": [now], "last_leak": now}

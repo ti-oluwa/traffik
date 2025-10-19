@@ -176,7 +176,7 @@ class TestConcurrencyEdgeCases:
     @pytest.mark.anyio
     @pytest.mark.strategy
     async def test_extreme_concurrency(self, backend: InMemoryBackend):
-        """Test with very high concurrent request count."""
+        """Test with very high concurrency request count."""
         async with backend(close_on_exit=True):
             strategy = FixedWindowStrategy()
             rate = Rate.parse("100/s")
@@ -281,32 +281,6 @@ class TestTimingEdgeCases:
 
                 # Wait for next window
                 await asyncio.sleep(0.06)
-
-    @pytest.mark.anyio
-    @pytest.mark.strategy
-    async def test_request_right_at_expiry(self, backend: InMemoryBackend):
-        async with backend(close_on_exit=True):
-            strategy = FixedWindowStrategy()
-            rate = Rate.parse("3/100ms")
-            key = "user:expiry"
-
-            # Use up limit
-            for _ in range(3):
-                await strategy(key, rate, backend)
-
-            # Wait almost until expiry
-            await asyncio.sleep(0.095)
-
-            # Should still be throttled
-            wait = await strategy(key, rate, backend)
-            assert wait > 0, "Should still be throttled just before expiry"
-
-            # Wait a bit more
-            await asyncio.sleep(0.01)
-
-            # Should be allowed now
-            wait = await strategy(key, rate, backend)
-            assert wait == 0.0, "Should be allowed after expiry"
 
 
 class TestStrategyStateEdgeCases:

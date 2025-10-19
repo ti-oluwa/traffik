@@ -224,20 +224,34 @@ class TestTokenBucketWithDebtStrategy:
             rate = Rate.parse("10/s")
             key = "user:debt"
 
-            # Use all tokens
+            # Use all tokens (bucket at 0)
             for _ in range(10):
                 await strategy(key, rate, backend)
 
-            # Make requests that go into debt
-            for _ in range(5):
+            # Go into max debt (bucket at -10)
+            for _ in range(10):
                 await strategy(key, rate, backend)
 
-            # Wait for some refill
-            await asyncio.sleep(0.2)
-
-            # Should still be limited due to debt
+            # Now at max debt, next request should be throttled
             wait = await strategy(key, rate, backend)
-            assert wait > 0, "Should still be throttled due to debt"
+            assert wait > 0, "Should be throttled at max debt"
+
+            # Wait for some refill (0.5s = 5 tokens, bucket at -5)
+            await asyncio.sleep(0.5)
+
+            # Should allow some requests now as debt partially paid
+            allowed_count = 0
+            for _ in range(10):
+                wait = await strategy(key, rate, backend)
+                if wait == 0.0:
+                    allowed_count += 1
+                else:
+                    break
+
+            # Should allow at least 4 requests (accounting for timing variance)
+            assert allowed_count >= 4, (
+                f"Should allow ~5 requests after partial refill, got {allowed_count}"
+            )
 
     @pytest.mark.anyio
     @pytest.mark.strategy
@@ -270,20 +284,34 @@ class TestTokenBucketWithDebtStrategy:
             rate = Rate.parse("10/s")
             key = "user:smooth"
 
-            # Use all tokens
+            # Use all tokens (bucket at 0)
             for _ in range(10):
                 await strategy(key, rate, backend)
 
-            # Accumulate some debt
-            for _ in range(5):
+            # Go to max debt (bucket at -10)
+            for _ in range(10):
                 await strategy(key, rate, backend)
 
-            # Wait for partial refill
+            # Should be throttled at max debt
+            wait = await strategy(key, rate, backend)
+            assert wait > 0, "Should throttle at max debt"
+
+            # Wait for partial refill (0.3s = 3 tokens, bucket at -7)
             await asyncio.sleep(0.3)
 
-            # Should still be throttled (debt not fully repaid)
-            wait = await strategy(key, rate, backend)
-            assert wait > 0, "Should throttle until debt is repaid"
+            # Can now make a few requests before hitting debt limit again
+            allowed_count = 0
+            for _ in range(10):
+                wait = await strategy(key, rate, backend)
+                if wait == 0.0:
+                    allowed_count += 1
+                else:
+                    break
+
+            # Should allow 2-3 requests (bucket -7 → -10)
+            assert allowed_count >= 2, (
+                f"Should allow 2-3 requests after partial refill, got {allowed_count}"
+            )
 
     @pytest.mark.anyio
     @pytest.mark.strategy

@@ -127,7 +127,7 @@ async def test_fixed_window_boundary_burst(backend: InMemoryBackend):
             wait_ms = await strategy(key, rate, backend)
 
         # Wait for next window
-        await asyncio.sleep(max(wait_ms // 1000, 1))  # The 
+        await asyncio.sleep(max(wait_ms // 1000, 1))  # The
 
         # Should be able to make 5 more requests immediately
         for i in range(5):

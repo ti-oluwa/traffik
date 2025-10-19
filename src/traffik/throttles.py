@@ -12,11 +12,11 @@ from traffik.exceptions import ConfigurationError, TraffikException
 from traffik.rates import Rate
 from traffik.strategies import default_strategy
 from traffik.types import (
+    UNLIMITED,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
     Stringable,
-    UNLIMITED,
     WaitPeriod,
 )
 
@@ -218,7 +218,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             if not self.dynamic_backend:
                 self.backend = backend
         else:
-            backend = self.backend # type: ignore[assignment]
+            backend = self.backend  # type: ignore[assignment]
 
         identifier = self.identifier or backend.identifier
         if (connection_id := await identifier(connection)) is UNLIMITED:

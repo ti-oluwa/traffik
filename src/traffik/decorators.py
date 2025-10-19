@@ -4,9 +4,9 @@ import asyncio
 import functools
 import inspect
 import typing
+from typing import Annotated
 
 from fastapi.params import Depends
-from typing_extensions import Annotated
 
 from traffik.throttles import BaseThrottle
 from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S

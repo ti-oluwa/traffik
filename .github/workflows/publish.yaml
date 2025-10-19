@@ -104,6 +104,7 @@ jobs:
       github.event_name == 'workflow_dispatch' || 
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
       github.event_name == 'release'
+    
     environment:
       name: testpypi
       url: https://test.pypi.org/p/traffik
@@ -152,10 +153,18 @@ jobs:
           path: dist/
 
       - name: Publish to TestPyPI
+        id: publish-step
         if: steps.version-check.outputs.exists == 'false'
-        run: uv publish --index testpypi
+        run: |
+          uv publish --index testpypi
+          echo "published=true" >> "$GITHUB_OUTPUT"
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+
+      - name: Mark as skipped
+        if: steps.version-check.outputs.exists == 'true'
+        id: skip-step
+        run: echo "published=false" >> "$GITHUB_OUTPUT"
 
   
   # Verify TestPyPI installation
@@ -163,6 +172,7 @@ jobs:
     name: Verify TestPyPI Installation
     runs-on: ubuntu-latest
     needs: publish-testpypi
+    if: needs.publish-testpypi.outputs.published == 'true'
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
@@ -209,17 +219,24 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: [build, verify-testpypi]
+    needs: [build, publish-testpypi]
     if: >
       github.event_name == 'release' && 
       github.event.action == 'published' &&
       !github.event.release.prerelease &&
-      (github.event.inputs.test_only != 'true' || github.event.inputs.test_only == '')
+      (github.event.inputs.test_only != 'true' || github.event.inputs.test_only == '') &&
+      always() &&
+      needs.build.result == 'success' &&
+      needs.publish-testpypi.result == 'success'
+    
     environment:
       name: pypi
       url: https://pypi.org/p/traffik
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

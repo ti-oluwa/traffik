@@ -113,7 +113,7 @@ class TokenBucketStrategy:
 
         full_key = await backend.get_key(str(key))
         bucket_key = f"{full_key}:tokenbucket"
-        ttl_seconds = int(refill_period_ms // 1000) * 2  # 2x refill period for safety
+        ttl_seconds = max(int((refill_period_ms * 2) // 1000), 1)  # 2x refill period for safety, at least 1s
 
         async with await backend.lock(
             f"lock:{bucket_key}", blocking=True, blocking_timeout=1
@@ -273,7 +273,7 @@ class TokenBucketWithDebtStrategy:
 
         full_key = await backend.get_key(str(key))
         bucket_key = f"{full_key}:tokenbucket:debt"
-        ttl_seconds = int(refill_period_ms // 1000) * 2  # 2x refill period for safety
+        ttl_seconds = max(int((refill_period_ms * 2) // 1000), 1)  # 2x refill period for safety, at least 1s
 
         async with await backend.lock(
             f"lock:{bucket_key}", blocking=True, blocking_timeout=1

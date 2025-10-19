@@ -84,15 +84,15 @@ class FixedWindowStrategy:
 
         full_key = await backend.get_key(str(key))
         window_key = f"{full_key}:fixedwindow:{current_window_start}"
-        # Add plus one buffer second, just to insure TTL covers the window
-        # Especially important for very short windows
-        ttl_seconds = (window_duration_ms // 1000) + 1
+        # TTL should be at least 1 second, this especially matters for very small windows
+        # Which can be less than 1000 ms and resolve to 0 seconds (<1000 ms // 1000) == 0)
+        ttl_seconds = max(int(window_duration_ms // 1000), 1)
 
         async with await backend.lock(
             f"lock:{window_key}", blocking=True, blocking_timeout=1
         ):
             counter = await backend.increment_with_ttl(
-                window_key, amount=1, ttl=int(ttl_seconds)
+                window_key, amount=1, ttl=ttl_seconds
             )
 
         if counter > rate.limit:

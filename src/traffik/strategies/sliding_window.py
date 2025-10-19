@@ -91,7 +91,7 @@ class SlidingWindowLogStrategy:
 
         full_key = await backend.get_key(str(key))
         log_key = f"{full_key}:slidinglog"
-        ttl_seconds = int(window_duration_ms // 1000) + 1  # +1 second buffer
+        ttl_seconds = max(int(window_duration_ms // 1000), 1)  # At least 1s
 
         async with await backend.lock(
             f"lock:{log_key}", blocking=True, blocking_timeout=1
@@ -208,7 +208,9 @@ class SlidingWindowCounterStrategy:
         current_window_key = f"{full_key}:slidingcounter:{current_window_id}"
         previous_window_key = f"{full_key}:slidingcounter:{previous_window_id}"
 
-        ttl_seconds = int(window_duration_ms // 1000) + 1  # +1 second buffer
+        # TTL must be 2x window duration so previous window is available
+        # throughout the entire current window. Add buffer for safety.
+        ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
 
         async with await backend.lock(
             f"lock:{previous_window_key}", blocking=True, blocking_timeout=1
@@ -221,9 +223,6 @@ class SlidingWindowCounterStrategy:
             if previous_count_str and previous_count_str != "":
                 try:
                     previous_count = int(previous_count_str)
-                    await backend.set(
-                        previous_window_key, previous_count_str, expire=ttl_seconds
-                    )
                 except (ValueError, TypeError):
                     previous_count = 0
             else:

@@ -111,3 +111,9 @@ def backends() -> BackendGen:
 @pytest.fixture(scope="function")
 def inmemory_backend() -> InMemoryBackend:
     return InMemoryBackend()
+
+
+@pytest.fixture(scope="function")
+async def backend() -> InMemoryBackend:
+    backend = InMemoryBackend(persistent=False)
+    return backend

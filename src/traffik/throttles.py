@@ -243,6 +243,9 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             await handle_throttled(connection, wait_ms, *args, **kwargs)
         return connection
 
+    hit = __call__
+    """Alias for `__call__` method to record a throttle hit."""
+
     async def get_key(
         self, connection: HTTPConnectionT, *args: typing.Any, **kwargs: typing.Any
     ) -> str:

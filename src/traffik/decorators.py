@@ -167,7 +167,7 @@ def throttled(
     Example:
     ```python
     import fastapi
-    from fastapi_throttle import throttled, HTTPThrottle
+    from traffik import throttled, HTTPThrottle
 
     sustained_throttle = HTTPThrottle(uid="sustained", rate="100/min")
     burst_throttle = HTTPThrottle(uid="burst", rate="20/sec")

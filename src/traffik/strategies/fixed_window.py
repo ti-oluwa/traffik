@@ -75,7 +75,7 @@ class FixedWindowStrategy:
     # means a new window start is based on the expiry of the counter key, and the minimum
     # allowable TTL for the counter key is 1 second, it could lead to inaccuracies for very small windows.
     # Especially for windows smaller than 1 second. So we either clamp the wait time to
-    # 1 second minimum, which is not ideal, assuming the throttling support sub-second wait times,
+    # 1 second minimum, which is not ideal, assuming the throttling supports sub-second wait times,
     # or we manually manage the window start time separately. Which is what we do here.
 
     async def __call__(

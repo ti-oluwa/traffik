@@ -310,7 +310,7 @@ You can create custom rate limiting strategies by implementing a callable that f
 
 ### Strategy Protocol
 
-A strategy is a callable (function or class with `__call__`) that takes three parameters and returns a wait period:
+A strategy is a callable (function or class with `__call__`) that takes four parameters and returns a wait period:
 
 ```python
 from traffik.backends.base import ThrottleBackend
@@ -318,14 +318,16 @@ from traffik.rates import Rate
 from traffik.types import Stringable, WaitPeriod
 
 async def my_strategy(
-    key: Stringable, 
-    rate: Rate, 
-    backend: ThrottleBackend
+    key: Stringable,
+    rate: Rate,
+    backend: ThrottleBackend,
+    cost: int = 1,
 ) -> WaitPeriod:
     """
     :param key: The throttling key (e.g., "user:123", "ip:192.168.1.1")
     :param rate: Rate limit definition with limit and expire properties
     :param backend: Backend instance for storage operations
+    :param cost: Cost of the request (default is 1)
     :return: Wait time in milliseconds (0.0 if request allowed)
     """
     # Your rate limiting logic here
@@ -345,7 +347,7 @@ from traffik.utils import time
 
 
 async def simple_counter_strategy(
-    self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
 ) -> WaitPeriod:
     """
     Simple counter-based rate limiting.
@@ -374,16 +376,16 @@ async def simple_counter_strategy(
             # Check if window has expired
             if now - timestamp > rate.expire:
                 # Reset counter for new window
-                count = 1
-                await backend.set(counter_key, "1", expire=ttl_seconds)
+                count = cost
+                await backend.set(counter_key, str(count), expire=ttl_seconds)
                 await backend.set(timestamp_key, str(now), expire=ttl_seconds)
             else:
                 # Increment counter
-                count = await backend.increment(counter_key)
+                count = await backend.increment(counter_key, amount=cost)
         else:
             # First request
-            count = 1
-            await backend.set(counter_key, "1", expire=ttl_seconds)
+            count = cost
+            await backend.set(counter_key, str(count), expire=ttl_seconds)
             await backend.set(timestamp_key, str(now), expire=ttl_seconds)
         
         # Check if limit exceeded
@@ -427,7 +429,7 @@ class AdaptiveRateStrategy:
     reduction_factor: float = 0.5  # Reduce to 50% during high load
     
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -442,8 +444,8 @@ class AdaptiveRateStrategy:
         ttl_seconds = int(window_duration_ms // 1000) + 1
         
         async with await backend.lock(f"lock:{counter_key}", blocking=True, blocking_timeout=1):
-            # Increment request counter
-            count = await backend.increment_with_ttl(counter_key, amount=1, ttl=ttl_seconds)
+            # Increment request counter by cost
+            count = await backend.increment_with_ttl(counter_key, amount=cost, ttl=ttl_seconds)
             
             # Calculate current load percentage
             load_percentage = count / rate.limit
@@ -515,7 +517,7 @@ class PriorityQueueStrategy:
         return self.default_priority
     
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -544,14 +546,14 @@ class PriorityQueueStrategy:
                 if now - entry["timestamp"] < rate.expire
             ]
             
-            # Count requests with higher or equal priority
-            higher_priority_count = sum(
-                1 for entry in queue 
+            # Count total cost of requests with higher or equal priority
+            higher_priority_cost = sum(
+                entry.get("cost", 1) for entry in queue 
                 if entry["priority"] >= priority
             )
             
-            # Check if request can be processed
-            if higher_priority_count >= rate.limit:
+            # Check if request can be processed (including current request's cost)
+            if higher_priority_cost + cost > rate.limit:
                 # Calculate wait time based on oldest high-priority entry
                 oldest_high_priority = min(
                     (entry["timestamp"] for entry in queue if entry["priority"] >= priority),
@@ -564,7 +566,8 @@ class PriorityQueueStrategy:
             queue.append({
                 "timestamp": now,
                 "priority": priority,
-                "key": str(key)
+                "key": str(key),
+                "cost": cost
             })
             
             # Sort by priority (descending) and timestamp (ascending)

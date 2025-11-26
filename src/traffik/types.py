@@ -1,10 +1,13 @@
 """Type definitions and protocols for the traffik package."""
 
 import typing
+from dataclasses import dataclass
 
 from starlette.requests import HTTPConnection
 from starlette.responses import Response
 from typing_extensions import ParamSpec, TypeAlias, TypedDict
+
+from traffik.rates import Rate
 
 __all__ = [
     "UNLIMITED",
@@ -111,6 +114,16 @@ class Dependency(typing.Protocol, typing.Generic[P, Rco]):
         *args: P.args,
         **kwargs: P.kwargs,  # Although FastAPI passes arguments as keyword arguments to dependencies
     ) -> typing.Union[Rco, typing.Awaitable[Rco]]: ...
+
+
+@dataclass(frozen=True)
+class StrategyStat:
+    """Statistics for a throttling strategy."""
+
+    key: Stringable
+    rate: Rate
+    hits_remaining: float
+    wait_time: WaitPeriod
 
 
 class AsyncLock(typing.Protocol):

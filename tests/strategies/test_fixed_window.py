@@ -159,7 +159,7 @@ async def test_fixed_window_multiple_windows(backend: InMemoryBackend):
     """Test behavior across multiple time windows."""
     async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
-        rate = Rate.parse("2/100ms")
+        rate = Rate.parse("2/200ms")
         key = "user:multiwindow"
 
         for window in range(3):

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import LockConfig, Stringable, WaitPeriod
+from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import JSONDecodeError, dump_json, load_json, time
 
 __all__ = ["SlidingWindowLogStrategy", "SlidingWindowCounterStrategy"]
@@ -49,7 +49,6 @@ class SlidingWindowLogStrategy:
     - TTL: Window duration + 1 second buffer
 
     **Example:**
-
     ```python
     from traffik.rates import Rate
     from traffik.strategies import SlidingWindowLogStrategy
@@ -79,7 +78,7 @@ class SlidingWindowLogStrategy:
     """Configuration for backend locking during log updates."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
     ) -> WaitPeriod:
         """
         Apply sliding window log rate limiting strategy.
@@ -87,6 +86,7 @@ class SlidingWindowLogStrategy:
         :param key: The throttling key (e.g., user ID, IP address).
         :param rate: The rate limit definition.
         :param backend: The throttle backend instance.
+        :param cost: The cost/weight of this request (default: 1).
         :return: Wait time in milliseconds if throttled, 0.0 if allowed.
         """
         if rate.unlimited:
@@ -102,26 +102,93 @@ class SlidingWindowLogStrategy:
 
         async with await backend.lock(f"lock:{log_key}", **self.lock_config):
             old_log_json = await backend.get(log_key)
+            # If log exists, load and parse entries as [timestamp, cost] tuples
             if old_log_json and old_log_json != "":
                 try:
-                    timestamps: typing.List[float] = load_json(old_log_json)
+                    entries: typing.List[typing.List[float]] = load_json(old_log_json)
                 except JSONDecodeError:
-                    timestamps = []
+                    entries = []
             else:
-                timestamps = []
+                entries = []
 
-            valid_timestamps = [float(ts) for ts in timestamps if ts > window_start]
-            if len(valid_timestamps) >= rate.limit:
-                oldest_timestamp = min(valid_timestamps)
+            # Filter entries to only include those within the current window and sum their costs
+            valid_entries = [
+                [float(ts), float(c)] for ts, c in entries if ts > window_start
+            ]
+            current_cost_sum = sum(c for _, c in valid_entries)
+
+            # If adding this request's cost would exceed limit, reject it
+            if current_cost_sum + cost > rate.limit:
+                # Find the oldest entry to calculate wait time
+                oldest_timestamp = min(ts for ts, _ in valid_entries)
                 wait_ms = (oldest_timestamp + window_duration_ms) - now
-                await backend.set(
-                    log_key, dump_json(valid_timestamps), expire=ttl_seconds
-                )
+                await backend.set(log_key, dump_json(valid_entries), expire=ttl_seconds)
                 return wait_ms
 
-            valid_timestamps.append(now)
-            await backend.set(log_key, dump_json(valid_timestamps), expire=ttl_seconds)
+            # If within limit, add this request as [timestamp, cost] entry
+            valid_entries.append([now, float(cost)])
+            await backend.set(log_key, dump_json(valid_entries), expire=ttl_seconds)
             return 0.0
+
+    async def get_stat(
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> StrategyStat:
+        """
+        Get current statistics for the rate limit.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: `StrategyStat` with current hits remaining and wait time.
+        """
+        if rate.unlimited:
+            return StrategyStat(
+                key=key,
+                rate=rate,
+                hits_remaining=float("inf"),
+                wait_time=0.0,
+            )
+
+        now = time() * 1000
+        window_duration_ms = rate.expire
+        window_start = now - window_duration_ms
+
+        full_key = await backend.get_key(str(key))
+        log_key = f"{full_key}:slidinglog"
+
+        old_log_json = await backend.get(log_key)
+        # If log exists, load and parse entries as [timestamp, cost] tuples
+        if old_log_json and old_log_json != "":
+            try:
+                entries: typing.List[typing.List[float]] = load_json(old_log_json)
+            except JSONDecodeError:
+                entries = []
+        else:
+            entries = []
+
+        # Filter entries to only include those within the current window and sum their costs
+        valid_entries = [
+            [float(ts), float(c)] for ts, c in entries if ts > window_start
+        ]
+        current_cost_sum = sum(c for _, c in valid_entries)
+
+        # Calculate remaining capacity
+        hits_remaining = max(rate.limit - current_cost_sum, 0.0)
+
+        # If over limit, calculate wait time
+        if current_cost_sum > rate.limit:
+            oldest_timestamp = min(ts for ts, _ in valid_entries)
+            wait_ms = (oldest_timestamp + window_duration_ms) - now
+            wait_ms = max(wait_ms, 0.0)
+        else:
+            wait_ms = 0.0
+
+        return StrategyStat(
+            key=key,
+            rate=rate,
+            hits_remaining=hits_remaining,
+            wait_time=wait_ms,
+        )
 
 
 @dataclass(frozen=True)
@@ -170,7 +237,6 @@ class SlidingWindowCounterStrategy:
         - If limit is 100, 20 more requests allowed
 
     **Example:**
-
     ```python
     from traffik.rates import Rate
     from traffik.strategies import SlidingWindowCounterStrategy
@@ -195,7 +261,7 @@ class SlidingWindowCounterStrategy:
     """Configuration for backend locking during counter updates."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
     ) -> WaitPeriod:
         """
         Apply sliding window counter rate limiting strategy.
@@ -203,6 +269,7 @@ class SlidingWindowCounterStrategy:
         :param key: The throttling key (e.g., user ID, IP address).
         :param rate: The rate limit definition.
         :param backend: The throttle backend instance.
+        :param cost: The cost/weight of this request (default: 1).
         :return: Wait time in milliseconds if throttled, 0.0 if allowed.
         """
         if rate.unlimited:
@@ -228,10 +295,12 @@ class SlidingWindowCounterStrategy:
         async with await backend.lock(
             f"lock:{previous_window_key}", **self.lock_config
         ):
+            # Increment current window counter by cost
             current_count = await backend.increment_with_ttl(
-                current_window_key, amount=1, ttl=ttl_seconds
+                current_window_key, amount=cost, ttl=ttl_seconds
             )
 
+            # Get previous window counter
             previous_count_str = await backend.get(previous_window_key)
             if previous_count_str and previous_count_str != "":
                 try:
@@ -245,7 +314,10 @@ class SlidingWindowCounterStrategy:
             else:
                 previous_count = 0
 
+            # Calculate weighted count using sliding window algorithm
             weighted_count = (previous_count * overlap_percentage) + current_count
+
+            # If weighted count exceeds limit, reject request
             if weighted_count > rate.limit:
                 requests_over = weighted_count - rate.limit
                 if previous_count > 0:
@@ -255,3 +327,68 @@ class SlidingWindowCounterStrategy:
                     wait_ms = window_duration_ms - time_in_current_window
                 return wait_ms
             return 0.0
+
+    async def get_stat(
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> StrategyStat:
+        """
+        Get current statistics for the rate limit.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: `StrategyStat` with current hits remaining and wait time.
+        """
+        if rate.unlimited:
+            return StrategyStat(
+                key=key,
+                rate=rate,
+                hits_remaining=float("inf"),
+                wait_time=0.0,
+            )
+
+        now = time() * 1000
+        window_duration_ms = rate.expire
+
+        current_window_id = int(now // window_duration_ms)
+        previous_window_id = current_window_id - 1
+
+        time_in_current_window = now % window_duration_ms
+        overlap_percentage = 1.0 - (time_in_current_window / window_duration_ms)
+
+        full_key = await backend.get_key(str(key))
+        current_window_key = f"{full_key}:slidingcounter:{current_window_id}"
+        previous_window_key = f"{full_key}:slidingcounter:{previous_window_id}"
+
+        # Get current window counter
+        current_count_str = await backend.get(current_window_key)
+        current_count = int(current_count_str) if current_count_str else 0
+
+        # Get previous window counter
+        previous_count_str = await backend.get(previous_window_key)
+        previous_count = int(previous_count_str) if previous_count_str else 0
+
+        # Calculate weighted count using sliding window algorithm
+        weighted_count = (previous_count * overlap_percentage) + current_count
+
+        # Calculate remaining hits
+        hits_remaining = max(rate.limit - weighted_count, 0.0)
+
+        # If over limit, calculate wait time
+        if weighted_count > rate.limit:
+            requests_over = weighted_count - rate.limit
+            if previous_count > 0:
+                wait_ratio = requests_over / previous_count
+                wait_ms = wait_ratio * time_in_current_window
+            else:
+                wait_ms = window_duration_ms - time_in_current_window
+            wait_ms = max(wait_ms, 0.0)
+        else:
+            wait_ms = 0.0
+
+        return StrategyStat(
+            key=key,
+            rate=rate,
+            hits_remaining=hits_remaining,
+            wait_time=wait_ms,
+        )

@@ -2,14 +2,13 @@
 
 import asyncio
 import functools
-import logging
 import typing
 
 from aiomcache import Client as MemcachedClient
 from aiomcache import ClientException
 
 from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import BackendConnectionError
+from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -20,15 +19,13 @@ from traffik.types import (
 )
 from traffik.utils import time
 
-logger = logging.getLogger(__name__)
-
 
 def _on_error_return(
     func: typing.Callable[P, typing.Awaitable[R]],
-    return_value: T = None,
+    return_value: typing.Optional[T] = None,
     hook: typing.Optional[typing.Callable[[Exception], bool]] = None,
     log: bool = False,
-) -> typing.Callable[P, typing.Awaitable[typing.Union[R, T]]]:
+) -> typing.Callable[P, typing.Awaitable[typing.Union[R, T, None]]]:
     """
     Decorator to catch `aiomcache.ClientException` and return a specified value.
     Used for handling transient Memcached errors gracefully.
@@ -42,12 +39,12 @@ def _on_error_return(
     """
 
     @functools.wraps(func)
-    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> typing.Union[R, T]:
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> typing.Union[R, T, None]:
         try:
             return await func(*args, **kwargs)
         except ClientException as exc:
             if log:
-                logger.error(f"Memcached error in {func.__name__}: {exc}")
+                print(f"Memcached error in {func.__name__}: {exc}") # type: ignore
 
             if hook and not hook(exc):
                 raise
@@ -77,7 +74,7 @@ class AsyncMemcachedLock:
 
         :param name: Unique lock name.
         :param client: `aiomcache.Client` instance.
-        :param release_timeout: Lock expiration time in seconds (default 10s).
+        :param release_timeout: Lock expiration time in seconds (default 5s).
         """
         self._name = name
         self._client = client
@@ -112,7 +109,7 @@ class AsyncMemcachedLock:
             # Returns True if added, False if key already exists
             added = await self._client.add(
                 self._name.encode(),
-                b"locked",
+                b"1",
                 exptime=self._release_timeout,
             )
             if added:
@@ -143,8 +140,10 @@ class AsyncMemcachedLock:
             await self._client.delete(self._name.encode())
         except asyncio.CancelledError:
             raise
-        except Exception:
-            # Lock might have expired or been deleted
+        except Exception as exc:
+            # Lock might have expired or been released already
+            # Log and ignore release errors to avoid deadlocks
+            print(f"Failed to release lock '{self._name}': {str(exc)}")
             pass  # nosec
         finally:
             self._acquired = False
@@ -214,6 +213,12 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         if self.connection is None:
             return
 
+        if "||" in key:
+            print(
+                f"Key '{key}' contains '||' character which is used as separator in tracking."
+                " Ensure keys do not contain this sequence."
+            )
+
         tracking_key = self._get_tracking_key()
         try:
             tracked = await self.connection.get(tracking_key.encode())
@@ -224,17 +229,17 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                     exptime=0,
                 )
             else:
-                keys_set = set(tracked.decode().split("|"))
+                keys_set = set(tracked.decode().split("||"))
                 if key not in keys_set:
                     keys_set.add(key)
-                    new_tracked = "|".join(sorted(keys_set))
+                    new_tracked = "||".join(sorted(keys_set))
                     await self.connection.set(
                         tracking_key.encode(),
                         new_tracked.encode(),
                         exptime=0,
                     )
         except Exception as exc:
-            logger.warning(f"Failed to track key '{key}': {exc}")
+            print(f"Failed to track key '{key}': {exc}")
 
     async def _untrack_key(self, key: str) -> None:
         """Remove key from tracking set."""
@@ -247,11 +252,11 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             if tracked is None:
                 return
 
-            keys_set = set(tracked.decode().split("|"))
+            keys_set = set(tracked.decode().split("||"))
             if key in keys_set:
                 keys_set.remove(key)
                 if keys_set:
-                    new_tracked = "|".join(sorted(keys_set))
+                    new_tracked = "||".join(sorted(keys_set))
                     await self.connection.set(
                         tracking_key.encode(),
                         new_tracked.encode(),
@@ -260,7 +265,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 else:
                     await self.connection.delete(tracking_key.encode())
         except Exception as exc:
-            logger.warning(f"Failed to untrack key '{key}': {exc}")
+            print(f"Failed to untrack key '{key}': {exc}")
 
     async def initialize(self) -> None:
         """Initialize the Memcached connection."""
@@ -346,7 +351,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         """
         Atomically increment counter.
 
-        Memcached's incr is atomic and thread-safe across all clients.
+        Memcached's `incr` is atomic and thread-safe across all clients.
 
         :param key: Counter key.
         :param amount: Amount to increment by.
@@ -386,7 +391,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         """
         Atomically decrement counter.
 
-        Memcached's decr is atomic and thread-safe across all clients.
+        Memcached's `decr` is atomic and thread-safe across all clients.
         Note: Memcached counters cannot go below 0.
 
         :param key: Counter key.
@@ -414,12 +419,12 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         # Use add() to atomically create if not exists
         added = await self.connection.add(
             key.encode(),
-            str(0 - amount).encode(),
+            str(-amount).encode(),
             exptime=0,
         )
         if added:
             await self._track_key(key)
-            return 0 - amount
+            return -amount
 
         # Someone else created it, try decrement again
         new_value = await self.connection.decr(key.encode(), amount)
@@ -458,7 +463,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         """
         Atomic increment with TTL.
 
-        For Memcached, we need to handle this specially since incr doesn't
+        For Memcached, we need to handle this specially since `incr` doesn't
         update expiration time.
 
         :param key: Counter key.
@@ -515,7 +520,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
 
         encoded_keys = [k.encode() for k in keys]
         values = await self.connection.multi_get(*encoded_keys)
-        results = []
+        results: typing.List[typing.Optional[str]] = []
         for value in values:
             if value is not None:
                 results.append(value.decode())
@@ -535,13 +540,19 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         if tracked is None:
             return
 
-        keys = tracked.decode().split("|")
+        keys = tracked.decode().split("||")
+        delete_tasks = []
         for key in keys:
-            try:
-                await self.connection.delete(key.encode())
-            except Exception as exc:
-                logger.warning(f"Failed to delete key '{key}': {exc}")
+            delete_tasks.append(self.connection.delete(key.encode()))
 
+        results = await asyncio.gather(*delete_tasks, return_exceptions=True)
+        for key, result in zip(keys, results):
+            if isinstance(result, Exception):
+                raise BackendError(
+                    f"Failed to clear key '{key}': {str(result)}"
+                ) from result
+
+        # Delete the tracking key itself finally
         await self.connection.delete(tracking_key.encode())
 
     async def reset(self) -> None:

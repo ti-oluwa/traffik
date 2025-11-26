@@ -3,26 +3,26 @@
 [![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
 [![Code Quality](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml)
 [![codecov](https://codecov.io/gh/ti-oluwa/traffik/branch/main/graph/badge.svg)](https://codecov.io/gh/ti-oluwa/traffik)
-<!-- [![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
-[![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/) -->
+[![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
+[![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/)
 
 Traffik provides flexible rate limiting for Starlette and FastAPI applications with support for both HTTP and WebSocket connections. It offers multiple rate limiting strategies including Fixed Window, Sliding Window, Token Bucket, and Leaky Bucket algorithms, allowing you to choose the approach that best fits your use case.
 
-The library features pluggable backends (in-memory, Redis, Memcached), dynamic backend resolution for special applications. Whether you need simple per-endpoint limits or complex distributed rate limiting, Traffik provides the flexibility and robustness to handle your requirements.
+The library features pluggable backends (in-memory, Redis, Memcached), context-aware backend resolution for special applications. Whether you need simple per-endpoint limits or complex distributed rate limiting, Traffik provides the flexibility and robustness to handle your requirements.
 
 Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-limiter) but has evolved into a more comprehensive solution with more advanced features.
 
 ## Features
 
-- 🚀 **Easy Integration**: Decorator, dependency, and middleware-based throttling
-- 🎯 **Multiple Strategies**: Fixed Window (default), Sliding Window, Token Bucket, Leaky Bucket
-- 🔄 **Multiple Backends**: In-memory, Redis, Memcached with atomic operation support
-- 🌐 **Protocol Support**: Both HTTP and WebSocket throttling
-- 🏢 **Dynamic Backend Resolution**: Support for runtime backend switching
-- 🔧 **Dependency Injection Friendly**: Works well with FastAPI's dependency injection system.
-- 📊 **Smart Client Identification**: IP-based by default, fully customizable
-- ⚙️ **Flexible and Extensible API**: Easily extend base functionality
-- 🧪 **Thoroughly Tested**: Comprehensive test suite covering concurrency and multithreading
+- **Easy Integration**: Decorator, dependency, and middleware-based throttling
+- **Multiple Strategies**: Fixed Window (default), Sliding Window, Token Bucket, Leaky Bucket
+- **Multiple Backends**: In-memory, Redis, Memcached with atomic operation support
+- **Protocol Support**: Both HTTP and WebSocket throttling
+- **Context-Aware Backend Resolution**: Support for runtime backend switching
+- **Dependency Injection Friendly**: Works well with FastAPI's dependency injection system.
+- **Smart Client Identification**: IP-based by default, fully customizable
+- **Middleware Support**: Global throttling via Starlette middleware
+- **Flexible and Extensible API**: Easily extend base functionality
 
 ## Installation
 
@@ -204,6 +204,7 @@ async def limited_endpoint():
 
 ```python
 from traffik.throttles import WebSocketThrottle
+from traffik.exceptions import ConnectionThrottled
 from starlette.websockets import WebSocket
 from starlette.exceptions import HTTPException
 
@@ -211,7 +212,6 @@ ws_throttle = WebSocketThrottle(uid="ws_messages", rate="3/10s")
 
 async def ws_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
-    
     while True:
         try:
             data = await websocket.receive_json()
@@ -221,7 +221,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                 "status": "success",
                 "data": data,
             })
-        except HTTPException as exc:
+        except ConnectionThrottled as exc:
             await websocket.send_json({
                 "status": "error", 
                 "status_code": exc.status_code,
@@ -236,7 +236,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
 
 Traffik supports multiple rate limiting strategies, each with different trade-offs. The **Fixed Window strategy is used by default** for its simplicity and performance.
 
-### Fixed Window (Default)
+### Fixed Window (Traffik Default)
 
 Divides time into fixed windows and counts requests within each window. Simple, fast, and memory-efficient.
 
@@ -310,7 +310,7 @@ You can create custom rate limiting strategies by implementing a callable that f
 
 ### Strategy Protocol
 
-A strategy is a callable (function or class with `__call__`) that takes three parameters and returns a wait period:
+A strategy is a callable (function or class with `__call__`) that takes four parameters and returns a wait period:
 
 ```python
 from traffik.backends.base import ThrottleBackend
@@ -318,14 +318,16 @@ from traffik.rates import Rate
 from traffik.types import Stringable, WaitPeriod
 
 async def my_strategy(
-    key: Stringable, 
-    rate: Rate, 
-    backend: ThrottleBackend
+    key: Stringable,
+    rate: Rate,
+    backend: ThrottleBackend,
+    cost: int = 1,
 ) -> WaitPeriod:
     """
     :param key: The throttling key (e.g., "user:123", "ip:192.168.1.1")
     :param rate: Rate limit definition with limit and expire properties
     :param backend: Backend instance for storage operations
+    :param cost: Cost of the request (default is 1)
     :return: Wait time in milliseconds (0.0 if request allowed)
     """
     # Your rate limiting logic here
@@ -345,7 +347,7 @@ from traffik.utils import time
 
 
 async def simple_counter_strategy(
-    self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
 ) -> WaitPeriod:
     """
     Simple counter-based rate limiting.
@@ -374,16 +376,16 @@ async def simple_counter_strategy(
             # Check if window has expired
             if now - timestamp > rate.expire:
                 # Reset counter for new window
-                count = 1
-                await backend.set(counter_key, "1", expire=ttl_seconds)
+                count = cost
+                await backend.set(counter_key, str(count), expire=ttl_seconds)
                 await backend.set(timestamp_key, str(now), expire=ttl_seconds)
             else:
                 # Increment counter
-                count = await backend.increment(counter_key)
+                count = await backend.increment(counter_key, amount=cost)
         else:
             # First request
-            count = 1
-            await backend.set(counter_key, "1", expire=ttl_seconds)
+            count = cost
+            await backend.set(counter_key, str(count), expire=ttl_seconds)
             await backend.set(timestamp_key, str(now), expire=ttl_seconds)
         
         # Check if limit exceeded
@@ -427,7 +429,7 @@ class AdaptiveRateStrategy:
     reduction_factor: float = 0.5  # Reduce to 50% during high load
     
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -442,8 +444,8 @@ class AdaptiveRateStrategy:
         ttl_seconds = int(window_duration_ms // 1000) + 1
         
         async with await backend.lock(f"lock:{counter_key}", blocking=True, blocking_timeout=1):
-            # Increment request counter
-            count = await backend.increment_with_ttl(counter_key, amount=1, ttl=ttl_seconds)
+            # Increment request counter by cost
+            count = await backend.increment_with_ttl(counter_key, amount=cost, ttl=ttl_seconds)
             
             # Calculate current load percentage
             load_percentage = count / rate.limit
@@ -515,14 +517,13 @@ class PriorityQueueStrategy:
         return self.default_priority
     
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
         
         now = time() * 1000
         priority = self._extract_priority(str(key))
-        
         full_key = await backend.get_key(str(key))
         queue_key = f"{full_key}:priority_queue"
         ttl_seconds = int(rate.expire // 1000) + 1
@@ -543,15 +544,14 @@ class PriorityQueueStrategy:
                 entry for entry in queue 
                 if now - entry["timestamp"] < rate.expire
             ]
-            
-            # Count requests with higher or equal priority
-            higher_priority_count = sum(
-                1 for entry in queue 
+            # Count total cost of requests with higher or equal priority
+            higher_priority_cost = sum(
+                entry.get("cost", 1) for entry in queue 
                 if entry["priority"] >= priority
             )
             
-            # Check if request can be processed
-            if higher_priority_count >= rate.limit:
+            # Check if request can be processed (including current request's cost)
+            if higher_priority_cost + cost > rate.limit:
                 # Calculate wait time based on oldest high-priority entry
                 oldest_high_priority = min(
                     (entry["timestamp"] for entry in queue if entry["priority"] >= priority),
@@ -564,12 +564,11 @@ class PriorityQueueStrategy:
             queue.append({
                 "timestamp": now,
                 "priority": priority,
-                "key": str(key)
+                "key": str(key),
+                "cost": cost
             })
-            
             # Sort by priority (descending) and timestamp (ascending)
             queue.sort(key=lambda x: (-x["priority"], x["timestamp"]))
-            
             # Store updated queue
             await backend.set(queue_key, dump_json(queue), expire=ttl_seconds)
             return 0.0
@@ -644,6 +643,10 @@ throttle = HTTPThrottle(
    except JSONDecodeError:
        data = default_value
    ```
+
+8. **Document your strategy**: Provide clear documentation for your strategy's behavior, configuration options, and any caveats.
+
+9. **Consider performance implications**: Be aware of the potential performance impact of your strategy, especially under high load. Avoid blocking operations (e.g, logging) and optimize data structures used for tracking requests.
 
 ### Testing Custom Strategies
 
@@ -828,6 +831,8 @@ class CustomBackend(ThrottleBackend[typing.Dict, HTTPConnectionT]):
         pass
 ```
 
+> Note: Ensure that backend operations are as fast as possible, and non-blocking. Avoiding logging or heavy computations in backend methods is crucial for performance. Use `print` statements if absolutely necessary for debugging.
+
 ### Throttle Backend Selection
 
 You can specify the backend for each throttle individually or allow them to share a common backend. The shared backend is usually the one set up in your application lifespan.
@@ -1005,6 +1010,69 @@ user_throttle = HTTPThrottle(
 )
 ```
 
+### Weighted Requests (Request Costs)
+
+Assign different costs to requests based on their resource intensity. This allows you to count expensive operations more heavily against rate limits:
+
+```python
+from fastapi import FastAPI, Request, Depends
+from traffik.throttles import HTTPThrottle
+
+# Default cost of 1 per request
+standard_throttle = HTTPThrottle(
+    uid="standard",
+    rate="100/m",
+)
+
+# Expensive operations cost more
+expensive_throttle = HTTPThrottle(
+    uid="reports",
+    rate="100/m",
+    cost=5,  # Each request counts as 5 toward the limit
+)
+
+# Per-request cost override
+async def dynamic_endpoint(request: Request):
+    # Check operation type
+    if request.query_params.get("full_export"):
+        # Override with higher cost for expensive operation
+        await expensive_throttle(request, cost=10)
+    else:
+        await expensive_throttle(request, cost=2)
+    return {"status": "ok"}
+
+@app.get("/api/data", dependencies=[Depends(standard_throttle)])
+async def get_data():
+    return {"data": "value"}
+
+@app.get("/api/reports", dependencies=[Depends(expensive_throttle)])
+async def generate_report():
+    return {"report": "data"}
+
+@app.post("/api/export")
+async def export_data(request: Request):
+    return await dynamic_endpoint(request)
+```
+
+**Use cases for request costs:**
+
+- Heavy database queries (cost=5)
+- Report generation (cost=10)
+- File uploads (cost based on file size)
+- AI/ML inference requests (cost=20)
+- Bulk operations (cost proportional to batch size)
+
+```python
+# Example: Cost based on request size
+async def size_based_cost(request: Request):
+    content_length = int(request.headers.get("content-length", 0))
+    # 1 cost per MB
+    cost = max(1, content_length // (1024 * 1024))
+    await upload_throttle(request, cost=cost)
+
+upload_throttle = HTTPThrottle(uid="uploads", rate="1000/h")
+```
+
 ### Strategy Selection Based on Use Case
 
 ```python
@@ -1045,9 +1113,9 @@ simple_api = HTTPThrottle(
 )
 ```
 
-### Dynamic Backend Resolution for Multi-Tenant Applications
+### Context-Aware (Dynamic) Backend Resolution
 
-Enable runtime backend switching for multi-tenant SaaS applications:
+Here, let's look at an example where we enable runtime backend switching for multi-tenant SaaS applications:
 
 ```python
 from fastapi import FastAPI, Request, Depends
@@ -1056,11 +1124,11 @@ from traffik.backends.redis import RedisBackend
 from traffik.backends.inmemory import InMemoryBackend
 import jwt
 
-# Shared throttle with dynamic backend resolution
+# Shared throttle with context-aware backend resolution
 api_throttle = HTTPThrottle(
     uid="api_quota",
     rate="1000/h",
-    dynamic_backend=True,  # Resolve backend at runtime
+    context_backend=True,  # Resolve backend at runtime based on request context
 )
 
 TENANT_CONFIG = {
@@ -1104,18 +1172,18 @@ async def get_data(request: Depends(api_throttle)):
     return {"data": "tenant-specific data"}
 ```
 
-**When to use dynamic backends:**
+**When to use context-aware backends:**
 
 - ✅ Multi-tenant SaaS with per-tenant storage
 - ✅ A/B testing different strategies
 - ✅ Environment-specific backends
 - ❌ Simple shared storage (use explicit `backend` parameter instead)
 
-**Important:** Dynamic backend resolution adds slight overhead and complexity. Only use when you need runtime backend switching.
+**Important:** Context-aware backend resolution adds slight overhead and complexity. Only use when you need runtime backend switching.
 
 ### Application Lifespan Management
 
-Properly manage backend lifecycle:
+It is necessary to manage the lifecycle of backends properly to ensure resources are cleaned up and connections are closed. To do this, integrate the backend's lifespan into your application. If you have a custom lifespan, make sure to include the backend's lifespan within it.
 
 #### Starlette
 
@@ -1152,7 +1220,7 @@ app = FastAPI(lifespan=lifespan)
 
 ## Throttle Middleware
 
-Apply rate limiting across multiple endpoints with sophisticated filtering and routing logic.
+With throttle middleware, you can apply rate limiting across multiple endpoints with sophisticated filtering and routing logic.
 
 ### Basic Middleware Setup
 
@@ -1209,6 +1277,8 @@ app = Starlette(
 
 #### Method-Based Filtering
 
+Throttle differently based on HTTP methods:
+
 ```python
 # Strict limits for write operations
 write_throttle = HTTPThrottle(uid="writes", rate="10/m")
@@ -1233,6 +1303,8 @@ app.add_middleware(
 
 #### Path Pattern Filtering
 
+Throttle based on URL path patterns:
+
 ```python
 # String patterns and regex
 api_throttle = HTTPThrottle(uid="api", rate="100/m")
@@ -1255,6 +1327,8 @@ app.add_middleware(
 ```
 
 #### Custom Hook-Based Filtering
+
+Throttle based on custom logic:
 
 ```python
 from starlette.requests import HTTPConnection
@@ -1282,6 +1356,8 @@ app.add_middleware(
 ```
 
 #### Combined Filtering
+
+Combine path, method, and hook criteria:
 
 ```python
 async def authenticated_only(connection: HTTPConnection) -> bool:
@@ -1321,7 +1397,7 @@ app.add_middleware(
 
 ## Error Handling
 
-Traffik provides specific exceptions for different scenarios:
+Traffik raises specific exceptions for different error scenarios:
 
 ### Exception Types
 
@@ -1359,6 +1435,8 @@ async def throttle_handler(request: Request, exc: ConnectionThrottled):
 
 ### Handling Configuration Errors
 
+A `ConfigurationError` is raised when there is an invalid configuration in your throttle or backend setup. You can catch this exception during application startup to log or handle misconfigurations.
+
 ```python
 from traffik.exceptions import ConfigurationError, BackendConnectionError
 
@@ -1373,7 +1451,7 @@ except ConfigurationError as exc:
 
 ### Handling Anonymous Connections
 
-The default identifier raises `AnonymousConnection` if it cannot identify the client. You can catch this exception to provide a fallback identifier.
+The default identifier raises `AnonymousConnection` if it cannot identify the client. You can catch this exception to provide a fallback identifier. Better still, implement a custom identifier function that handles anonymous clients gracefully.
 
 ```python
 from traffik.exceptions import AnonymousConnection
@@ -1469,7 +1547,7 @@ HTTPThrottle(
     handle_throttled: Optional[Callable],  # Custom handler
     strategy: Optional[Strategy],      # Rate limiting strategy
     backend: Optional[ThrottleBackend],  # Storage backend
-    dynamic_backend: bool = False,     # Runtime backend resolution
+    context_backend: bool = False,     # Runtime context-aware backend resolution
     min_wait_period: Optional[int] = None,  # Minimum wait (ms)
     headers: Optional[Dict[str, str]] = None,  # Extra headers to include in throttled response
 )
@@ -1487,7 +1565,7 @@ WebSocketThrottle(
     handle_throttled: Optional[Callable],
     strategy: Optional[Strategy],
     backend: Optional[ThrottleBackend],
-    dynamic_backend: bool = False,
+    context_backend: bool = False,
     min_wait_period: Optional[int] = None,
     headers: Optional[Dict[str, str]] = None,
 )

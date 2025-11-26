@@ -108,3 +108,18 @@ show_missing = true
 line-length = 88
 target-version = "py39"
 lint.extend-select = ["I", "UP", "TID", "F"]
+
+
+[tool.mypy]
+namespace_packages = "True"
+mypy_path = "src"
+
+[dependency-groups]
+dev = [
+    "bandit>=1.7.10",
+    "mypy>=1.14.1",
+    "orjson>=3.11.3",
+    "pytest-watch>=4.2.0",
+    "ruff>=0.12.1",
+    "traffik[test]",
+]

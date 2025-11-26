@@ -17,15 +17,15 @@ from traffik.throttles import HTTPThrottle
 
 @pytest.mark.asyncio
 @pytest.mark.throttle
-async def test_throttle_with_dynamic_backend(inmemory_backend: InMemoryBackend) -> None:
+async def test_throttle_with_context_backend(inmemory_backend: InMemoryBackend) -> None:
     """Test dynamic backend switching for `HTTPThrottle` in Starlette."""
-    # This throttle should raise an error if dynamic_backend is True
+    # This throttle should raise an error if context_backend is True
     # and a backend is provided
     with pytest.raises(ValueError):
         throttle = HTTPThrottle(
             "test-dynamic-backend-with-backend",
             rate=Rate(2, seconds=50, minutes=2, hours=1),
-            dynamic_backend=True,
+            context_backend=True,
             backend=inmemory_backend,
         )
 
@@ -34,10 +34,10 @@ async def test_throttle_with_dynamic_backend(inmemory_backend: InMemoryBackend) 
     throttle = HTTPThrottle(
         "test-dynamic-backend-no-backend",
         rate=Rate(2, seconds=50, minutes=2, hours=1),
-        dynamic_backend=True,
+        context_backend=True,
         identifier=default_client_identifier,
     )
-    assert throttle.dynamic_backend is True
+    assert throttle.context_backend is True
     assert throttle.backend is None
 
     dummy_request = Request(
@@ -85,7 +85,7 @@ async def test_throttle_with_dynamic_backend(inmemory_backend: InMemoryBackend) 
 
 
 @pytest.mark.throttle
-def test_throttle_with_dynamic_backend_and_lifespan(
+def test_throttle_with_context_backend_and_lifespan(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     """
@@ -97,7 +97,7 @@ def test_throttle_with_dynamic_backend_and_lifespan(
     throttle = HTTPThrottle(
         "test-dynamic-lifespan-endpoint-starlette",
         rate="2/s",
-        dynamic_backend=True,
+        context_backend=True,
         identifier=default_client_identifier,
     )
 
@@ -173,14 +173,14 @@ def test_throttle_with_dynamic_backend_and_lifespan(
 
 
 @pytest.mark.throttle
-def test_throttle_with_dynamic_backend_and_middleware(
+def test_throttle_with_context_backend_and_middleware(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     # Shared throttle for all tenants
     quota_throttle = HTTPThrottle(
         uid="api_quota",
         rate="2/min",
-        dynamic_backend=True,
+        context_backend=True,
         identifier=default_client_identifier,
     )
 

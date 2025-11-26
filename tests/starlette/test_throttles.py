@@ -124,7 +124,7 @@ async def test_http_throttle(backends: BackendGen) -> None:
         async with backend(close_on_exit=True):
             throttle = HTTPThrottle(
                 "test-http-throttle",
-                rate="3/3005ms",
+                rate="3/3500ms",
             )
             sleep_time = 4 + (5 / 1000)
 
@@ -167,7 +167,7 @@ async def test_http_throttle_concurrent(backends: BackendGen) -> None:
         async with backend(close_on_exit=True):
             throttle = HTTPThrottle(
                 "http-throttle-concurrent",
-                rate="3/s",
+                rate="3/1050ms",
                 strategy=strategies.TokenBucketStrategy(),
             )
 

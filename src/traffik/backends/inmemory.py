@@ -311,7 +311,7 @@ class InMemoryBackend(
                 self.connection[key] = (str(amount), expires_at)
                 return amount
 
-            value, expires_at = entry
+            value, expires_at = entry # type: ignore[assignment]
             # Check if expired
             if expires_at is not None and expires_at < time():
                 # Expired, reinitialize with new TTL

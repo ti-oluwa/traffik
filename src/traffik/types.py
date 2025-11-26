@@ -1,7 +1,7 @@
 """Type definitions and protocols for the traffik package."""
 
-from dataclasses import dataclass
 import typing
+from dataclasses import dataclass
 
 from starlette.requests import HTTPConnection
 from starlette.responses import Response

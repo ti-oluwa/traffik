@@ -68,7 +68,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         self,
         throttle: BaseThrottle[HTTPConnectionT],
         path: typing.Optional[Matchable] = None,
-        methods: typing.Optional[typing.Set[str]] = None,
+        methods: typing.Optional[typing.Iterable[str]] = None,
         hook: typing.Optional[ThrottleHook[HTTPConnectionT]] = None,
     ) -> None:
         """
@@ -235,6 +235,6 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
 
         # Ensure that the next middleware or application call is not nested
         # within this middleware's backend context. Else, it would cause
-        # the next backend to use the same backend context as this middleware,
+        # the next call to use the same backend context as this middleware,
         # even when it supposed to use the backend context set on lifespan.
         await self.app(scope, receive, send)

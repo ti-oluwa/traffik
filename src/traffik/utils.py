@@ -4,7 +4,6 @@ import asyncio
 import functools
 import inspect
 import ipaddress
-import logging
 import typing
 from collections import deque
 from types import TracebackType
@@ -19,8 +18,6 @@ try:
     import orjson as json  # type: ignore[import]
 except ImportError:
     import json  # type: ignore[no-redef]
-
-logger = logging.getLogger(__name__)
 
 
 def get_ip_address(
@@ -246,9 +243,12 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
                     self._released_by_timeout = True
                     self._acquired = False
                 except RuntimeError:
+                    # This needs to be a fast operation. Cannot use logger here as it blocks the event loop,
+                    # and it may cause deadlocks if logging uses the same backend
+
                     # Lock might have been released already or not owned by us
                     # This can happen with reentrant locks
-                    logger.warning(
+                    print(
                         "Failed to auto-release lock after timeout; it may have been released already."
                         " This can happen with reentrant locks, and can lead to unexpected behavior.",
                     )
@@ -277,9 +277,12 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
             try:
                 await self._lock.release()
             except RuntimeError:
+                # This needs to be a fast operation. Cannot use logger here as it blocks the event loop,
+                # and it may cause deadlocks if logging uses the same backend
+
                 # Lock might have been released by timeout in a race
                 # or not owned by current task
-                logger.warning(
+                print(
                     "Failed to release lock on context exit; it may have been released already."
                     " This can happen with reentrant locks, and can lead to unexpected behavior.",
                 )

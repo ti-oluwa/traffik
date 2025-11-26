@@ -1,8 +1,6 @@
 """Throttles for HTTP and WebSocket connections."""
 
 import hashlib
-import logging
-from re import S
 import typing
 
 from starlette.requests import Request
@@ -13,22 +11,19 @@ from traffik.exceptions import ConfigurationError, TraffikException
 from traffik.rates import Rate
 from traffik.strategies import default_strategy
 from traffik.types import (
+    UNLIMITED,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
     StrategyStat,
     Stringable,
-    UNLIMITED,
     WaitPeriod,
 )
-
-logger = logging.getLogger(__name__)
-
 
 __all__ = ["BaseThrottle", "HTTPThrottle", "WebSocketThrottle"]
 
 ThrottleStrategy = typing.Callable[
-    [Stringable, Rate, ThrottleBackend[typing.Any, HTTPConnectionT], int],
+    [Stringable, Rate, ThrottleBackend[typing.Any, HTTPConnectionT], int],  # type: ignore[misc]
     typing.Awaitable[WaitPeriod],
 ]
 """
@@ -52,7 +47,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]] = None,
         cost: int = 1,
-        dynamic_backend: bool = False,
+        context_backend: bool = False,
         min_wait_period: typing.Optional[int] = None,
         headers: typing.Optional[typing.Mapping[str, str]] = None,
     ) -> None:
@@ -83,12 +78,12 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             The backend is responsible for managing the throttling state,
             including checking the current throttling status, updating it, and handling
             throttled connections.
-            If `dynamic_backend` is True, the backend will be resolved from the request context
+            If `context_backend` is True, the backend will be resolved from the request context
             on each call, allowing for dynamic backend resolution based on the request context.
         :param cost: The cost/weight of each request. This allows for different requests
             to have different impacts on the throttling state. For example, a request that performs a
             resource-intensive operation might have a higher cost than a simple read request.
-        :param dynamic_backend: If True, resolves backend from (request) context on each call instead of caching.
+        :param context_backend: If True, resolves backend from (request) context on each call instead of caching.
             Use ONLY when backend choice must be determined dynamically at runtime.
 
             This feature is designed for advanced use cases where the same throttle instance
@@ -105,7 +100,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             tenant_throttle = HTTPThrottle(
                 uid="api_quota",
                 rate="1000/h",
-                dynamic_backend=True
+                context_backend=True
             )
 
             async def tenant_middleware(request, call_next):
@@ -124,7 +119,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
 
             Example (Testing with nested contexts):
             ```python
-            throttle = HTTPThrottle(uid="test", limit=3, seconds=5, dynamic_backend=True)
+            throttle = HTTPThrottle(uid="test", limit=3, seconds=5, context_backend=True)
 
             async with backend_a():
                 await throttle(request)  # Uses backend_a
@@ -144,7 +139,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", backend=shared_backend)
 
             # BAD - Unnecessary dynamic resolution
-            user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", dynamic_backend=True)
+            user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", context_backend=True)
             ```
 
             **WARNING:** This feature adds complexity and slight performance overhead.
@@ -162,21 +157,21 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         if not uid or not isinstance(uid, str):
             raise ValueError("uid is required and must be a non-empty string")
 
-        if dynamic_backend and backend is not None:
+        if context_backend and backend is not None:
             raise ValueError(
-                "Cannot specify explicit backend with dynamic_backend=True"
+                "Cannot specify explicit backend with context_backend=True"
             )
 
         self.uid = uid
         self.rate = Rate.parse(rate) if isinstance(rate, str) else rate
         self.cost = cost
-        self.dynamic_backend = dynamic_backend
+        self.context_backend = context_backend
         self.strategy = strategy or default_strategy
         self.min_wait_period = min_wait_period
         self.headers = dict(headers or {})
 
-        # Only set backend for non-dynamic throttles
-        if not dynamic_backend:
+        # Only set backend for non-context backend throttles
+        if not context_backend:
             resolved_backend = backend or get_throttle_backend()
             self.backend = resolved_backend
 
@@ -217,7 +212,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
                     "Provide a backend to the throttle or set a default backend."
                 )
             # Only set/cache the backend if the throttle is not dynamic.
-            if not self.dynamic_backend:
+            if not self.context_backend:
                 self.backend = backend
         else:
             backend = self.backend  # type: ignore[assignment]
@@ -276,7 +271,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             cost = cost if cost is not None else self.cost
             wait_ms = await self.strategy(namespaced_key, self.rate, backend, cost)
         except TimeoutError as exc:
-            logging.warning(
+            print(
                 f"An error occurred while utilizing strategy '{self.strategy!r}': {exc}",
             )
             wait_ms = self.min_wait_period or 1000  # Default to 1000ms
@@ -305,7 +300,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         :return: A `ThrottleStat` object containing the current throttling statistics,
             or None if the connection is not being throttled or the throttle strategy does not support stats
         """
-        # Check if the strategy has a `get_stat` method. This is to ensure backward compatibility
+        # We check if the strategy has a `get_stat` method. This is to ensure backward compatibility
         # with the defined `ThrottleStrategy` type which does not include `get_stat`.
         if not hasattr(self.strategy, "get_stat"):
             return None
@@ -391,8 +386,8 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
     async def __call__(
         self,
         connection: WebSocket,
-        context_key: typing.Optional[str] = None,
         cost: typing.Optional[int] = None,
+        context_key: typing.Optional[str] = None,
     ) -> WebSocket:
         """
         Calls the throttle for a `WebSocket` connection.

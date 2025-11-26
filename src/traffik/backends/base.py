@@ -137,6 +137,9 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
     The `get()`, `set()`, and `delete()` methods need explicit locking when utilized in racy conditions.
     Hence, locks should not be implemented implicitly in these methods.
+
+    NOTE: All backend operation must be done as fast as possible and should not block the event loop.
+    Operations like logging should not be done on critical paths to prevent deadlocks or performance issues.
     """
 
     base_exception_type: typing.ClassVar[typing.Type[BaseException]] = BaseException

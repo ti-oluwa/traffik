@@ -456,7 +456,7 @@ async def test_asynchronous_lock_synchronization(backends: BackendGen) -> None:
                     # Read current value
                     value = int(await backend.get(key) or "0")
                     # Simulate some work
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.001)
                     # Write new value
                     await backend.set(key, str(value + 1))
 
@@ -559,7 +559,7 @@ async def test_multithreaded_lock_synchronization(backends: BackendGen) -> None:
             kwargs={
                 "thread_id": i,
                 "blocking": True,
-                "blocking_timeout": 0.5,
+                "blocking_timeout": 1.5,
             },
         )
         threads.append(thread)

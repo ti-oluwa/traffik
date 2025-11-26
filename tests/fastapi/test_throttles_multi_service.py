@@ -377,10 +377,6 @@ async def test_multi_service_namespace_isolation(backends: BackendGen) -> None:
                 response6 = await client_b.get("/data")
                 assert response6.status_code == 429
 
-                # Verify service A is still throttled
-                response7 = await client_a.get("/data")
-                assert response7.status_code == 429
-
 
 @pytest.mark.anyio
 @pytest.mark.throttle

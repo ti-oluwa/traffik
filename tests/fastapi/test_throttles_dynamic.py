@@ -16,14 +16,14 @@ from traffik.throttles import HTTPThrottle
 @pytest.mark.asyncio
 @pytest.mark.throttle
 @pytest.mark.fastapi
-async def test_throttle_dynamic_backend(inmemory_backend: InMemoryBackend) -> None:
-    # This throttle should raise an error if dynamic_backend is True
+async def test_throttle_context_backend(inmemory_backend: InMemoryBackend) -> None:
+    # This throttle should raise an error if context_backend is True
     # and a backend is provided, as it should not use the backend
     with pytest.raises(ValueError):
         throttle = HTTPThrottle(
             "test-dynamic-backend-with-backend",
             rate=Rate(2, seconds=50, minutes=2, hours=1),
-            dynamic_backend=True,
+            context_backend=True,
             backend=inmemory_backend,
         )
 
@@ -32,10 +32,10 @@ async def test_throttle_dynamic_backend(inmemory_backend: InMemoryBackend) -> No
     throttle = HTTPThrottle(
         "test-dynamic-backend-no-backend",
         rate=Rate(2, seconds=50, minutes=2, hours=1),
-        dynamic_backend=True,
+        context_backend=True,
         identifier=default_client_identifier,
     )
-    assert throttle.dynamic_backend is True
+    assert throttle.context_backend is True
     assert throttle.backend is None
 
     dummy_request = Request(
@@ -81,7 +81,7 @@ async def test_throttle_dynamic_backend(inmemory_backend: InMemoryBackend) -> No
 
 @pytest.mark.throttle
 @pytest.mark.fastapi
-def test_throttle_with_dynamic_backend_and_lifespan(
+def test_throttle_with_context_backend_and_lifespan(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     """
@@ -92,10 +92,10 @@ def test_throttle_with_dynamic_backend_and_lifespan(
     """
     throttle = HTTPThrottle(
         "test-dynamic-lifespan-endpoint",
-        rate="2/s",
-        dynamic_backend=True,
+        rate="2/1020ms",
+        context_backend=True,
         identifier=default_client_identifier,
-    )  # Create app with lifespan using inmemory_backend
+    )  # Create app with lifespan using `inmemory_backend`
     app = FastAPI(lifespan=inmemory_backend.lifespan)
 
     # Create a separate backend for endpoint-specific usage
@@ -103,7 +103,7 @@ def test_throttle_with_dynamic_backend_and_lifespan(
 
     @app.get("/normal", dependencies=[Depends(throttle)])
     async def normal_endpoint(request: Request) -> typing.Dict[str, str]:
-        """Uses the lifespan backend (inmemory_backend)"""
+        """Uses the lifespan backend (`inmemory_backend`)"""
         return {"message": "normal endpoint", "backend": "lifespan"}
 
     @app.get("/special")
@@ -128,7 +128,7 @@ def test_throttle_with_dynamic_backend_and_lifespan(
         assert response3.status_code == 429
         assert "Retry-After" in response3.headers
 
-        # Verify the lifespan backend has 1 connection recorded
+        # Verify the lifespan backend has at least 1 connection recorded
         assert inmemory_backend.connection is not None
         assert len(inmemory_backend.connection) >= 1
         assert (
@@ -163,14 +163,14 @@ def test_throttle_with_dynamic_backend_and_lifespan(
 
 @pytest.mark.throttle
 @pytest.mark.fastapi
-def test_throttle_with_dynamic_backend_and_middleware(
+def test_throttle_with_context_backend_and_middleware(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     # Shared throttle for all tenants
     api_quota_throttle = HTTPThrottle(
         uid="api_quota",
         rate="2/min",
-        dynamic_backend=True,
+        context_backend=True,
         identifier=default_client_identifier,
     )
 

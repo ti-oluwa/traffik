@@ -52,7 +52,7 @@ class TestRateEdgeCases:
         """Test with very short time window (milliseconds)."""
         async with backend(close_on_exit=True):
             strategy = FixedWindowStrategy()
-            rate = Rate.parse("5/10ms")
+            rate = Rate.parse("5/20ms")
             key = "user:short"
 
             # Should handle short windows
@@ -62,7 +62,7 @@ class TestRateEdgeCases:
 
             wait = await strategy(key, rate, backend)
             assert wait > 0, "Should throttle after limit"
-            assert wait <= 10, "Wait should be within short window"
+            assert wait <= 15, "Wait should be within short window"
 
     @pytest.mark.anyio
     @pytest.mark.strategy

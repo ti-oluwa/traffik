@@ -124,14 +124,12 @@ class AsyncRedisLock:
         will the underlying Redis lock actually be released.
         """
         task_locks = self._get_task_locks()
-
         if self._name not in task_locks:
             raise RuntimeError(
                 f"Cannot release lock '{self._name}' - not owned by current task"
             )
 
         lock_obj, count = task_locks[self._name]
-
         if count > 1:
             # Decrement reentrancy counter
             task_locks[self._name] = (lock_obj, count - 1)
@@ -142,8 +140,10 @@ class AsyncRedisLock:
             await lock_obj.release()
         except asyncio.CancelledError:
             raise
-        except Exception:  # nosec
+        except Exception as exc:  # nosec
             # Lock might have expired or been released already
+            # Log and ignore release errors to avoid deadlocks
+            print(f"Failed to release lock '{self._name}': {str(exc)}")
             pass
         finally:
             del task_locks[self._name]

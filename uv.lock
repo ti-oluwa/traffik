@@ -1090,6 +1090,16 @@ test = [
     { name = "requests" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "bandit" },
+    { name = "mypy" },
+    { name = "orjson" },
+    { name = "pytest-watch" },
+    { name = "ruff" },
+    { name = "traffik", extra = ["test"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiomcache", marker = "extra == 'memcached'", specifier = ">=0.8.2" },
@@ -1115,6 +1125,16 @@ requires-dist = [
     { name = "traffik", extras = ["test"], marker = "extra == 'dev'" },
 ]
 provides-extras = ["all", "test", "dev", "redis", "memcached"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bandit", specifier = ">=1.7.10" },
+    { name = "mypy", specifier = ">=1.14.1" },
+    { name = "orjson", specifier = ">=3.11.3" },
+    { name = "pytest-watch", specifier = ">=4.2.0" },
+    { name = "ruff", specifier = ">=0.12.1" },
+    { name = "traffik", extras = ["test"] },
+]
 
 [[package]]
 name = "typing-extensions"

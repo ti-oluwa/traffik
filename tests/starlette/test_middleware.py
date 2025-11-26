@@ -362,7 +362,7 @@ def test_middleware_with_multiple_throttles(inmemory_backend: InMemoryBackend) -
     # Different throttles for different endpoints
     api_throttle = HTTPThrottle(
         uid="api-throttle",
-        rate="2/s",
+        rate="2/700ms",
         identifier=default_client_identifier,
     )
     admin_throttle = HTTPThrottle(

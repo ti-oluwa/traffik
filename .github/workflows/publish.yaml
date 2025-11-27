@@ -227,9 +227,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build, publish-testpypi]
     if: >
-      github.event_name == 'release' && 
+      (github.event_name == 'workflow_dispatch' || 
+      (github.event_name == 'release' && 
       github.event.action == 'published' &&
-      !github.event.release.prerelease &&
+      !github.event.release.prerelease)) &&
       (github.event.inputs.test_only != 'true' || github.event.inputs.test_only == '') &&
       always() &&
       needs.build.result == 'success' &&

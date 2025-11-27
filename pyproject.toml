@@ -1,6 +1,6 @@
 [project]
 name = "traffik"
-version = "1.0.0b1"
+version = "1.0.0b2"
 description = "Distributed rate limiting for Starlette applications."
 readme = "README.md"
 authors = [

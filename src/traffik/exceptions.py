@@ -36,7 +36,7 @@ class BackendConnectionError(BackendError):
     pass
 
 
-class LockTimeoutError(TraffikException, TimeoutError):
+class LockTimeoutError(BackendError, TimeoutError):
     """Exception raised when a lock timeout occurs"""
 
     pass

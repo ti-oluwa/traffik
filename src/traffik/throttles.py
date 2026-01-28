@@ -8,12 +8,13 @@ from starlette.requests import Request
 from starlette.websockets import WebSocket
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import ConfigurationError, TraffikException
+from traffik.exceptions import BackendError, ConfigurationError, TraffikException
 from traffik.rates import Rate
 from traffik.strategies import default_strategy
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
+    ErrorHandler,
     HTTPConnectionT,
     StrategyStat,
     Stringable,
@@ -51,6 +52,12 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         context_backend: bool = False,
         min_wait_period: typing.Optional[int] = None,
         headers: typing.Optional[typing.Mapping[str, str]] = None,
+        on_error: typing.Optional[
+            typing.Union[
+                typing.Literal["allow", "throttle", "raise"],
+                ErrorHandler[HTTPConnectionT],
+            ]
+        ] = None,
     ) -> None:
         """
         Initialize the throttle.
@@ -154,6 +161,16 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         :param min_wait_period: The minimum allowable wait period (in milliseconds) for a throttled connection.
         :param headers: Optional headers to include in throttling responses. A use case can
             be to include additional throttle/throttling information in the response headers.
+        :param on_error: Strategy for handling errors during throttling.
+            Can be one of the following:
+            - "allow": Allow the request to proceed without throttling.
+            - "throttle": Throttle the request as if it exceeded the rate limit.
+            - "raise": Raise the exception encountered during throttling.
+            - A custom callable that takes the connection and the exception as parameters and
+                returns an integer representing the wait period in milliseconds. Ensure this
+                function executes quickly to avoid additional latency.
+
+            If not provided, defaults to behavior defined by the backend or "throttle".
         """
         if not uid or not isinstance(uid, str):
             raise ValueError("uid is required and must be a non-empty string")
@@ -184,10 +201,16 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
                 if resolved_backend is not None
                 else None
             )
+            self.on_error = on_error or (
+                resolved_backend.on_error
+                if resolved_backend is not None
+                else "throttle"
+            )
         else:
             self.backend = backend
             self.identifier = identifier
             self.handle_throttled = handle_throttled
+            self.on_error = on_error
 
     async def get_backend(
         self, connection: typing.Optional[HTTPConnectionT] = None
@@ -239,6 +262,33 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         namespaced_key = f"{self.uid}:{str(connection_id)}:{throttle_key}"
         return namespaced_key
 
+    async def handle_error(
+        self, connection: HTTPConnectionT, exc: Exception
+    ) -> WaitPeriod:
+        """
+        Handle errors during throttling based on the configured strategy.
+
+        :param connection: The HTTP connection being throttled.
+        :param exc: The exception that occurred during throttling.
+        :return: The wait period in milliseconds.
+        """
+        if self.on_error is None:
+            return self.min_wait_period or 1000  # Default to 1000ms
+
+        if isinstance(self.on_error, str):
+            if self.on_error == "allow":
+                return 0
+            elif self.on_error == "throttle":
+                return self.min_wait_period or 1000  # Default to 1000ms
+            elif self.on_error == "raise":
+                raise exc
+            else:
+                raise ValueError(
+                    f"Invalid on_error value: {self.on_error!r}. "
+                    "Must be 'allow', 'throttle', 'raise', or a callable."
+                )
+        return await self.on_error(connection, exc)
+
     async def __call__(
         self,
         connection: HTTPConnectionT,
@@ -271,11 +321,11 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         try:
             cost = cost if cost is not None else self.cost
             wait_ms = await self.strategy(namespaced_key, self.rate, backend, cost)
-        except TimeoutError as exc:
+        except (BackendError, TimeoutError) as exc:
             print(
                 f"Warning: An error occurred while utilizing strategy '{self.strategy!r}': {exc}",
             )
-            wait_ms = self.min_wait_period or 1000  # Default to 1000ms
+            wait_ms = await self.handle_error(connection, exc)
 
         if self.min_wait_period is not None:
             wait_ms = max(wait_ms, self.min_wait_period)
@@ -385,7 +435,7 @@ async def websocket_throttled(
         {
             "type": "rate_limit",
             "error": "Too many messages",
-            "retry_after_seconds": wait_seconds,
+            "retry_after": wait_seconds,
             **kwargs.get("extras", {}),
         }
     )
@@ -406,6 +456,12 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
         context_backend: bool = False,
         min_wait_period: typing.Optional[int] = None,
         headers: typing.Optional[typing.Mapping[str, str]] = None,
+        on_error: typing.Optional[
+            typing.Union[
+                typing.Literal["allow", "throttle", "raise"],
+                ErrorHandler[WebSocket],
+            ]
+        ] = None,
     ) -> None:
         if handle_throttled is None:
             handle_throttled = websocket_throttled
@@ -420,6 +476,7 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
             context_backend=context_backend,
             min_wait_period=min_wait_period,
             headers=headers,
+            on_error=on_error,
         )
 
     async def get_key(  # type: ignore[override]

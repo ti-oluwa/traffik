@@ -925,7 +925,7 @@ from traffik import UNLIMITED
 from traffik.throttles import HTTPThrottle
 
 
-async def admin_bypass_identifier(connection: HTTPConnection) -> typing.Any:
+async def allow_admin_id(connection: HTTPConnection) -> typing.Any:
     """Bypass throttling for admin users"""
     user_role = extract_role(connection.headers.get("authorization"))
     if user_role == "admin":
@@ -938,7 +938,7 @@ async def admin_bypass_identifier(connection: HTTPConnection) -> typing.Any:
 throttle = HTTPThrottle(
     uid="api_limit",
     rate="50/m",
-    identifier=admin_bypass_identifier,
+    identifier=allow_admin_id,
 )
 ```
 
@@ -950,11 +950,10 @@ Customize the response when rate limits are exceeded:
 from starlette.requests import HTTPConnection
 from starlette.exceptions import HTTPException
 
-async def custom_throttled_handler(
+async def throttled_handler(
     connection: HTTPConnection, 
     wait_ms: int,
-    *args,
-    **kwargs
+    *args, **kwargs
 ):
     wait_seconds = wait_ms // 1000
     raise HTTPException(
@@ -970,7 +969,7 @@ async def custom_throttled_handler(
 throttle = HTTPThrottle(
     uid="api",
     rate="100/m",
-    handle_throttled=custom_throttled_handler,
+    handle_throttled=throttled_handler,
 )
 ```
 
@@ -1004,14 +1003,14 @@ async def get_data():
 from traffik.throttles import HTTPThrottle
 from starlette.requests import Request
 
-async def user_identifier(request: Request) -> str:
+async def get_user_id(request: Request) -> str:
     user_id = extract_user_from_token(request.headers.get("authorization"))
     return f"user:{user_id}"
 
 user_throttle = HTTPThrottle(
     uid="user_quota",
     rate="1000/h",
-    identifier=user_identifier,
+    identifier=get_user_id,
 )
 ```
 
@@ -1068,6 +1067,8 @@ async def export_data(request: Request):
 - Bulk operations (cost proportional to batch size)
 
 ```python
+upload_throttle = HTTPThrottle(uid="uploads", rate="1000/h")
+
 # Example: Cost based on request size
 async def size_based_cost(request: Request):
     content_length = int(request.headers.get("content-length", 0))
@@ -1075,7 +1076,6 @@ async def size_based_cost(request: Request):
     cost = max(1, content_length // (1024 * 1024))
     await upload_throttle(request, cost=cost)
 
-upload_throttle = HTTPThrottle(uid="uploads", rate="1000/h")
 ```
 
 ### Strategy Selection Based on Use Case
@@ -1462,7 +1462,7 @@ The default identifier raises `AnonymousConnection` if it cannot identify the cl
 from traffik.exceptions import AnonymousConnection
 from traffik.backends.base import connection_identifier
 
-async def safe_identifier(connection: HTTPConnection) -> str:
+async def get_safe_id(connection: HTTPConnection) -> str:
     try:
         return await connection_identifier(connection)
     except AnonymousConnection:
@@ -1670,7 +1670,7 @@ MiddlewareThrottle(
     throttle: BaseThrottle,
     path: Optional[Union[str, Pattern]] = None,
     methods: Optional[Set[str]] = None,
-    hook: Optional[Callable] = None,
+    predicate: Optional[Callable] = None,
 )
 ```
 

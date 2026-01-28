@@ -1,13 +1,13 @@
 """Base classes and utilities for throttle backends."""
 
 import asyncio
+from contextlib import asynccontextmanager
+from contextvars import ContextVar, Token
 import functools
 import hashlib
 import inspect
 import math
 import typing
-from contextlib import asynccontextmanager
-from contextvars import ContextVar, Token
 
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
@@ -18,6 +18,7 @@ from traffik.types import (
     AsyncLock,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
+    ErrorHandler,
     HTTPConnectionT,
     P,
     R,
@@ -194,6 +195,9 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             ConnectionThrottledHandler[HTTPConnectionT]
         ] = None,
         persistent: bool = False,
+        on_error: typing.Union[
+            typing.Literal["allow", "throttle", "raise"], ErrorHandler[HTTPConnectionT]
+        ] = "throttle",
     ) -> None:
         """
         Initialize the throttle backend with a prefix.
@@ -203,12 +207,20 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :param identifier: The connected client identifier generator.
         :param handle_throttled: The handler to call when the client connection is throttled.
         :param persistent: Whether to persist throttling data across application restarts.
+        :param on_error: Strategy to handle errors during throttling operations.
+            - "allow": Allow the request to proceed without throttling.
+            - "throttle": Throttle the request as if it exceeded the rate limit.
+            - "raise": Raise the exception encountered during throttling.
+            - A custom callable that takes the connection and the exception as parameters
+                and returns an integer representing the wait period in milliseconds. Ensure this
+                function executes quickly to avoid additional latency.
         """
         self.connection = connection
         self.namespace = namespace
         self.identifier = identifier or connection_identifier
         self.handle_throttled = handle_throttled or connection_throttled
         self.persistent = persistent
+        self.on_error = on_error
 
     async def get_key(self, key: str, *args, **kwargs) -> str:
         """

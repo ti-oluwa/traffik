@@ -1,7 +1,7 @@
 """Type definitions and protocols for the traffik package."""
 
-import typing
 from dataclasses import dataclass
+import typing
 
 from starlette.requests import HTTPConnection
 from starlette.responses import Response
@@ -55,6 +55,13 @@ ExceptionHandler: TypeAlias = typing.Callable[
 ]
 
 AwaitableCallable = typing.Callable[..., typing.Awaitable[T]]
+
+ErrorHandler = typing.Callable[[HTTPConnectionT, Exception], typing.Awaitable[int]]
+"""
+A callable that handles errors during throttling.
+Takes the connection and the exception as parameters.
+Returns an integer representing the wait period in milliseconds.
+"""
 
 
 class LockConfig(TypedDict, total=False):

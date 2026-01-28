@@ -1,16 +1,21 @@
 """Tests for stat functionality in HTTP and WebSocket throttles."""
 
-import pytest
+import asyncio
+
 from fastapi import FastAPI
+from fastapi import WebSocket
 from httpx import ASGITransport, AsyncClient
+import pytest
 from starlette.requests import Request
 
+from tests.asyncio_client import AsyncioTestClient
 from tests.utils import default_client_identifier
+from traffik.backends.base import connection_throttled
 from traffik.backends.inmemory import InMemoryBackend
+from traffik.exceptions import ConnectionThrottled
 from traffik.rates import Rate
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
-
 
 @pytest.mark.asyncio
 @pytest.mark.throttle
@@ -250,12 +255,6 @@ async def test_http_throttle_stat_unlimited_rate(
 @pytest.mark.fastapi
 async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> None:
     """Test WebSocketThrottle.stat() method."""
-    import asyncio
-
-    from fastapi import WebSocket
-
-    from tests.asyncio_client import AsyncioTestClient
-    from traffik.exceptions import ConnectionThrottled
 
     async with inmemory_backend(close_on_exit=True):
         ws_throttle = WebSocketThrottle(
@@ -263,6 +262,8 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
             rate="5/s",
             identifier=default_client_identifier,  # type: ignore
             strategy=FixedWindowStrategy(),
+            # Use this handler so an exception is raised on throttle
+            handle_throttled=connection_throttled,
         )
         app = FastAPI()
 
@@ -282,7 +283,6 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
             try:
                 while True:
                     _ = await websocket.receive_text()
-
                     # Get stat before throttle
                     stat_before = await ws_throttle.stat(websocket)
 
@@ -297,7 +297,6 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
 
                     # Get stat after throttle
                     stat_after = await ws_throttle.stat(websocket)
-
                     await websocket.send_json(
                         {
                             "before": stat_before.hits_remaining

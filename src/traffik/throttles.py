@@ -246,24 +246,23 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         self,
         connection: HTTPConnectionT,
         connection_id: Stringable,
-        *args: typing.Any,
-        **kwargs: typing.Any,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> str:
         """
         Returns the namespaced throttling key for the connection.
 
         :param connection: The HTTP connection to throttle.
         :param connection_id: The unique identifier for the connection.
-        :param args: Additional positional arguments to pass to the throttle key generator.
-        :param kwargs: Additional keyword arguments to pass to the throttle key generator.
+        :param context: Additional throttle context. The context can include any relevant information
+            needed to uniquely identify the request for throttling purposes.
         :return: The namespaced throttling key for the connection.
         """
-        throttle_key = await self.get_key(connection, *args, **kwargs)
+        throttle_key = await self.get_key(connection, context)
         namespaced_key = f"{self.uid}:{str(connection_id)}:{throttle_key}"
         return namespaced_key
 
     async def handle_error(
-        self, connection: HTTPConnectionT, exc: Exception
+        self, connection: HTTPConnectionT, exc: Exception, cost: int = 1
     ) -> WaitPeriod:
         """
         Handle errors during throttling based on the configured strategy.
@@ -287,14 +286,13 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
                     f"Invalid on_error value: {self.on_error!r}. "
                     "Must be 'allow', 'throttle', 'raise', or a callable."
                 )
-        return await self.on_error(connection, exc)
+        return await self.on_error(connection, exc, cost)
 
     async def __call__(
         self,
         connection: HTTPConnectionT,
         cost: typing.Optional[int] = None,
-        *args: typing.Any,
-        **kwargs: typing.Any,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> HTTPConnectionT:
         """
         Throttle the connection based on the limit and time period.
@@ -303,8 +301,8 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
 
         :param connection: The HTTP connection to throttle.
         :param cost: The cost/weight of this request (overrides default cost if provided).
-        :param args: Additional positional arguments to pass to the throttled key generator and handler.
-        :param kwargs: Additional keyword arguments to pass to the throttled key generator and handler.
+        :param context: Additional throttle context. The context can include any relevant information
+            needed to uniquely identify the request for throttling purposes.
         :return: The throttled HTTP connection.
         """
         if self.rate.unlimited:
@@ -316,38 +314,41 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             return connection
 
         namespaced_key = await self.get_namespaced_key(
-            connection, connection_id, *args, **kwargs
+            connection, connection_id, context
         )
+        cost = cost if cost is not None else self.cost
         try:
-            cost = cost if cost is not None else self.cost
             wait_ms = await self.strategy(namespaced_key, self.rate, backend, cost)
         except (BackendError, TimeoutError) as exc:
             print(
                 f"Warning: An error occurred while utilizing strategy '{self.strategy!r}': {exc}",
             )
-            wait_ms = await self.handle_error(connection, exc)
+            wait_ms = await self.handle_error(connection, exc, cost)
 
         if self.min_wait_period is not None:
             wait_ms = max(wait_ms, self.min_wait_period)
 
         if wait_ms != 0:
             handle_throttled = self.handle_throttled or backend.handle_throttled
-            kwargs.setdefault("headers", self.headers)
-            await handle_throttled(connection, wait_ms, *args, **kwargs)
+            context = dict(context or {})
+            context.setdefault("headers", self.headers)
+            await handle_throttled(connection, wait_ms, context)
         return connection
 
     hit = __call__  # Useful for explicitly recording a hit
     """Alias for the `__call__` method to record a throttle hit."""
 
     async def stat(
-        self, connection: HTTPConnectionT, *args, **kwargs
+        self,
+        connection: HTTPConnectionT,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> typing.Optional[StrategyStat]:
         """
         Get the current throttling statistics for the connection.
 
         :param connection: The HTTP connection to get statistics for.
-        :param args: Additional positional arguments to pass to the throttle key generator.
-        :param kwargs: Additional keyword arguments to pass to the throttle key generator.
+        :param context: Additional throttle context. Can contain any relevant information needed
+            to uniquely identify the request for throttling purposes.
         :return: A `ThrottleStat` object containing the current throttling statistics,
             or None if the connection is not being throttled or the throttle strategy does not support stats
         """
@@ -361,20 +362,22 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             return None
 
         namespaced_key = await self.get_namespaced_key(
-            connection, connection_id, *args, **kwargs
+            connection, connection_id, context
         )
         stat = await self.strategy.get_stat(namespaced_key, self.rate, backend)  # type: ignore[attr-defined]
         return typing.cast(StrategyStat, stat)
 
     async def get_key(
-        self, connection: HTTPConnectionT, *args: typing.Any, **kwargs: typing.Any
+        self,
+        connection: HTTPConnectionT,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> str:
         """
         Returns a unique throttling key for the connection.
 
         :param connection: The HTTP connection to throttle.
-        :param args: Additional positional arguments to pass to the throttled handler.
-        :param kwargs: Additional keyword arguments to pass to the throttled handler.
+        :param context: Additional throttle context. Can contain any relevant information needed
+            to uniquely identify the request for throttling purposes.
         :return: The unique throttling key for the connection.
         """
         raise NotImplementedError
@@ -384,15 +387,10 @@ class HTTPThrottle(BaseThrottle[Request]):
     """HTTP connection throttle"""
 
     async def get_key(
-        self, connection: Request, *args: typing.Any, **kwargs: typing.Any
+        self,
+        connection: Request,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> str:
-        """
-        Returns a unique throttling key for the HTTP connection.
-
-        :param connection: The HTTP connection to throttle.
-        :param args: Additional positional arguments to pass to the throttled handler.
-        :param kwargs: Additional keyword arguments to pass to the throttled handler.
-        """
         method = connection.scope["method"].upper()
         path = connection.scope["path"]
         connection_key = f"{method}:{path}"
@@ -401,24 +399,19 @@ class HTTPThrottle(BaseThrottle[Request]):
         throttle_key = f"http:{hashed_connection_key}"
         return throttle_key
 
-    async def __call__(  # type: ignore[override]
+    async def __call__(
         self,
         connection: Request,
         cost: typing.Optional[int] = None,
-        **kwargs: typing.Any,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> Request:
-        """
-        Calls the throttle for an HTTP connection.
-
-        :param connection: The HTTP connection to throttle.
-        :param cost: The cost/weight of this request (overrides default cost if provided).
-        :return: The throttled HTTP connection.
-        """
-        return await super().__call__(connection, cost=cost, **kwargs)
+        return await super().__call__(connection, cost=cost, context=context)
 
 
 async def websocket_throttled(
-    connection: WebSocket, wait_ms: WaitPeriod, *args, **kwargs
+    connection: WebSocket,
+    wait_ms: WaitPeriod,
+    context: typing.Mapping[str, typing.Any],
 ) -> None:
     """
     Handler for throttled WebSocket connections.
@@ -427,8 +420,7 @@ async def websocket_throttled(
 
     :param connection: The WebSocket connection that is throttled.
     :param wait_ms: The wait period in milliseconds before the client can send messages again.
-    :param args: Additional positional arguments.
-    :param kwargs: Additional keyword arguments.
+    :param context: Additional context for the throttled handler.
     """
     wait_seconds = math.ceil(wait_ms / 1000)
     await connection.send_json(
@@ -436,7 +428,7 @@ async def websocket_throttled(
             "type": "rate_limit",
             "error": "Too many messages",
             "retry_after": wait_seconds,
-            **kwargs.get("extras", {}),
+            **context.get("extras", {}),
         }
     )
 
@@ -479,35 +471,34 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
             on_error=on_error,
         )
 
-    async def get_key(  # type: ignore[override]
+    async def get_key(
         self,
         connection: WebSocket,
-        context_key: typing.Optional[str] = None,
-        *args: typing.Any,
-        **kwargs: typing.Any,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> str:
         """
         Returns a unique throttling key for the `WebSocket` connection.
 
         :param connection: The `WebSocket` connection to throttle.
-        :param context_key: Optional context key to differentiate throttling
+        :param context: Additional throttle context. Can contain any relevant information needed
+            to uniquely identify the request for throttling purposes.
+            Provide an identifier called "key" in the context to differentiate throttling
             for different contexts within the same `WebSocket` connection.
         :return: The unique throttling key for the `WebSocket` connection.
         """
         path = connection.scope["path"]
-        context = context_key or "default"
-        connection_key = f"{path}:{context}"
+        context_key = context.get("key", "default") if context else "default"
+        connection_key = f"{path}:{context_key}"
         # Hash for some layer of security
         hashed_connection_key = hashlib.md5(connection_key.encode()).hexdigest()  # nosec
         throttle_key = f"ws:{hashed_connection_key}"
         return throttle_key
 
-    async def __call__(  # type: ignore[override]
+    async def __call__(
         self,
         connection: WebSocket,
         cost: typing.Optional[int] = None,
-        context_key: typing.Optional[str] = None,
-        **kwargs: typing.Any,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> WebSocket:
         """
         Calls the throttle for a `WebSocket` connection.
@@ -516,27 +507,28 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
         :param context_key: Optional context key to differentiate throttling
             for different contexts within the same `WebSocket` connection.
         :param cost: The cost/weight of this request (overrides default cost if provided).
+        :param context: Additional throttle context. The context can include any relevant information
+            needed to uniquely identify the request for throttling purposes.
+            Provide an identifier called "key" in the context to differentiate throttling
+            for different contexts within the same `WebSocket` connection.
         :return: The throttled `WebSocket` connection.
         """
-        return await super().__call__(
-            connection, cost=cost, context_key=context_key, **kwargs
-        )
+        return await super().__call__(connection, cost=cost, context=context)
 
     async def stat(  # type: ignore[override]
         self,
         connection: WebSocket,
-        context_key: typing.Optional[str] = None,
-        **kwargs,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> typing.Optional[StrategyStat]:
         """
         Get the current throttling statistics for the `WebSocket` connection.
 
         :param connection: The `WebSocket` connection to get statistics for.
-        :param context_key: Optional context key to differentiate throttling
+        :param context: Additional throttle context. Can contain any relevant information needed
+            to uniquely identify the request for throttling purposes.
+            Provide an identifier called "key" in the context to differentiate throttling
             for different contexts within the same `WebSocket` connection.
-        :param args: Additional positional arguments to pass to the throttle key generator.
-        :param kwargs: Additional keyword arguments to pass to the throttle key generator.
         :return: A `ThrottleStat` object containing the current throttling statistics,
             or None if the connection is not being throttled or the throttle strategy does not support stats.
         """
-        return await super().stat(connection, context_key=context_key, **kwargs)
+        return await super().stat(connection, context=context)

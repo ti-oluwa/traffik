@@ -6,15 +6,17 @@
 [![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
 [![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/)
 
-Traffik provides flexible rate limiting for Starlette and FastAPI applications with support for both HTTP and WebSocket connections. It offers multiple rate limiting strategies including Fixed Window, Sliding Window, Token Bucket, and Leaky Bucket algorithms, allowing you to choose the approach that best fits your use case.
+Traffik provides true distributed rate limiting for Starlette and FastAPI applications with support for both HTTP and WebSocket connections, with first-class Async support. It offers multiple rate limiting strategies including Fixed Window, Sliding Window, Token Bucket, and Leaky Bucket algorithms, allowing you to choose the approach that best fits your use case.
 
-The library features pluggable backends (in-memory, Redis, Memcached), context-aware backend resolution for special applications. Whether you need simple per-endpoint limits or complex distributed rate limiting, Traffik provides the flexibility and robustness to handle your requirements.
+Traffik features pluggable backends (in-memory, Redis, Memcached), context-aware backend resolution for special applications. Whether you need simple per-endpoint limits or complex distributed rate limiting, Traffik provides the flexibility and robustness to handle your requirements.
 
 Traffik was inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-limiter) but has evolved into a more comprehensive solution with more advanced features.
 
 ## Features
 
 - **Easy Integration**: Decorator, dependency, and middleware-based throttling
+- **Async First**: Fully asynchronous design for high-performance applications
+- **True Distributed Rate Limiting**: Works seamlessly in multi-instance deployments with distributed locks
 - **Multiple Strategies**: Fixed Window (default), Sliding Window, Token Bucket, Leaky Bucket
 - **Multiple Backends**: In-memory, Redis, Memcached with atomic operation support
 - **Protocol Support**: Both HTTP and WebSocket throttling

@@ -1,4 +1,5 @@
 """Tests for stat functionality in HTTP and WebSocket throttles."""
+from traffik import connection_throttled
 
 import asyncio
 
@@ -275,6 +276,8 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
             rate="5/s",
             identifier=default_client_identifier,
             strategy=FixedWindowStrategy(),
+            # Use this handler so an exception is raised on throttle
+            handle_throttled=connection_throttled,
         )
 
         async def websocket_endpoint(websocket: WebSocket) -> None:

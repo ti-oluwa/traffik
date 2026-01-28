@@ -5,8 +5,8 @@ NOTE: This is not suitable for multi-process or distributed setups.
 """
 
 import asyncio
-import typing
 from collections import OrderedDict
+import typing
 
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError

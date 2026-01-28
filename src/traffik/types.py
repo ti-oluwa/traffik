@@ -56,10 +56,13 @@ ExceptionHandler: TypeAlias = typing.Callable[
 
 AwaitableCallable = typing.Callable[..., typing.Awaitable[T]]
 
-ErrorHandler = typing.Callable[[HTTPConnectionT, Exception], typing.Awaitable[int]]
+ErrorHandler = typing.Callable[
+    [HTTPConnectionT, Exception, int], typing.Awaitable[WaitPeriod]
+]
 """
 A callable that handles errors during throttling.
-Takes the connection and the exception as parameters.
+
+Takes the connection, the exception, and the cost as parameters.
 Returns an integer representing the wait period in milliseconds.
 """
 
@@ -83,34 +86,16 @@ class Stringable(typing.Protocol):
         ...
 
 
-class ConnectionIdentifier(typing.Protocol, typing.Generic[HTTPConnectionTcon]):
-    """Protocol for connection identifier functions."""
+ConnectionIdentifier = typing.Callable[
+    [HTTPConnectionTcon], typing.Awaitable[typing.Union[Stringable, typing.Any]]
+]
+"""Type definition for connection identifier functions."""
 
-    async def __call__(
-        self, connection: HTTPConnectionTcon, *args: typing.Any, **kwargs: typing.Any
-    ) -> typing.Union[Stringable, typing.Any]:
-        """Identify a connection for throttling purposes."""
-        ...
-
-
-class ConnectionThrottledHandler(typing.Protocol, typing.Generic[HTTPConnectionTcon]):
-    """Protocol for connection throttled handlers."""
-
-    async def __call__(
-        self,
-        connection: HTTPConnectionTcon,
-        wait_ms: WaitPeriod,
-        *args: typing.Any,
-        **kwargs: typing.Any,
-    ) -> typing.Any:
-        """
-        Handle a throttled connection.
-
-        :param connection: The HTTP connection that was throttled.
-        :param wait_ms: The wait time in milliseconds before the next allowed request.
-        :return: A response or action to take when throttled.
-        """
-        ...
+ConnectionThrottledHandler = typing.Callable[
+    [HTTPConnectionTcon, WaitPeriod, typing.Dict[str, typing.Any]],
+    typing.Awaitable[typing.Any],
+]
+"""Type definition for connection throttled handlers."""
 
 
 class Dependency(typing.Protocol, typing.Generic[P, Rco]):

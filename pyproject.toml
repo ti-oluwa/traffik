@@ -10,7 +10,12 @@ maintainers = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
 ]
 license = { file = "LICENSE" }
-keywords = ["starlette", "fastapi", "throttling", "rate-limiting", "api", "distributed-rate-limiting"]
+keywords = [
+    "starlette", "fastapi", "throttling", "rate-limiting", "api", 
+    "distributed-rate-limiting", "fastapi", "starlette", "rate-limiting", 
+    "rate-limiter", "throttling", "redis", "memcached", "distributed",
+    "websocket", "async", "asyncio", "middleware",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -23,6 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Framework :: FastAPI",
+    "Framework :: AsyncIO",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Networking",

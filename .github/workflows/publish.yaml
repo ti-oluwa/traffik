@@ -234,7 +234,7 @@ jobs:
       (github.event.inputs.test_only != 'true' || github.event.inputs.test_only == '') &&
       always() &&
       needs.build.result == 'success' &&
-      needs.publish-testpypi.result == 'success'
+      (needs.publish-testpypi.result == 'success' || needs.publish-testpypi.outputs.exists == 'true')
     
     environment:
       name: pypi

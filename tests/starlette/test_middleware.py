@@ -37,7 +37,7 @@ async def test_throttle_initialization() -> None:
     )
     assert isinstance(middleware_throttle.path, re.Pattern)
     assert middleware_throttle.methods == frozenset(["get", "post"])
-    assert middleware_throttle.hook is None
+    assert middleware_throttle.predicate is None
 
     # Test with regex path
     regex_pattern = re.compile(r"/api/\d+")
@@ -53,7 +53,7 @@ async def test_throttle_initialization() -> None:
     middleware_throttle_all = MiddlewareThrottle(throttle=throttle)
     assert middleware_throttle_all.path is None
     assert middleware_throttle_all.methods is None
-    assert middleware_throttle_all.hook is None
+    assert middleware_throttle_all.predicate is None
 
 
 @pytest.mark.asyncio
@@ -207,7 +207,7 @@ async def test_throttle_hook_filtering(inmemory_backend: InMemoryBackend) -> Non
 
         middleware_throttle = MiddlewareThrottle(
             throttle=throttle,
-            hook=premium_user_hook,
+            predicate=premium_user_hook,
         )
 
         # Create connections with different user tiers
@@ -267,7 +267,7 @@ async def test_throttle_combined_filters(inmemory_backend: InMemoryBackend) -> N
             throttle=throttle,
             path="/api/",
             methods={"POST"},
-            hook=auth_hook,
+            predicate=auth_hook,
         )
 
         test_cases = [
@@ -476,13 +476,13 @@ def test_middleware_with_hook(inmemory_backend: InMemoryBackend) -> None:
     )
 
     # Only throttle requests with premium tier
-    async def premium_only_hook(connection: HTTPConnection) -> bool:
+    async def is_premium_user(connection: HTTPConnection) -> bool:
         headers = dict(connection.headers)
         return headers.get("x-user-tier") == "premium"
 
     middleware_throttle = MiddlewareThrottle(
         throttle=throttle,
-        hook=premium_only_hook,
+        predicate=is_premium_user,
     )
 
     async def get_data(request: Request) -> JSONResponse:
@@ -534,7 +534,7 @@ def test_middleware_with_no_backend_specified(
     ]
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
 
-    # Don't specify backend - should use the one from lifespan
+    # Don't specify backend, should use the one from lifespan
     app.add_middleware(
         ThrottleMiddleware,
         middleware_throttles=[middleware_throttle],
@@ -667,7 +667,7 @@ def test_middleware_exemption_with_hook(inmemory_backend: InMemoryBackend) -> No
 
     middleware_throttle = MiddlewareThrottle(
         throttle=throttle,
-        hook=non_admin_hook,
+        predicate=non_admin_hook,
     )
 
     async def get_data(request: Request) -> JSONResponse:

@@ -36,7 +36,9 @@ async def connection_identifier(connection: HTTPConnection) -> str:
 
 
 async def connection_throttled(
-    connection: HTTPConnection, wait_ms: WaitPeriod, *args, **kwargs
+    connection: HTTPConnection,
+    wait_ms: WaitPeriod,
+    context: typing.Mapping[str, typing.Any],
 ) -> typing.NoReturn:
     """
     Handler for throttled HTTP connections
@@ -48,11 +50,11 @@ async def connection_throttled(
     wait_seconds = math.ceil(wait_ms / 1000)
     raise ConnectionThrottled(
         wait_period=wait_seconds,
-        detail=kwargs.get(
+        detail=context.get(
             "detail", f"Too many requests. Retry in {wait_seconds} seconds."
         ),
-        status_code=kwargs.get("status_code", 429),
-        headers=kwargs.get("headers", None),
+        status_code=context.get("status_code", 429),
+        headers=context.get("headers", None),
     )
 
 

@@ -46,6 +46,7 @@ async def test_throttle_decorator_only(
         ) as client:
             for _ in range(3):
                 response = await client.get("/throttled")
+                print(response.json())
                 assert response.status_code == 200
                 assert response.json() == {"message": "Hello, World!"}
 

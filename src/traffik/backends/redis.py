@@ -4,8 +4,8 @@ import asyncio
 import contextvars
 import typing
 
-import redis.asyncio as aioredis
 from pottery import AIORedlock
+import redis.asyncio as aioredis
 from typing_extensions import TypeAlias
 
 from traffik.backends.base import ThrottleBackend

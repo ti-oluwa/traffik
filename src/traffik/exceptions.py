@@ -101,7 +101,7 @@ def build_exception_handler_getter(
     Build an exception handler getter for the given Starlette app.
     """
     # Here we use a neat trick to retrieve the exception handlers from the app
-    # by creating an instance of ExceptionMiddleware with the app and its handlers,
+    # by creating an instance of `ExceptionMiddleware` with the app and its handlers,
     # and trying to resolve the handler from both the status handlers and the exception handlers.
     exception_middleware = ExceptionMiddleware(
         app,

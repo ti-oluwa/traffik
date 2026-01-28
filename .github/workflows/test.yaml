@@ -111,7 +111,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
-        python-version: ["3.9", "3.11", "3.12"]  # Test fewer versions for speed
+        python-version: ["3.9", "3.11", "3.13"]  # Test fewer versions for speed
 
     steps:
       - name: Checkout code

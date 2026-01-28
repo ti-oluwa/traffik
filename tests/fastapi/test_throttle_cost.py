@@ -140,11 +140,22 @@ async def test_http_throttle_override_cost_per_request(
 async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -> None:
     """Test WebSocketThrottle with variable costs."""
     async with inmemory_backend(close_on_exit=True):
+
+        async def ws_throttled(
+            connection: WebSocket,
+            wait_ms: float,
+            context: typing.Mapping[str, typing.Any],
+        ) -> None:
+            await connection.send_text("Throttled")
+            await asyncio.sleep(0.1)  # Give time for message to be sent
+            await connection.close(code=1008, reason="Throttled")
+
         ws_throttle = WebSocketThrottle(
             "test-ws-cost",
             rate="10/2s",
             identifier=default_client_identifier,  # type: ignore
             cost=2,
+            handle_throttled=ws_throttled,
         )
         app = FastAPI()
 
@@ -160,12 +171,6 @@ async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -
                     data = await websocket.receive_text()
                     await ws_throttle(websocket)
                     await websocket.send_text(f"Echo: {data}")
-                except ConnectionThrottled as exc:
-                    print("ConnectionThrottled caught in websocket:", exc)
-                    await websocket.send_text("Throttled")
-                    close_code = 1008  # Policy Violation
-                    close_reason = exc.detail
-                    break
                 except Exception as exc:
                     print("Exception caught in websocket:", exc)
                     await websocket.send_text("Internal error")

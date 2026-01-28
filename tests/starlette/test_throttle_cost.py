@@ -6,7 +6,6 @@ import typing
 from httpx import ASGITransport, AsyncClient
 import pytest
 from starlette.applications import Starlette
-from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute

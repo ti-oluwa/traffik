@@ -1,10 +1,8 @@
 """Tests for stat functionality in HTTP and WebSocket throttles."""
-from traffik import connection_throttled
-
 import asyncio
 
-import pytest
 from httpx import ASGITransport, AsyncClient
+import pytest
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
@@ -14,6 +12,7 @@ from starlette.websockets import WebSocket
 
 from tests.asyncio_client import AsyncioTestClient
 from tests.utils import default_client_identifier
+from traffik import connection_throttled
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
 from traffik.strategies.fixed_window import FixedWindowStrategy

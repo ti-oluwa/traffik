@@ -1,7 +1,7 @@
 import asyncio
 
-import pytest
 from httpx import ASGITransport, AsyncClient
+import pytest
 from starlette.applications import Starlette
 from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse

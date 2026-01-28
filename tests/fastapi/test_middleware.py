@@ -3,10 +3,10 @@
 import asyncio
 import re
 
-import pytest
 from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
+import pytest
 from starlette.requests import HTTPConnection, Request
 
 from tests.conftest import BackendGen

@@ -1,9 +1,9 @@
 import asyncio
 import typing
 
-import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
+import pytest
 from starlette.requests import HTTPConnection
 
 from tests.conftest import BackendGen

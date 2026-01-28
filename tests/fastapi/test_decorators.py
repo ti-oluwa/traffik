@@ -3,9 +3,9 @@
 import typing
 
 import anyio
-import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
+import pytest
 
 from tests.utils import default_client_identifier
 from traffik import strategies

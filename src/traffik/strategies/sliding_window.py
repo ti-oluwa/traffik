@@ -1,7 +1,7 @@
 """Sliding Window Rate Limiting Strategies"""
 
-import typing
 from dataclasses import dataclass, field
+import typing
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate

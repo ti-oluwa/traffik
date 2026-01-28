@@ -1,12 +1,12 @@
 import asyncio
-import typing
 from itertools import repeat
+import typing
 
 import anyio
-import pytest
 from fastapi import Depends, FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient, Response
+import pytest
 from starlette.exceptions import HTTPException
 from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocket

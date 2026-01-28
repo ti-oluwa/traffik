@@ -3,14 +3,13 @@
 import asyncio
 import typing
 
-import pytest
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from httpx import ASGITransport, AsyncClient
+import pytest
 
 from tests.asyncio_client import AsyncioTestClient
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.exceptions import ConnectionThrottled
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 

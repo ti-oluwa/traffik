@@ -18,7 +18,7 @@ from .throttles import (
     WebSocketThrottle as WebSocketThrottle,
 )
 
-__version__ = "1.0.0b2"
+__version__ = "1.0.0"
 
 
 # NOTE: All operations by traffik must be fast and non-blocking.

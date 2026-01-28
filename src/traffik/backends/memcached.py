@@ -17,7 +17,7 @@ from traffik.types import (
     R,
     T,
 )
-from traffik.utils import time
+from traffik.utils import fence_token_generator, time
 
 
 def _on_error_return(
@@ -44,7 +44,7 @@ def _on_error_return(
             return await func(*args, **kwargs)
         except ClientException as exc:
             if log:
-                print(f"Memcached error in {func.__name__}: {exc}") # type: ignore
+                print(f"Memcached error in {func.__name__}: {exc}")  # type: ignore
 
             if hook and not hook(exc):
                 raise
@@ -61,7 +61,13 @@ class AsyncMemcachedLock:
     This provides a lightweight distributed locking mechanism.
     """
 
-    __slots__ = ("_name", "_client", "_release_timeout", "_acquired")
+    __slots__ = (
+        "_name",
+        "_client",
+        "_release_timeout",
+        "_acquired",
+        "_fence_token",
+    )
 
     def __init__(
         self,
@@ -82,6 +88,7 @@ class AsyncMemcachedLock:
             int(release_timeout) if release_timeout is not None else 5
         )
         self._acquired = False
+        self._fence_token: typing.Optional[str] = None
 
     def locked(self) -> bool:
         """Return True if this instance currently holds the lock."""
@@ -103,17 +110,19 @@ class AsyncMemcachedLock:
             # Already acquired by this instance
             return True
 
+        token = str(fence_token_generator.next())
         start_time = time()
         while True:
             # add() is atomic, as only succeeds if key doesn't exist
             # Returns True if added, False if key already exists
             added = await self._client.add(
                 self._name.encode(),
-                b"1",
+                token.encode(),
                 exptime=self._release_timeout,
             )
             if added:
                 self._acquired = True
+                self._fence_token = token
                 return True
 
             # Lock is held by someone else
@@ -121,10 +130,11 @@ class AsyncMemcachedLock:
                 return False
 
             # Check timeout
-            if blocking_timeout is not None:
-                elapsed = time() - start_time
-                if elapsed >= blocking_timeout:
-                    return False
+            if (
+                blocking_timeout is not None
+                and (time() - start_time) >= blocking_timeout
+            ):
+                return False
 
             # Wait a bit before retrying
             await asyncio.sleep(1e-9)
@@ -133,20 +143,27 @@ class AsyncMemcachedLock:
         """Release the lock."""
         if not self._acquired:
             raise RuntimeError(
-                f"Cannot release lock '{self._name}' - not owned by this instance"
+                f"Cannot release lock '{self._name}'. Lock not owned by this instance"
             )
 
         try:
-            await self._client.delete(self._name.encode())
+            # Ensure we only delete if we own the lock (fence token matches)
+            current = await self._client.get(self._name.encode())
+            if current and current.decode() == self._fence_token:
+                await self._client.delete(self._name.encode())
+            else:
+                print(f"Warning: Lock '{self._name}' expired or stolen")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             # Lock might have expired or been released already
             # Log and ignore release errors to avoid deadlocks
-            print(f"Failed to release lock '{self._name}': {str(exc)}")
+            print(f"Warning: Failed to release lock '{self._name}': {str(exc)}")
             pass  # nosec
         finally:
+            # Reset state
             self._acquired = False
+            self._fence_token = None
 
     async def __aenter__(self):
         acquired = await self.acquire()
@@ -176,6 +193,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         *,
         pool_size: int = 2,
         pool_minsize: int = 1,
+        connection_args: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         namespace: str = ":memcached:",
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
@@ -196,6 +214,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         self.port = port
         self.pool_size = pool_size
         self.pool_minsize = pool_minsize
+        self.connection_args = connection_args
         super().__init__(
             None,
             namespace=namespace,
@@ -215,7 +234,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
 
         if "||" in key:
             print(
-                f"Key '{key}' contains '||' character which is used as separator in tracking."
+                f"Warning: Key '{key}' contains '||' character which is used as separator in tracking."
                 " Ensure keys do not contain this sequence."
             )
 
@@ -239,7 +258,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                         exptime=0,
                     )
         except Exception as exc:
-            print(f"Failed to track key '{key}': {exc}")
+            print(f"Warning: Failed to track key '{key}': {exc}")
 
     async def _untrack_key(self, key: str) -> None:
         """Remove key from tracking set."""
@@ -265,7 +284,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 else:
                     await self.connection.delete(tracking_key.encode())
         except Exception as exc:
-            print(f"Failed to untrack key '{key}': {exc}")
+            print(f"Warning: Failed to untrack key '{key}': {exc}")
 
     async def initialize(self) -> None:
         """Initialize the Memcached connection."""
@@ -275,6 +294,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 self.port,
                 pool_size=self.pool_size,
                 pool_minsize=self.pool_minsize,
+                conn_args=self.connection_args,
             )
 
     async def get_lock(self, name: str) -> AsyncMemcachedLock:
@@ -290,7 +310,9 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             )
         return AsyncMemcachedLock(name, self.connection, release_timeout=10.0)
 
-    async def get(self, key: str) -> typing.Optional[str]:
+    async def get(
+        self, key: str, *args: typing.Any, **kwargs: typing.Any
+    ) -> typing.Optional[str]:
         """
         Get value by key.
 
@@ -330,7 +352,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         )
         await self._track_key(key)
 
-    async def delete(self, key: str) -> bool:
+    async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
         """
         Delete key if exists.
 

@@ -332,7 +332,9 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
 class HTTPThrottle(BaseThrottle[Request]):
     """HTTP connection throttle"""
 
-    async def get_key(self, connection: Request) -> str:
+    async def get_key(
+        self, connection: Request, *args: typing.Any, **kwargs: typing.Any
+    ) -> str:
         """
         Returns a unique throttling key for the HTTP connection.
 
@@ -349,7 +351,11 @@ class HTTPThrottle(BaseThrottle[Request]):
         return throttle_key
 
     async def __call__(
-        self, connection: Request, cost: typing.Optional[int] = None
+        self,
+        connection: Request,
+        cost: typing.Optional[int] = None,
+        *args: typing.Any,
+        **kwargs: typing.Any,
     ) -> Request:
         """
         Calls the throttle for an HTTP connection.
@@ -364,8 +370,12 @@ class HTTPThrottle(BaseThrottle[Request]):
 class WebSocketThrottle(BaseThrottle[WebSocket]):
     """WebSocket connection throttle"""
 
-    async def get_key(
-        self, connection: WebSocket, context_key: typing.Optional[str] = None
+    async def get_key(  # type: ignore[override]
+        self,
+        connection: WebSocket,
+        context_key: typing.Optional[str] = None,
+        *args: typing.Any,
+        **kwargs: typing.Any,
     ) -> str:
         """
         Returns a unique throttling key for the `WebSocket` connection.
@@ -383,11 +393,13 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
         throttle_key = f"ws:{hashed_connection_key}"
         return throttle_key
 
-    async def __call__(
+    async def __call__(  # type: ignore[override]
         self,
         connection: WebSocket,
         cost: typing.Optional[int] = None,
         context_key: typing.Optional[str] = None,
+        *args: typing.Any,
+        **kwargs: typing.Any,
     ) -> WebSocket:
         """
         Calls the throttle for a `WebSocket` connection.
@@ -400,7 +412,7 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
         """
         return await super().__call__(connection, context_key=context_key, cost=cost)
 
-    async def stat(
+    async def stat(  # type: ignore[override]
         self,
         connection: WebSocket,
         context_key: typing.Optional[str] = None,

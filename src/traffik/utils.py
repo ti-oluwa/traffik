@@ -1,12 +1,14 @@
 """`traffik` utilities."""
 
 import asyncio
+from collections import deque
 import functools
 import inspect
 import ipaddress
-import typing
-from collections import deque
+import threading
+from time import time_ns
 from types import TracebackType
+import typing
 
 from starlette.requests import HTTPConnection
 from typing_extensions import Self, TypeGuard
@@ -172,6 +174,46 @@ def time() -> float:
     Preferable to `time.time()` for duration calculations in async code.
     """
     return asyncio.get_event_loop().time()
+
+
+class FenceTokenGenerator:
+    """
+    A thread-safe fence token generator that produces unique, monotonically increasing integer tokens.
+
+    Each token is a combination of the current timestamp in nanoseconds and a sequence number
+    to ensure uniqueness even when multiple tokens are generated within the same nanosecond.
+
+    64-bit Token Structure:
+    - Upper 48 bits: Timestamp in nanoseconds.
+    - Lower 16 bits: Sequence number (0-65535).
+    """
+
+    __slots__ = ("_lock", "_last_timestamp", "_sequence_number")
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        """Lock for thread-safe token generation."""
+        self._last_timestamp = 0
+        """Last timestamp in nanoseconds."""
+        self._sequence_number = 0
+        """Sequence number for tokens generated within the same nanosecond."""
+
+    def next(self) -> int:
+        """Generate the next unique fence token."""
+        with self._lock:
+            timestamp = int(time_ns())
+
+            if timestamp == self._last_timestamp:
+                self._sequence_number += 1
+            else:
+                self._last_timestamp = timestamp
+                self._sequence_number = 0
+
+            return (timestamp << 16) | self._sequence_number
+
+
+fence_token_generator = FenceTokenGenerator()
+"""Global fence token generator instance."""
 
 
 AsyncLockT = typing.TypeVar("AsyncLockT", bound=AsyncLock)

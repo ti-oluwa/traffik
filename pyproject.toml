@@ -1,7 +1,7 @@
 [project]
 name = "traffik"
-version = "1.0.0b1"
-description = "Distributed rate limiting for Starlette applications."
+version = "1.0.0"
+description = "Distributed rate limiting for Starlette and FastAPI applications."
 readme = "README.md"
 authors = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }

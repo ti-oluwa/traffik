@@ -88,7 +88,7 @@ def _raises_error(
 
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:  # type: ignore[no-redefined]
             try:
-                return await func(*args, **kwargs)
+                return await func(*args, **kwargs)  # type: ignore
             except asyncio.CancelledError:
                 raise
             except target_exc_type as exc:

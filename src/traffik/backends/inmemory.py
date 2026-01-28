@@ -1,7 +1,7 @@
 """
 In-memory implementation of a throttle backend using an `OrderedDict` for storage.
 
-NOTE: This is NOT suitable for multi-process or distributed setups.
+NOTE: This is not suitable for multi-process or distributed setups.
 """
 
 import asyncio
@@ -174,7 +174,9 @@ class InMemoryBackend(
         lock._lock = self._global_lock
         return lock
 
-    async def get(self, key: str) -> typing.Optional[str]:
+    async def get(
+        self, key: str, *args: typing.Any, **kwargs: typing.Any
+    ) -> typing.Optional[str]:
         """Get value by key."""
         if self.connection is None:
             raise BackendConnectionError(
@@ -209,7 +211,7 @@ class InMemoryBackend(
                 expires_at = time() + expire
             self.connection[key] = (value, expires_at)
 
-    async def delete(self, key: str) -> bool:
+    async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
         """Delete key if exists."""
         if self.connection is None:
             raise BackendConnectionError(
@@ -311,7 +313,7 @@ class InMemoryBackend(
                 self.connection[key] = (str(amount), expires_at)
                 return amount
 
-            value, expires_at = entry # type: ignore[assignment]
+            value, expires_at = entry  # type: ignore[assignment]
             # Check if expired
             if expires_at is not None and expires_at < time():
                 # Expired, reinitialize with new TTL

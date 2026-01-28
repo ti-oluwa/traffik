@@ -126,7 +126,7 @@ class AsyncRedisLock:
         task_locks = self._get_task_locks()
         if self._name not in task_locks:
             raise RuntimeError(
-                f"Cannot release lock '{self._name}' - not owned by current task"
+                f"Cannot release lock '{self._name}'. Lock not owned by current task"
             )
 
         lock_obj, count = task_locks[self._name]
@@ -143,7 +143,7 @@ class AsyncRedisLock:
         except Exception as exc:  # nosec
             # Lock might have expired or been released already
             # Log and ignore release errors to avoid deadlocks
-            print(f"Failed to release lock '{self._name}': {str(exc)}")
+            print(f"Warning: Failed to release lock '{self._name}': {str(exc)}")
             pass
         finally:
             del task_locks[self._name]
@@ -241,7 +241,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             )
         return AsyncRedisLock(name, redis=self.connection, blocking_timeout=10.0)
 
-    async def get(self, key: str) -> typing.Optional[str]:
+    async def get(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> typing.Optional[str]:
         """Get value by key."""
         if self.connection is None:
             raise BackendConnectionError(
@@ -267,7 +267,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         else:
             await self.connection.set(key, value)
 
-    async def delete(self, key: str) -> bool:
+    async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
         """Delete key."""
         if self.connection is None:
             raise BackendConnectionError(

@@ -2,6 +2,7 @@
 
 import re
 import typing
+import warnings
 
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
@@ -14,11 +15,13 @@ from traffik.throttles import BaseThrottle
 from traffik.types import HTTPConnectionT, Matchable
 from traffik.utils import is_async_callable
 
-ThrottleHook: TypeAlias = typing.Callable[[HTTPConnectionT], typing.Awaitable[bool]]
+ThrottlePredicate: TypeAlias = typing.Callable[
+    [HTTPConnectionT], typing.Awaitable[bool]
+]
 """
 A type alias for a callable that takes an HTTP connection and returns a boolean.
 
-This is used as a hook to determine if the throttle should apply.
+This is used as a predicate to determine if the throttle should apply.
 """
 
 
@@ -42,7 +45,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
     from traffik.middleware import ThrottleMiddleware
 
     # Use a custom hook to use throttle for only premium users.
-    async def premium_user_hook(connection: HTTPConnection) -> bool:
+    async def is_premium_user(connection: HTTPConnection) -> bool:
         # Check if the user is a premium user
         return connection.headers.get("X-User-Tier") == "premium"
 
@@ -50,7 +53,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         HTTPThrottle(uid="...", rate="10/min"),
         path="/api/",
         methods={"GET", "POST"},
-        hook=premium_user_hook,
+        predicate=is_premium_user,
     )
 
     # Use the middleware throttle in your application
@@ -69,7 +72,8 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         throttle: BaseThrottle[HTTPConnectionT],
         path: typing.Optional[Matchable] = None,
         methods: typing.Optional[typing.Iterable[str]] = None,
-        hook: typing.Optional[ThrottleHook[HTTPConnectionT]] = None,
+        hook: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
+        predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
     ) -> None:
         """
         Initialize the middleware throttle.
@@ -86,11 +90,24 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
 
         :param methods: A set of HTTP methods (e.g., 'GET', 'POST') to apply the throttle to.
             If None, the throttle applies to all methods.
-        :param hook: An optional callable that takes an HTTP connection and returns a boolean.
+        :param predicate: An optional callable that takes an HTTP connection and returns a boolean.
             If provided, the throttle will only apply if this hook returns True for the connection.
             This is useful for more complex conditions that cannot be expressed with just path and methods.
             It is run after checking the path and methods, so it should be used for more expensive checks.
+        :param hook: Deprecated alias for `predicate`. Use `predicate` instead.
         """
+        if hook is not None:
+            warnings.warn(
+                "`hook` parameter is deprecated and will be removed in future versions. "
+                "Use `predicate` instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if predicate is not None and hook is not None:
+            raise ConfigurationError(
+                "Cannot specify both `predicate` and `hook`. Use only `predicate`."
+            )
+
         self.throttle = throttle
 
         self.path: typing.Optional[re.Pattern[str]]
@@ -105,7 +122,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             self.methods = frozenset(
                 method.lower() for method in methods if isinstance(method, str)
             )
-        self.hook = hook
+        self.predicate = predicate or hook
 
     async def __call__(self, connection: HTTPConnectionT) -> HTTPConnectionT:
         """
@@ -124,7 +141,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             return connection
         if self.path is not None and not self.path.match(connection.scope["path"]):
             return connection
-        if self.hook is not None and not await self.hook(connection):
+        if self.predicate is not None and not await self.predicate(connection):
             return connection
 
         return await self.throttle(connection)
@@ -223,7 +240,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
                     handler = exc_handler(exc)
                     if handler is not None:
                         if is_async_callable(handler):
-                            response = await handler(connection, exc)
+                            response = await handler(connection, exc)  # type: ignore
                         else:
                             response = await run_in_threadpool(handler, connection, exc)
 

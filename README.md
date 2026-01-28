@@ -168,7 +168,7 @@ app = FastAPI(lifespan=lifespan)
 throttle = HTTPThrottle(uid="endpoint_limit", rate="10/m")
 
 @app.get("/api/hello", dependencies=[Depends(throttle)])
-async def say_hello():
+async def hello_endpoint():
     return {"message": "Hello World"}
 ```
 
@@ -196,7 +196,7 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/api/limited")
 @throttled(HTTPThrottle(uid="limited", rate="5/m"))
-async def limited_endpoint():
+async def endpoint():
     return {"data": "Limited access"}
 ```
 
@@ -213,23 +213,28 @@ ws_throttle = WebSocketThrottle(uid="ws_messages", rate="3/10s")
 async def ws_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
     while True:
-        try:
-            data = await websocket.receive_json()
-            await ws_throttle(websocket)  # Rate limit per message
-            
-            await websocket.send_json({
-                "status": "success",
-                "data": data,
-            })
-        except ConnectionThrottled as exc:
-            await websocket.send_json({
-                "status": "error", 
-                "status_code": exc.status_code,
-                "detail": exc.detail,
-            })
-            break
+        data = await websocket.receive_json()
+        # Throttle sends rate limit message to client, doesn't raise
+        await ws_throttle(websocket)  # Rate limit per message
+        await websocket.send_json({
+            "status": "success",
+            "data": data,
+        })
     
     await websocket.close()
+
+
+# Alternatively, you can provide a throttled handler that closes the connection
+async def close_on_throttle(connection: WebSocket, wait_ms: WaitPeriod, *args, **kwargs):
+    await connection.send_json({"error": "rate_limited"})
+    await asyncio.sleep(0.1)  # Give time for message to be sent
+    await connection.close(code=1008)  # Policy Violation
+
+ws_throttle = WebSocketThrottle(
+    uid="ws_messages",
+    rate="3/10s",
+    handle_throttled=close_on_throttle,
+)
 ```
 
 ## Rate Limiting Strategies
@@ -861,7 +866,7 @@ throttle_with_shared_backend = HTTPThrottle(
 )
 
 @app.get("/api/custom", dependencies=[Depends(throttle_with_shared_backend)])
-async def endpoint_custom(request: Request = Depends(throttle_with_own_backend)):
+async def endpoint(request: Request = Depends(throttle_with_own_backend)):
     return {"message": "Uses its own backend"}
 
 ```
@@ -897,7 +902,7 @@ Customize how clients are identified for rate limiting:
 from starlette.requests import HTTPConnection
 from traffik.throttles import HTTPThrottle
 
-async def user_based_identifier(connection: HTTPConnection) -> str:
+async def get_user_id(connection: HTTPConnection) -> str:
     """Identify by user ID from JWT token"""
     user_id = extract_user_id(connection.headers.get("authorization"))
     return f"user:{user_id}"
@@ -905,7 +910,7 @@ async def user_based_identifier(connection: HTTPConnection) -> str:
 throttle = HTTPThrottle(
     uid="user_limit",
     rate="100/h",
-    identifier=user_based_identifier,
+    identifier=get_user_id,
 )
 ```
 
@@ -1326,18 +1331,18 @@ app.add_middleware(
 )
 ```
 
-#### Custom Hook-Based Filtering
+#### Custom Predicate-Based Filtering
 
 Throttle based on custom logic:
 
 ```python
 from starlette.requests import HTTPConnection
 
-async def authenticated_only(connection: HTTPConnection) -> bool:
+async def is_authenticated(connection: HTTPConnection) -> bool:
     """Apply throttle only to authenticated users"""
     return connection.headers.get("authorization") is not None
 
-async def intensive_operations(connection: HTTPConnection) -> bool:
+async def is_intensive_op(connection: HTTPConnection) -> bool:
     """Throttle resource-intensive endpoints"""
     intensive_paths = ["/api/reports/", "/api/analytics/", "/api/exports/"]
     return any(connection.scope["path"].startswith(p) for p in intensive_paths)
@@ -1345,8 +1350,8 @@ async def intensive_operations(connection: HTTPConnection) -> bool:
 auth_throttle = HTTPThrottle(uid="auth", rate="200/m")
 intensive_throttle = HTTPThrottle(uid="intensive", rate="20/m")
 
-auth_middleware_throttle = MiddlewareThrottle(auth_throttle, hook=authenticated_only)
-intensive_middleware_throttle = MiddlewareThrottle(intensive_throttle, hook=intensive_operations)
+auth_middleware_throttle = MiddlewareThrottle(auth_throttle, predicate=is_authenticated)
+intensive_middleware_throttle = MiddlewareThrottle(intensive_throttle, predicate=is_intensive_op)
 
 app.add_middleware(
     ThrottleMiddleware,
@@ -1360,7 +1365,7 @@ app.add_middleware(
 Combine path, method, and hook criteria:
 
 ```python
-async def authenticated_only(connection: HTTPConnection) -> bool:
+async def is_authenticated(connection: HTTPConnection) -> bool:
     return connection.headers.get("authorization") is not None
 
 complex_throttle = HTTPThrottle(uid="complex", rate="25/m")
@@ -1370,7 +1375,7 @@ complex_middleware_throttle = MiddlewareThrottle(
     complex_throttle,
     path="/api/",
     methods={"POST"},
-    hook=authenticated_only
+    predicate=is_authenticated
 )
 ```
 

@@ -1,6 +1,7 @@
 """Throttles for HTTP and WebSocket connections."""
 
 import hashlib
+import math
 import typing
 
 from starlette.requests import Request
@@ -11,12 +12,12 @@ from traffik.exceptions import ConfigurationError, TraffikException
 from traffik.rates import Rate
 from traffik.strategies import default_strategy
 from traffik.types import (
-    UNLIMITED,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
     StrategyStat,
     Stringable,
+    UNLIMITED,
     WaitPeriod,
 )
 
@@ -272,7 +273,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             wait_ms = await self.strategy(namespaced_key, self.rate, backend, cost)
         except TimeoutError as exc:
             print(
-                f"An error occurred while utilizing strategy '{self.strategy!r}': {exc}",
+                f"Warning: An error occurred while utilizing strategy '{self.strategy!r}': {exc}",
             )
             wait_ms = self.min_wait_period or 1000  # Default to 1000ms
 
@@ -350,11 +351,10 @@ class HTTPThrottle(BaseThrottle[Request]):
         throttle_key = f"http:{hashed_connection_key}"
         return throttle_key
 
-    async def __call__(
+    async def __call__(  # type: ignore[override]
         self,
         connection: Request,
         cost: typing.Optional[int] = None,
-        *args: typing.Any,
         **kwargs: typing.Any,
     ) -> Request:
         """
@@ -364,11 +364,63 @@ class HTTPThrottle(BaseThrottle[Request]):
         :param cost: The cost/weight of this request (overrides default cost if provided).
         :return: The throttled HTTP connection.
         """
-        return await super().__call__(connection, cost=cost)
+        return await super().__call__(connection, cost=cost, **kwargs)
+
+
+async def websocket_throttled(
+    connection: WebSocket, wait_ms: WaitPeriod, *args, **kwargs
+) -> None:
+    """
+    Handler for throttled WebSocket connections.
+
+    Sends rate limit message to client without closing connection.
+
+    :param connection: The WebSocket connection that is throttled.
+    :param wait_ms: The wait period in milliseconds before the client can send messages again.
+    :param args: Additional positional arguments.
+    :param kwargs: Additional keyword arguments.
+    """
+    wait_seconds = math.ceil(wait_ms / 1000)
+    await connection.send_json(
+        {
+            "type": "rate_limit",
+            "error": "Too many messages",
+            "retry_after_seconds": wait_seconds,
+            **kwargs.get("extras", {}),
+        }
+    )
 
 
 class WebSocketThrottle(BaseThrottle[WebSocket]):
     """WebSocket connection throttle"""
+
+    def __init__(
+        self,
+        uid: str,
+        rate: typing.Union[Rate, str],
+        identifier: typing.Optional[ConnectionIdentifier[WebSocket]] = None,
+        handle_throttled: typing.Optional[ConnectionThrottledHandler[WebSocket]] = None,
+        strategy: typing.Optional[ThrottleStrategy] = None,
+        backend: typing.Optional[ThrottleBackend[typing.Any, WebSocket]] = None,
+        cost: int = 1,
+        context_backend: bool = False,
+        min_wait_period: typing.Optional[int] = None,
+        headers: typing.Optional[typing.Mapping[str, str]] = None,
+    ) -> None:
+        if handle_throttled is None:
+            handle_throttled = websocket_throttled
+        super().__init__(
+            uid=uid,
+            rate=rate,
+            identifier=identifier,
+            handle_throttled=handle_throttled,
+            strategy=strategy,
+            backend=backend,
+            cost=cost,
+            context_backend=context_backend,
+            min_wait_period=min_wait_period,
+            headers=headers,
+        )
 
     async def get_key(  # type: ignore[override]
         self,
@@ -398,7 +450,6 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
         connection: WebSocket,
         cost: typing.Optional[int] = None,
         context_key: typing.Optional[str] = None,
-        *args: typing.Any,
         **kwargs: typing.Any,
     ) -> WebSocket:
         """
@@ -410,13 +461,14 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
         :param cost: The cost/weight of this request (overrides default cost if provided).
         :return: The throttled `WebSocket` connection.
         """
-        return await super().__call__(connection, context_key=context_key, cost=cost)
+        return await super().__call__(
+            connection, cost=cost, context_key=context_key, **kwargs
+        )
 
     async def stat(  # type: ignore[override]
         self,
         connection: WebSocket,
         context_key: typing.Optional[str] = None,
-        *args,
         **kwargs,
     ) -> typing.Optional[StrategyStat]:
         """
@@ -430,4 +482,4 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
         :return: A `ThrottleStat` object containing the current throttling statistics,
             or None if the connection is not being throttled or the throttle strategy does not support stats.
         """
-        return await super().stat(connection, context_key=context_key, *args, **kwargs)
+        return await super().stat(connection, context_key=context_key, **kwargs)

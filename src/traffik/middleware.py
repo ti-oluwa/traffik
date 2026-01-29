@@ -212,7 +212,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
             await self.app(scope, receive, send)
             return
 
-        connection = typing.cast(HTTPConnectionT, HTTPConnection(scope, receive))
+        connection = HTTPConnection(scope, receive)
         if self.backend is None:
             backend = get_throttle_backend(connection.app)
             if backend is None:
@@ -225,7 +225,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
         async with self.backend(close_on_exit=False, persistent=True):
             for throttle in self.middleware_throttles:
                 try:
-                    connection = await throttle(connection)
+                    connection = await throttle(connection)  # type: ignore[arg-type]
                 except Exception as exc:
                     # This approach allows custom throttles to raise custom exceptions
                     # that will be handled if they register an exception handler with

@@ -2,7 +2,7 @@
 `Traffik` - Rate limiting for `starlette` applications.
 """
 
-from .utils import get_ip_address  # noqa
+from .utils import get_remote_address  # noqa
 from .types import *  # noqa
 from .rates import Rate  # noqa
 from .backends.base import (

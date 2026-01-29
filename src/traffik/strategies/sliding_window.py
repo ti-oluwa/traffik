@@ -72,7 +72,7 @@ class SlidingWindowLogStrategy:
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
             blocking=True,
-            blocking_timeout=1.5,
+            blocking_timeout=0.1, # 100 milliseconds
         )
     )
     """Configuration for backend locking during log updates."""
@@ -255,7 +255,7 @@ class SlidingWindowCounterStrategy:
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
             blocking=True,
-            blocking_timeout=1.5,
+            blocking_timeout=0.1, # 100 milliseconds
         )
     )
     """Configuration for backend locking during counter updates."""

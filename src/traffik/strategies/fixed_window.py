@@ -66,7 +66,7 @@ class FixedWindowStrategy:
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
             blocking=True,
-            blocking_timeout=1.5,
+            blocking_timeout=0.1, # 100 milliseconds
         )
     )
     """Configuration for backend locking during rate limit checks."""
@@ -105,7 +105,6 @@ class FixedWindowStrategy:
         # TTL should be at least 1 second for cleanup, but we track window time separately
         # Add buffer to ensure keys don't expire during a valid window
         ttl_seconds = max(int(window_duration_ms // 1000), 2)
-
         async with await backend.lock(f"lock:{base_key}", **self.lock_config):
             # Get the stored window start time
             stored_window_start = await backend.get(window_start_key)

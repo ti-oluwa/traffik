@@ -1,4 +1,4 @@
-# Traffik - A Starlette/FastAPI throttling library
+# Traffik - Distributed rate limiting for FastAPI/Starlette applications
 
 [![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
 [![Code Quality](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml)
@@ -6,7 +6,7 @@
 [![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
 [![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/)
 
-Traffik provides true distributed rate limiting for Starlette and FastAPI applications with support for both HTTP and WebSocket connections, with first-class Async support. It offers multiple rate limiting strategies including Fixed Window, Sliding Window, Token Bucket, and Leaky Bucket algorithms, allowing you to choose the approach that best fits your use case.
+Traffik provides truely asynchronous distributed rate limiting for Starlette and FastAPI applications with support for both HTTP and WebSocket protocols. It offers multiple rate limiting strategies including Fixed Window, Sliding Window, Token Bucket, and Leaky Bucket algorithms, allowing you to choose the approach that best fits your use case.
 
 Traffik features pluggable backends (in-memory, Redis, Memcached), context-aware backend resolution for special applications. Whether you need simple per-endpoint limits or complex distributed rate limiting, Traffik provides the flexibility and robustness to handle your requirements.
 
@@ -207,26 +207,31 @@ async def endpoint():
 ```python
 from traffik.throttles import WebSocketThrottle
 from traffik.exceptions import ConnectionThrottled
+from traffik import connection_throttled
 from starlette.websockets import WebSocket
 from starlette.exceptions import HTTPException
 
 ws_throttle = WebSocketThrottle(uid="ws_messages", rate="3/10s")
 
-async def ws_endpoint(websocket: WebSocket) -> None:
-    await websocket.accept()
+@app.websocket("/ws")
+async def ws_endpoint(ws: ws) -> None:
+    await ws.accept()
     while True:
-        data = await websocket.receive_json()
+        data = await ws.receive_json()
         # Throttle sends rate limit message to client, doesn't raise
-        await ws_throttle(websocket)  # Rate limit per message
-        await websocket.send_json({
+        await ws_throttle(ws)  # Rate limit per message
+        await ws.send_json({
             "status": "success",
             "data": data,
         })
     
-    await websocket.close()
+    await ws.close()
 
+```
 
-# Alternatively, you can provide a throttled handler that closes the connection
+Alternatively, you can provide a throttled handler that closes the connection
+
+```python
 async def close_on_throttle(connection: WebSocket, wait_ms: WaitPeriod, *args, **kwargs):
     await connection.send_json({"error": "rate_limited"})
     await asyncio.sleep(0.1)  # Give time for message to be sent
@@ -238,6 +243,36 @@ ws_throttle = WebSocketThrottle(
     handle_throttled=close_on_throttle,
 )
 ```
+
+You can also use the default handler that raises `ConnectionThrottled`
+
+```python
+ws_throttle = WebSocketThrottle(
+    uid="ws_messages",
+    rate="3/10s",
+    handle_throttled=connection_throttled,
+)
+
+@app.websocket("/ws")
+async def ws_endpoint(ws: WebSocket) -> None:
+    await ws.accept()
+    while True:
+        data = await ws.receive_json()
+        try:
+            await ws_throttle(ws)  # Rate limit per message
+        except ConnectionThrottled as exc:
+            # Send rate limit message and continue
+            await ws.send_json({
+                "error": "rate_limited",
+                "retry_after_ms": exc.wait_ms,
+            })
+            continue
+
+        await ws.send_json({
+            "status": "success",
+            "data": data,
+        })
+```  
 
 ## Rate Limiting Strategies
 

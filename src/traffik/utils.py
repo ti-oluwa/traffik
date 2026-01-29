@@ -22,11 +22,11 @@ except ImportError:
     import json  # type: ignore[no-redef]
 
 
-def get_ip_address(
+def get_remote_address(
     connection: HTTPConnection,
 ) -> typing.Optional[typing.Union[ipaddress.IPv4Address, ipaddress.IPv6Address]]:
     """
-    Returns the IP address of the connection client.
+    Returns the Remote/IP address of the connection client.
 
     This function attempts to extract the IP address from the `x-forwarded-for` header
     or the `remote-addr` header. If neither is present, it falls back to the `client.host`
@@ -322,8 +322,7 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
                 # This needs to be a fast operation. Cannot use logger here as it blocks the event loop,
                 # and it may cause deadlocks if logging uses the same backend
 
-                # Lock might have been released by timeout in a race
-                # or not owned by current task
+                # Lock might have been released by timeout in a race or not owned by current task
                 print(
                     "Failed to release lock on context exit; it may have been released already."
                     " This can happen with reentrant locks, and can lead to unexpected behavior.",

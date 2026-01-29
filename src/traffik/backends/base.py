@@ -25,11 +25,11 @@ from traffik.types import (
     T,
     WaitPeriod,
 )
-from traffik.utils import AsyncLockContext, get_ip_address
+from traffik.utils import AsyncLockContext, get_remote_address
 
 
 async def connection_identifier(connection: HTTPConnection) -> str:
-    client_ip = get_ip_address(connection)
+    client_ip = get_remote_address(connection)
     if not client_ip:
         raise AnonymousConnection("Unable to determine client IP from connection")
     return f"{client_ip.exploded}:{connection.scope['path']}"
@@ -540,9 +540,7 @@ def get_throttle_backend(
         and (app_state := getattr(app, "state", None)) is not None
     ):
         backend = getattr(app_state, BACKEND_STATE_KEY, None)
-    return typing.cast(
-        typing.Optional[ThrottleBackend[typing.Any, HTTPConnection]], backend
-    )
+    return backend
 
 
 __all__ = [

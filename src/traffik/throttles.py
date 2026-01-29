@@ -92,7 +92,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             to have different impacts on the throttling state. For example, a request that performs a
             resource-intensive operation might have a higher cost than a simple read request.
         :param context_backend: If True, resolves backend from (request) context on each call instead of caching.
-            Use ONLY when backend choice must be determined dynamically at runtime.
+            Use only when backend choice must be determined dynamically at runtime.
 
             This feature is designed for advanced use cases where the same throttle instance
             needs to use different backends based on runtime conditions.
@@ -177,7 +177,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
 
         if context_backend and backend is not None:
             raise ValueError(
-                "Cannot specify explicit backend with context_backend=True"
+                "Cannot specify an explicit backend with `context_backend=True`"
             )
 
         self.uid = uid
@@ -210,7 +210,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             self.backend = backend
             self.identifier = identifier
             self.handle_throttled = handle_throttled
-            self.on_error = on_error
+            self.on_error = on_error  # type: ignore[assignment]
 
     async def get_backend(
         self, connection: typing.Optional[HTTPConnectionT] = None
@@ -240,7 +240,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
                 self.backend = backend
         else:
             backend = self.backend  # type: ignore[assignment]
-        return typing.cast(ThrottleBackend[typing.Any, HTTPConnectionT], backend)
+        return backend # type: ignore[return-value]
 
     async def get_namespaced_key(
         self,
@@ -365,7 +365,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             connection, connection_id, context
         )
         stat = await self.strategy.get_stat(namespaced_key, self.rate, backend)  # type: ignore[attr-defined]
-        return typing.cast(StrategyStat, stat)
+        return stat
 
     async def get_key(
         self,

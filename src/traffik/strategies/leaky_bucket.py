@@ -69,7 +69,7 @@ class LeakyBucketStrategy:
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
             blocking=True,
-            blocking_timeout=1.5,
+            blocking_timeout=0.1, # 100 milliseconds
         )
     )
     """Configuration for the lock used during rate limit checks."""
@@ -262,7 +262,7 @@ class LeakyBucketWithQueueStrategy:
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
             blocking=True,
-            blocking_timeout=1.5,
+            blocking_timeout=0.1, # 100 milliseconds
         )
     )
     """Configuration for the lock used during rate limit checks."""

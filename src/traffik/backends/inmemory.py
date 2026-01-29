@@ -14,12 +14,13 @@ from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
+    ErrorHandler,
 )
 from traffik.utils import AsyncRLock, time
 
 
 class AsyncInMemoryLock:
-    """Lock for in-memory backend."""
+    """Re-entrant async (un-fair) lock for in-memory backend."""
 
     __slots__ = "_lock"
 
@@ -127,16 +128,41 @@ class InMemoryBackend(
             ConnectionThrottledHandler[HTTPConnectionT]
         ] = None,
         persistent: bool = False,
+        on_error: typing.Union[
+            typing.Literal["allow", "throttle", "raise"], ErrorHandler[HTTPConnectionT]
+        ] = "throttle",
+        cleanup_frequency: float = 5.0,
+        **kwargs: typing.Any,
     ) -> None:
+        """
+        Initialize the in-memory throttle backend.
+
+        :param namespace: The namespace to be used for all throttling keys.
+        :param identifier: The connected client identifier generator.
+        :param handle_throttled: The handler to call when the client connection is throttled.
+        :param persistent: Whether to persist throttling data across application restarts.
+        :param on_error: Strategy to handle errors during throttling operations.
+            - "allow": Allow the request to proceed without throttling.
+            - "throttle": Throttle the request as if it exceeded the rate limit.
+            - "raise": Raise the exception encountered during throttling.
+            - A custom callable that takes the connection and the exception as parameters
+                and returns an integer representing the wait period in milliseconds. Ensure this
+                function executes quickly to avoid additional latency.
+        :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys.
+        """
         super().__init__(
             None,
             namespace=namespace,
             identifier=identifier,
             handle_throttled=handle_throttled,
             persistent=persistent,
+            on_error=on_error,
+            **kwargs,
         )
         # Global lock for all storage operations
         self._global_lock = AsyncRLock()
+        self._cleanup_task: typing.Optional[asyncio.Task[None]] = None
+        self._cleanup_frequency = cleanup_frequency
 
     async def initialize(self) -> None:
         """Initialize the in-memory storage."""
@@ -144,11 +170,16 @@ class InMemoryBackend(
             # Use `OrderedDict` to maintain insertion order (for predictable expiration cleanup)
             self.connection = OrderedDict()
 
+        if self._cleanup_task is None:
+            self._cleanup_task = await self._schedule_cleanup(
+                frequency=self._cleanup_frequency
+            )
+
     async def _cleanup_expired(self) -> None:
         """
         Remove expired keys.
 
-        MUST be called with `_global_lock` held!
+        Must be called with `_global_lock` held!
         """
         if self.connection is None:
             return
@@ -161,6 +192,19 @@ class InMemoryBackend(
         ]
         for key in expired:
             del self.connection[key]
+
+    async def _schedule_cleanup(self, frequency: float = 0.1) -> asyncio.Task[None]:
+        """
+        Schedule periodic cleanup of expired keys.
+        """
+
+        async def _cleanup_task():
+            while self.connection is not None:
+                await asyncio.sleep(frequency)  # Cleanup interval
+                async with self._global_lock:
+                    await self._cleanup_expired()
+
+        return asyncio.create_task(_cleanup_task())
 
     async def get_lock(self, name: str) -> AsyncInMemoryLock:
         """
@@ -184,7 +228,6 @@ class InMemoryBackend(
             )
 
         async with self._global_lock:
-            await self._cleanup_expired()
             entry = self.connection.get(key)
             if entry is None:
                 return None
@@ -238,8 +281,6 @@ class InMemoryBackend(
             )
 
         async with self._global_lock:
-            await self._cleanup_expired()
-
             entry = self.connection.get(key)
             if entry is None:
                 # Key doesn't exist, initialize
@@ -304,8 +345,6 @@ class InMemoryBackend(
             )
 
         async with self._global_lock:
-            await self._cleanup_expired()
-
             entry = self.connection.get(key)
             if entry is None:
                 # New key, initialize with TTL
@@ -355,8 +394,6 @@ class InMemoryBackend(
             return []
 
         async with self._global_lock:
-            await self._cleanup_expired()
-
             now = time()
             results: typing.List[typing.Optional[str]] = []
 
@@ -398,3 +435,10 @@ class InMemoryBackend(
     async def close(self) -> None:
         """Close the backend."""
         self.connection = None
+        if self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None

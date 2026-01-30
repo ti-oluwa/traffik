@@ -118,7 +118,7 @@ class TokenBucketStrategy:
         refill_rate = rate.limit / refill_period_ms
         capacity = self.burst_size if self.burst_size is not None else rate.limit
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         bucket_key = f"{full_key}:tokenbucket"
         ttl_seconds = max(
             int((refill_period_ms * 2) // 1000), 1
@@ -189,7 +189,7 @@ class TokenBucketStrategy:
         refill_rate = rate.limit / refill_period_ms
         capacity = self.burst_size if self.burst_size is not None else rate.limit
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         bucket_key = f"{full_key}:tokenbucket"
 
         old_state_json = await backend.get(bucket_key)
@@ -352,7 +352,7 @@ class TokenBucketWithDebtStrategy:
         refill_rate = rate.limit / refill_period_ms
         capacity = self.burst_size if self.burst_size is not None else rate.limit
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         bucket_key = f"{full_key}:tokenbucket:debt"
         ttl_seconds = max(
             int((refill_period_ms * 2) // 1000), 1
@@ -421,7 +421,7 @@ class TokenBucketWithDebtStrategy:
         refill_rate = rate.limit / refill_period_ms
         capacity = self.burst_size if self.burst_size is not None else rate.limit
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         bucket_key = f"{full_key}:tokenbucket:debt"
 
         old_state_json = await backend.get(bucket_key)

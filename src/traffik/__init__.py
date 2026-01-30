@@ -7,7 +7,7 @@ from .types import *  # noqa
 from .rates import Rate  # noqa
 from .backends.base import (
     ThrottleBackend as ThrottleBackend,
-    connection_identifier as connection_identifier,
+    default_identifier as default_identifier,
     connection_throttled as connection_throttled,
     get_throttle_backend as get_throttle_backend,
 )

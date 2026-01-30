@@ -136,7 +136,7 @@ throttle = HTTPThrottle(
 )
 
 async def throttled_endpoint(request: Request):
-    await throttle(request)
+    await throttle.hit(request, cost=2)  # Each request costs 2 (cost=1 by default)
     return JSONResponse({"message": "Success"})
 
 app = Starlette(
@@ -167,7 +167,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # Create throttle
-throttle = HTTPThrottle(uid="endpoint_limit", rate="10/m")
+throttle = HTTPThrottle(uid="endpoint_limit", rate="10/m", cost=2)
 
 @app.get("/api/hello", dependencies=[Depends(throttle)])
 async def hello_endpoint():
@@ -197,7 +197,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 @app.get("/api/limited")
-@throttled(HTTPThrottle(uid="limited", rate="5/m"))
+@throttled(HTTPThrottle(uid="limited", rate="5/m", cost=2))
 async def endpoint():
     return {"data": "Limited access"}
 ```
@@ -400,7 +400,7 @@ async def simple_counter_strategy(
         return 0.0
     
     now = time() * 1000  # Current time in milliseconds
-    full_key = await backend.get_key(str(key))
+    full_key = backend.get_key(str(key))
     counter_key = f"{full_key}:counter"
     timestamp_key = f"{full_key}:timestamp"
     
@@ -480,7 +480,7 @@ class AdaptiveRateStrategy:
         window_duration_ms = rate.expire
         current_window = int(now // window_duration_ms)
         
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         counter_key = f"{full_key}:adaptive:{current_window}"
         load_key = f"{full_key}:load"
         ttl_seconds = int(window_duration_ms // 1000) + 1
@@ -566,7 +566,7 @@ class PriorityQueueStrategy:
         
         now = time() * 1000
         priority = self._extract_priority(str(key))
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         queue_key = f"{full_key}:priority_queue"
         ttl_seconds = int(rate.expire // 1000) + 1
         
@@ -658,7 +658,7 @@ throttle = HTTPThrottle(
 4. **Use proper key prefixes**: Namespace your strategy's keys to avoid conflicts
 
    ```python
-   full_key = await backend.get_key(str(key))
+   full_key = backend.get_key(str(key))
    strategy_key = f"{full_key}:mystrategy:data"
    ```
 
@@ -953,12 +953,12 @@ throttle = HTTPThrottle(
 
 ### Exempting Connections
 
-Skip throttling for specific clients by returning `UNLIMITED`:
+Skip throttling for specific clients by returning `EXEMPTED`:
 
 ```python
 import typing
 from starlette.requests import HTTPConnection
-from traffik import UNLIMITED
+from traffik import EXEMPTED
 from traffik.throttles import HTTPThrottle
 
 
@@ -966,7 +966,7 @@ async def allow_admin_id(connection: HTTPConnection) -> typing.Any:
     """Bypass throttling for admin users"""
     user_role = extract_role(connection.headers.get("authorization"))
     if user_role == "admin":
-        return UNLIMITED  # Admins bypass throttling
+        return EXEMPTED  # Admins bypass throttling
     
     # Regular users get normal identification
     user_id = extract_user_id(connection.headers.get("authorization"))
@@ -1447,7 +1447,6 @@ Traffik raises specific exceptions for different error scenarios:
 from traffik.exceptions import (
     TraffikException,           # Base exception
     ConfigurationError,         # Invalid configuration
-    AnonymousConnection,        # Cannot identify client
     ConnectionThrottled,        # Rate limit exceeded (HTTP 429)
     BackendError,               # Backend operation failed
 )
@@ -1493,19 +1492,7 @@ except ConfigurationError as exc:
 
 ### Handling Anonymous Connections
 
-The default identifier raises `AnonymousConnection` if it cannot identify the client. You can catch this exception to provide a fallback identifier. Better still, implement a custom identifier function that handles anonymous clients gracefully.
-
-```python
-from traffik.exceptions import AnonymousConnection
-from traffik.backends.base import connection_identifier
-
-async def get_safe_id(connection: HTTPConnection) -> str:
-    try:
-        return await connection_identifier(connection)
-    except AnonymousConnection:
-        # Fall back to a default identifier
-        return f"anonymous:{connection.scope['path']}"
-```
+The default identifier returns `"__anonymous__"` if it cannot identify the client. You can check for this value to provide a fallback identifier. Better still, implement a custom identifier function that handles anonymous clients gracefully.
 
 ## Testing
 

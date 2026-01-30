@@ -1,10 +1,9 @@
 """`traffik` utilities."""
 
-import asyncio
+import asyncio # noqa: I001
 from collections import deque
 import functools
 import inspect
-import ipaddress
 import threading
 from time import time_ns
 from types import TracebackType
@@ -22,9 +21,7 @@ except ImportError:
     import json  # type: ignore[no-redef]
 
 
-def get_remote_address(
-    connection: HTTPConnection,
-) -> typing.Optional[typing.Union[ipaddress.IPv4Address, ipaddress.IPv6Address]]:
+def get_remote_address(connection: HTTPConnection) -> typing.Optional[str]:
     """
     Returns the Remote/IP address of the connection client.
 
@@ -33,16 +30,16 @@ def get_remote_address(
     attribute of the connection.
 
     :param connection: The HTTP connection
-    :return: The IP address of the connection client, or None if it cannot be determined.
+    :return: The Remote/IP address of the connection client, or None if it cannot be determined.
     """
     x_forwarded_for = connection.headers.get(
         "x-forwarded-for"
     ) or connection.headers.get("remote-addr")
     if x_forwarded_for:
-        return ipaddress.ip_address(x_forwarded_for.split(",")[0].strip())
+        return x_forwarded_for.split(",")[0].strip()
 
     if connection.client:
-        return ipaddress.ip_address(connection.client.host)
+        return connection.client.host
     return None
 
 
@@ -262,7 +259,7 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
         )
         if not acquired:
             raise LockTimeoutError(
-                f"Could not acquire {type(self._lock).__name__!r} lock"
+                f"Could not acquire {type(self._lock).__qualname__!r} lock"
             )
 
         self._acquired = acquired

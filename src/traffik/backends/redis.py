@@ -1,6 +1,6 @@
 """Redis implementation of the throttle backend using `redis.asyncio`."""
 
-import asyncio
+import asyncio  # noqa: I001
 import contextvars
 import math
 import typing
@@ -22,7 +22,7 @@ from traffik.utils import time
 
 class AsyncRedisLock:
     """
-    Name-based reentrant distributed Redis (un-fair) lock implementing the `AsyncLock` protocol.
+    Name-based, task-reentrant, and fenced distributed Redis (un-fair) lock implementing the `AsyncLock` protocol.
 
     Uses a simple Redis-based locking mechanism with:
 
@@ -67,12 +67,12 @@ class AsyncRedisLock:
         :param name: Unique lock name shared across processes.
         :param redis: An `aioredis.Redis` connection instance.
         :param blocking_timeout: Max time to wait when acquiring lock (default: None = wait forever).
-        :param release_timeout: Lock expiration time in seconds (default 1.0s).
+        :param release_timeout: Lock expiration time in seconds (default 2.0s).
         """
         self._name = name
         self._redis = redis
         self._blocking_timeout = blocking_timeout
-        self._release_timeout = math.ceil(release_timeout or 1.0)
+        self._release_timeout = math.ceil(release_timeout or 2.0)
         self._release_sha: typing.Optional[str] = None
 
     def _get_task_locks(self) -> dict[str, tuple[int, int]]:
@@ -115,15 +115,22 @@ class AsyncRedisLock:
         )
 
         start = time()
+        attempts = 0
         while True:
-            # Fence token (linearizable)
-            token = await self._redis.incr(f"{self._name}:fence")
-            acquired = await self._redis.set(
+            pipe = self._redis.pipeline(transaction=False)
+            # Generate global fence token
+            pipe.incr(f"{self._name}:fence")
+
+            # Try to acquire lock using that token
+            # Placeholder value; Redis will already have incremented before SET
+            pipe.set(
                 self._name,
-                token,
+                "0",  # overwritten logically by token returned from INCR
                 nx=True,
-                ex=int(self._release_timeout),
+                ex=self._release_timeout,
             )
+
+            token, acquired = await pipe.execute()
             if acquired:
                 locks[self._name] = (token, 1)
                 return True
@@ -134,7 +141,10 @@ class AsyncRedisLock:
             if blocking_timeout is not None and (time() - start) >= blocking_timeout:
                 return False
 
-            await asyncio.sleep(0)
+            # Exponential backoff with jitter
+            attempts += 1
+            delay = min(0.00001 * attempts, 0.01)
+            await asyncio.sleep(delay)
 
     async def release(self) -> None:
         locks = self._get_task_locks()
@@ -434,8 +444,8 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
 
     async def _ensure_increment_with_ttl_script(self) -> None:
         """Ensure the `increment_with_ttl` Lua script is registered."""
-        if self._increment_with_ttl_sha is None and self.connection is not None:
-            self._increment_with_ttl_sha = await self.connection.script_load(
+        if self._increment_with_ttl_sha is None:
+            self._increment_with_ttl_sha = await self.connection.script_load(  # type: ignore
                 type(self)._INCREMENT_WITH_TTL_SCRIPT
             )
 
@@ -449,7 +459,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             name,
             redis=self.connection,
             blocking_timeout=0.1,
-            release_timeout=1,
+            release_timeout=3.0,
         )
 
     async def get(

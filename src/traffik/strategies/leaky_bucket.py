@@ -69,7 +69,7 @@ class LeakyBucketStrategy:
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
             blocking=True,
-            blocking_timeout=0.1, # 100 milliseconds
+            blocking_timeout=0.1,  # 100 milliseconds
         )
     )
     """Configuration for the lock used during rate limit checks."""
@@ -90,7 +90,7 @@ class LeakyBucketStrategy:
             return 0.0
 
         now = time() * 1000
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         state_key = f"{full_key}:leakybucket:state"
 
         leak_rate = rate.limit / rate.expire
@@ -152,7 +152,7 @@ class LeakyBucketStrategy:
             )
 
         now = time() * 1000
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         state_key = f"{full_key}:leakybucket:state"
 
         leak_rate = rate.limit / rate.expire
@@ -186,11 +186,12 @@ class LeakyBucketStrategy:
         level = max(0.0, level - leaked_amount)
 
         # Calculate remaining capacity
-        hits_remaining = max(rate.limit - level, 0)
+        limit = rate.limit
+        hits_remaining = max(limit - level, 0)
 
         # If bucket is over capacity, calculate wait time
-        if level > rate.limit:
-            wait_ms = (level - rate.limit) / leak_rate
+        if level > limit:
+            wait_ms = (level - limit) / leak_rate
         else:
             wait_ms = 0.0
 
@@ -262,7 +263,7 @@ class LeakyBucketWithQueueStrategy:
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
             blocking=True,
-            blocking_timeout=0.1, # 100 milliseconds
+            blocking_timeout=0.1,  # 100 milliseconds
         )
     )
     """Configuration for the lock used during rate limit checks."""
@@ -283,7 +284,7 @@ class LeakyBucketWithQueueStrategy:
             return 0.0
 
         now = time() * 1000
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         state_key = f"{full_key}:leakybucketqueue:state"
 
         leak_rate = rate.limit / rate.expire
@@ -370,7 +371,7 @@ class LeakyBucketWithQueueStrategy:
             )
 
         now = time() * 1000
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         state_key = f"{full_key}:leakybucketqueue:state"
 
         leak_rate = rate.limit / rate.expire
@@ -423,11 +424,12 @@ class LeakyBucketWithQueueStrategy:
         current_queue_cost = sum(c for _, c in simulated_queue)
 
         # Calculate remaining capacity
-        hits_remaining = max(rate.limit - current_queue_cost, 0.0)
+        limit = rate.limit
+        hits_remaining = max(limit - current_queue_cost, 0.0)
 
         # If over capacity, calculate wait time
-        if current_queue_cost > rate.limit:
-            cost_over = current_queue_cost - rate.limit
+        if current_queue_cost > limit:
+            cost_over = current_queue_cost - limit
             wait_ms = cost_over / leak_rate
             wait_ms = max(wait_ms, 0.0)
         else:

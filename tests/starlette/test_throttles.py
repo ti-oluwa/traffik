@@ -110,7 +110,7 @@ def test_throttle_exemption_with_unlimited_identifier(
         assert response.status_code == 200
         assert response.json() == {"message": "PONG"}
 
-        # Third request should be throttled but since the identifier is UNLIMITED,
+        # Third request should be throttled but since the identifier is EXEMPTED,
         # it should not be throttled and should succeed
         response = client.get("/")
         assert response.status_code == 200

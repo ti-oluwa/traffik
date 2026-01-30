@@ -27,7 +27,23 @@ class ConfigurationError(TraffikException):
 class BackendError(TraffikException):
     """Exception raised for backend related errors."""
 
-    pass
+    def __init__(
+        self,
+        *args: typing.Any,
+        cause: typing.Optional[BaseException] = None,
+        **kwargs: typing.Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._cause = cause
+
+    @property
+    def cause(self) -> typing.Optional[BaseException]:
+        """
+        The underlying cause of the backend error, if any.
+
+        Basically the exception that triggered this exception.
+        """
+        return self._cause or self.__cause__
 
 
 class BackendConnectionError(BackendError):
@@ -38,17 +54,6 @@ class BackendConnectionError(BackendError):
 
 class LockTimeoutError(BackendError, TimeoutError):
     """Exception raised when a lock timeout occurs"""
-
-    pass
-
-
-class AnonymousConnection(TraffikException):
-    """
-    Exception raised when the connection identifier cannot be determined.
-
-    This exception is raised when the throttle backend cannot generate a unique identifier
-    for the connection, which is necessary for throttling to work correctly.
-    """
 
     pass
 

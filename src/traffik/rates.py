@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field  # noqa: I001
 import re
 from typing import Annotated
 
@@ -19,7 +19,20 @@ class Rate:
     """Time period in minutes"""
     hours: Annotated[int, Ge(0)] = 0
     """Time period in hours"""
-    _expire: float = field(init=False, repr=False)
+    expire: float = field(init=False, repr=False)
+    """Total time period in milliseconds"""
+    is_subsecond: bool = field(init=False, repr=False)
+    """Whether the rate limit window is less than one second"""
+    unlimited: bool = field(init=False, repr=False)
+    """Whether the rate limit is unlimited"""
+    rps: float = field(init=False, repr=False)
+    """Requests per second"""
+    rpm: float = field(init=False, repr=False)
+    """Requests per minute"""
+    rph: float = field(init=False, repr=False)
+    """Requests per hour"""
+    rpd: float = field(init=False, repr=False)
+    """Requests per day"""
 
     def __post_init__(self) -> None:
         if self.limit < 0:
@@ -37,45 +50,18 @@ class Rate:
         if self.limit != 0 and expire == 0:
             raise ValueError("Expire must be greater than 0 when limit is set")
 
-        object.__setattr__(self, "_expire", expire)
-
-    @property
-    def expire(self) -> float:
-        """Total time period in milliseconds, per limit"""
-        return self._expire
-
-    @property
-    def unlimited(self) -> bool:
-        """Whether the rate limit is unlimited"""
-        return self.limit == 0 and self.expire == 0
-
-    @property
-    def rps(self) -> float:
-        """Requests per second"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 1000)
-
-    @property
-    def rpm(self) -> float:
-        """Requests per minute"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 60000)
-
-    @property
-    def rph(self) -> float:
-        """Requests per hour"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 3600000)
-
-    @property
-    def rpd(self) -> float:
-        """Requests per day"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 86400000)
+        unlimited = self.limit == 0 and expire == 0
+        rps = float("inf") if unlimited else self.limit / (expire / 1000)
+        rpm = float("inf") if unlimited else self.limit / (expire / 60000)
+        rph = float("inf") if unlimited else self.limit / (expire / 3600000)
+        rpd = float("inf") if unlimited else self.limit / (expire / 86400000)
+        object.__setattr__(self, "expire", expire)
+        object.__setattr__(self, "is_subsecond", expire < 1000)
+        object.__setattr__(self, "unlimited", unlimited)
+        object.__setattr__(self, "rps", rps)
+        object.__setattr__(self, "rpm", rpm)
+        object.__setattr__(self, "rph", rph)
+        object.__setattr__(self, "rpd", rpd)
 
     def __eq__(self, other: object, /) -> bool:
         return isinstance(other, Rate) and self.rps == other.rps

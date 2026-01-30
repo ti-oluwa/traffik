@@ -1,6 +1,6 @@
 """Type definitions and protocols for the traffik package."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass # noqa: I001
 import typing
 
 from starlette.requests import HTTPConnection
@@ -10,7 +10,7 @@ from typing_extensions import ParamSpec, TypeAlias, TypedDict
 from traffik.rates import Rate
 
 __all__ = [
-    "UNLIMITED",
+    "EXEMPTED",
     "HTTPConnectionT",
     "HTTPConnectionTcon",
     "WaitPeriod",
@@ -31,13 +31,14 @@ S = typing.TypeVar("S")
 T = typing.TypeVar("T")
 Rco = typing.TypeVar("Rco", covariant=True)
 
-UNLIMITED = object()
+EXEMPTED = object()
 """
 A sentinel value to identify that a connection should not be throttled.
 
 This value should be returned by the connection identifier function
 when the connection should not be subject to throttling.
 """
+
 
 Function: TypeAlias = typing.Callable[P, R]
 CoroutineFunction: TypeAlias = typing.Callable[P, typing.Awaitable[R]]

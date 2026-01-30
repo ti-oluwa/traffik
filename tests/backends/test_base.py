@@ -18,7 +18,7 @@ def backend() -> ThrottleBackend:
 @pytest.mark.asyncio
 @pytest.mark.backend
 async def test_get_key(backend: ThrottleBackend) -> None:
-    key1 = await backend.get_key("test_key")
+    key1 = backend.get_key("test_key")
     assert isinstance(key1, str)
     assert key1.startswith(backend.namespace)
 

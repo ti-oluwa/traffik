@@ -24,7 +24,12 @@ class SkipBackend(Exception):
 
 
 def get_inmemory_backend(namespace: str, persistent: bool) -> InMemoryBackend:
-    return InMemoryBackend(persistent=persistent, namespace=namespace)
+    return InMemoryBackend(
+        persistent=persistent,
+        namespace=namespace,
+        number_of_shards=3,
+        cleanup_frequency=2,
+    )
 
 
 def get_redis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
@@ -34,7 +39,10 @@ def get_redis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
     from traffik.backends.redis import RedisBackend
 
     return RedisBackend(
-        connection=REDIS_URL, namespace=namespace, persistent=persistent
+        connection=REDIS_URL,
+        namespace=namespace,
+        persistent=persistent,
+        lock_type="redis",
     )
 
 
@@ -52,6 +60,9 @@ def get_memcached_backend(namespace: str, persistent: bool) -> ThrottleBackend:
         namespace=namespace,
         pool_size=MEMCACHED_POOL_SIZE,
         persistent=persistent,
+        # Enable key tracking for testing purposes
+        # So that we can clean up keys after tests
+        track_keys=True,
     )
 
 

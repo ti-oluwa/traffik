@@ -1,14 +1,13 @@
 """Throttles for HTTP and WebSocket connections."""
 
-import hashlib
-import math
+import math # noqa: I001
 import typing
 
 from starlette.requests import Request
 from starlette.websockets import WebSocket
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import BackendError, ConfigurationError, TraffikException
+from traffik.exceptions import BackendError, ConfigurationError
 from traffik.rates import Rate
 from traffik.strategies import default_strategy
 from traffik.types import (
@@ -18,7 +17,7 @@ from traffik.types import (
     HTTPConnectionT,
     StrategyStat,
     Stringable,
-    UNLIMITED,
+    EXEMPTED,
     WaitPeriod,
 )
 
@@ -72,7 +71,11 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         :param identifier: Connected client identifier generator.
             If not provided, the throttle backend's identifier will be used.
             This identifier is used to uniquely identify the client connection
-            and track its throttling state.
+            and track its throttling state. Identifiers can be based on various factors,
+            such as IP address, user ID, API key, etc.
+            Identifiers should be efficient to compute and provide sufficient uniqueness to avoid collisions.
+            NOTE: Identifiers can be used to implement any exemption logic (e.g., whitelisting certain clients),
+            Just return `EXEMPTED` from the identifier to exempt a connection from throttling.
         :param handle_throttled: Handler to call when the client connection is throttled.
             If provided, it will override the default connection throttled handler
             defined for the throttle backend.
@@ -183,7 +186,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         self.uid = uid
         self.rate = Rate.parse(rate) if isinstance(rate, str) else rate
         self.cost = cost
-        self.context_backend = context_backend
+        self.use_fixed_backend = not context_backend
         self.strategy = strategy or default_strategy
         self.min_wait_period = min_wait_period
         self.headers = dict(headers or {})
@@ -201,7 +204,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
                 if resolved_backend is not None
                 else None
             )
-            self.on_error = on_error or (
+            on_error_ = on_error or (
                 resolved_backend.on_error
                 if resolved_backend is not None
                 else "throttle"
@@ -210,9 +213,20 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             self.backend = backend
             self.identifier = identifier
             self.handle_throttled = handle_throttled
-            self.on_error = on_error  # type: ignore[assignment]
+            on_error_ = on_error or "throttle"
 
-    async def get_backend(
+        self._error_callback: typing.Optional[ErrorHandler[HTTPConnectionT]] = None
+        if callable(on_error_):
+            self._error_callback = on_error_
+        elif isinstance(on_error_, str) and on_error_ in {"allow", "throttle", "raise"}:
+            self.on_error = on_error_
+        else:
+            raise ValueError(
+                f"Invalid `on_error` value: {on_error_!r}. "
+                "Must be 'allow', 'throttle', 'raise', or a callable."
+            )
+
+    def get_backend(
         self, connection: typing.Optional[HTTPConnectionT] = None
     ) -> ThrottleBackend[typing.Any, HTTPConnectionT]:
         """
@@ -222,27 +236,22 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         :return: The resolved throttle backend.
         """
         if self.backend is None and connection is not None:
-            try:
-                app = getattr(connection, "app", None)
-            except Exception as exc:
-                raise TraffikException(
-                    "Failed to access `connection.app` for dynamic backend resolution"
-                ) from exc
-
+            app = getattr(connection, "app", None)
             backend = get_throttle_backend(app)
             if backend is None:
                 raise ConfigurationError(
                     "No throttle backend configured. "
                     "Provide a backend to the throttle or set a default backend."
                 )
+
             # Only set/cache the backend if the throttle is not dynamic.
-            if not self.context_backend:
+            if self.use_fixed_backend:
                 self.backend = backend
         else:
             backend = self.backend  # type: ignore[assignment]
-        return backend # type: ignore[return-value]
+        return backend  # type: ignore[return-value]
 
-    async def get_namespaced_key(
+    def get_namespaced_key(
         self,
         connection: HTTPConnectionT,
         connection_id: Stringable,
@@ -257,36 +266,29 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             needed to uniquely identify the request for throttling purposes.
         :return: The namespaced throttling key for the connection.
         """
-        throttle_key = await self.get_key(connection, context)
+        throttle_key = self.get_key(connection, context)
         namespaced_key = f"{self.uid}:{str(connection_id)}:{throttle_key}"
         return namespaced_key
 
-    async def handle_error(
-        self, connection: HTTPConnectionT, exc: Exception, cost: int = 1
+    async def _handle_error(
+        self, connection: HTTPConnectionT, exc: Exception, cost: int
     ) -> WaitPeriod:
         """
         Handle errors during throttling based on the configured strategy.
 
         :param connection: The HTTP connection being throttled.
         :param exc: The exception that occurred during throttling.
+        :param cost: The cost/weight of the request that caused the error.
         :return: The wait period in milliseconds.
         """
-        if self.on_error is None:
-            return self.min_wait_period or 1000  # Default to 1000ms
-
-        if isinstance(self.on_error, str):
-            if self.on_error == "allow":
-                return 0
-            elif self.on_error == "throttle":
-                return self.min_wait_period or 1000  # Default to 1000ms
-            elif self.on_error == "raise":
-                raise exc
-            else:
-                raise ValueError(
-                    f"Invalid on_error value: {self.on_error!r}. "
-                    "Must be 'allow', 'throttle', 'raise', or a callable."
-                )
-        return await self.on_error(connection, exc, cost)
+        if self._error_callback:
+            return await self._error_callback(connection, exc, cost)
+        elif self.on_error == "allow":
+            return 0.0
+        elif self.on_error == "throttle":
+            return self.min_wait_period or 1000.0  # Default to 1000ms
+        # `on_error` is "raise"
+        raise exc
 
     async def __call__(
         self,
@@ -308,27 +310,28 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         if self.rate.unlimited:
             return connection  # No throttling applied
 
-        backend = await self.get_backend(connection)
-        identifier = self.identifier or backend.identifier
-        if (connection_id := await identifier(connection)) is UNLIMITED:
-            return connection
+        cost = cost if cost else self.cost
+        if cost <= 0:
+            raise ValueError("cost must be a positive integer")
 
-        namespaced_key = await self.get_namespaced_key(
-            connection, connection_id, context
-        )
-        cost = cost if cost is not None else self.cost
+        backend = self.get_backend(connection)
+        identifier = self.identifier or backend.identifier
+        if (connection_id := await identifier(connection)) is EXEMPTED:
+            return connection  # Exempted from throttling
+
+        namespaced_key = self.get_namespaced_key(connection, connection_id, context)
         try:
             wait_ms = await self.strategy(namespaced_key, self.rate, backend, cost)
         except (BackendError, TimeoutError) as exc:
             print(
                 f"Warning: An error occurred while utilizing strategy '{self.strategy!r}': {exc}",
             )
-            wait_ms = await self.handle_error(connection, exc, cost)
+            wait_ms = await self._handle_error(connection, exc, cost)
 
-        if self.min_wait_period is not None:
-            wait_ms = max(wait_ms, self.min_wait_period)
-
-        if wait_ms != 0:
+        wait_ms = (
+            max(wait_ms, self.min_wait_period) if self.min_wait_period else wait_ms
+        )
+        if wait_ms:
             handle_throttled = self.handle_throttled or backend.handle_throttled
             context = dict(context or {})
             context.setdefault("headers", self.headers)
@@ -356,18 +359,17 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         # with the defined `ThrottleStrategy` type which does not include `get_stat`.
         if not hasattr(self.strategy, "get_stat"):
             return None
-        backend = await self.get_backend(connection)
+
+        backend = self.get_backend(connection)
         identifier = self.identifier or backend.identifier
-        if (connection_id := await identifier(connection)) is UNLIMITED:
+        if (connection_id := await identifier(connection)) is EXEMPTED:
             return None
 
-        namespaced_key = await self.get_namespaced_key(
-            connection, connection_id, context
-        )
+        namespaced_key = self.get_namespaced_key(connection, connection_id, context)
         stat = await self.strategy.get_stat(namespaced_key, self.rate, backend)  # type: ignore[attr-defined]
         return stat
 
-    async def get_key(
+    def get_key(
         self,
         connection: HTTPConnectionT,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
@@ -386,18 +388,14 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
 class HTTPThrottle(BaseThrottle[Request]):
     """HTTP connection throttle"""
 
-    async def get_key(
+    def get_key(
         self,
         connection: Request,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> str:
         method = connection.scope["method"].upper()
         path = connection.scope["path"]
-        connection_key = f"{method}:{path}"
-        # Hash for some layer of security
-        hashed_connection_key = hashlib.md5(connection_key.encode()).hexdigest()  # nosec
-        throttle_key = f"http:{hashed_connection_key}"
-        return throttle_key
+        return f"http:{method}:{path}"
 
     async def __call__(
         self,
@@ -471,7 +469,7 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
             on_error=on_error,
         )
 
-    async def get_key(
+    def get_key(
         self,
         connection: WebSocket,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
@@ -488,11 +486,7 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
         """
         path = connection.scope["path"]
         context_key = context.get("key", "default") if context else "default"
-        connection_key = f"{path}:{context_key}"
-        # Hash for some layer of security
-        hashed_connection_key = hashlib.md5(connection_key.encode()).hexdigest()  # nosec
-        throttle_key = f"ws:{hashed_connection_key}"
-        return throttle_key
+        return f"ws:{path}:{context_key}"
 
     async def __call__(
         self,

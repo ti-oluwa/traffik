@@ -72,7 +72,7 @@ class SlidingWindowLogStrategy:
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
             blocking=True,
-            blocking_timeout=0.1, # 100 milliseconds
+            blocking_timeout=0.1,  # 100 milliseconds
         )
     )
     """Configuration for backend locking during log updates."""
@@ -96,7 +96,7 @@ class SlidingWindowLogStrategy:
         window_duration_ms = rate.expire
         window_start = now - window_duration_ms
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         log_key = f"{full_key}:slidinglog"
         ttl_seconds = max(int(window_duration_ms // 1000), 1)  # At least 1s
 
@@ -153,7 +153,7 @@ class SlidingWindowLogStrategy:
         window_duration_ms = rate.expire
         window_start = now - window_duration_ms
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         log_key = f"{full_key}:slidinglog"
 
         old_log_json = await backend.get(log_key)
@@ -255,7 +255,7 @@ class SlidingWindowCounterStrategy:
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
             blocking=True,
-            blocking_timeout=0.1, # 100 milliseconds
+            blocking_timeout=0.1,  # 100 milliseconds
         )
     )
     """Configuration for backend locking during counter updates."""
@@ -284,14 +284,14 @@ class SlidingWindowCounterStrategy:
         time_in_current_window = now % window_duration_ms
         overlap_percentage = 1.0 - (time_in_current_window / window_duration_ms)
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         current_window_key = f"{full_key}:slidingcounter:{current_window_id}"
         previous_window_key = f"{full_key}:slidingcounter:{previous_window_id}"
 
         # TTL must be 2x window duration so previous window is available
         # throughout the entire current window. Minimum 1 second for cleanup.
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
-
+        limit = rate.limit
         async with await backend.lock(
             f"lock:{previous_window_key}", **self.lock_config
         ):
@@ -318,8 +318,8 @@ class SlidingWindowCounterStrategy:
             weighted_count = (previous_count * overlap_percentage) + current_count
 
             # If weighted count exceeds limit, reject request
-            if weighted_count > rate.limit:
-                requests_over = weighted_count - rate.limit
+            if weighted_count > limit:
+                requests_over = weighted_count - limit
                 if previous_count > 0:
                     wait_ratio = requests_over / previous_count
                     wait_ms = wait_ratio * time_in_current_window
@@ -356,16 +356,15 @@ class SlidingWindowCounterStrategy:
         time_in_current_window = now % window_duration_ms
         overlap_percentage = 1.0 - (time_in_current_window / window_duration_ms)
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         current_window_key = f"{full_key}:slidingcounter:{current_window_id}"
         previous_window_key = f"{full_key}:slidingcounter:{previous_window_id}"
 
-        # Get current window counter
-        current_count_str = await backend.get(current_window_key)
+        # Get current and previous window counter
+        current_count_str, previous_count_str = await backend.multi_get(
+            current_window_key, previous_window_key
+        )
         current_count = int(current_count_str) if current_count_str else 0
-
-        # Get previous window counter
-        previous_count_str = await backend.get(previous_window_key)
         previous_count = int(previous_count_str) if previous_count_str else 0
 
         # Calculate weighted count using sliding window algorithm

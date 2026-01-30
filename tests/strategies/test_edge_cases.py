@@ -299,7 +299,7 @@ class TestStrategyStateEdgeCases:
             await strategy(key, rate, backend)
 
             # Corrupt the state by setting invalid data
-            state_key = await backend.get_key(f"{key}:fixedwindow")
+            state_key = backend.get_key(f"{key}:fixedwindow")
             await backend.set(state_key, "invalid_json_data", expire=1000)
 
             # Should recover gracefully

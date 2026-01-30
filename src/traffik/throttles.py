@@ -41,7 +41,7 @@ Takes a key, a Rate object, the throttle backend, and cost, and returns the wait
 class ExceptionInfo(TypedDict):
     """TypedDict for exception handler information."""
 
-    exception: typing.Type[Exception]
+    exception: Exception
     """The type of exception the handler is for."""
     connection: HTTPConnection
     """The HTTP connection associated with the exception."""
@@ -156,23 +156,23 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         throttle = HTTPThrottle(uid="test", limit=3, seconds=5, context_backend=True)
 
         async with backend_a():
-            await throttle(request)  # Uses backend_a
+            await throttle.hit(request)  # Uses backend_a
 
             async with backend_b():
-                await throttle(request)  # Switches to backend_b
+                await throttle.hit(request)  # Switches to backend_b
 
-            await throttle(request)  # Back to backend_a
+            await throttle.hit(request)  # Back to backend_a
         ```
 
-        IMPORTANT: Do NOT use for simple shared storage across services.
+        IMPORTANT: Do not use for simple shared storage across services.
         For shared backends, use explicit backend configuration instead:
 
         ```python
-        # GOOD - Explicit shared backend
+        # GOOD: Explicit shared backend
         shared_backend = RedisBackend("redis://shared-redis:6379/0")
         user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", backend=shared_backend)
 
-        # BAD - Unnecessary dynamic resolution
+        # BAD: Unnecessary dynamic resolution
         user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", context_backend=True)
         ```
 
@@ -212,7 +212,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
 
         self._uses_cost_func = callable(cost)
         self.cost = cost
-        self.use_fixed_backend = not context_backend
+        self.uses_fixed_backend = not context_backend
         self.strategy = strategy or default_strategy
         self.min_wait_period = min_wait_period
         self.headers = dict(headers or {})
@@ -239,15 +239,20 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             self.backend = backend
             self.identifier = identifier
             self.handle_throttled = handle_throttled
-            on_error_ = on_error or "throttle"
+            on_error_ = on_error
 
         self._error_callback: typing.Optional[
             ThrottleErrorHandler[HTTPConnectionT, ExceptionInfo]
         ] = None
         if callable(on_error_):
             self._error_callback = on_error_
+            # Just set it for reference
+            self.on_error = on_error_
         elif isinstance(on_error_, str) and on_error_ in {"allow", "throttle", "raise"}:
             self.on_error = on_error_
+        elif on_error_ is None and not self.uses_fixed_backend:
+            # We'll handle this in `_handle_error(...)` since backend is dynamic
+            self.on_error = None
         else:
             raise ValueError(
                 f"Invalid `on_error` value: {on_error_!r}. "
@@ -273,7 +278,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
                 )
 
             # Only set/cache the backend if the throttle is not dynamic.
-            if self.use_fixed_backend:
+            if self.uses_fixed_backend:
                 self.backend = backend
         else:
             backend = self.backend  # type: ignore[assignment]
@@ -319,7 +324,7 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         """
         if self._error_callback:
             exc_info = ExceptionInfo(
-                exception=type(exc),
+                exception=exc,
                 connection=connection,
                 cost=cost,
                 rate=rate,
@@ -331,6 +336,25 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             return 0.0
         elif self.on_error == "throttle":
             return self.min_wait_period or 1000.0  # Default to 1000ms
+        elif not self.uses_fixed_backend and self.on_error is None:
+            # For dynamic backend throttles, check backend's on_error
+            backend_on_error = backend.on_error
+            if callable(backend_on_error):
+                exc_info = ExceptionInfo(
+                    exception=exc,
+                    connection=connection,
+                    cost=cost,
+                    rate=rate,
+                    backend=backend,  # type: ignore
+                    throttle=self,  # type: ignore
+                )
+                return await backend_on_error(connection, exc_info)
+            elif backend_on_error == "allow":
+                return 0.0
+            elif backend_on_error == "throttle":
+                return self.min_wait_period or 1000.0  # Default to 1000ms
+            # Falls through to raise below
+
         # `on_error` is "raise"
         raise exc
 
@@ -444,6 +468,17 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         :return: The unique throttling key for the connection.
         """
         raise NotImplementedError
+
+    def set_error_handler(
+        self,
+        handler: ThrottleErrorHandler[HTTPConnectionT, ExceptionInfo],
+    ) -> None:
+        """
+        Set a custom error handler for the throttle.
+
+        :param handler: The custom error handler to set.
+        """
+        self._error_callback = handler
 
 
 class HTTPThrottle(BaseThrottle[Request]):

@@ -261,9 +261,9 @@ bandit -r src/
 ### Style Guidelines
 
 - **Line length**: Maximum 88 characters
-- **Python version**: Support Python 3.8+
+- **Python version**: Support Python 3.9+
 - **Type hints**: Use type hints for all public APIs
-- **Docstrings**: Use Google-style docstrings for all public functions and classes
+- **Docstrings**: Use Sphinx-style docstrings for all public functions and classes
 - **Import sorting**: Use isort-compatible import ordering
 - **Variable naming**: Use descriptive names, avoid abbreviations
 - **Security**: Follow secure coding practices, avoid common vulnerabilities
@@ -326,8 +326,9 @@ A clear description of what you expected to happen.
 - OS: [e.g., Ubuntu 20.04]
 - Python version: [e.g., 3.9.0]
 - Traffik version: [e.g., 0.1.0]
-- FastAPI version: [e.g., 0.115.13]
+- FastAPI/Starlette version: [e.g., 0.115.13]
 - Redis version (if applicable): [e.g., 7.0]
+- Memcached version (if applicable): [e.g., 1.6]
 
 **Additional context**
 Add any other context about the problem here.

@@ -1261,6 +1261,30 @@ all = [
     { name = "pottery" },
     { name = "redis" },
 ]
+benchmark = [
+    { name = "aiomcache" },
+    { name = "anyio" },
+    { name = "bandit" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "line-profiler" },
+    { name = "memory-profiler" },
+    { name = "mypy" },
+    { name = "orjson" },
+    { name = "pottery" },
+    { name = "psutil" },
+    { name = "pymemcache" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-watch" },
+    { name = "redis" },
+    { name = "requests" },
+    { name = "ruff" },
+    { name = "slowapi" },
+    { name = "uvicorn", version = "0.39.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "uvicorn", version = "0.40.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
 dev = [
     { name = "aiomcache" },
     { name = "anyio" },
@@ -1323,9 +1347,13 @@ requires-dist = [
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.10" },
     { name = "fastapi", marker = "extra == 'test'", specifier = ">=0.68.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.0" },
+    { name = "line-profiler", marker = "extra == 'benchmark'", specifier = ">=5.0.0" },
+    { name = "memory-profiler", marker = "extra == 'benchmark'", specifier = ">=0.61.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14.1" },
     { name = "orjson", marker = "extra == 'dev'", specifier = ">=3.11.3" },
     { name = "pottery", marker = "extra == 'redis'", specifier = ">=3.0.1" },
+    { name = "psutil", marker = "extra == 'benchmark'", specifier = ">=5.9.5" },
+    { name = "pymemcache", marker = "extra == 'benchmark'", specifier = ">=4.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24.0" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=5.0.0" },
@@ -1333,13 +1361,16 @@ requires-dist = [
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0" },
     { name = "requests", marker = "extra == 'test'", specifier = ">=2.32.4" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.1" },
+    { name = "slowapi", marker = "extra == 'benchmark'", specifier = ">=0.1.4" },
     { name = "starlette", specifier = ">=0.14.0" },
     { name = "traffik", extras = ["all"], marker = "extra == 'test'" },
+    { name = "traffik", extras = ["dev"], marker = "extra == 'benchmark'" },
     { name = "traffik", extras = ["memcached"], marker = "extra == 'all'" },
     { name = "traffik", extras = ["redis"], marker = "extra == 'all'" },
     { name = "traffik", extras = ["test"], marker = "extra == 'dev'" },
+    { name = "uvicorn", marker = "extra == 'benchmark'", specifier = ">=0.22.0" },
 ]
-provides-extras = ["all", "test", "dev", "redis", "memcached"]
+provides-extras = ["all", "test", "dev", "benchmark", "redis", "memcached"]
 
 [package.metadata.requires-dev]
 dev = [

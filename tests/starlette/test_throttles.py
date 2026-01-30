@@ -19,14 +19,14 @@ from tests.utils import default_client_identifier, unlimited_identifier
 from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
-from traffik.throttles import BaseThrottle, HTTPThrottle, WebSocketThrottle
+from traffik.throttles import Throttle, HTTPThrottle, WebSocketThrottle
 
 
 @pytest.mark.asyncio
 @pytest.mark.throttle
 async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> None:
     with pytest.raises(ValueError):
-        BaseThrottle("test-init-1", rate=Rate(limit=-1))
+        Throttle("test-init-1", rate=Rate(limit=-1))
 
     async def _throttle_handler(connection: Request, wait_ms: float) -> None:
         # do nothing, just a placeholder for testing
@@ -34,7 +34,7 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
 
     # Test initialization behaviour
     async with inmemory_backend(close_on_exit=True):
-        throttle = BaseThrottle(
+        throttle = Throttle(
             "test-init-2",
             rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
             handle_throttled=_throttle_handler,

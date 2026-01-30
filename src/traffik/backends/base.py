@@ -65,7 +65,7 @@ throttle_backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVa
     "throttle_backend_ctx", default=None
 )
 
-BACKEND_STATE_KEY = "__traffik_throttle_backend"
+BACKEND_STATE_KEY = "__traffik_throttle_backend__"
 
 
 def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:

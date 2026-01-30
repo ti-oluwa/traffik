@@ -440,8 +440,23 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         """Ensure the Redis connection is ready and register Lua scripts."""
         if self.connection is None:
             self.connection = await self._get_connection()
+            try:
+                await self.connection.ping()
+                await self._ensure_increment_with_ttl_script()
+            except aioredis.RedisError as exc:
+                raise BackendConnectionError(
+                    "Failed to initialize Redis connection."
+                ) from exc
+
+    async def ready(self) -> bool:
+        if self.connection is None:
+            return False
+
+        try:
             await self.connection.ping()
-            await self._ensure_increment_with_ttl_script()
+            return True
+        except aioredis.RedisError:
+            return False
 
     async def _ensure_increment_with_ttl_script(self) -> None:
         """Ensure the `increment_with_ttl` Lua script is registered."""

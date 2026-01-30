@@ -11,7 +11,7 @@ from typing_extensions import TypeAlias
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import ConfigurationError, build_exception_handler_getter
-from traffik.throttles import BaseThrottle
+from traffik.throttles import Throttle
 from traffik.types import HTTPConnectionT, Matchable
 from traffik.utils import is_async_callable
 
@@ -69,7 +69,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
 
     def __init__(
         self,
-        throttle: BaseThrottle[HTTPConnectionT],
+        throttle: Throttle[HTTPConnectionT],
         path: typing.Optional[Matchable] = None,
         methods: typing.Optional[typing.Iterable[str]] = None,
         hook: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,

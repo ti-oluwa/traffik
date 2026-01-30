@@ -8,11 +8,11 @@ from typing import Annotated
 
 from fastapi.params import Depends
 
-from traffik.throttles import BaseThrottle
+from traffik.throttles import Throttle
 from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S
 from traffik.utils import add_parameter_to_signature
 
-ThrottleT = typing.TypeVar("ThrottleT", bound=BaseThrottle)
+ThrottleT = typing.TypeVar("ThrottleT", bound=Throttle)
 
 __all__ = ["throttled"]
 
@@ -58,7 +58,7 @@ class DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
 # Is this worth it? Just because of the `throttle` decorator?
 def apply_throttle(
     route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
-    throttle: BaseThrottle[HTTPConnectionT],
+    throttle: Throttle[HTTPConnectionT],
 ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
     """
     Create and returns an wrapper that applies throttling to an route
@@ -137,19 +137,19 @@ def route_wrapper(
 
 @typing.overload
 def throttled(
-    throttle: BaseThrottle[HTTPConnectionT],
+    throttle: Throttle[HTTPConnectionT],
 ) -> DecoratorDepends[typing.Any, typing.Any, typing.Any, HTTPConnectionT]: ...  # type: ignore[misc]
 
 
 @typing.overload
 def throttled(
-    throttle: BaseThrottle[HTTPConnectionT],
+    throttle: Throttle[HTTPConnectionT],
     route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
 ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]: ...
 
 
 def throttled(
-    throttle: BaseThrottle[HTTPConnectionT],
+    throttle: Throttle[HTTPConnectionT],
     route: typing.Optional[
         typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]
     ] = None,

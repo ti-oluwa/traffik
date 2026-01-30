@@ -5,6 +5,31 @@ from typing import Annotated
 from annotated_types import Ge
 
 
+_PERIOD_RE = re.compile(r"^(\d+)?\s*([a-z]+)$")
+_SPLIT_RE = re.compile(r"\s*per\s*|\/", re.IGNORECASE)
+# Maps unit to Rate constructor parameters
+_UNIT_MAPPING = {
+    "ms": ("milliseconds", 1),
+    "millisecond": ("milliseconds", 1),
+    "milliseconds": ("milliseconds", 1),
+    "s": ("seconds", 1),
+    "sec": ("seconds", 1),
+    "second": ("seconds", 1),
+    "seconds": ("seconds", 1),
+    "m": ("minutes", 1),
+    "min": ("minutes", 1),
+    "minute": ("minutes", 1),
+    "minutes": ("minutes", 1),
+    "h": ("hours", 1),
+    "hr": ("hours", 1),
+    "hour": ("hours", 1),
+    "hours": ("hours", 1),
+    "d": ("days", 24),  # days are represented as hours
+    "day": ("days", 24),
+    "days": ("days", 24),
+}
+
+
 @dataclass(frozen=True, eq=False)
 class Rate:
     """Rate limit definition"""
@@ -75,6 +100,8 @@ class Rate:
         - "<limit>/<unit>": e.g., "5/m" means 5 requests per minute
         - "<limit>/<period><unit>": e.g., "2/5s" means 2 requests per 5 seconds
         - "<limit>/<period> <unit>": e.g., "10/30 seconds" means 10 requests per 30 seconds
+        - "<limit> per <period> <unit>": e.g., "2 per second" means 2 requests per 1 second.
+        - "<limit> per <period><unit>": e.g., "2 persecond" means 2 requests per 1 second.
 
         Where:
         - <limit>: Maximum number of requests (integer)
@@ -89,6 +116,7 @@ class Rate:
         Examples:
             - "5/m" -> 5 requests per minute
             - "100/h" -> 100 requests per hour
+            - "10 per second" -> 10 requests per second
             - "2/5s" -> 2 requests per 5 seconds
             - "10/30 seconds" -> 10 requests per 30 seconds
             - "1000/500ms" -> 1000 requests per 500 milliseconds
@@ -104,12 +132,11 @@ class Rate:
         if not rate:
             raise ValueError("Rate string cannot be empty")
 
-        # Split on forward slash
-        parts = rate.split("/")
+        parts = _SPLIT_RE.split(rate)
         if len(parts) != 2:
             raise ValueError(
-                f"Invalid rate format '{rate}'. Expected format: '<limit>/<period>' "
-                f"(e.g., '5/m', '2/5s', '10/30 seconds')"
+                f"Invalid rate format '{rate}'. Expected format: '<limit>/<period><unit>' or '<limit> per <period><unit>'"
+                f"(e.g., '5 per m', '2/5s', '10/30 seconds')"
             )
 
         # Parse limit (left side)
@@ -131,7 +158,7 @@ class Rate:
 
         # Extract number and unit from period string
         # Regex matches: optional number + optional whitespace + unit
-        match = re.match(r"^(\d+)?\s*([a-z]+)$", period_str)
+        match = _PERIOD_RE.match(period_str)
         if not match:
             raise ValueError(
                 f"Invalid period format '{period_str}'. Expected format: "
@@ -146,35 +173,13 @@ class Rate:
                 f"Period multiplier must be positive, got {period_multiplier}"
             )
 
-        # Map unit to Rate constructor parameters
-        unit_mapping = {
-            "ms": ("milliseconds", 1),
-            "millisecond": ("milliseconds", 1),
-            "milliseconds": ("milliseconds", 1),
-            "s": ("seconds", 1),
-            "sec": ("seconds", 1),
-            "second": ("seconds", 1),
-            "seconds": ("seconds", 1),
-            "m": ("minutes", 1),
-            "min": ("minutes", 1),
-            "minute": ("minutes", 1),
-            "minutes": ("minutes", 1),
-            "h": ("hours", 1),
-            "hr": ("hours", 1),
-            "hour": ("hours", 1),
-            "hours": ("hours", 1),
-            "d": ("days", 24),  # days are represented as hours
-            "day": ("days", 24),
-            "days": ("days", 24),
-        }
-
-        if unit not in unit_mapping:
-            valid_units = sorted(set(unit_mapping.keys()))
+        if unit not in _UNIT_MAPPING:
+            valid_units = sorted(set(_UNIT_MAPPING.keys()))
             raise ValueError(
                 f"Invalid time unit '{unit}'. Valid units: {', '.join(valid_units)}"
             )
 
-        param_name, base_multiplier = unit_mapping[unit]
+        param_name, base_multiplier = _UNIT_MAPPING[unit]
         # For days, we use hours internally
         if param_name == "days":
             return cls(limit=limit, hours=period_multiplier * base_multiplier)

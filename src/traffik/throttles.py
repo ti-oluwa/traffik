@@ -25,7 +25,9 @@ from traffik.types import (
     CostType,
 )
 
-__all__ = ["BaseThrottle", "HTTPThrottle", "WebSocketThrottle"]
+__all__ = ["Throttle", "HTTPThrottle", "WebSocketThrottle", "is_throttled"]
+
+THROTTLED_STATE_KEY = "__traffik_throttled_state__"
 
 ThrottleStrategy = typing.Callable[
     [Stringable, Rate, ThrottleBackend[typing.Any, HTTPConnectionT], int],  # type: ignore[misc]
@@ -51,12 +53,12 @@ class ExceptionInfo(TypedDict):
     """The rate associated with the throttling operation."""
     backend: ThrottleBackend[typing.Any, HTTPConnection]
     """The backend used during the throttling operation."""
-    throttle: "BaseThrottle[HTTPConnection]"
+    throttle: "Throttle[HTTPConnection]"
     """The throttle instance used during the throttling operation."""
 
 
-class BaseThrottle(typing.Generic[HTTPConnectionT]):
-    """Base throttle class"""
+class Throttle(typing.Generic[HTTPConnectionT]):
+    """Base connection throttle class"""
 
     def __init__(
         self,
@@ -418,6 +420,8 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         )
         if wait_ms:
             handle_throttled = self.handle_throttled or backend.handle_throttled
+            # Mark connection as throttled
+            setattr(connection.state, THROTTLED_STATE_KEY, True)
             context = dict(context or {})
             context.setdefault("headers", self.headers)
             await handle_throttled(connection, wait_ms, context)
@@ -481,7 +485,17 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         self._error_callback = handler
 
 
-class HTTPThrottle(BaseThrottle[Request]):
+def is_throttled(connection: HTTPConnection) -> bool:
+    """
+    Check if the connection has been throttled.
+
+    :param connection: The HTTP connection to check.
+    :return: True if the connection has been throttled, False otherwise.
+    """
+    return getattr(connection.state, THROTTLED_STATE_KEY, False)
+
+
+class HTTPThrottle(Throttle[Request]):
     """HTTP connection throttle"""
 
     def get_key(
@@ -527,7 +541,7 @@ async def websocket_throttled(
     )
 
 
-class WebSocketThrottle(BaseThrottle[WebSocket]):
+class WebSocketThrottle(Throttle[WebSocket]):
     """WebSocket connection throttle"""
 
     def __init__(

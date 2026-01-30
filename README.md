@@ -58,7 +58,7 @@ pip install "traffik[redis]"
 # With Memcached
 pip install "traffik[memcached]"
 
-# All backends + FastAPI
+# All backends
 pip install "traffik[all]"
 
 # Development
@@ -84,7 +84,9 @@ async def root():
     return {"message": "ok"}
 ```
 
-### Production Example
+### Example Setup for Production
+
+#### API Routes
 
 ```python
 from fastapi import FastAPI, Request
@@ -121,7 +123,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Production-grade throttle
 api_throttle = HTTPThrottle(
     uid="api",
     rate="1000/hour",
@@ -139,11 +140,91 @@ async def get_data(request: Request = Depends(api_throttle)):
     return {"data": "value"}
 ```
 
+#### Websocket Routes
+
+```python
+from contextlib import asynccontextmanager
+from traffik import WebSocketThrottle, is_throttled
+from traffik.backends.redis import RedisBackend
+from traffik.strategies import SlidingWindowCounterStrategy
+from traffik.error_handlers import circuit_breaker_fallback, CircuitBreaker
+from traffik.backends.inmemory import InMemoryBackend
+
+# Primary backend
+backend = RedisBackend(
+    connection="redis://localhost:6379/0",
+    namespace="prod",
+    persistent=True,
+)
+
+# Fallback backend
+fallback_backend = InMemoryBackend(namespace="fallback")
+
+# Circuit breaker
+breaker = CircuitBreaker(
+    failure_threshold=10,
+    recovery_timeout=60.0,
+    success_threshold=3,
+)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with backend(app, persistent=True):
+        await fallback_backend.initialize()
+        yield
+        await fallback_backend.close()
+
+app = FastAPI(lifespan=lifespan)
+
+ws_throttle = HTTPThrottle(
+    uid="ws",
+    rate="1000/hour",
+    strategy=SlidingWindowCounterStrategy(),
+    backend=backend,
+    on_error=circuit_breaker_fallback(
+        backend=fallback_backend,
+        circuit_breaker=breaker,
+        max_retries=2,
+    ),
+)
+
+@app.websocket("/ws/data")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    close_code = 1000
+    reason = "Normal closure"
+    while True:
+        try:
+            data = await websocket.receive_json()
+            # Hit throttle. Default handler sends a throttle response if limit reached
+            await ws_throttle(websocket)
+            # If throttled, do not process further
+            if is_throttled(websocket):
+                continue
+                # Or you could just close the connection with code `1008` here
+
+            # Do something with data...
+            await websocket.send_json({"data": "value"})
+        except Exception:
+            close_code = 1011
+            reason = "Internal error"
+            break
+    await websocket.close(code=close_code, reason=reason)
+
+```
+
 ## Core Concepts
 
 ### Rate Format
 
-Rate limits are specified as `"<limit>/<period>"`:
+Rate limits are specified as:
+
+- `"<limit>/<unit>"`: e.g., "5/m" means 5 requests per minute
+- `"<limit>/<period><unit>"`: e.g., "2/5s" means 2 requests per 5 seconds
+- `"<limit>/<period> <unit>"`: e.g., "10/30 seconds" means 10 requests per 30 seconds
+- `"<limit> per <period> <unit>"`: e.g., "2 per second" means 2 requests per 1 second.
+- `"<limit> per <period><unit>"`: e.g., "2 persecond" means 2 requests per 1 second.
+- `Rate` object: for complex periods (e.g., minutes + seconds)
 
 ```python
 from traffik import HTTPThrottle, Rate
@@ -152,6 +233,7 @@ from traffik import HTTPThrottle, Rate
 HTTPThrottle(uid="api", rate="100/minute")
 HTTPThrottle(uid="api", rate="5/10seconds")
 HTTPThrottle(uid="api", rate="1000/500ms")
+HTTPThrottle(uid="api", rate="20 per 2 mins")
 
 # Supported units
 # ms, millisecond(s)
@@ -753,7 +835,7 @@ async def error_handler(
     - cost: int - Request cost
     - rate: Rate - Rate limit configuration
     - backend: ThrottleBackend - Backend that failed
-    - throttle: BaseThrottle - Throttle instance
+    - throttle: Throttle - Throttle instance
     """
     # Decision logic
     if isinstance(exc_info["exception"], BackendConnectionError):
@@ -848,11 +930,7 @@ throttle = HTTPThrottle(
 # Monitor circuit state
 @app.get("/health/circuit")
 async def circuit_status():
-    return {
-        "state": breaker._state,  # "closed", "open", or "half_open"
-        "failures": breaker._failures,
-        "successes": breaker._successes,
-    }
+    return breaker.info()
 ```
 
 **States:**
@@ -1488,7 +1566,7 @@ Available strategies:
 
 ```python
 MiddlewareThrottle(
-    throttle: BaseThrottle,
+    throttle: Throttle,
     path: Optional[Union[str, Pattern]] = None,
     methods: Optional[Set[str]] = None,
     predicate: Optional[Callable[[HTTPConnection], Awaitable[bool]]] = None,

@@ -183,6 +183,14 @@ class CircuitBreaker:
         self._successes = 0
         self._opened_at = None
 
+    def info(self) -> typing.Dict[str, typing.Any]:
+        return {
+            "state": self._state,
+            "failures": self._failures,
+            "successes": self._successes,
+            "opened_at": self._opened_at,
+        }
+
 
 def circuit_breaker(
     circuit_breaker: typing.Optional[CircuitBreaker] = None,

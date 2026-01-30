@@ -13,7 +13,7 @@ from .backends.base import (
 )
 from .backends.inmemory import InMemoryBackend as InMemoryBackend
 from .throttles import (
-    BaseThrottle as BaseThrottle,
+    Throttle as Throttle,
     HTTPThrottle as HTTPThrottle,
     WebSocketThrottle as WebSocketThrottle,
 )

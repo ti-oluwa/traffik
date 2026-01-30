@@ -1,6 +1,6 @@
 """Type definitions and protocols for the traffik package."""
 
-from dataclasses import dataclass # noqa: I001
+from dataclasses import dataclass  # noqa: I001
 import typing
 
 from starlette.requests import HTTPConnection
@@ -57,8 +57,9 @@ ExceptionHandler: TypeAlias = typing.Callable[
 
 AwaitableCallable = typing.Callable[..., typing.Awaitable[T]]
 
-ErrorHandler = typing.Callable[
-    [HTTPConnectionT, Exception, int], typing.Awaitable[WaitPeriod]
+MappingT = typing.TypeVar("MappingT", bound=typing.Mapping[typing.Any, typing.Any])
+ThrottleErrorHandler = typing.Callable[
+    [HTTPConnectionT, MappingT], typing.Awaitable[WaitPeriod]
 ]
 """
 A callable that handles errors during throttling.
@@ -97,6 +98,20 @@ ConnectionThrottledHandler = typing.Callable[
     typing.Awaitable[typing.Any],
 ]
 """Type definition for connection throttled handlers."""
+
+RateFunc = typing.Callable[
+    [HTTPConnectionT, typing.Mapping[str, typing.Any]], typing.Awaitable[Rate]
+]
+"""Type definition for rate functions."""
+CostFunc = typing.Callable[
+    [HTTPConnectionT, typing.Mapping[str, typing.Any]], typing.Awaitable[int]
+]
+"""Type definition for cost functions."""
+
+RateType = typing.Union[Rate, RateFunc[HTTPConnectionT], str]
+"""Type definition for rate specifications."""
+CostType = typing.Union[int, CostFunc[HTTPConnectionT]]
+"""Type definition for cost specifications."""
 
 
 class Dependency(typing.Protocol, typing.Generic[P, Rco]):

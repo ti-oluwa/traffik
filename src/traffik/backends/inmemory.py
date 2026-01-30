@@ -13,7 +13,7 @@ from traffik.exceptions import BackendConnectionError
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
-    ErrorHandler,
+    ThrottleErrorHandler,
     HTTPConnectionT,
 )
 from traffik.utils import AsyncRLock, time
@@ -120,7 +120,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         ] = None,
         persistent: bool = False,
         on_error: typing.Union[
-            typing.Literal["allow", "throttle", "raise"], ErrorHandler[HTTPConnectionT]
+            typing.Literal["allow", "throttle", "raise"],
+            ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
         ] = "throttle",
         number_of_shards: int = 3,
         cleanup_frequency: float = 5.0,

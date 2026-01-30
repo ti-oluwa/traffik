@@ -14,7 +14,7 @@ from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
-    ErrorHandler,
+    ThrottleErrorHandler,
     HTTPConnectionT,
 )
 from traffik.utils import time
@@ -389,7 +389,8 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         persistent: bool = False,
         lock_type: typing.Literal["redis", "redlock"] = "redis",
         on_error: typing.Union[
-            typing.Literal["allow", "throttle", "raise"], ErrorHandler[HTTPConnectionT]
+            typing.Literal["allow", "throttle", "raise"],
+            ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
         ] = "throttle",
         **kwargs: typing.Any,
     ) -> None:

@@ -1,6 +1,6 @@
 """Memcached implementation of a throttle backend using `aiomcache`."""
 
-import asyncio
+import asyncio  # noqa: I001
 import functools
 import math
 import typing
@@ -14,7 +14,7 @@ from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
-    ErrorHandler,
+    ThrottleErrorHandler,
     HTTPConnectionT,
     P,
     R,
@@ -246,7 +246,8 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         ] = None,
         persistent: bool = False,
         on_error: typing.Union[
-            typing.Literal["allow", "throttle", "raise"], ErrorHandler[HTTPConnectionT]
+            typing.Literal["allow", "throttle", "raise"],
+            ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
         ] = "throttle",
         track_keys: bool = False,
         **kwargs: typing.Any,

@@ -1,9 +1,11 @@
 """Throttles for HTTP and WebSocket connections."""
 
-import math # noqa: I001
+import math  # noqa: I001
 import typing
 
-from starlette.requests import Request
+from typing_extensions import TypedDict
+
+from starlette.requests import Request, HTTPConnection
 from starlette.websockets import WebSocket
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
@@ -13,12 +15,14 @@ from traffik.strategies import default_strategy
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
-    ErrorHandler,
+    ThrottleErrorHandler,
     HTTPConnectionT,
     StrategyStat,
     Stringable,
     EXEMPTED,
     WaitPeriod,
+    RateType,
+    CostType,
 )
 
 __all__ = ["BaseThrottle", "HTTPThrottle", "WebSocketThrottle"]
@@ -34,27 +38,44 @@ Takes a key, a Rate object, the throttle backend, and cost, and returns the wait
 """
 
 
+class ExceptionInfo(TypedDict):
+    """TypedDict for exception handler information."""
+
+    exception: typing.Type[Exception]
+    """The type of exception the handler is for."""
+    connection: HTTPConnection
+    """The HTTP connection associated with the exception."""
+    cost: int
+    """The cost associated with the throttling operation."""
+    rate: Rate
+    """The rate associated with the throttling operation."""
+    backend: ThrottleBackend[typing.Any, HTTPConnection]
+    """The backend used during the throttling operation."""
+    throttle: "BaseThrottle[HTTPConnection]"
+    """The throttle instance used during the throttling operation."""
+
+
 class BaseThrottle(typing.Generic[HTTPConnectionT]):
     """Base throttle class"""
 
     def __init__(
         self,
         uid: str,
-        rate: typing.Union[Rate, str],
+        rate: RateType[HTTPConnectionT],
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
             ConnectionThrottledHandler[HTTPConnectionT]
         ] = None,
         strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]] = None,
-        cost: int = 1,
+        cost: CostType[HTTPConnectionT] = 1,
         context_backend: bool = False,
         min_wait_period: typing.Optional[int] = None,
         headers: typing.Optional[typing.Mapping[str, str]] = None,
         on_error: typing.Optional[
             typing.Union[
                 typing.Literal["allow", "throttle", "raise"],
-                ErrorHandler[HTTPConnectionT],
+                ThrottleErrorHandler[HTTPConnectionT, ExceptionInfo],
             ]
         ] = None,
     ) -> None:
@@ -105,53 +126,55 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             - Request-based backend selection (e.g., different storage for different request types)
             - Advanced testing scenarios with nested backend context managers
 
-            Example (Multi-tenant):
-            ```python
-            # Tenant determined at runtime from request headers
-            tenant_throttle = HTTPThrottle(
-                uid="api_quota",
-                rate="1000/h",
-                context_backend=True
-            )
+        Example (Multi-tenant):
 
-            async def tenant_middleware(request, call_next):
-                tenant = extract_tenant_from_auth_header(request.headers["Authorization"])
+        ```python
+        # Tenant determined at runtime from request headers
+        tenant_throttle = HTTPThrottle(
+            uid="api_quota",
+            rate="1000/h",
+            context_backend=True
+        )
 
-                if tenant == "premium":
-                    backend = RedisBackend("redis://premium-redis:6379/0")
-                elif tenant == "enterprise":
-                    backend = RedisBackend("redis://enterprise-redis:6379/0")
-                else:
-                    backend = InMemoryBackend()  # Free tier
+        async def tenant_middleware(request, call_next):
+            tenant = extract_tenant_from_auth_header(request.headers["Authorization"])
 
-                async with backend():
-                    return await call_next(request)
-            ```
+            if tenant == "premium":
+                backend = RedisBackend("redis://premium-redis:6379/0")
+            elif tenant == "enterprise":
+                backend = RedisBackend("redis://enterprise-redis:6379/0")
+            else:
+                backend = InMemoryBackend()  # Free tier
 
-            Example (Testing with nested contexts):
-            ```python
-            throttle = HTTPThrottle(uid="test", limit=3, seconds=5, context_backend=True)
+            async with backend():
+                return await call_next(request)
+        ```
 
-            async with backend_a():
-                await throttle(request)  # Uses backend_a
+        Example (Testing with nested contexts):
 
-                async with backend_b():
-                    await throttle(request)  # Switches to backend_b
+        ```python
+        throttle = HTTPThrottle(uid="test", limit=3, seconds=5, context_backend=True)
 
-                await throttle(request)  # Back to backend_a
-            ```
+        async with backend_a():
+            await throttle(request)  # Uses backend_a
 
-            IMPORTANT: Do NOT use for simple shared storage across services.
-            For shared backends, use explicit backend configuration instead:
+            async with backend_b():
+                await throttle(request)  # Switches to backend_b
 
-            ```python
-            # GOOD - Explicit shared backend
-            shared_backend = RedisBackend("redis://shared-redis:6379/0")
-            user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", backend=shared_backend)
+            await throttle(request)  # Back to backend_a
+        ```
 
-            # BAD - Unnecessary dynamic resolution
-            user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", context_backend=True)
-            ```
+        IMPORTANT: Do NOT use for simple shared storage across services.
+        For shared backends, use explicit backend configuration instead:
+
+        ```python
+        # GOOD - Explicit shared backend
+        shared_backend = RedisBackend("redis://shared-redis:6379/0")
+        user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", backend=shared_backend)
+
+        # BAD - Unnecessary dynamic resolution
+        user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", context_backend=True)
+        ```
 
             **WARNING:** This feature adds complexity and slight performance overhead.
             - Cannot be used with explicit backend parameter
@@ -184,7 +207,10 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             )
 
         self.uid = uid
+        self._uses_rate_func = callable(rate)
         self.rate = Rate.parse(rate) if isinstance(rate, str) else rate
+
+        self._uses_cost_func = callable(cost)
         self.cost = cost
         self.use_fixed_backend = not context_backend
         self.strategy = strategy or default_strategy
@@ -215,7 +241,9 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             self.handle_throttled = handle_throttled
             on_error_ = on_error or "throttle"
 
-        self._error_callback: typing.Optional[ErrorHandler[HTTPConnectionT]] = None
+        self._error_callback: typing.Optional[
+            ThrottleErrorHandler[HTTPConnectionT, ExceptionInfo]
+        ] = None
         if callable(on_error_):
             self._error_callback = on_error_
         elif isinstance(on_error_, str) and on_error_ in {"allow", "throttle", "raise"}:
@@ -271,7 +299,12 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         return namespaced_key
 
     async def _handle_error(
-        self, connection: HTTPConnectionT, exc: Exception, cost: int
+        self,
+        connection: HTTPConnectionT,
+        exc: Exception,
+        cost: int,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnectionT],
     ) -> WaitPeriod:
         """
         Handle errors during throttling based on the configured strategy.
@@ -279,10 +312,21 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
         :param connection: The HTTP connection being throttled.
         :param exc: The exception that occurred during throttling.
         :param cost: The cost/weight of the request that caused the error.
+        :param rate: The rate associated with the throttling operation.
+        :param backend: The backend used during the throttling operation.
+        :param throttle: The throttle instance.
         :return: The wait period in milliseconds.
         """
         if self._error_callback:
-            return await self._error_callback(connection, exc, cost)
+            exc_info = ExceptionInfo(
+                exception=type(exc),
+                connection=connection,
+                cost=cost,
+                rate=rate,
+                backend=backend,  # type: ignore
+                throttle=self,  # type: ignore
+            )
+            return await self._error_callback(connection, exc_info)
         elif self.on_error == "allow":
             return 0.0
         elif self.on_error == "throttle":
@@ -307,11 +351,22 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
             needed to uniquely identify the request for throttling purposes.
         :return: The throttled HTTP connection.
         """
-        if self.rate.unlimited:
+        rate = (
+            await self.rate(connection, context) if self._uses_rate_func else self.rate  # type: ignore
+        )
+        if rate.unlimited:  # type: ignore[attr-defined]
             return connection  # No throttling applied
 
-        cost = cost if cost else self.cost
-        if cost <= 0:
+        cost_ = (  # type: ignore
+            cost
+            if cost
+            else (
+                await self.cost(connection, context)  # type: ignore
+                if self._uses_cost_func
+                else self.cost
+            )
+        )
+        if cost_ <= 0:  # type: ignore
             raise ValueError("cost must be a positive integer")
 
         backend = self.get_backend(connection)
@@ -321,12 +376,18 @@ class BaseThrottle(typing.Generic[HTTPConnectionT]):
 
         namespaced_key = self.get_namespaced_key(connection, connection_id, context)
         try:
-            wait_ms = await self.strategy(namespaced_key, self.rate, backend, cost)
+            wait_ms = await self.strategy(namespaced_key, rate, backend, cost_)  # type: ignore
         except (BackendError, TimeoutError) as exc:
             print(
                 f"Warning: An error occurred while utilizing strategy '{self.strategy!r}': {exc}",
             )
-            wait_ms = await self._handle_error(connection, exc, cost)
+            wait_ms = await self._handle_error(
+                connection,
+                exc=exc,
+                cost=cost_,  # type: ignore
+                rate=rate,  # type: ignore
+                backend=backend,
+            )
 
         wait_ms = (
             max(wait_ms, self.min_wait_period) if self.min_wait_period else wait_ms
@@ -437,19 +498,19 @@ class WebSocketThrottle(BaseThrottle[WebSocket]):
     def __init__(
         self,
         uid: str,
-        rate: typing.Union[Rate, str],
+        rate: RateType[WebSocket],
         identifier: typing.Optional[ConnectionIdentifier[WebSocket]] = None,
         handle_throttled: typing.Optional[ConnectionThrottledHandler[WebSocket]] = None,
         strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, WebSocket]] = None,
-        cost: int = 1,
+        cost: CostType[WebSocket] = 1,
         context_backend: bool = False,
         min_wait_period: typing.Optional[int] = None,
         headers: typing.Optional[typing.Mapping[str, str]] = None,
         on_error: typing.Optional[
             typing.Union[
                 typing.Literal["allow", "throttle", "raise"],
-                ErrorHandler[WebSocket],
+                ThrottleErrorHandler[WebSocket, ExceptionInfo],
             ]
         ] = None,
     ) -> None:

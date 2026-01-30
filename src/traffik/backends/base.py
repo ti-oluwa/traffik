@@ -18,7 +18,7 @@ from traffik.types import (
     AsyncLock,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
-    ErrorHandler,
+    ThrottleErrorHandler,
     HTTPConnectionT,
     P,
     R,
@@ -202,7 +202,8 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         ] = None,
         persistent: bool = False,
         on_error: typing.Union[
-            typing.Literal["allow", "throttle", "raise"], ErrorHandler[HTTPConnectionT]
+            typing.Literal["allow", "throttle", "raise"],
+            ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
         ] = "throttle",
     ) -> None:
         """

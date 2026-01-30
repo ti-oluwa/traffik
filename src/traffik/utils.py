@@ -1,6 +1,6 @@
 """`traffik` utilities."""
 
-import asyncio # noqa: I001
+import asyncio  # noqa: I001
 from collections import deque
 import functools
 import inspect

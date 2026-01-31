@@ -228,6 +228,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         self.handle_throttled = handle_throttled or connection_throttled
         self.persistent = persistent
         self.on_error = on_error
+        self._error_callback = on_error if callable(on_error) else None
 
     def get_key(self, key: str, *args, **kwargs) -> str:
         """
@@ -292,7 +293,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
     async def get_lock(self, name: str) -> AsyncLock:
         """
-        Acquire a distributed lock with the given name.
+        Get a distributed lock with the given name.
 
         :param name: The name of the lock.
         :return: An asynchronous lock object that implements the `traffik.types.AsyncLock` protocol.

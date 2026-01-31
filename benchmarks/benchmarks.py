@@ -11,20 +11,20 @@ import argparse  # noqa: I001
 import asyncio
 from dataclasses import dataclass, field
 import statistics
-import sys
 import time
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, Request
 import httpx
 from slowapi import Limiter as SlowAPILimiter
-from slowapi.util import get_remote_address
+import slowapi
 from starlette.testclient import TestClient
 
-from traffik import HTTPThrottle
+from traffik import HTTPThrottle, get_remote_address
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.memcached import MemcachedBackend
 from traffik.backends.redis import RedisBackend
+from traffik.strategies.custom import GCRAStrategy
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.strategies.leaky_bucket import (
     LeakyBucketStrategy,
@@ -63,6 +63,8 @@ class BenchmarkConfig:
     traffik_strategy: str = "fixed-window"  # fixed-window, sliding-window-counter, sliding-window-log, token-bucket, token-bucket-debt, leaky-bucket, leaky-bucket-queue
     traffik_redis_url: Optional[str] = None
     traffik_memcached_url: Optional[str] = None
+    # We will not track keys for memcached backend by default to avoid performance overhead
+    traffik_memcached_track_keys: bool = False
 
     # SlowAPI configuration
     slowapi_backend: str = "inmemory"  # inmemory, redis, memcached
@@ -165,9 +167,7 @@ def create_traffik_backend(config: BenchmarkConfig):
             namespace="traffik:bench",
             identifier=custom_identifier,
             persistent=False,
-            # We will not track keys for benchmark backend
-            # to avoid performance overhead
-            track_keys=False,
+            track_keys=config.traffik_memcached_track_keys,
         )
     # inmemory
     return InMemoryBackend(
@@ -185,6 +185,7 @@ TRAFFIK_STRATEGIES = {
     "token-bucket-debt": TokenBucketWithDebtStrategy,
     "leaky-bucket": LeakyBucketStrategy,
     "leaky-bucket-queue": LeakyBucketWithQueueStrategy,
+    "gcra": GCRAStrategy,
 }
 
 
@@ -249,7 +250,8 @@ def create_slowapi_app(
 
     limiter = SlowAPILimiter(
         key_func=lambda request: request.headers.get("X-Client-ID")
-        or get_remote_address(request),
+        or get_remote_address(request)
+        or "anonymous",
         storage_uri=storage_uri,
         strategy=config.slowapi_strategy.replace("_", "-"),
     )
@@ -683,6 +685,11 @@ def print_comparison(
             f"{'':<20} {'P95 Latency (ms)':<25} {t_agg.p95_latency:<15.2f} {s_agg.p95_latency:<15.2f} {p95_winner:<10}"
         )
 
+        p99_winner = "Traffik" if t_agg.p99_latency < s_agg.p99_latency else "SlowAPI"
+        print(
+            f"{'':<20} {'P99 Latency (ms)':<25} {t_agg.p99_latency:<15.2f} {s_agg.p99_latency:<15.2f} {p99_winner:<10}"
+        )
+
         print(
             f"{'':<20} {'Success Rate (%)':<25} {t_agg.success_rate:<15.1f} {s_agg.success_rate:<15.1f}"
         )
@@ -830,15 +837,7 @@ async def main():
     parser.add_argument(
         "--traffik-strategy",
         type=str,
-        choices=[
-            "fixed-window",
-            "sliding-window-counter",
-            "sliding-window-log",
-            "token-bucket",
-            "token-bucket-debt",
-            "leaky-bucket",
-            "leaky-bucket-queue",
-        ],
+        choices=list(TRAFFIK_STRATEGIES.keys()),
         default="fixed-window",
         help="Strategy for Traffik (default: fixed-window)",
     )
@@ -853,6 +852,11 @@ async def main():
         type=str,
         default="memcached://localhost:11211",
         help="Memcached URL for Traffik (required if backend=memcached)",
+    )
+    parser.add_argument(
+        "--traffik-memcached-track-keys",
+        action="store_true",
+        help="Enable key tracking for Traffik Memcached backend (default: disabled)",
     )
 
     # SlowAPI options
@@ -889,8 +893,6 @@ async def main():
     )
 
     args = parser.parse_args()
-
-    # Build config
     config = BenchmarkConfig(
         scenarios=args.scenarios.split(","),
         iterations=args.iterations,
@@ -899,6 +901,7 @@ async def main():
         traffik_strategy=args.traffik_strategy,
         traffik_redis_url=args.traffik_redis_url,
         traffik_memcached_url=args.traffik_memcached_url,
+        traffik_memcached_track_keys=args.traffik_memcached_track_keys,
         slowapi_backend=args.slowapi_backend,
         slowapi_strategy=args.slowapi_strategy,
         slowapi_redis_url=args.slowapi_redis_url,
@@ -926,7 +929,6 @@ async def main():
     if "Traffik" in results and "SlowAPI" in results:
         print_comparison(results["Traffik"], results["SlowAPI"])
 
-    # Cleanup All Memcached keys
     print("Benchmark complete!")
 
 

@@ -1,7 +1,7 @@
 """Token Bucket rate limiting strategies."""
 
-from dataclasses import dataclass, field
 import typing
+from dataclasses import dataclass, field
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
@@ -93,7 +93,7 @@ class TokenBucketStrategy:
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
             blocking=True,
-            blocking_timeout=0.1, # 100 milliseconds
+            blocking_timeout=0.1,  # 100 milliseconds
         )
     )
     """Configuration for backend locking during rate limit checks."""
@@ -328,7 +328,7 @@ class TokenBucketWithDebtStrategy:
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
             blocking=True,
-            blocking_timeout=0.1, # 100 milliseconds
+            blocking_timeout=0.1,  # 100 milliseconds
         )
     )
 

@@ -219,7 +219,7 @@ async def test_cost_zero_treated_as_one(backend: InMemoryBackend):
             # Depending on implementation, cost=0 might be treated as cost=1
             # or might be rejected. Let's test both scenarios
             if i < 3:
-                assert wait == 0.0 or wait > 0, f"Request {i+1} handled"
+                assert wait == 0.0 or wait > 0, f"Request {i + 1} handled"
 
 
 @pytest.mark.anyio

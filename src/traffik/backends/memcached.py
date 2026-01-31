@@ -386,6 +386,16 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 return_value=None,
             )
 
+    async def ready(self) -> bool:
+        if self.connection is None:
+            return False
+
+        try:
+            await self.connection.version()
+            return True
+        except ClientException:
+            return False
+
     async def get_lock(self, name: str) -> AsyncMemcachedLock:
         """
         Get a distributed lock for the given name.

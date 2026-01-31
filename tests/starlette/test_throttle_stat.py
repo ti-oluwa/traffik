@@ -1,8 +1,9 @@
 """Tests for stat functionality in HTTP and WebSocket throttles."""
+
 import asyncio
 
-from httpx import ASGITransport, AsyncClient
 import pytest
+from httpx import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.requests import Request

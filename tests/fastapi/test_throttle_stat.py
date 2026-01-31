@@ -2,10 +2,9 @@
 
 import asyncio
 
-from fastapi import FastAPI
-from fastapi import WebSocket
-from httpx import ASGITransport, AsyncClient
 import pytest
+from fastapi import FastAPI, WebSocket
+from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
 from tests.asyncio_client import AsyncioTestClient
@@ -16,6 +15,7 @@ from traffik.exceptions import ConnectionThrottled
 from traffik.rates import Rate
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
+
 
 @pytest.mark.asyncio
 @pytest.mark.throttle

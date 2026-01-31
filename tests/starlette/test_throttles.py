@@ -1,10 +1,10 @@
 import asyncio
-from itertools import repeat
 import typing
+from itertools import repeat
 
 import anyio
-from httpx import ASGITransport, AsyncClient, Response
 import pytest
+from httpx import ASGITransport, AsyncClient, Response
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
@@ -19,7 +19,7 @@ from tests.utils import default_client_identifier, unlimited_identifier
 from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
-from traffik.throttles import Throttle, HTTPThrottle, WebSocketThrottle
+from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 
 
 @pytest.mark.asyncio

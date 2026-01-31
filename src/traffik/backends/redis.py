@@ -240,7 +240,7 @@ class AsyncRedLock:
             return self._task_locks.get()
         except LookupError:
             # Create new dict for this task/context
-            task_locks = {}
+            task_locks: typing.Dict[str, typing.Tuple[AIORedlock, int]] = {}
             self._task_locks.set(task_locks)
             return task_locks
 

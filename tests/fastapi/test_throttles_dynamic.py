@@ -2,9 +2,9 @@
 
 import typing
 
+import pytest
 from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
-import pytest
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from tests.utils import default_client_identifier

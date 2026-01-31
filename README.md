@@ -10,13 +10,13 @@ Asynchronous distributed rate limiting for FastAPI/Starlette applications.
 
 ## Features
 
-- **Fully Asynchronous**: Built for async/await with no blocking operations
-- **Distributed**: Atomic operations with distributed locks (Redis, Memcached)
-- **Multiple Strategies**: Fixed Window, Sliding Window, Token Bucket, Leaky Bucket
-- **HTTP & WebSocket**: Rate limit both protocols
-- **Production-Ready**: Circuit breakers, fallback backends, error handling
-- **Flexible Integration**: Decorators, dependencies, or middleware
-- **Extensible**: Custom strategies, backends, and identifiers
+- **Fully Asynchronous**: Built for async/await with no blocking operations with little overhead.
+- **Distributed**: Atomic operations with distributed locks (Redis, Memcached). With higher success rates than existing throttling libraries.
+- **Multiple Strategies**: Fixed Window, Sliding Window, Token Bucket, Leaky Bucket, GCRA, and more.
+- **HTTP & WebSocket**: Rate limit both protocols. Yes, Traffik supports WebSockets!
+- **Production-Ready**: Use circuit breakers, retries, specify error handling strategies and fallbacks
+- **Flexible Integration**: Use either as dependencies, decorators, middleware, or with direct calls
+- **Extensible API**: Traffik is designed so you can easily plug in your own custom backends, strategies, error handlers, identifiers, and more.
 
 Inspired by [fastapi-limiter](https://github.com/long2ice/fastapi-limiter) but with advanced features for production systems.
 
@@ -176,7 +176,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-ws_throttle = HTTPThrottle(
+ws_throttle = WebSocketThrottle(
     uid="ws",
     rate="1000/hour",
     strategy=SlidingWindowCounterStrategy(),
@@ -189,7 +189,7 @@ ws_throttle = HTTPThrottle(
 )
 
 @app.websocket("/ws/data")
-async def websocket_endpoint(websocket: WebSocket):
+async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     close_code = 1000
     reason = "Normal closure"
@@ -197,7 +197,7 @@ async def websocket_endpoint(websocket: WebSocket):
         try:
             data = await websocket.receive_json()
             # Hit throttle. Default handler sends a throttle response if limit reached
-            await ws_throttle(websocket)
+            await ws_throttle(websocket, context={"scope": "<some_scope>"})
             # If throttled, do not process further
             if is_throttled(websocket):
                 continue
@@ -307,7 +307,7 @@ backend = RedisBackend(
 
 **Lock Types:**
 
-- `"redis"`: Single Redis instance, low latency (~0.1ms overhead)
+- `"redis"`: Single Redis instance, low latency (~0.4ms overhead)
 - `"redlock"`: Distributed Redlock algorithm, higher latency (~5ms overhead)
 
 **Characteristics:**

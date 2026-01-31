@@ -1,6 +1,6 @@
 """Memcached implementation of a throttle backend using `aiomcache`."""
 
-import asyncio  # noqa: I001
+import asyncio
 import functools
 import math
 import typing
@@ -14,11 +14,11 @@ from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
-    ThrottleErrorHandler,
     HTTPConnectionT,
     P,
     R,
     T,
+    ThrottleErrorHandler,
 )
 from traffik.utils import fence_token_generator, time
 

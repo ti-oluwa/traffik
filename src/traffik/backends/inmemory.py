@@ -4,17 +4,17 @@ In-memory implementation of a throttle backend using an `OrderedDict` for storag
 NOTE: This is not suitable for multi-process or distributed setups.
 """
 
-import asyncio  # noqa: I001
-from collections import OrderedDict
+import asyncio
 import typing
+from collections import OrderedDict
 
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
-    ThrottleErrorHandler,
     HTTPConnectionT,
+    ThrottleErrorHandler,
 )
 from traffik.utils import AsyncRLock, time
 

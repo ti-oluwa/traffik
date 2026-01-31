@@ -2,27 +2,26 @@
 Comprehensive benchmarks comparing Traffik and SlowAPI rate limiting libraries.
 
 Usage:
-    python benchmarks.py --help
-    python benchmarks.py --traffik-backend redis --traffik-strategy sliding-window-counter
-    python benchmarks.py --scenarios low,high,burst --iterations 3
+    python benchmarks/comparison.py --help
+    python benchmarks/comparison.py --traffik-backend redis --traffik-strategy sliding-window-counter
+    python benchmarks/comparison.py --scenarios low,high,burst --iterations 3
 """
 
-import argparse  # noqa: I001
+import argparse
 import asyncio
-from dataclasses import dataclass, field
 import statistics
 import time
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, Request
 import httpx
+from base import BenchmarkMemcachedBackend, custom_identifier  # type: ignore[import]
+from fastapi import FastAPI, Request
 from slowapi import Limiter as SlowAPILimiter
-import slowapi
 from starlette.testclient import TestClient
 
 from traffik import HTTPThrottle, get_remote_address
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.backends.memcached import MemcachedBackend
 from traffik.backends.redis import RedisBackend
 from traffik.strategies.custom import GCRAStrategy
 from traffik.strategies.fixed_window import FixedWindowStrategy
@@ -118,38 +117,6 @@ class ScenarioResult:
         return sorted_latencies[idx] * 1000
 
 
-# Custom identifier for distributed testing
-async def custom_identifier(connection: Request) -> str:
-    """Use X-Client-ID header if present, otherwise fall back to IP."""
-    client_id = connection.headers.get("X-Client-ID")
-    if client_id:
-        return f"client:{client_id}"
-
-    # Fallback to IP
-    client_ip = get_remote_address(connection)
-    if not client_ip:
-        return "anonymous"
-    return f"ip:{client_ip}:{connection.scope['path']}"
-
-
-class BenchmarkMemcachedBackend(MemcachedBackend):
-    """
-    Memcached backend variant for benchmarks.
-
-    NOTE: This backend skips key tracking to avoid performance overhead during benchmarks.
-    But caution: Without key tracking, the `clear` method will flush the entire Memcached cache,
-    which may affect other applications using the same Memcached instance.
-    Ensure that the Memcached instance is dedicated for benchmarking purposes only.
-    """
-
-    async def clear(self) -> None:
-        # Flush entire Memcached cache, if not tracking keys
-        if self.connection is not None and not self.track_keys:
-            await self.connection.flush_all()
-            return
-        await super().clear()
-
-
 def create_traffik_backend(config: BenchmarkConfig):
     """Create Traffik backend based on configuration."""
     if config.traffik_backend == "redis":
@@ -212,7 +179,7 @@ def create_traffik_app(
     throttle = HTTPThrottle(
         uid="bench",
         rate=f"{limit}/{window}s",
-        backend=backend,
+        backend=backend,  # type: ignore
         strategy=strategy,
     )
 

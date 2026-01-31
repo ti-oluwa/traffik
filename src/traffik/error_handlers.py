@@ -1,12 +1,10 @@
 """
 Error handling strategies for rate limiting operations.
-
-Error handlers can switch backends, implement fallback logic, circuit breaking, and more.
 """
 
-import asyncio  # noqa: I001
-from datetime import datetime, timedelta
+import asyncio
 import typing
+from datetime import datetime, timedelta
 
 from starlette.requests import HTTPConnection
 

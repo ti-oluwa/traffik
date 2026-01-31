@@ -1,13 +1,14 @@
 """`traffik` utilities."""
 
-import asyncio  # noqa: I001
-from collections import deque
+import asyncio
 import functools
 import inspect
+import os
 import threading
+import typing
+from collections import deque
 from time import time_ns
 from types import TracebackType
-import typing
 
 from starlette.requests import HTTPConnection
 from typing_extensions import Self, TypeGuard
@@ -19,6 +20,66 @@ try:
     import orjson as json  # type: ignore[import]
 except ImportError:
     import json  # type: ignore[no-redef]
+
+
+DEFAUL_BLOCKING_SETTING_ENV_VAR = "TRAFFIK_DEFAULT_BLOCKING"
+DEFAULT_BLOCKING_TIMEOUT_ENV_VAR = "TRAFFIK_DEFAULT_BLOCKING_TIMEOUT"
+
+
+def get_blocking_setting() -> bool:
+    """
+    Get the default blocking setting from the environment variable `TRAFFIK_DEFAULT_BLOCKING`.
+
+    :return: The default blocking setting as a boolean. Defaults to True if not set.
+    """
+    blocking_str = os.getenv(DEFAUL_BLOCKING_SETTING_ENV_VAR)
+    if blocking_str is not None:
+        return blocking_str.lower() in ("1", "true", "yes", "on")
+    return True
+
+
+def get_blocking_timeout() -> typing.Optional[float]:
+    """
+    Get the default blocking timeout from the environment variable `TRAFFIK_DEFAULT_BLOCKING_TIMEOUT`.
+
+    :return: The default blocking timeout in seconds, or None if not set.
+    """
+    timeout_str = os.getenv(DEFAULT_BLOCKING_TIMEOUT_ENV_VAR)
+    if timeout_str is not None:
+        try:
+            timeout = float(timeout_str)
+            if timeout < 0:
+                raise ValueError
+            return timeout
+        except ValueError:
+            raise ValueError(
+                f"Invalid value for {DEFAULT_BLOCKING_TIMEOUT_ENV_VAR}. Must be a non-negative float."
+            )
+    return None
+
+
+def set_blocking_setting(blocking: bool) -> None:
+    """
+    Set the default gloabl blocking setting in the environment variable `TRAFFIK_DEFAULT_BLOCKING`.
+
+    :param blocking: The blocking setting to set.
+    """
+    os.environ[DEFAUL_BLOCKING_SETTING_ENV_VAR] = "1" if blocking else "0"
+
+
+def set_blocking_timeout(timeout: typing.Optional[float]) -> None:
+    """
+    Set the default global blocking timeout in the environment variable `TRAFFIK_DEFAULT_BLOCKING_TIMEOUT`.
+
+    :param timeout: The blocking timeout to set, or None to unset.
+    """
+    if timeout is None:
+        if DEFAULT_BLOCKING_TIMEOUT_ENV_VAR in os.environ:
+            del os.environ[DEFAULT_BLOCKING_TIMEOUT_ENV_VAR]
+    else:
+        if timeout < 0:
+            raise ValueError("Blocking timeout must be a non-negative float.")
+        os.environ[DEFAULT_BLOCKING_TIMEOUT_ENV_VAR] = str(timeout)
 
 
 def get_remote_address(connection: HTTPConnection) -> typing.Optional[str]:

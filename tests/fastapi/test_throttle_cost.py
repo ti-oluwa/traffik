@@ -7,7 +7,7 @@ import pytest
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from httpx import ASGITransport, AsyncClient
 
-from tests.asyncio_client import AsyncioTestClient
+from tests.asynctestclient import AsyncTestClient
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
@@ -183,7 +183,7 @@ async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -
         base_url = "http://0.0.0.0"
         running_loop = asyncio.get_running_loop()
         async with (
-            AsyncioTestClient(
+            AsyncTestClient(
                 app=app,
                 base_url=base_url,
                 event_loop=running_loop,

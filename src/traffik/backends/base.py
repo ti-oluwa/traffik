@@ -1,13 +1,13 @@
 """Base classes and utilities for throttle backends."""
 
-import asyncio  # noqa: I001
-from contextlib import asynccontextmanager
-from contextvars import ContextVar, Token
+import asyncio
 import functools
 import hashlib
 import inspect
 import math
 import typing
+from contextlib import asynccontextmanager
+from contextvars import ContextVar, Token
 
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
@@ -18,11 +18,11 @@ from traffik.types import (
     AsyncLock,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
-    ThrottleErrorHandler,
     HTTPConnectionT,
     P,
     R,
     T,
+    ThrottleErrorHandler,
     WaitPeriod,
 )
 from traffik.utils import AsyncLockContext, get_remote_address

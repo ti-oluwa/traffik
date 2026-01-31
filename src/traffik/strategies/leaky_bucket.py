@@ -5,7 +5,14 @@ from dataclasses import dataclass, field
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
-from traffik.utils import JSONDecodeError, dump_json, load_json, time
+from traffik.utils import (
+    JSONDecodeError,
+    dump_json,
+    get_blocking_setting,
+    get_blocking_timeout,
+    load_json,
+    time,
+)
 
 __all__ = ["LeakyBucketStrategy", "LeakyBucketWithQueueStrategy"]
 
@@ -68,8 +75,8 @@ class LeakyBucketStrategy:
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=0.1,  # 100 milliseconds
+            blocking=get_blocking_setting(),
+            blocking_timeout=get_blocking_timeout(),  # 100 milliseconds
         )
     )
     """Configuration for the lock used during rate limit checks."""
@@ -262,8 +269,8 @@ class LeakyBucketWithQueueStrategy:
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=0.1,  # 100 milliseconds
+            blocking=get_blocking_setting(),
+            blocking_timeout=get_blocking_timeout(),  # 100 milliseconds
         )
     )
     """Configuration for the lock used during rate limit checks."""

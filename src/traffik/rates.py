@@ -1,9 +1,8 @@
-from dataclasses import dataclass, field  # noqa: I001
 import re
+from dataclasses import dataclass, field
 from typing import Annotated
 
 from annotated_types import Ge
-
 
 _PERIOD_RE = re.compile(r"^(\d+)?\s*([a-z]+)$")
 _SPLIT_RE = re.compile(r"\s*per\s*|\/", re.IGNORECASE)

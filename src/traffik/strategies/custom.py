@@ -10,7 +10,14 @@ import typing
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, Stringable, WaitPeriod
-from traffik.utils import JSONDecodeError, dump_json, load_json, time
+from traffik.utils import (
+    JSONDecodeError,
+    dump_json,
+    load_json,
+    time,
+    get_blocking_setting,
+    get_blocking_timeout,
+)
 
 
 __all__ = [
@@ -78,8 +85,8 @@ class TieredRateStrategy:
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=0.1,
+            blocking=get_blocking_setting(),
+            blocking_timeout=get_blocking_timeout(),
         )
     )
     """Configuration for backend locking during rate limit checks."""
@@ -201,8 +208,8 @@ class AdaptiveThrottleStrategy:
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=0.1,
+            blocking=get_blocking_setting(),
+            blocking_timeout=get_blocking_timeout(),
         )
     )
     """Configuration for backend locking during rate limit checks."""
@@ -341,8 +348,8 @@ class PriorityQueueStrategy:
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=0.2,
+            blocking=get_blocking_setting(),
+            blocking_timeout=get_blocking_timeout(),
         )
     )
     """Configuration for backend locking during rate limit checks."""
@@ -478,8 +485,8 @@ class QuotaWithRolloverStrategy:
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=0.1,
+            blocking=get_blocking_setting(),
+            blocking_timeout=get_blocking_timeout(),
         )
     )
     """Configuration for backend locking during rate limit checks."""
@@ -592,8 +599,8 @@ class TimeOfDayStrategy:
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=0.1,
+            blocking=get_blocking_setting(),
+            blocking_timeout=get_blocking_timeout(),
         )
     )
     """Configuration for backend locking during rate limit checks."""
@@ -687,8 +694,8 @@ class CostBasedTokenBucketStrategy:
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=0.1,
+            blocking=get_blocking_setting(),
+            blocking_timeout=get_blocking_timeout(),
         )
     )
     """Configuration for backend locking during rate limit checks."""
@@ -826,8 +833,8 @@ class GCRAStrategy:
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=0.1,
+            blocking=get_blocking_setting(),
+            blocking_timeout=get_blocking_timeout(),
         )
     )
     """Configuration for backend locking during rate limit checks."""
@@ -1070,8 +1077,8 @@ class GeographicDistributionStrategy:
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=0.1,
+            blocking=get_blocking_setting(),
+            blocking_timeout=get_blocking_timeout(),
         )
     )
     """Configuration for backend locking during rate limit checks."""

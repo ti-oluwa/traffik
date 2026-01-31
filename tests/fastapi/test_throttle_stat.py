@@ -7,7 +7,7 @@ from fastapi import FastAPI, WebSocket
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
-from tests.asyncio_client import AsyncioTestClient
+from tests.asynctestclient import AsyncTestClient
 from tests.utils import default_client_identifier
 from traffik.backends.base import connection_throttled
 from traffik.backends.inmemory import InMemoryBackend
@@ -319,7 +319,7 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
         base_url = "http://0.0.0.0"
         running_loop = asyncio.get_running_loop()
         async with (
-            AsyncioTestClient(
+            AsyncTestClient(
                 app=app,
                 base_url=base_url,
                 event_loop=running_loop,

@@ -1,6 +1,6 @@
-"""Throttles for HTTP and WebSocket connections."""
+"""Throttles for Starlette `HTTPConnection` types."""
 
-import asyncio  # noqa: I001
+import asyncio
 import math
 import typing
 
@@ -536,7 +536,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             return None
 
         key = self.get_namespaced_key(connection, connection_id, context)
-        stat = await self.strategy.get_stat(key, self.rate, backend)  # type: ignore[attr-defined]
+        stat = await self.strategy.get_stat(key, self.rate, backend)  # type: ignore[attr-defined, arg-type]
         return stat
 
     def set_error_handler(

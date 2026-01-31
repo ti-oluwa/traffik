@@ -13,7 +13,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from tests.asyncio_client import AsyncioTestClient
+from tests.asynctestclient import AsyncTestClient
 from tests.conftest import BackendGen
 from tests.utils import default_client_identifier, unlimited_identifier
 from traffik import strategies
@@ -265,7 +265,7 @@ async def test_websocket_throttle(backends: BackendGen) -> None:
             base_url = "http://0.0.0.0"
             running_loop = asyncio.get_running_loop()
             async with (
-                AsyncioTestClient(
+                AsyncTestClient(
                     app=app,
                     base_url=base_url,
                     event_loop=running_loop,

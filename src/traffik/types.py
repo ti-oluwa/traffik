@@ -1,7 +1,7 @@
-"""Type definitions and protocols for the traffik package."""
+"""Type definitions and protocols."""
 
-from dataclasses import dataclass  # noqa: I001
 import typing
+from dataclasses import dataclass
 
 from starlette.requests import HTTPConnection
 from starlette.responses import Response

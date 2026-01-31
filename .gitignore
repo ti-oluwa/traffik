@@ -7,4 +7,3 @@
 .python-version
 issue.md
 feature.md
-benchmarks/*_*.py

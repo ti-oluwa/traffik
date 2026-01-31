@@ -31,7 +31,7 @@ THROTTLED_STATE_KEY = "__traffik_throttled_state__"
 CONNECTION_IDS_STATE_KEY = "__traffik_connection_ids__"
 
 ThrottleStrategy = typing.Callable[
-    [Stringable, Rate, ThrottleBackend[typing.Any, HTTPConnectionT], int],  # type: ignore[misc]
+    [Stringable, Rate, ThrottleBackend[typing.Any, HTTPConnection], int],  # type: ignore[misc]
     typing.Awaitable[WaitPeriod],
 ]
 """

@@ -1,4 +1,3 @@
-import typing
 
 from starlette.requests import HTTPConnection
 

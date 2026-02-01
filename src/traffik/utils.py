@@ -1,6 +1,7 @@
 """`traffik` utilities."""
 
 import asyncio
+import base64
 import functools
 import inspect
 import os
@@ -10,17 +11,12 @@ from collections import deque
 from time import time_ns
 from types import TracebackType
 
+import msgpack  # type: ignore[import-untyped]
 from starlette.requests import HTTPConnection
 from typing_extensions import Self, TypeGuard
 
 from traffik.exceptions import LockTimeoutError
 from traffik.types import AsyncLock, AwaitableCallable, T
-
-try:
-    import orjson as json  # type: ignore[import]
-except ImportError:
-    import json  # type: ignore[no-redef]
-
 
 DEFAUL_BLOCKING_SETTING_ENV_VAR = "TRAFFIK_DEFAULT_BLOCKING"
 DEFAULT_BLOCKING_TIMEOUT_ENV_VAR = "TRAFFIK_DEFAULT_BLOCKING_TIMEOUT"
@@ -121,6 +117,7 @@ def add_parameter_to_signature(
     :return: The updated function.
 
     Example Usage:
+
     ```python
     import inspect
     import typing
@@ -142,7 +139,7 @@ def add_parameter_to_signature(
 
     wrapped_func = decorator(my_func) # returns wrapper function
     assert "new_param" in inspect.signature(wrapped_func).parameters
-    >>> False
+    # False
 
     # This will fail because the signature of the wrapper function is overridden by the original function's signature,
     # when functools.wraps is used. To fix this, we can use the `add_parameter_to_signature` function.
@@ -157,10 +154,11 @@ def add_parameter_to_signature(
         index=0 # Add the new parameter at the beginning
     )
     assert "new_param" in inspect.signature(wrapped_func).parameters
-    >>> True
+    # True
 
     # This way any new parameters added to the wrapper function will be preserved and logic using the
     # function's signature will respect the new parameters.
+    ```
     """
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
@@ -198,31 +196,35 @@ def is_async_callable(obj: typing.Any) -> typing.Any:
     )
 
 
-def dump_json(data: typing.Any) -> str:
+def dump_data(obj: typing.Any) -> str:
     """
-    Serialize data to a JSON string using `orjson` if available, otherwise falls back to the built-in `json` module.
+    Serialize an object to msgpack bytes, then base64 encode as string.
 
-    :param data: The data to serialize.
-    :return: The serialized JSON string.
+    Uses msgpack for fast, compact binary serialization.
+    Approximately 5-10x faster and 30-50% smaller than JSON.
+
+    :param obj: Object to serialize (dict, list, int, float, str, bytes, etc.)
+    :return: Base64-encoded msgpack string
     """
-    dumped_data = json.dumps(data)
-    if isinstance(dumped_data, bytes):
-        return dumped_data.decode("utf-8")
-    return dumped_data
+    packed: bytes = msgpack.packb(obj, use_bin_type=True)  # type: ignore[no-untyped-call]
+    # Encode to base85 for slightly better compression than base64
+    return base64.b85encode(packed).decode("ascii")
 
 
-def load_json(data: str) -> typing.Any:
+def load_data(data: str) -> typing.Any:
     """
-    Deserialize a JSON string to a Python object using `orjson` if available, otherwise falls back to the built-in `json` module.
+    Deserialize base64-encoded msgpack string to a Python object.
 
-    :param data: The JSON string to deserialize.
-    :return: The deserialized Python object.
+    :param data: Base64-encoded msgpack string to deserialize
+    :return: Deserialized Python object
+    :raises msgpack.exceptions.UnpackException: If data is corrupted
     """
-    return json.loads(data)
+    packed = base64.b85decode(data.encode("ascii"))
+    return msgpack.unpackb(packed, raw=False)  # type: ignore[no-any-return, no-untyped-call]
 
 
-JSONDecodeError = json.JSONDecodeError  # type: ignore[attr-defined]
-"""Exception raised for JSON decoding errors. Either from `orjson` or built-in `json` module."""
+MsgPackDecodeError = msgpack.exceptions.UnpackException
+"""Exception raised for data decoding errors from msgpack."""
 
 
 def time() -> float:

@@ -7,11 +7,11 @@ from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import (
-    JSONDecodeError,
-    dump_json,
+    MsgPackDecodeError,
+    dump_data,
     get_blocking_setting,
     get_blocking_timeout,
-    load_json,
+    load_data,
     time,
 )
 
@@ -112,8 +112,8 @@ class SlidingWindowLogStrategy:
             # If log exists, load and parse entries as [timestamp, cost] tuples
             if old_log_json and old_log_json != "":
                 try:
-                    entries: typing.List[typing.List[float]] = load_json(old_log_json)
-                except JSONDecodeError:
+                    entries: typing.List[typing.List[float]] = load_data(old_log_json)
+                except MsgPackDecodeError:
                     entries = []
             else:
                 entries = []
@@ -129,12 +129,12 @@ class SlidingWindowLogStrategy:
                 # Find the oldest entry to calculate wait time
                 oldest_timestamp = min(ts for ts, _ in valid_entries)
                 wait_ms = (oldest_timestamp + window_duration_ms) - now
-                await backend.set(log_key, dump_json(valid_entries), expire=ttl_seconds)
+                await backend.set(log_key, dump_data(valid_entries), expire=ttl_seconds)
                 return wait_ms
 
             # If within limit, add this request as [timestamp, cost] entry
             valid_entries.append([now, float(cost)])
-            await backend.set(log_key, dump_json(valid_entries), expire=ttl_seconds)
+            await backend.set(log_key, dump_data(valid_entries), expire=ttl_seconds)
             return 0.0
 
     async def get_stat(
@@ -167,8 +167,8 @@ class SlidingWindowLogStrategy:
         # If log exists, load and parse entries as [timestamp, cost] tuples
         if old_log_json and old_log_json != "":
             try:
-                entries: typing.List[typing.List[float]] = load_json(old_log_json)
-            except JSONDecodeError:
+                entries: typing.List[typing.List[float]] = load_data(old_log_json)
+            except MsgPackDecodeError:
                 entries = []
         else:
             entries = []

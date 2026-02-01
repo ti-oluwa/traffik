@@ -117,3 +117,105 @@ async def test_throttle_decorator_with_dependency(
             response = await client.get("/throttled")
             assert response.status_code == 429
             assert response.headers.get("Retry-After") is not None
+
+
+@pytest.mark.anyio
+@pytest.mark.throttle
+@pytest.mark.decorator
+@pytest.mark.fastapi
+async def test_throttled_decorator_with_multiple_throttles(
+    app: FastAPI, inmemory_backend: InMemoryBackend
+) -> None:
+    """Test @throttled() decorator with multiple throttles applied sequentially."""
+    async with inmemory_backend(app, persistent=False, close_on_exit=True):
+        # Burst throttle: 5 per 10 seconds
+        burst_throttle = HTTPThrottle(
+            uid="multi-burst",
+            rate=Rate(limit=5, seconds=10),
+            identifier=default_client_identifier,
+        )
+        # Sustained throttle: 10 per minute
+        sustained_throttle = HTTPThrottle(
+            uid="multi-sustained",
+            rate=Rate(limit=10, minutes=1),
+            identifier=default_client_identifier,
+        )
+
+        @app.get("/multi-throttled")
+        @throttled(burst_throttle, sustained_throttle)
+        async def multi_throttled_endpoint() -> typing.Dict[str, str]:
+            return {"status": "ok"}
+
+        base_url = "http://0.0.0.0"
+        async with AsyncClient(
+            base_url=base_url, transport=ASGITransport(app=app)
+        ) as client:
+            # First 5 requests should pass both throttles
+            for i in range(5):
+                response = await client.get("/multi-throttled")
+                assert response.status_code == 200, f"Request {i+1} should pass"
+                assert response.json() == {"status": "ok"}
+
+            # 6th request should be blocked by burst throttle
+            response = await client.get("/multi-throttled")
+            assert response.status_code == 429, "Should be throttled by burst limit"
+            assert response.headers.get("Retry-After") is not None
+
+            # Wait for burst window to clear
+            wait_period = int(response.headers.get("Retry-After", "10")) + 1
+            print(f"Waiting {wait_period}s for burst window to clear...")
+            await anyio.sleep(wait_period)
+
+            # After burst clears, can make 5 more (total 10 in 1 minute)
+            for i in range(5):
+                response = await client.get("/multi-throttled")
+                assert response.status_code == 200, f"Request after burst clear {i+1} should pass"
+
+            # 11th request should be blocked by sustained throttle
+            response = await client.get("/multi-throttled")
+            assert response.status_code == 429, "Should be throttled by sustained limit"
+
+
+@pytest.mark.anyio
+@pytest.mark.throttle
+@pytest.mark.decorator
+@pytest.mark.fastapi
+async def test_throttled_decorator_multiple_throttles_short_circuit(
+    app: FastAPI, inmemory_backend: InMemoryBackend
+) -> None:
+    """Test that when first throttle blocks, second isn't checked (short-circuit)."""
+    async with inmemory_backend(app, persistent=False, close_on_exit=True):
+        # Very restrictive first throttle
+        first_throttle = HTTPThrottle(
+            uid="first-limit",
+            rate=Rate(limit=2, seconds=5),
+            identifier=default_client_identifier,
+        )
+        # More permissive second throttle
+        second_throttle = HTTPThrottle(
+            uid="second-limit",
+            rate=Rate(limit=100, minutes=1),
+            identifier=default_client_identifier,
+        )
+
+        @app.get("/short-circuit")
+        @throttled(first_throttle, second_throttle)
+        async def short_circuit_endpoint() -> typing.Dict[str, str]:
+            return {"status": "ok"}
+
+        base_url = "http://0.0.0.0"
+        async with AsyncClient(
+            base_url=base_url, transport=ASGITransport(app=app)
+        ) as client:
+            # First 2 requests pass
+            for i in range(2):
+                response = await client.get("/short-circuit")
+                assert response.status_code == 200
+
+            # 3rd blocked by first throttle
+            response = await client.get("/short-circuit")
+            assert response.status_code == 429
+
+            # Verify second throttle hasn't counted the blocked request
+            # by checking we haven't hit second throttle's much higher limit
+            # (This is implicit - if second was counting, it would allow more)

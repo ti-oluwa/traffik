@@ -379,8 +379,9 @@ async def run_scenario_concurrent_connections(
     start_time = time.perf_counter()
 
     async def send_messages(client_id: int):
-        nonlocal successful, throttled, total_messages
         local_latencies = []
+        local_successful = 0
+        local_throttled = 0
 
         base_url = "http://test"
         running_loop = asyncio.get_running_loop()
@@ -400,20 +401,22 @@ async def run_scenario_concurrent_connections(
 
                 msg_end = time.perf_counter()
                 local_latencies.append(msg_end - msg_start)
-                total_messages += 1
 
                 if response.get("type") == "rate_limit":
-                    throttled += 1
+                    local_throttled += 1
                 else:
-                    successful += 1
+                    local_successful += 1
 
-        return local_latencies
+        return local_latencies, local_successful, local_throttled
 
     tasks = [send_messages(i) for i in range(num_connections)]
     results = await asyncio.gather(*tasks)
 
-    for result in results:
-        latencies.extend(result)
+    for result_latencies, result_successful, result_throttled in results:
+        latencies.extend(result_latencies)
+        successful += result_successful
+        throttled += result_throttled
+        total_messages += len(result_latencies)
 
     end_time = time.perf_counter()
     return ScenarioResult(

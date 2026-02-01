@@ -23,6 +23,7 @@ from starlette.testclient import TestClient
 from traffik import HTTPThrottle, get_remote_address
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.redis import RedisBackend
+from traffik.decorators import throttled
 from traffik.strategies.custom import GCRAStrategy
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.strategies.leaky_bucket import (
@@ -184,6 +185,7 @@ def create_traffik_app(
     )
 
     @app.get("/test")
+    @throttled(throttle)
     async def test_endpoint(request: Request):
         await throttle(request)
         return {"status": "ok"}
@@ -321,6 +323,7 @@ async def run_scenario_sustained_load(
         app = create_slowapi_app(limit=1000, window=60, config=config)
 
     num_requests = 500
+    concurrency = 50  # 50 concurrent requests at a time
 
     latencies = []
     successful = 0
@@ -328,18 +331,29 @@ async def run_scenario_sustained_load(
 
     start_time = time.perf_counter()
 
-    with TestClient(app) as client:
-        for _ in range(num_requests):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+
+        async def make_request():
             req_start = time.perf_counter()
-            response = client.get("/test")
+            response = await client.get("/test")
             req_end = time.perf_counter()
+            return req_end - req_start, response.status_code
 
-            latencies.append(req_end - req_start)
+        # Create batches of concurrent requests
+        for batch_start in range(0, num_requests, concurrency):
+            batch_size = min(concurrency, num_requests - batch_start)
+            tasks = [make_request() for _ in range(batch_size)]
 
-            if response.status_code == 200:
-                successful += 1
-            elif response.status_code == 429:
-                throttled += 1
+            results = await asyncio.gather(*tasks)
+
+            for req_time, status in results:
+                latencies.append(req_time)
+                if status == 200:
+                    successful += 1
+                elif status == 429:
+                    throttled += 1
 
     end_time = time.perf_counter()
     return ScenarioResult(
@@ -419,7 +433,6 @@ async def run_scenario_race_conditions(
 
     start_time = time.perf_counter()
 
-    # Use httpx AsyncClient for true concurrent requests
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -479,17 +492,31 @@ async def run_scenario_distributed(
 
     start_time = time.perf_counter()
 
-    with TestClient(app) as client:
-        for client_id in range(num_clients):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+
+        async def make_client_requests(client_id: int):
+            """Make all requests for a single client."""
+            results_list = []
             for _ in range(requests_per_client):
                 req_start = time.perf_counter()
-                response = client.get(
+                response = await client.get(
                     "/test", headers={"X-Client-ID": f"client-{client_id}"}
                 )
                 req_end = time.perf_counter()
+                results_list.append((response, req_end - req_start))
+            return results_list
 
+        # Run all clients concurrently
+        client_tasks = [make_client_requests(i) for i in range(num_clients)]
+        all_client_results = await asyncio.gather(*client_tasks)
+
+        # Aggregate results
+        for client_results in all_client_results:
+            for response, latency in client_results:
                 total_requests += 1
-                latencies.append(req_end - req_start)
+                latencies.append(latency)
 
                 if response.status_code == 200:
                     successful += 1

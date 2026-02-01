@@ -7,11 +7,11 @@ from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import (
-    JSONDecodeError,
-    dump_json,
+    MsgPackDecodeError,
+    dump_data,
     get_blocking_setting,
     get_blocking_timeout,
-    load_json,
+    load_data,
     time,
 )
 
@@ -136,12 +136,12 @@ class TokenBucketStrategy:
             # If state exists, load tokens and last refill time
             if old_state_json and old_state_json != "":
                 try:
-                    bucket_state: typing.Dict[str, typing.Any] = load_json(
+                    bucket_state: typing.Dict[str, typing.Any] = load_data(
                         old_state_json
                     )
                     tokens = float(bucket_state.get("tokens", capacity))
                     last_refill = float(bucket_state.get("last_refill", now))
-                except (JSONDecodeError, ValueError, KeyError):
+                except (MsgPackDecodeError, ValueError, KeyError):
                     # If state is corrupted, reinitialize bucket at full capacity
                     tokens = float(capacity)
                     last_refill = now
@@ -159,7 +159,7 @@ class TokenBucketStrategy:
             if tokens >= cost:
                 # Consume cost tokens from bucket
                 tokens -= cost
-                new_state = dump_json({"tokens": tokens, "last_refill": now})
+                new_state = dump_data({"tokens": tokens, "last_refill": now})
                 await backend.set(bucket_key, new_state, expire=ttl_seconds)
                 return 0.0
 
@@ -168,7 +168,7 @@ class TokenBucketStrategy:
             wait_ms = tokens_needed / refill_rate
 
             # Save current state without consuming tokens
-            new_state = dump_json({"tokens": tokens, "last_refill": now})
+            new_state = dump_data({"tokens": tokens, "last_refill": now})
             await backend.set(bucket_key, new_state, expire=ttl_seconds)
             return wait_ms
 
@@ -203,10 +203,10 @@ class TokenBucketStrategy:
         # If state exists, load tokens and last refill time
         if old_state_json and old_state_json != "":
             try:
-                bucket_state: typing.Dict[str, typing.Any] = load_json(old_state_json)
+                bucket_state: typing.Dict[str, typing.Any] = load_data(old_state_json)
                 tokens = float(bucket_state.get("tokens", capacity))
                 last_refill = float(bucket_state.get("last_refill", now))
-            except (JSONDecodeError, ValueError, KeyError):
+            except (MsgPackDecodeError, ValueError, KeyError):
                 # If state is corrupted, assume bucket is at full capacity
                 tokens = float(capacity)
                 last_refill = now
@@ -370,10 +370,10 @@ class TokenBucketWithDebtStrategy:
             # If state exists, load tokens and last refill time
             if old_state_json and old_state_json != "":
                 try:
-                    bucket_state = load_json(old_state_json)
+                    bucket_state = load_data(old_state_json)
                     tokens = float(bucket_state.get("tokens", capacity))
                     last_refill = float(bucket_state.get("last_refill", now))
-                except (JSONDecodeError, ValueError, KeyError):
+                except (MsgPackDecodeError, ValueError, KeyError):
                     # If state is corrupted, reinitialize bucket at full capacity
                     tokens = float(capacity)
                     last_refill = now
@@ -391,7 +391,7 @@ class TokenBucketWithDebtStrategy:
             if tokens - cost >= -self.max_debt:
                 # Allow request and consume cost tokens (may go negative)
                 tokens -= cost
-                new_state = dump_json({"tokens": tokens, "last_refill": now})
+                new_state = dump_data({"tokens": tokens, "last_refill": now})
                 await backend.set(bucket_key, new_state, expire=ttl_seconds)
                 return 0.0
 
@@ -400,7 +400,7 @@ class TokenBucketWithDebtStrategy:
             wait_ms = tokens_needed / refill_rate
 
             # Save current state without consuming tokens
-            new_state = dump_json({"tokens": tokens, "last_refill": now})
+            new_state = dump_data({"tokens": tokens, "last_refill": now})
             await backend.set(bucket_key, new_state, expire=ttl_seconds)
             return wait_ms
 
@@ -435,10 +435,10 @@ class TokenBucketWithDebtStrategy:
         # If state exists, load tokens and last refill time
         if old_state_json and old_state_json != "":
             try:
-                bucket_state = load_json(old_state_json)
+                bucket_state = load_data(old_state_json)
                 tokens = float(bucket_state.get("tokens", capacity))
                 last_refill = float(bucket_state.get("last_refill", now))
-            except (JSONDecodeError, ValueError, KeyError):
+            except (MsgPackDecodeError, ValueError, KeyError):
                 # If state is corrupted, assume bucket is at full capacity
                 tokens = float(capacity)
                 last_refill = now

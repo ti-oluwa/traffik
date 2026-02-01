@@ -10,14 +10,16 @@ Asynchronous distributed rate limiting for FastAPI/Starlette applications.
 
 ## Features
 
-- **Fully Asynchronous**: Built for async/await with non-blocking operations and minimal overhead (<1ms latency)
+Rate limiting doesn't have to be complicated. Traffik gives you the tools to protect your APIs with minimal code and maximum flexibility:
+
+- **Fully Asynchronous**: Built for async/await with non-blocking operations and minimal overhead/latency
 - **Distributed-First**: Atomic operations with distributed locks (Redis, Memcached) achieving very high accuracy even under high concurrency.
 - **10+ Strategies**: Fixed Window, Sliding Window (Log & Counter), Token Bucket, Leaky Bucket, GCRA, Adaptive, Tiered, Priority Queue, and more
 - **HTTP & WebSocket**: Full-featured rate limiting for both protocols with per-message throttling support
-- **Production-Ready**: Circuit breakers, automatic retries, backend failover, degraded mode, and comprehensive error handling
+- **Production-Ready**: Circuit breakers, automatic retries, backend failover, and custom error handling
 - **Flexible Integration**: Dependencies, decorators, middleware, or direct calls - use what fits your architecture
 - **Highly Extensible**: Simple, well-documented APIs for custom backends, strategies, error handlers, and identifiers
-- **Observable**: Built-in metrics, detailed error context, and strategy statistics for monitoring
+- **Observable**: Rich error context, and strategy statistics for monitoring
 - **Performance-Optimized**: Lock striping, connection pooling, script caching, and minimal memory footprint
 
 Built for production workloads with battle-tested patterns from high-scale systems.
@@ -50,6 +52,8 @@ Built for production workloads with battle-tested patterns from high-scale syste
 
 ## Installation
 
+Getting started with Traffik is straightforward. Install it using your preferred package manager:
+
 ```bash
 # Basic (InMemory backend only)
 pip install traffik
@@ -68,6 +72,8 @@ pip install "traffik[dev]"
 ```
 
 ## Quick Start
+
+Let's get you up and running in under a minute. The examples below show just how little code you need to add rate limiting to your application.
 
 ### Minimal Example (5 lines)
 
@@ -91,10 +97,12 @@ async def root():
 - Allows 100 requests per minute per IP address
 - Returns HTTP 429 (Too Many Requests) when exceeded
 - Automatically includes `Retry-After` header
-- No external dependencies (uses in-memory storage)
+- No external storage dependencies (uses in-memory storage)
 - Dev environment ready
 
 ### Example Setup for Production
+
+When you're ready to deploy, here's a more complete setup with Redis, circuit breakers, and fallback protection. This is the kind of setup you'd use in a real production environment.
 
 #### API Routes
 
@@ -225,9 +233,11 @@ async def ws_endpoint(websocket: WebSocket):
 
 ## Core Concepts
 
+Before diving into the advanced features, it's worth understanding the building blocks that make Traffik work. These concepts form the foundation of how rate limiting is configured and applied.
+
 ### Rate Format
 
-Rate limits are specified as:
+Trafik offers flexible ways to define your rate limits. Whether you prefer terse shorthand or explicit configuration, there's a format that fits your style:
 
 - `"<limit>/<unit>"`: e.g., "5/m" means 5 requests per minute
 - `"<limit>/<period><unit>"`: e.g., "2/5s" means 2 requests per 5 seconds
@@ -262,7 +272,7 @@ HTTPThrottle(uid="api", rate="0/0")  # No limits
 
 ### Backends
 
-Backends store throttle state. Choose based on deployment:
+Backends are where Traffik keeps track of request counts and timestamps. Your choice of backend depends on how your application is deployed—single server, multiple instances, or a distributed system. Here's a quick comparison to help you choose:
 
 | Backend | Use Case | Persistence | Distributed | Overhead |
 |---------|----------|-------------|-------------|----------|
@@ -271,6 +281,8 @@ Backends store throttle state. Choose based on deployment:
 | **Memcached** | High-throughput, caching | Yes | Yes | Low |
 
 #### InMemory Backend
+
+The simplest option—perfect for local development, testing, and single-process deployments. Zero external dependencies, instant setup.
 
 ```python
 from traffik.backends.inmemory import InMemoryBackend
@@ -292,6 +304,8 @@ backend = InMemoryBackend(
 
 #### Redis Backend
 
+The go-to choice for production deployments. Persistent, distributed, and battle-tested. Supports both single-instance and multi-cluster setups with Redlock.
+
 ```python
 from traffik.backends.redis import RedisBackend
 
@@ -310,14 +324,13 @@ async def get_redis():
     return await redis.from_url("redis://localhost:6379/0")
 
 backend = RedisBackend(
-    connection=get_redis,
-    namespace="app",
+    connection=get_redis, namespace="app"
 )
 ```
 
 **Lock Types:**
 
-- `"redis"`: Single Redis instance, low latency (~0.4ms overhead)
+- `"redis"`: Single Redis instance, low latency (~0.4-0.5ms overhead)
 - `"redlock"`: Distributed Redlock algorithm, higher latency (~5ms overhead)
 
 **Characteristics:**
@@ -328,6 +341,8 @@ backend = RedisBackend(
 - Production-ready
 
 #### Memcached Backend
+
+If you're already running Memcached for caching, you can use it for rate limiting too. Great for high-throughput scenarios where eventual consistency is acceptable.
 
 ```python
 from traffik.backends.memcached import MemcachedBackend
@@ -352,7 +367,7 @@ backend = MemcachedBackend(
 
 ### Strategies
 
-Strategies determine rate limiting behavior:
+Not all rate limiting algorithms are created equal. Each strategy makes different tradeoffs between accuracy, memory usage, and burst tolerance. Understanding these tradeoffs helps you pick the right one for your use case:
 
 | Strategy | Accuracy | Memory | Bursts | Use Case |
 |----------|----------|--------|--------|----------|
@@ -549,7 +564,7 @@ GCRAStrategy(burst_tolerance_ms=500)
 
 ### Identifiers
 
-Identifiers determine which clients share rate limits:
+Identifiers are how Traffik knows who's who. By default, rate limits are applied per IP address, but real applications often need something more nuanced—maybe you want to limit by user account, API key, or tenant. An identifier function takes an `HTTPConnection` and returns a string that uniquely identifies the client.
 
 ```python
 from starlette.requests import HTTPConnection
@@ -586,6 +601,8 @@ HTTPThrottle(
 
 ## Integration Methods
 
+Traffik's throttles can be integrated in multiple ways depending on your architecture.
+
 ### Dependencies
 
 FastAPI dependency injection:
@@ -619,7 +636,7 @@ async def dynamic(request: Request = Depends(throttle)):
 
 ### Decorators
 
-FastAPI-only, syntactic sugar over dependencies:
+Some developers prefer seeing the rate limit configuration right at the endpoint definition. The `@throttled` decorator provides that clean, declarative syntax while doing the same thing as dependencies under the hood:
 
 ```python
 from traffik.decorators import throttled
@@ -645,11 +662,13 @@ async def create_resource():
 # @app.post("/create", dependencies=[Depends(burst), Depends(sustained)])
 ```
 
-**Note:** When using multiple throttles with `@throttled()`, all limits are checked sequentially before the request proceeds.
+> **Note:** When using multiple throttles with `@throttled()`, all limits are checked sequentially before the request proceeds. If any throttle is exceeded, the request is rejected immediately without checking the remaining throttles.
 
 ### Middleware
 
-Apply throttles globally with filtering:
+Traffik's middleware allows applying throttles globally or conditionally based on path, method, or custom predicates.
+
+> Note: Middleware only works with `HTTPThrottle`, not `WebSocketThrottle`.
 
 ```python
 import re
@@ -701,7 +720,7 @@ app.add_middleware(
     ],
 )
 
-# Method-based
+# Method-based: Apply based on HTTP method
 write_throttle = HTTPThrottle(uid="writes", rate="10/minute")
 read_throttle = HTTPThrottle(uid="reads", rate="1000/minute")
 
@@ -713,7 +732,7 @@ app.add_middleware(
     ],
 )
 
-# Predicate-based
+# Predicate-based: Only apply if predicate is True
 async def is_authenticated(connection: HTTPConnection) -> bool:
     return "authorization" in connection.headers
 
@@ -727,7 +746,7 @@ app.add_middleware(
     ],
 )
 
-# Combined
+# Combined: Only for authenticated POSTs to /api/
 app.add_middleware(
     ThrottleMiddleware,
     middleware_throttles=[
@@ -749,7 +768,7 @@ app.add_middleware(
 
 ### Direct Usage
 
-Manual throttle invocation:
+Sometimes you need fine-grained control over when and how rate limiting is applied. Direct invocation lets you call the throttle programmatically, apply custom costs mid-request, or handle throttling as part of a larger workflow:
 
 ```python
 from starlette.requests import Request
@@ -770,9 +789,11 @@ async def manual_throttle(request: Request):
 
 ## Advanced Features
 
+Once you've got the basics down, Traffik offers a rich set of features for handling real-world complexity—from variable request costs to multi-tier rate limits to sophisticated error recovery.
+
 ### Request Costs
 
-Different requests can have different impacts:
+Not all requests are equal. A file upload consumes more resources than a simple GET, and a complex report generation shouldn't count the same as a health check. Traffik lets you assign different costs to different operations:
 
 ```python
 from traffik import HTTPThrottle
@@ -811,7 +832,7 @@ dynamic_throttle = HTTPThrottle(
 
 ### Multiple Limits
 
-Layer throttles for burst + sustained limits:
+Real APIs often need multiple layers of protection—a short-term burst limit to prevent sudden spikes, combined with a longer-term sustained limit to ensure fair usage over time. Traffik makes it easy to stack these limits:
 
 ```python
 # Burst: 10 per minute
@@ -827,7 +848,7 @@ async def get_data():
 
 ### Exemptions
 
-Bypass throttling for specific clients:
+Some users shouldn't be rate limited—premium customers, internal services, or trusted partners. Rather than building separate code paths, you can use the `EXEMPTED` sentinel value in your identifier function to gracefully bypass limits:
 
 ```python
 from traffik import EXEMPTED
@@ -854,7 +875,7 @@ throttle = HTTPThrottle(
 
 ### Context-Aware Backends
 
-Runtime backend selection for scenarios where the backend must be determined dynamically from request data (JWT tokens, headers, tenant context).
+In multi-tenant SaaS applications, you might need different backends for different customers—enterprise clients get their dedicated Redis instance, while free-tier users share an in-memory store. Dynamic backend selection lets you make this decision at request time based on JWT claims, headers, or any other context.
 
 **When to use `dynamic_backend=True`:**
 
@@ -1008,7 +1029,7 @@ strategy = FixedWindowStrategy(
 
 ### Lock Contention and Sub-Second Windows
 
-Some strategies require distributed locking to maintain atomicity for multi-step operations. Understanding when locks are used helps you make informed decisions about strategy selection and tuning.
+If you're pushing Traffik hard—think high concurrency, sub-second rate windows, or distributed deployments—understanding lock behavior becomes important. This section explains when locking kicks in and how to tune it for your workload.
 
 **Strategies that use locking:**
 
@@ -1081,9 +1102,11 @@ Track lock acquisition times and timeouts in production to identify contention i
 
 ## Error Handling
 
-Traffik provides comprehensive error handling for production systems.
+In production, things go wrong—Redis connections drop, Memcached runs out of memory, networks partition. Traffik's error handling system gives you full control over what happens when the unexpected occurs. Do you fail open and let requests through? Fail closed and protect your services? Fall back to a secondary backend? The choice is yours.
 
 ### Error Handler Signature
+
+Custom error handlers receive rich context about what went wrong, letting you make intelligent decisions:
 
 ```python
 from traffik.throttles import ExceptionInfo
@@ -1110,7 +1133,11 @@ async def error_handler(
 
 ### Built-in Error Handlers
 
+Traffik includes several pre-built error handlers for common scenarios. From simple string shortcuts for development to sophisticated handlers that combine retries, circuit breakers, and failover logic.
+
 #### Basic Handlers (String Literals)
+
+For straightforward cases, you can use string literals that cover the most common error handling strategies:
 
 ```python
 # Development: Allow on errors (fail open)
@@ -1353,7 +1380,7 @@ Throttle `on_error` takes precedence over backend `on_error`.
 
 ## Custom Strategies
 
-Implement custom rate limiting algorithms:
+While Traffik ships with all the standard rate limiting algorithms, sometimes you need something specific to your domain. Maybe you're implementing a proprietary fairness algorithm, or you need to integrate with an external rate limiting service. Here's how to build your own strategy:
 
 ```python
 from dataclasses import dataclass
@@ -1426,7 +1453,7 @@ throttle = HTTPThrottle(
 
 ## Custom Backends
 
-Implement custom storage backends:
+Need to store rate limit state in DynamoDB? Cassandra? A custom distributed cache? Traffik's backend interface is designed to be extended. Here's the contract your custom backend needs to fulfill:
 
 ```python
 import typing
@@ -1522,6 +1549,8 @@ class CustomBackend(ThrottleBackend[YourConnectionType, HTTPConnectionT]):
 - All operations must be non-blocking and fast
 
 ## Testing
+
+Good rate limiting code deserves good tests. Traffik is designed to be testable—use the in-memory backend for fast, isolated unit tests, or spin up real Redis/Memcached instances for integration testing. Here are some patterns to get you started.
 
 ### Basic Test
 
@@ -1642,17 +1671,150 @@ async def test_fallback_handler():
 
 See [DOCKER.md](DOCKER.md) and [TESTING.md](TESTING.md) for details.
 
+## Benchmarks
+
+Numbers matter when you're adding middleware to every request. We've run extensive benchmarks comparing Traffik against [SlowAPI](https://github.com/laurents/slowapi), one of the most popular rate limiting libraries for FastAPI. The results below should help you understand the performance characteristics of each library under different workloads.
+
+**Test Environment:** Python 3.9, single-process, 3 iterations per scenario averaged across 3 separate benchmark runs. Performance is expected to improve by 5-15% on Python 3.11+ due to CPython optimizations.
+
+### InMemory Backend (Fixed Window)
+
+| Scenario | Metric | Traffik | SlowAPI | Notes |
+| -------- | ------ | ------- | ------- | ----- |
+| Low Load (50 req) | Requests/sec | 386 | 367 | Both handle light traffic well |
+| | P50 Latency | 2.55ms | 3.78ms | |
+| | P95 Latency | 6.03ms | 6.33ms | |
+| | P99 Latency | 8.05ms | 8.95ms | |
+| High Load (200 req) | Requests/sec | 381 | 367 | Under sustained pressure |
+| | P50 Latency | 3.83ms | 4.66ms | |
+| | P95 Latency | 7.29ms | 8.09ms | |
+| | P99 Latency | 9.19ms | 10.02ms | |
+| Sustained (500 req) | Requests/sec | 1,091 | 1,014 | High concurrency batches |
+| | P50 Latency | 1.06ms | 1.79ms | Traffik scales better |
+| | P95 Latency | 2.96ms | 3.70ms | |
+| | P99 Latency | 4.40ms | 5.10ms | |
+| Burst (100 req) | Requests/sec | 355 | 433 | Rapid sequential requests |
+| | P50 Latency | 5.61ms | 2.53ms | |
+| | P95 Latency | 8.68ms | 5.90ms | |
+| | P99 Latency | 11.53ms | 9.01ms | |
+
+### Redis Backend (Fixed Window)
+
+| Scenario | Metric | Traffik | SlowAPI | Notes |
+| -------- | ------ | ------- | ------- | ----- |
+| Low Load (50 req) | Requests/sec | 309 | 321 | Similar performance |
+| | P50 Latency | 2.56ms | 2.45ms | |
+| | P95 Latency | 5.83ms | 5.41ms | |
+| | P99 Latency | 9.71ms | 7.45ms | |
+| High Load (200 req) | Requests/sec | 444 | 459 | Comparable throughput |
+| | P50 Latency | 2.01ms | 2.01ms | |
+| | P95 Latency | 3.26ms | 3.23ms | |
+| | P99 Latency | 5.84ms | 4.50ms | |
+| Sustained (500 req) | Requests/sec | 978 | 917 | Traffik 7% faster |
+| | P50 Latency | 0.90ms | 0.96ms | |
+| | P95 Latency | 1.52ms | 1.63ms | |
+| | P99 Latency | 2.19ms | 2.31ms | |
+| Burst (100 req) | Requests/sec | 352 | 398 | SlowAPI edge |
+| | P50 Latency | 2.19ms | 2.29ms | |
+| | P95 Latency | 5.09ms | 3.61ms | |
+| | P99 Latency | 8.74ms | 5.54ms | |
+
+### Memcached Backend (Fixed Window)
+
+| Scenario | Metric | Traffik | SlowAPI | Notes |
+| -------- | ------ | ------- | ------- | ----- |
+| Low Load (50 req) | Requests/sec | 369 | 301 | Traffik 23% faster |
+| | P50 Latency | 2.22ms | 3.55ms | |
+| | P95 Latency | 3.70ms | 6.25ms | |
+| | P99 Latency | 5.67ms | 9.24ms | |
+| High Load (200 req) | Requests/sec | 474 | 390 | Traffik 22% faster |
+| | P50 Latency | 1.89ms | 2.28ms | |
+| | P95 Latency | 2.95ms | 5.08ms | |
+| | P99 Latency | 4.20ms | 8.49ms | |
+| Sustained (500 req) | Requests/sec | 972 | 877 | Traffik 11% faster |
+| | P50 Latency | 0.91ms | 0.96ms | |
+| | P95 Latency | 1.62ms | 1.79ms | |
+| | P99 Latency | 2.40ms | 4.95ms | |
+| Burst (100 req) | Requests/sec | 419 | 423 | Comparable |
+| | P50 Latency | 2.10ms | 2.07ms | |
+| | P95 Latency | 3.59ms | 3.50ms | |
+| | P99 Latency | 4.89ms | 6.44ms | |
+
+### Sliding Window Counter Strategy (InMemory)
+
+| Scenario | Metric | Traffik | SlowAPI | Notes |
+| -------- | ------ | ------- | ------- | ----- |
+| Low Load (50 req) | Requests/sec | 273 | 172 | Traffik 59% faster |
+| | P50 Latency | 3.97ms | 5.39ms | |
+| | P95 Latency | 8.93ms | 11.80ms | |
+| | P99 Latency | 11.27ms | 13.81ms | |
+| High Load (200 req) | Requests/sec | 305 | 135 | Traffik 126% faster |
+| | P50 Latency | 2.71ms | 7.39ms | |
+| | P95 Latency | 6.52ms | 11.18ms | |
+| | P99 Latency | 9.30ms | 13.31ms | |
+| Sustained (500 req) | Requests/sec | 457 | 420 | Traffik 9% faster |
+| | P50 Latency | 1.65ms | 1.98ms | |
+| | P95 Latency | 5.03ms | 5.05ms | |
+| | P99 Latency | 6.96ms | 6.68ms | |
+| Burst (100 req) | Requests/sec | 147 | 190 | SlowAPI edge |
+| | P50 Latency | 6.77ms | 4.54ms | |
+| | P95 Latency | 11.23ms | 11.15ms | |
+| | P99 Latency | 14.94ms | 13.48ms | |
+
+### WebSocket Rate Limiting
+
+Real-time applications need real-time protection. Traffik is one of the few libraries offering native WebSocket rate limiting—limiting not just connection attempts, but individual messages within an open connection. No direct comparison available as SlowAPI does not support WebSocket throttling.
+
+| Scenario | Messages/sec | P50 Latency | P95 Latency | P99 Latency |
+| -------- | ------------ | ----------- | ----------- | ----------- |
+| Low Load (50 msg) | 4,307 | 0.21ms | 0.47ms | 0.69ms |
+| High Load (200 msg) | 5,709 | 0.15ms | 0.63ms | 2.48ms |
+| Sustained (500 msg) | 6,660 | 0.15ms | 0.30ms | 0.65ms |
+| Burst Traffic | 4,873 | 0.18ms | 0.82ms | 3.43ms |
+| Concurrent (10 conn) | 2,899 | 1.87ms | 4.36ms | 6.39ms |
+
+### Key Observations
+
+After running thousands of requests across different backends, strategies, and load patterns, here's what the numbers tell us:
+
+- **InMemory**: Both libraries perform similarly with Traffik showing better scaling under sustained load
+- **Redis**: Performance is comparable, with both libraries handling distributed workloads well
+- **Memcached**: Traffik shows consistent advantages across scenarios (11-23% faster)
+- **Sliding Window**: Traffik's implementation is significantly faster (up to 126% in high load scenarios)
+- **Correctness**: Both libraries pass race condition and distributed correctness tests
+- **WebSocket**: Sub-millisecond P50 latencies make Traffik suitable for real-time applications
+
+### Running Benchmarks
+
+You can run benchmarks yourself to verify results on your hardware:
+
+```bash
+# HTTP comparison with InMemory backend
+uv run python benchmarks/comparison.py --scenarios low,high,burst,sustained --iterations 3
+
+# With Redis backend
+uv run python benchmarks/comparison.py --traffik-backend redis --slowapi-backend redis \
+    --traffik-redis-url redis://localhost:6379/0 --slowapi-redis-url redis://localhost:6379/0
+
+# With Memcached backend  
+uv run python benchmarks/comparison.py --traffik-backend memcached --slowapi-backend memcached \
+    --traffik-memcached-url memcached://localhost:11211 --slowapi-memcached-url memcached://localhost:11211
+
+# With sliding-window-counter strategy
+uv run python benchmarks/comparison.py --traffik-strategy sliding-window-counter \
+    --slowapi-strategy sliding-window-counter
+
+# WebSocket benchmarks
+uv run python benchmarks/websockets.py --scenarios low,high,burst,sustained,concurrent --iterations 3
+
+# See all options
+uv run python benchmarks/comparison.py --help
+uv run python benchmarks/websockets.py --help
+```
+
 ## Performance
 
-### Benchmark Results
-
-Single-process benchmarks (Redis backend, 100 req/min limit):
-
-| Operation | Latency (P50) | Latency (P95) | RPS |
-|-----------|---------------|---------------|-----|
-| Allow (under limit) | 0.95ms | 1.72ms | 880+ |
-| Throttle (over limit) | 1.00ms | 1.31ms | 950+ |
-| InMemory backend | 0.50ms | 1.00ms | 1200+ |
+Rate limiting runs on every request, so even small inefficiencies add up. This section shares hard-won lessons from production deployments to help you get the most out of Traffik.
 
 ### Optimization Tips
 
@@ -1694,6 +1856,8 @@ Single-process benchmarks (Redis backend, 100 req/min limit):
 6. **Avoid logging in backend operations:** Logging can cause ~10× slowdown**. Especially when the logging backend is slow (e.g., file I/O).
 
 ## API Reference
+
+This section provides a comprehensive reference for Traffik's public API. For quick examples, see the sections above. For the full parameter lists and method signatures, read on.
 
 ### Throttle Classes
 
@@ -1885,7 +2049,7 @@ on_error="raise"      # Re-raise exceptions
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+Want to help make Traffik better? We'd love to have you! Whether it's fixing bugs, adding features, improving documentation, or just reporting issues, every contribution matters. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
 ## License
 

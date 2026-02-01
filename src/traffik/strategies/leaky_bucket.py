@@ -155,7 +155,7 @@ class LeakyBucketStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float("inf"),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         now = time() * 1000
@@ -171,7 +171,7 @@ class LeakyBucketStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=rate.limit,
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         try:
@@ -184,7 +184,7 @@ class LeakyBucketStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=rate.limit,
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         # Calculate current level after leakage
@@ -206,7 +206,7 @@ class LeakyBucketStrategy:
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
-            wait_time=wait_ms,
+            wait_ms=wait_ms,
         )
 
 
@@ -374,7 +374,7 @@ class LeakyBucketWithQueueStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float("inf"),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         now = time() * 1000
@@ -390,7 +390,7 @@ class LeakyBucketWithQueueStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float(rate.limit),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         try:
@@ -404,7 +404,7 @@ class LeakyBucketWithQueueStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float(rate.limit),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         # Calculate how much cost should have leaked
@@ -446,5 +446,5 @@ class LeakyBucketWithQueueStrategy:
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
-            wait_time=wait_ms,
+            wait_ms=wait_ms,
         )

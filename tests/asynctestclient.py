@@ -42,7 +42,7 @@ class AsyncWebSocketTestSession:
         self.accepted_subprotocol = None
         self._receive_queue = receive_queue
         self._send_queue = send_queue
-        self._task = None
+        self._task: typing.Optional[asyncio.Task[None]] = None
 
     async def __aenter__(self) -> "AsyncWebSocketTestSession":
         self._task = self.event_loop.create_task(self._run())
@@ -304,8 +304,8 @@ class _ASGIAdapter(HTTPAdapter):
         }
 
         # Create new queues for each WebSocket connection
-        receive_queue = asyncio.Queue()
-        send_queue = asyncio.Queue()
+        receive_queue: asyncio.Queue[Message] = asyncio.Queue()
+        send_queue: asyncio.Queue[Message] = asyncio.Queue()
         session = AsyncWebSocketTestSession(
             app=self.app,
             scope=scope,
@@ -352,8 +352,8 @@ class AsyncTestClient(Session):
 
         # Separate queues for lifespan
         self.event_loop = event_loop or asyncio.get_event_loop()
-        self.lifespan_receive_queue = asyncio.Queue()
-        self.lifespan_send_queue = asyncio.Queue()
+        self.lifespan_receive_queue: asyncio.Queue[Message] = asyncio.Queue()
+        self.lifespan_send_queue: asyncio.Queue[Message] = asyncio.Queue()
 
         adapter = _ASGIAdapter(
             app,

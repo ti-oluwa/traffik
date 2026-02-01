@@ -37,7 +37,7 @@ async def test_crud(backends: BackendGen) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.backend
-async def test_clear(backends: BackendGen) -> None:
+async def test_reset(backends: BackendGen) -> None:
     for backend in backends(namespace="generics"):
         async with backend(close_on_exit=True):
             key1 = backend.get_key("key1")
@@ -57,9 +57,7 @@ async def test_context_management(backends: BackendGen) -> None:
         # Test that the context variable is initialized to None
         assert get_throttle_backend() is None
         async with backend(close_on_exit=True):
-            # Exclude InMemoryBackend as it does not have a real connection
-            if not getattr(backend, "_inmemory_backend_", False):
-                assert backend.connection is not None
+            assert await backend.ready()
             # Test that the context variable is set within the context
             assert get_throttle_backend() is backend
 
@@ -174,7 +172,7 @@ async def test_expire_on_existing_key(backends: BackendGen) -> None:
             assert value == "test_value"
 
             # Wait for expiration
-            await asyncio.sleep(1.02)
+            await asyncio.sleep(1.05)
 
             # Value should be expired
             value = await backend.get(key)
@@ -288,7 +286,7 @@ async def test_multi_get(backends: BackendGen) -> None:
             await backend.set(key2, "value2")
             await backend.set(key3, "value3")
 
-            # Get multiple keys (using *args unpacking)
+            # Get multiple keys
             values = await backend.multi_get(key1, key2, key3, key4)
 
             assert len(values) == 4
@@ -461,17 +459,17 @@ async def test_asynchronous_lock_synchronization(backends: BackendGen) -> None:
                     # Write new value
                     await backend.set(key, str(value + 1))
 
-            # 1. Run 5 concurrent increments with locking
+            # 1. Run 10 concurrent increments with locking
             await asyncio.gather(
                 *[
-                    increment_with_lock(blocking=True, blocking_timeout=0.5)
+                    increment_with_lock(blocking=True, blocking_timeout=1.5)
                     for _ in range(10)
                 ]
             )
 
             # Final value should be exactly 10 (no race conditions)
             final_value = await backend.get(key)
-            assert final_value == "5", f"Expected '5', got '{final_value}'"
+            assert final_value == "10", f"Expected '10', got '{final_value}'"
 
             # 2. Try blocking with short timeout, and a timeout error should be raised
             # Exclude `InMemoryBackend` as it does not support `blocking_timeout` yet
@@ -709,10 +707,11 @@ async def test_close(backends: BackendGen) -> None:
     """Test that backends can be closed properly."""
     for backend in backends(namespace="close_test"):
         await backend.initialize()
-        assert backend.connection is not None
+        assert await backend.ready() is True
 
         await backend.close()
-        assert backend.connection is None
+        await asyncio.sleep(0.001)  # Allow time for closure
+        assert await backend.ready() is False
 
 
 @pytest.mark.asyncio
@@ -728,7 +727,7 @@ async def test_multi_context_usage(backends: BackendGen) -> None:
             assert await backend.get(key) == "value1"
 
         # Connection still alive (persistent)
-        assert backend.connection is not None
+        assert await backend.ready() is True
         # Data still persist
         assert await backend.get(key) == "value1"
 

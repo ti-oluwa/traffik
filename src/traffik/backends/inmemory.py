@@ -109,8 +109,6 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     wrap_methods = ("clear",)
 
-    _inmemory_backend_ = True  # Marker for tests to identify this backend type
-
     def __init__(
         self,
         namespace: str = "inmemory",
@@ -124,7 +122,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
         ] = "throttle",
         number_of_shards: int = 3,
-        cleanup_frequency: float = 5.0,
+        cleanup_frequency: float = 3.0,
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -189,7 +187,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._initialized = True
 
     async def ready(self) -> bool:
-        return bool(self._shard_stores)
+        return self._initialized
 
     def _get_shard(self, key: str) -> typing.Tuple[int, AsyncRLock, OrderedDict]:
         """Get shard index, lock, and store for a key."""
@@ -497,15 +495,20 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     async def close(self) -> None:
         """Close the backend."""
+        # Clear all keys
+        await self.clear()
         self._initialized = False
 
         # Stop cleanup task
-        if self._cleanup_task is not None:
-            self._cleanup_task.cancel()
+        if self._cleanup_task and not self._cleanup_task.done():
             try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(self._cleanup_task, timeout=1.0)
+            except asyncio.TimeoutError:
+                self._cleanup_task.cancel()
+                try:
+                    await self._cleanup_task
+                except asyncio.CancelledError:
+                    pass
             self._cleanup_task = None
 
         # Clear named locks

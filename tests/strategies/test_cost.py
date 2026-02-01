@@ -206,24 +206,6 @@ async def test_leaky_bucket_with_queue_and_cost(backend: InMemoryBackend):
 
 @pytest.mark.anyio
 @pytest.mark.strategy
-async def test_cost_zero_treated_as_one(backend: InMemoryBackend):
-    """Test that cost=0 is treated as cost=1 to prevent free requests."""
-    async with backend(close_on_exit=True):
-        strategy = FixedWindowStrategy()
-        rate = Rate.parse("3/s")
-        key = "user:zero_cost"
-
-        # Try to make requests with cost=0
-        for i in range(3):
-            wait = await strategy(key, rate, backend, cost=0)
-            # Depending on implementation, cost=0 might be treated as cost=1
-            # or might be rejected. Let's test both scenarios
-            if i < 3:
-                assert wait == 0.0 or wait > 0, f"Request {i + 1} handled"
-
-
-@pytest.mark.anyio
-@pytest.mark.strategy
 async def test_cost_accumulation_across_strategies(backend: InMemoryBackend):
     """Test that costs accumulate correctly over time."""
     async with backend(close_on_exit=True):
@@ -233,7 +215,7 @@ async def test_cost_accumulation_across_strategies(backend: InMemoryBackend):
 
         # Make many small-cost requests
         total_cost = 0
-        for i in range(50):
+        for _ in range(50):
             cost = 2
             wait = await strategy(key, rate, backend, cost=cost)
             if wait == 0.0:
@@ -258,10 +240,10 @@ async def test_mixed_cost_and_default_cost(backend: InMemoryBackend):
         assert wait == 0.0, "Cost=3 should be allowed"
 
         # Make requests with default cost (should be 1)
-        wait = await strategy(key, rate, backend, cost=1)
+        wait = await strategy(key, rate, backend)
         assert wait == 0.0, "Cost=1 should be allowed (total 4)"
 
-        wait = await strategy(key, rate, backend, cost=1)
+        wait = await strategy(key, rate, backend)
         assert wait == 0.0, "Cost=1 should be allowed (total 5)"
 
         # Make another explicit cost request
@@ -269,7 +251,7 @@ async def test_mixed_cost_and_default_cost(backend: InMemoryBackend):
         assert wait == 0.0, "Cost=5 should be allowed (total 10)"
 
         # Should be at limit
-        wait = await strategy(key, rate, backend, cost=1)
+        wait = await strategy(key, rate, backend)
         assert wait > 0, "Should be throttled (10+1 > 10)"
 
 

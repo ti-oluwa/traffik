@@ -162,23 +162,24 @@ async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
             print("Accepted websocket connection")
-            close_code = 1000  # Normal closure
-            close_reason = "Normal closure"
 
             while True:
                 try:
                     data = await websocket.receive_text()
                     await ws_throttle(websocket)
                     await websocket.send_text(f"Echo: {data}")
+                except WebSocketDisconnect:
+                    # Throttle handler may have closed the connection
+                    break
                 except Exception as exc:
                     print("Exception caught in websocket:", exc)
-                    await websocket.send_text("Internal error")
-                    close_code = 1011  # Internal Error
-                    close_reason = "Internal error"
+                    # Only try to send if websocket is still connected
+                    if websocket.client_state.value != 3:  # 3 = DISCONNECTED
+                        try:
+                            await websocket.send_text("Internal error")
+                        except Exception:
+                            pass
                     break
-
-            await asyncio.sleep(1)  # Ensure message is sent before closing
-            await websocket.close(code=close_code, reason=close_reason)
 
         base_url = "http://0.0.0.0"
         running_loop = asyncio.get_running_loop()

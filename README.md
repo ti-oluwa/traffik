@@ -10,15 +10,15 @@ Asynchronous distributed rate limiting for FastAPI/Starlette applications.
 
 ## Features
 
-- **🚀 Fully Asynchronous**: Built from the ground up for async/await with non-blocking operations and minimal overhead (<1ms latency)
-- **🌐 Distributed-First**: Atomic operations with distributed locks (Redis, Memcached) achieving 99.9%+ accuracy even under high concurrency
-- **🎯 14+ Strategies**: Fixed Window, Sliding Window (Log & Counter), Token Bucket, Leaky Bucket, GCRA, Adaptive, Tiered, Priority Queue, and more
-- **📡 HTTP & WebSocket**: Full-featured rate limiting for both protocols with per-message throttling support
-- **🛡️ Production-Ready**: Circuit breakers, automatic retries, backend failover, degraded mode, and comprehensive error handling
-- **🔌 Flexible Integration**: Dependencies, decorators, middleware, or direct calls - use what fits your architecture
-- **🎨 Highly Extensible**: Simple, well-documented APIs for custom backends, strategies, error handlers, and identifiers
-- **📊 Observable**: Built-in metrics, detailed error context, and strategy statistics for monitoring
-- **⚡ Performance-Optimized**: Lock striping, connection pooling, script caching, and minimal memory footprint
+- **Fully Asynchronous**: Built for async/await with non-blocking operations and minimal overhead (<1ms latency)
+- **Distributed-First**: Atomic operations with distributed locks (Redis, Memcached) achieving very high accuracy even under high concurrency.
+- **10+ Strategies**: Fixed Window, Sliding Window (Log & Counter), Token Bucket, Leaky Bucket, GCRA, Adaptive, Tiered, Priority Queue, and more
+- **HTTP & WebSocket**: Full-featured rate limiting for both protocols with per-message throttling support
+- **Production-Ready**: Circuit breakers, automatic retries, backend failover, degraded mode, and comprehensive error handling
+- **Flexible Integration**: Dependencies, decorators, middleware, or direct calls - use what fits your architecture
+- **Highly Extensible**: Simple, well-documented APIs for custom backends, strategies, error handlers, and identifiers
+- **Observable**: Built-in metrics, detailed error context, and strategy statistics for monitoring
+- **Performance-Optimized**: Lock striping, connection pooling, script caching, and minimal memory footprint
 
 Built for production workloads with battle-tested patterns from high-scale systems.
 
@@ -92,7 +92,7 @@ async def root():
 - Returns HTTP 429 (Too Many Requests) when exceeded
 - Automatically includes `Retry-After` header
 - No external dependencies (uses in-memory storage)
-- Production-ready with atomic operations
+- Dev environment ready
 
 ### Example Setup for Production
 
@@ -104,7 +104,7 @@ from contextlib import asynccontextmanager
 from traffik import HTTPThrottle
 from traffik.backends.redis import RedisBackend
 from traffik.strategies import SlidingWindowCounterStrategy
-from traffik.error_handlers import circuit_breaker_fallback, CircuitBreaker
+from traffik.error_handlers import failover, CircuitBreaker
 from traffik.backends.inmemory import InMemoryBackend
 
 # Primary backend
@@ -138,9 +138,9 @@ api_throttle = HTTPThrottle(
     rate="1000/hour",
     strategy=SlidingWindowCounterStrategy(),
     backend=backend,
-    on_error=circuit_breaker_fallback(
+    on_error=failover(
         backend=fallback_backend,
-        circuit_breaker=breaker,
+        breaker=breaker,
         max_retries=2,
     ),
 )
@@ -157,7 +157,7 @@ from contextlib import asynccontextmanager
 from traffik import WebSocketThrottle, is_throttled
 from traffik.backends.redis import RedisBackend
 from traffik.strategies import SlidingWindowCounterStrategy
-from traffik.error_handlers import circuit_breaker_fallback, CircuitBreaker
+from traffik.error_handlers import failover, CircuitBreaker
 from traffik.backends.inmemory import InMemoryBackend
 
 # Primary backend
@@ -191,9 +191,9 @@ ws_throttle = WebSocketThrottle(
     rate="1000/hour",
     strategy=SlidingWindowCounterStrategy(),
     backend=backend,
-    on_error=circuit_breaker_fallback(
+    on_error=failover(
         backend=fallback_backend,
-        circuit_breaker=breaker,
+        breaker=breaker,
         max_retries=2,
     ),
 )
@@ -344,12 +344,11 @@ backend = MemcachedBackend(
 
 **Characteristics:**
 
-- Atomic operations via `add()` and CAS
 - Best-effort distributed locks
 - No native persistence/non-persistence guarantees. Use `track_keys=True` for better cleanup (at the cost of some latency).
 - Good for high-throughput scenarios
 
-**Important:** Memcached has no `KEYS` command. The `clear()` method is a no-op unless `track_keys=True` is enabled (adds overhead).
+**Important:** Memcached has no `KEYS` command. The `clear()` method is a no-op unless `track_keys=True` is enabled but this adds overhead.
 
 ### Strategies
 
@@ -379,7 +378,7 @@ HTTPThrottle(
 
 - Time divided into fixed windows (e.g., 00:00-01:00, 01:00-02:00)
 - Counter resets at window boundary
-- Can allow up to 2× limit at boundaries (99 at 00:59, 100 at 01:00)
+- Can allow up to 2x limit at boundaries (99 at 00:59, 100 at 01:00)
 
 **Storage:**
 
@@ -653,6 +652,8 @@ async def create_resource():
 Apply throttles globally with filtering:
 
 ```python
+import re
+
 from traffik.middleware import ThrottleMiddleware, MiddlewareThrottle
 
 # Basic
@@ -679,7 +680,6 @@ app.add_middleware(
 )
 
 # Regex path patterns
-import re
 
 app.add_middleware(
     ThrottleMiddleware,
@@ -854,49 +854,93 @@ throttle = HTTPThrottle(
 
 ### Context-Aware Backends
 
-Runtime backend selection for multi-tenant applications:
+Runtime backend selection for scenarios where the backend must be determined dynamically from request data (JWT tokens, headers, tenant context).
+
+**When to use `dynamic_backend=True`:**
+
+| Scenario | Use `dynamic_backend` | Why |
+|----------|----------------------|-----|
+| Multi-tenant SaaS (tenant from JWT) | Yes | Tenant unknown until request arrives |
+| A/B testing different storage | Yes | Selection based on request attributes |
+| Shared Redis across services | No | Use explicit `backend` parameter |
+| Single backend for all requests | No | Use explicit `backend` parameter |
+
+**Complete Multi-Tenant Example:**
 
 ```python
-from fastapi import Request
+from fastapi import FastAPI, Request, Depends
+from traffik import HTTPThrottle
+from traffik.backends import RedisBackend, InMemoryBackend
 
-# Enable context-aware backend resolution
+app = FastAPI()
+
+# Step 1: Create throttle with dynamic_backend=True
+# No backend specified - it will be resolved from context at runtime
 api_throttle = HTTPThrottle(
     uid="api",
     rate="1000/hour",
-    context_backend=True,  # Resolve backend at runtime
+    dynamic_backend=True,
 )
 
-# Middleware sets up tenant-specific backend
-async def tenant_middleware(request: Request, call_next):
-    tenant = extract_tenant(request)
+# Step 2: Middleware sets up tenant-specific backend BEFORE throttle runs
+@app.middleware("http")
+async def tenant_backend_middleware(request: Request, call_next):
+    # Extract tenant from auth (JWT, API key, subdomain, etc.)
+    tenant_id = request.headers.get("X-Tenant-ID", "default")
+    tenant_tier = get_tenant_tier(tenant_id)  # Your lookup logic
     
     # Select backend based on tenant tier
-    if tenant.tier == "enterprise":
-        backend = RedisBackend(f"redis://enterprise-{tenant.region}:6379/0")
-    elif tenant.tier == "premium":
-        backend = RedisBackend(f"redis://premium:6379/{tenant.id}")
+    if tenant_tier == "enterprise":
+        # Enterprise: Dedicated Redis instance
+        backend = RedisBackend(f"redis://enterprise-redis:6379/0")
+    elif tenant_tier == "premium":
+        # Premium: Shared Redis with tenant namespace
+        backend = RedisBackend(
+            "redis://premium-redis:6379/0",
+            namespace=f"tenant:{tenant_id}"
+        )
     else:
-        backend = InMemoryBackend(namespace=f"free:{tenant.id}")
+        # Free tier: In-memory with tenant namespace
+        backend = InMemoryBackend(namespace=f"free:{tenant_id}")
     
-    # Execute in backend context
-    async with backend(request.app):
+    # Enter backend context before request handlers run.
+    # close_on_exit=False keeps connection alive for connection pooling
+    # persistent=True maintains backend across requests
+    async with backend(request.app, close_on_exit=False, persistent=True):
         return await call_next(request)
 
-app.middleware("http")(tenant_middleware)
-
+# Step 3: Use throttle in route - it automatically uses the context backend
 @app.get("/api/data")
 async def get_data(request: Request = Depends(api_throttle)):
-    return {"data": "tenant-specific"}
+    return {"data": "tenant-specific rate limiting applied"}
+
+# Helper function (your implementation)
+def get_tenant_tier(tenant_id: str) -> str:
+    # Look up tenant tier from database, cache, etc.
+    tiers = {"acme-corp": "enterprise", "startup-x": "premium"}
+    return tiers.get(tenant_id, "free")
 ```
 
-**When to use:**
+**How it works:**
 
-- ✅ Multi-tenant SaaS with per-tenant backends
-- ✅ A/B testing different strategies
-- ✅ Environment-specific backends
-- ❌ Simple shared storage (use explicit `backend` parameter)
+1. Request arrives → middleware extracts tenant info
+2. Middleware creates appropriate backend and enters its context
+3. Route handler runs → throttle resolves backend from current context
+4. Throttle applies rate limit using tenant-specific backend
+5. Request completes → context exits (backend connection managed by pool)
 
-**Performance impact:** ~1-20ms overhead for backend resolution per reques, depending on backend initialization/connection speed
+**Anti-pattern - Don't use for simple shared backends:**
+
+```python
+# Bad: Unnecessary dynamic resolution overhead
+api_throttle = HTTPThrottle(uid="api", rate="1000/h", dynamic_backend=True)
+
+# Good: Explicit backend for shared storage
+shared_redis = RedisBackend("redis://shared-redis:6379/0")
+api_throttle = HTTPThrottle(uid="api", rate="1000/h", backend=shared_redis)
+```
+
+**Performance impact:** ~1-20ms overhead per request for backend resolution, depending on backend initialization/connection speed.
 
 ## Configuration
 
@@ -962,6 +1006,79 @@ strategy = FixedWindowStrategy(
 - `TRAFFIK_DEFAULT_BLOCKING`: "true", "false", "1", "0", "yes", "no"
 - `TRAFFIK_DEFAULT_BLOCKING_TIMEOUT`: Float value in seconds (e.g., "2.0")
 
+### Lock Contention and Sub-Second Windows
+
+Some strategies require distributed locking to maintain atomicity for multi-step operations. Understanding when locks are used helps you make informed decisions about strategy selection and tuning.
+
+**Strategies that use locking:**
+
+| Strategy | Locking Required | When |
+| -------- | ---------------- | ---- |
+| FixedWindowStrategy | Conditional | Only for sub-second windows (< 1s) |
+| SlidingWindowLogStrategy | Always | Multi-step log operations |
+| SlidingWindowCounterStrategy | Conditional | Only for sub-second windows |
+| TokenBucketStrategy | Always | Token refill + consume atomicity |
+| TokenBucketWithDebtStrategy | Always | Debt tracking + token operations |
+| LeakyBucketStrategy | Always | Queue level management |
+| LeakyBucketWithQueueStrategy | Always | Queue operations |
+| GCRAStrategy | Always | TAT calculations |
+| ConcurrencyLimitStrategy | Always | Active request tracking |
+| RegionalBurstStrategy | Always | Multi-region coordination |
+
+**Sub-second window considerations:**
+
+For windows less than 1 second (e.g., `"100/500ms"`), `FixedWindowStrategy` and `SlidingWindowCounterStrategy` must use explicit locking because:
+
+1. Minimum TTL for backend keys is typically 1 second
+2. Window boundaries must be tracked separately from key expiration
+3. Multiple operations (read window start, check/reset counter) must be atomic
+
+```python
+# This uses locking (sub-second window)
+fast_throttle = HTTPThrottle(uid="fast", rate="10/100ms", strategy=FixedWindowStrategy())
+
+# This does NOT use locking (>= 1 second window, uses atomic increment)
+normal_throttle = HTTPThrottle(uid="normal", rate="100/s", strategy=FixedWindowStrategy())
+```
+
+**Lock contention under high load:**
+
+Under high concurrency with locking strategies, you may experience:
+
+- **Increased latency**: Requests wait for lock acquisition (up to `blocking_timeout`)
+- **Lock timeouts**: If `blocking_timeout` is too short, requests may fail to acquire locks
+- **Throughput degradation**: Serial lock acquisition limits parallel processing
+
+**Mitigation strategies:**
+
+1. **Use longer windows when possible** - Prefer `"100/s"` over `"100/500ms"` to avoid sub-second locking
+2. **Tune blocking_timeout** - Balance between accuracy and latency:
+
+   ```python
+   # For high-throughput, fail fast
+   strategy = FixedWindowStrategy(
+       lock_config=LockConfig(blocking=True, blocking_timeout=0.05)  # 50ms
+   )
+   
+   # For accuracy-critical, wait longer
+   strategy = TokenBucketStrategy(
+       lock_config=LockConfig(blocking=True, blocking_timeout=1.0)  # 1s
+   )
+   ```
+
+3. **Consider non-locking strategies** - For >= 1 second windows, `FixedWindowStrategy` uses atomic `increment_with_ttl` without locks
+4. **Use `blocking=False` for best-effort** - Accepts potential accuracy loss for lower latency:
+
+   ```python
+   strategy = TokenBucketStrategy(
+       lock_config=LockConfig(blocking=False)  # Fail immediately if lock unavailable
+   )
+   ```
+
+**Monitoring recommendation:**
+
+Track lock acquisition times and timeouts in production to identify contention issues before they impact users.
+
 ## Error Handling
 
 Traffik provides comprehensive error handling for production systems.
@@ -978,12 +1095,12 @@ async def error_handler(
 ) -> WaitPeriod:  # Return wait time in milliseconds
     """
     exc_info contains:
-    - exception: Exception - Exception instance
-    - connection: HTTPConnection - HTTP connection
+    - exception: `Exception` - Exception instance
+    - connection: `HTTPConnection` - HTTP connection
     - cost: int - Request cost
-    - rate: Rate - Rate limit configuration
-    - backend: ThrottleBackend - Backend that failed
-    - throttle: Throttle - Throttle instance
+    - rate: `Rate` - Rate limit configuration
+    - backend: `ThrottleBackend` - Backend that failed
+    - throttle: `Throttle` - Throttle instance
     """
     # Decision logic
     if isinstance(exc_info["exception"], BackendConnectionError):
@@ -1103,7 +1220,7 @@ Retry transient failures:
 from traffik.error_handlers import retry
 
 throttle = HTTPThrottle(
-    uid="resilient",
+    uid="retry-example",
     rate="100/minute",
     on_error=retry(
         max_retries=3,
@@ -1121,31 +1238,12 @@ throttle = HTTPThrottle(
 - Attempt 3: 200ms delay
 - Attempt 4: 400ms delay
 
-#### Degraded Mode Handler
-
-Relaxed limits when backend unavailable:
-
-```python
-from traffik.error_handlers import degraded_mode
-
-throttle = HTTPThrottle(
-    uid="degradable",
-    rate="100/minute",  # Normal: 100/min
-    on_error=degraded_mode(
-        rate_multiplier=3.0,  # Degraded: ~33/min (3× wait)
-        duration=300.0,        # Stay degraded for 5 minutes
-    ),
-)
-```
-
-Provides basic protection without backend access.
-
-#### Smart Fallback Handler (Production)
+#### Failover Handler (Production)
 
 Combines circuit breaker + retry + fallback:
 
 ```python
-from traffik.error_handlers import circuit_breaker_fallback, CircuitBreaker
+from traffik.error_handlers import failover, CircuitBreaker
 from traffik.backends.redis import RedisBackend
 from traffik.backends.inmemory import InMemoryBackend
 
@@ -1162,9 +1260,9 @@ throttle = HTTPThrottle(
     uid="production",
     rate="1000/hour",
     backend=primary,
-    on_error=circuit_breaker_fallback(
+    on_error=failover(
         backend=fallback,
-        circuit_breaker=breaker,
+        breaker=breaker,
         max_retries=2,
     ),
 )
@@ -1172,12 +1270,12 @@ throttle = HTTPThrottle(
 
 **Decision flow:**
 
-```markdown
+```text
 Error occurs
     ↓
 Circuit open? ──Yes──> Use fallback backend
     ↓ No
-Retry primary (max 2) ──Success──> Return ✓
+Retry primary (max 2) ──Success──> Return
     ↓ Fail
 Record failure ──> Use fallback backend
 ```
@@ -1233,11 +1331,10 @@ throttle = HTTPThrottle(
 |----------|---------|-----------|
 | Development | `"allow"` | Never block developers |
 | Security-critical | `"throttle"` | Fail closed always |
-| High-availability | `circuit_breaker_fallback` | Best resilience |
+| High-availability | `failover` | Best resilience |
 | Multi-region | `backend_fallback` | Automatic failover |
-| Unstable backend | `circuit_breaker` | Prevent cascades |
 | Network issues | `retry` | Handle transient errors |
-| Observability | Custom handler | Logging + metrics |
+| Observability | Custom handler | Logging and metrics |
 
 ### Backend-Level Error Handling
 
@@ -1589,7 +1686,7 @@ Single-process benchmarks (Redis backend, 100 req/min limit):
        return conn.client.host
    
    # Slow (avoid in hot paths)
-   async def complex_identifier(conn):
+   async def slow_identifier(conn):
        user = await db.get_user(extract_jwt(conn))  # DB query!
        return f"user:{user.id}"
    ```
@@ -1611,7 +1708,7 @@ HTTPThrottle(
     strategy: Optional[ThrottleStrategy] = None,
     backend: Optional[ThrottleBackend] = None,
     cost: Union[int, CostFunc] = 1,
-    context_backend: bool = False,
+    dynamic_backend: bool = False,
     min_wait_period: Optional[int] = None,
     headers: Optional[Mapping[str, str]] = None,
     on_error: Union[Literal["allow", "throttle", "raise"], ErrorHandler] = None,
@@ -1627,7 +1724,7 @@ HTTPThrottle(
 - `strategy`: Rate limiting strategy (default: `FixedWindowStrategy`)
 - `backend`: Storage backend (default: from app context)
 - `cost`: Request cost (default: 1 or function)
-- `context_backend`: Enable runtime backend resolution (default: False)
+- `dynamic_backend`: Enable runtime backend resolution (default: False)
 - `min_wait_period`: Minimum wait time in milliseconds
 - `headers`: Extra headers for throttled responses
 - `on_error`: Error handling strategy
@@ -1775,17 +1872,14 @@ from traffik.exceptions import (
 ```python
 from traffik.error_handlers import (
     backend_fallback,
-    circuit_breaker,
     retry,
-    degraded_mode,
-    circuit_breaker_fallback,
-    throttle_fallbacks,
+    failover,
     CircuitBreaker,
 )
 
 # String literal handlers (built-in)
 on_error="allow"      # Allow all requests on errors
-on_error="throttle"   # Throttle all requests on errors (`min_wait_period` or 1000ms wait if set)
+on_error="throttle"   # Throttle all requests on errors (min_wait_period or 1000ms wait if set)
 on_error="raise"      # Re-raise exceptions
 ```
 
@@ -1800,3 +1894,7 @@ MIT License - see [LICENSE](LICENSE) file.
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for version history.
+
+## Acknowledgments
+
+This project used AI assistance (GitHub Copilot) for writing documentation and test generation. All AI-generated content was reviewed and vetted by me.

@@ -48,7 +48,7 @@ async def connection_throttled(
 
     :param connection: The HTTP connection
     :param wait_ms: The wait period in milliseconds before the next connection can be made
-    :return: None
+    :raises ConnectionThrottled: Always raises this exception to indicate throttling
     """
     wait_seconds = math.ceil(wait_ms / 1000)
     raise ConnectionThrottled(

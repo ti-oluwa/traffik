@@ -37,7 +37,7 @@ ThrottleStrategy = typing.Callable[
 """
 A callable that implements a throttling strategy.
 
-Takes a key, a Rate object, the throttle backend, and cost, and returns the wait period in seconds.
+Takes a key, a Rate object, the throttle backend, and cost, and returns the wait period in milliseconds.
 """
 
 
@@ -54,6 +54,8 @@ class ExceptionInfo(TypedDict):
     """The rate associated with the throttling operation."""
     backend: ThrottleBackend[typing.Any, HTTPConnection]
     """The backend used during the throttling operation."""
+    context: typing.Optional[typing.Mapping[str, typing.Any]]
+    """Additional context for the throttling operation."""
     throttle: "Throttle[HTTPConnection]"
     """The throttle instance used during the throttling operation."""
 
@@ -72,7 +74,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]] = None,
         cost: CostType[HTTPConnectionT] = 1,
-        context_backend: bool = False,
+        dynamic_backend: bool = False,
         min_wait_period: typing.Optional[int] = None,
         headers: typing.Optional[typing.Mapping[str, str]] = None,
         on_error: typing.Optional[
@@ -114,79 +116,30 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             The backend is responsible for managing the throttling state,
             including checking the current throttling status, updating it, and handling
             throttled connections.
-            If `context_backend` is True, the backend will be resolved from the request context
+            If `dynamic_backend` is True, the backend will be resolved from the request context
             on each call, allowing for dynamic backend resolution based on the request context.
         :param cost: The cost/weight of each request. This allows for different requests
             to have different impacts on the throttling state. For example, a request that performs a
             resource-intensive operation might have a higher cost than a simple read request.
-        :param context_backend: If True, resolves backend from (request) context on each call instead of caching.
-            Use only when backend choice must be determined dynamically at runtime.
+        :param dynamic_backend: If True, resolves backend from context on each request
+            instead of caching. Designed for multi-tenant applications where the backend
+            is determined at runtime from request data (JWT, headers, etc.).
 
-            This feature is designed for advanced use cases where the same throttle instance
-            needs to use different backends based on runtime conditions.
+            **Use cases:**
+            - Multi-tenant SaaS: Different backends per tenant tier
+            - Environment-based routing: Production vs staging backends
+            - Testing: Nested context managers with different backends
 
-            Valid use cases:
-            - Multi-tenant applications where tenant is determined from JWT/headers at runtime
-            - Request-based backend selection (e.g., different storage for different request types)
-            - Advanced testing scenarios with nested backend context managers
+            **Requirements:**
+            - Backend must be set via context manager in middleware **before** throttle is called
+            - Cannot be combined with explicit `backend` parameter
 
-        Example (Multi-tenant):
+            **Trade-offs:**
+            - Adds ~1-20ms overhead per request (backend resolution)
+            - Data fragmentation risk if context switching is inconsistent
+            - Use explicit `backend` parameter for simple shared storage
 
-        ```python
-        # Tenant determined at runtime from request headers
-        tenant_throttle = HTTPThrottle(
-            uid="api_quota",
-            rate="1000/h",
-            context_backend=True
-        )
-
-        async def tenant_middleware(request, call_next):
-            tenant = extract_tenant_from_auth_header(request.headers["Authorization"])
-
-            if tenant == "premium":
-                backend = RedisBackend("redis://premium-redis:6379/0")
-            elif tenant == "enterprise":
-                backend = RedisBackend("redis://enterprise-redis:6379/0")
-            else:
-                backend = InMemoryBackend()  # Free tier
-
-            async with backend():
-                return await call_next(request)
-        ```
-
-        Example (Testing with nested contexts):
-
-        ```python
-        throttle = HTTPThrottle(uid="test", limit=3, seconds=5, context_backend=True)
-
-        async with backend_a():
-            await throttle.hit(request)  # Uses backend_a
-
-            async with backend_b():
-                await throttle.hit(request)  # Switches to backend_b
-
-            await throttle.hit(request)  # Back to backend_a
-        ```
-
-        IMPORTANT: Do not use for simple shared storage across services.
-        For shared backends, use explicit backend configuration instead:
-
-        ```python
-        # GOOD: Explicit shared backend
-        shared_backend = RedisBackend("redis://shared-redis:6379/0")
-        user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", backend=shared_backend)
-
-        # BAD: Unnecessary dynamic resolution
-        user_quota = HTTPThrottle(uid="user_quota", rate="1000/h", context_backend=True)
-        ```
-
-            **WARNING:** This feature adds complexity and slight performance overhead.
-            - Cannot be used with explicit backend parameter
-            - May cause data fragmentation if context switching is inconsistent
-            - Harder to debug due to dynamic backend resolution
-            - Only use when you absolutely need runtime backend switching
-
-            For most use cases, explicit backend configuration is simpler and more efficient.
+            See documentation on "Context-Aware Backends" section for full examples.
 
         :param min_wait_period: The minimum allowable wait period (in milliseconds) for a throttled connection.
         :param headers: Optional headers to include in throttling responses. A use case can
@@ -212,9 +165,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         if not uid or not isinstance(uid, str):
             raise ValueError("uid is required and must be a non-empty string")
 
-        if context_backend and backend is not None:
+        if dynamic_backend and backend is not None:
             raise ValueError(
-                "Cannot specify an explicit backend with `context_backend=True`"
+                "Cannot specify an explicit backend with `dynamic_backend=True`"
             )
 
         self.uid = uid
@@ -223,14 +176,14 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         self._uses_cost_func = callable(cost)
         self.cost = cost
-        self.uses_fixed_backend = not context_backend
+        self.uses_fixed_backend = not dynamic_backend
         self.strategy = strategy or default_strategy
         self.min_wait_period = min_wait_period
         self.headers = dict(headers or {})
         self.cache_ids = cache_ids
 
-        # Only set backend for non-context backend throttles
-        if not context_backend:
+        # Only set backend for non-dynamic backend throttles
+        if not dynamic_backend:
             resolved_backend = backend or get_throttle_backend()
             self.backend = resolved_backend
 
@@ -384,6 +337,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         exc: Exception,
         cost: int,
         rate: Rate,
+        context: typing.Optional[typing.Mapping[str, typing.Any]],
         backend: ThrottleBackend[typing.Any, HTTPConnectionT],
     ) -> WaitPeriod:
         """
@@ -403,6 +357,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 connection=connection,
                 cost=cost,
                 rate=rate,
+                context=context,
                 backend=backend,  # type: ignore
                 throttle=self,  # type: ignore
             )
@@ -419,6 +374,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                     connection=connection,
                     cost=cost,
                     rate=rate,
+                    context=context,
                     backend=backend,  # type: ignore
                     throttle=self,  # type: ignore
                 )
@@ -490,6 +446,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 exc=exc,
                 cost=cost_,  # type: ignore
                 rate=rate,  # type: ignore
+                context=context,
                 backend=backend,
             )
 
@@ -620,7 +577,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
         strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, WebSocket]] = None,
         cost: CostType[WebSocket] = 1,
-        context_backend: bool = False,
+        dynamic_backend: bool = False,
         min_wait_period: typing.Optional[int] = None,
         headers: typing.Optional[typing.Mapping[str, str]] = None,
         on_error: typing.Optional[
@@ -641,7 +598,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
             strategy=strategy,
             backend=backend,
             cost=cost,
-            context_backend=context_backend,
+            dynamic_backend=dynamic_backend,
             min_wait_period=min_wait_period,
             headers=headers,
             on_error=on_error,

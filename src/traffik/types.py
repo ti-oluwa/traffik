@@ -1,7 +1,7 @@
 """Type definitions and protocols."""
 
 import typing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from starlette.requests import HTTPConnection
 from starlette.responses import Response
@@ -129,9 +129,15 @@ class StrategyStat:
     """Statistics for a throttling strategy."""
 
     key: Stringable
+    """The throttling key."""
     rate: Rate
+    """The rate limit definition."""
     hits_remaining: float
-    wait_time: WaitPeriod
+    """Number of hits remaining in the current period."""
+    wait_ms: WaitPeriod
+    """Time to wait (in milliseconds) before the next allowed request."""
+    metadata: typing.Dict[str, typing.Any] = field(default_factory=dict)
+    """Additional metadata related to the strategy."""
 
 
 class AsyncLock(typing.Protocol):

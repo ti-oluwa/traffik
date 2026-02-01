@@ -2,10 +2,11 @@
 Advanced Rate Limiting Strategies for Special Use Cases
 """
 
-from dataclasses import dataclass, field  # noqa: I001
-from enum import IntEnum
 import heapq
+import time as pytime
 import typing
+from dataclasses import dataclass, field
+from enum import IntEnum
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
@@ -13,12 +14,11 @@ from traffik.types import LockConfig, Stringable, WaitPeriod
 from traffik.utils import (
     MsgPackDecodeError,
     dump_data,
-    load_data,
-    time,
     get_blocking_setting,
     get_blocking_timeout,
+    load_data,
+    time,
 )
-
 
 __all__ = [
     "TieredRateStrategy",
@@ -562,6 +562,9 @@ class TimeOfDayStrategy:
     - Apply multiplier based on current hour (UTC)
     - E.g., 2x limit during business hours, 1x at night
 
+    Note: The time window boundaries are inclusive of the start hour and exclusive of the end hour.
+    Time windows should be defined in 24-hour format (0-24).
+
     **Example:**
     ```python
     strategy = TimeOfDayStrategy(
@@ -592,10 +595,23 @@ class TimeOfDayStrategy:
             (17, 24, 1.5),  # Evening (17:00-00:00): 1.5x
         ]
     )
-    """List of (start_hour, end_hour, multiplier) tuples (24-hour format)"""
+    """
+    List of (start_hour, end_hour, multiplier) tuples (24-hour format)
+    
+    Best practice is that the time windows should cover the full 24-hour period without gaps.
+    
+    For example:
+    ```json
+    [(0, 8, 2.0), (8, 17, 1.0), (17, 24, 1.5)]
+    ```
+    Means:
+    - From 00:00 to 08:00, apply a 2.0x multiplier
+    - From 08:00 to 17:00, apply a 1.0x multiplier
+    - From 17:00 to 24:00, apply a 1.5x multiplier
+    """
 
     timezone_offset: int = 0
-    """Timezone offset from UTC in hours"""
+    """Timezone offset from UTC in hours. Time offset can range from -12 to +14."""
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
@@ -604,6 +620,23 @@ class TimeOfDayStrategy:
         )
     )
     """Configuration for backend locking during rate limit checks."""
+
+    def __post_init__(self) -> None:
+        if not self.time_windows:
+            raise ValueError("`time_windows` cannot be empty")
+
+        for start, end, mult in self.time_windows:
+            if not (0 <= start < 24) or not (0 < end <= 24):
+                raise ValueError(
+                    "Start and end hours must be in 0-24 range (24 exclusive for start)"
+                )
+            if start >= end:
+                raise ValueError("Start hour must be less than end hour")
+            if mult <= 0:
+                raise ValueError("Multiplier must be positive")
+
+        if self.timezone_offset < -12 or self.timezone_offset > 14:
+            raise ValueError("`timezone_offset` must be between -12 and +14 hours")
 
     def _get_current_multiplier(self, timestamp_ms: float) -> float:
         """Get rate multiplier for current time"""
@@ -625,7 +658,8 @@ class TimeOfDayStrategy:
         if rate.unlimited:
             return 0.0
 
-        now = time() * 1000
+        # We must use wall clock time for time-of-day calculations, not event loop time
+        now = pytime.time() * 1000
         window_duration_ms = rate.expire
         current_window = int(now // window_duration_ms)
 
@@ -928,7 +962,17 @@ class DistributedFairnessStrategy:
     """Weight for weighted fair queuing (higher = more quota)"""
 
     fairness_window_ms: float = 60000
-    """Window for fairness calculation (1 minute)"""
+    """
+    Window for fairness calculation (1 minute). 
+    
+    Fairness is calculated per this interval. Think of it as the "round duration" for
+    deficit round-robin.
+
+    60000 ms = 1 minute is typical.
+    10000 ms = 10 seconds for more responsive balancing.
+    300000 ms = 5 minutes for very stable balancing.
+    0 ms is not allowed.
+    """
 
     lock_config: LockConfig = field(
         default_factory=lambda: LockConfig(
@@ -936,6 +980,16 @@ class DistributedFairnessStrategy:
             blocking_timeout=0.2,
         )
     )
+
+    def __post_init__(self) -> None:
+        if not self.instance_id:
+            raise ValueError("`instance_id` must be a non-empty string")
+
+        if self.instance_weight <= 0:
+            raise ValueError("`instance_weight` must be a positive number")
+
+        if self.fairness_window_ms <= 0:
+            raise ValueError("`fairness_window_ms` must be a positive number")
 
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1

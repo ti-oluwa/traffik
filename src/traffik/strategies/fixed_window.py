@@ -162,7 +162,7 @@ class FixedWindowStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float("inf"),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         now = time() * 1000
@@ -171,24 +171,31 @@ class FixedWindowStrategy:
 
         full_key = backend.get_key(str(key))
         base_key = f"{full_key}:fixedwindow"
-        window_start_key = f"{base_key}:start"
         counter_key = f"{base_key}:counter"
 
-        # Get the stored window start time
-        stored_window_start, stored_counter = await backend.multi_get(
-            window_start_key, counter_key
-        )
-
-        # Check if we're in a new window or no data exists
-        if (
-            stored_window_start is None
-            or int(stored_window_start) != current_window_start
-        ):
-            # If we are in a new window or no data set counter as 0
-            counter = 0
-        else:
-            # If we are in an existing/valid window, use the stored counter
+        # For non-subsecond windows, we only use the counter key (with TTL)
+        # For subsecond windows, we use both window_start and counter keys
+        if not rate.is_subsecond:
+            # Only read the counter for >= 1 second windows
+            stored_counter = await backend.get(counter_key)
             counter = int(stored_counter) if stored_counter else 0
+        else:
+            # For subsecond windows, check if we're in the same window
+            window_start_key = f"{base_key}:start"
+            stored_window_start, stored_counter = await backend.multi_get(
+                window_start_key, counter_key
+            )
+            
+            # Check if we're in a new window or no data exists
+            if (
+                stored_window_start is None
+                or int(stored_window_start) != current_window_start
+            ):
+                # If we are in a new window or no data set counter as 0
+                counter = 0
+            else:
+                # If we are in an existing/valid window, use the stored counter
+                counter = int(stored_counter) if stored_counter else 0
 
         hits_remaining = max(rate.limit - counter, 0)
         if counter > rate.limit:
@@ -202,5 +209,5 @@ class FixedWindowStrategy:
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
-            wait_time=wait_ms,
+            wait_ms=wait_ms,
         )

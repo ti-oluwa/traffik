@@ -188,7 +188,7 @@ class TokenBucketStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float("inf"),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         now = time() * 1000
@@ -233,7 +233,7 @@ class TokenBucketStrategy:
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
-            wait_time=wait_ms,
+            wait_ms=wait_ms,
         )
 
 
@@ -420,7 +420,7 @@ class TokenBucketWithDebtStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float("inf"),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         now = time() * 1000
@@ -466,5 +466,5 @@ class TokenBucketWithDebtStrategy:
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
-            wait_time=wait_ms,
+            wait_ms=wait_ms,
         )

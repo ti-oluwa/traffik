@@ -69,11 +69,6 @@ class SlidingWindowLogStrategy:
         wait_seconds = int(wait_ms / 1000)
         raise HTTPException(429, f"Rate limited. Retry in {wait_seconds}s")
     ```
-
-    :param key: The throttling key (e.g., user ID, IP address).
-    :param rate: The rate limit definition.
-    :param backend: The throttle backend instance.
-    :return: Wait time in milliseconds if throttled, 0.0 if allowed.
     """
 
     lock_config: LockConfig = field(
@@ -153,7 +148,7 @@ class SlidingWindowLogStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float("inf"),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         now = time() * 1000
@@ -194,7 +189,7 @@ class SlidingWindowLogStrategy:
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
-            wait_time=wait_ms,
+            wait_ms=wait_ms,
         )
 
 
@@ -351,7 +346,7 @@ class SlidingWindowCounterStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float("inf"),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         now = time() * 1000
@@ -396,5 +391,5 @@ class SlidingWindowCounterStrategy:
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
-            wait_time=wait_ms,
+            wait_ms=wait_ms,
         )

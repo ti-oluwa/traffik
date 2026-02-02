@@ -479,7 +479,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         namespace: str,
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[HTTPConnectionT]
+            ConnectionThrottledHandler[HTTPConnectionT, typing.Any]
         ] = None,
         persistent: bool = False,
         on_error: typing.Union[

@@ -1,13 +1,72 @@
 """Leaky Bucket rate limiting strategies."""
 
+import typing
 from dataclasses import dataclass, field
+
+from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
-__all__ = ["LeakyBucketStrategy", "LeakyBucketWithQueueStrategy"]
+__all__ = [
+    "LeakyBucketStrategy",
+    "LeakyBucketWithQueueStrategy",
+    "LeakyBucketStatMetadata",
+    "LeakyBucketWithQueueStatMetadata",
+]
+
+
+class LeakyBucketStatMetadata(TypedDict):
+    """
+    Metadata for `LeakyBucketStrategy` statistics.
+
+    The leaky bucket strategy models rate limiting as a bucket that leaks
+    at a constant rate, enforcing smooth traffic output.
+    """
+
+    strategy: typing.Literal["leaky_bucket"]
+    """Strategy identifier, always "leaky_bucket"."""
+
+    bucket_level: float
+    """Current fill level of the bucket (pending request cost)."""
+
+    bucket_capacity: int
+    """Maximum capacity of the bucket (rate limit)."""
+
+    leak_rate_per_ms: float
+    """Rate at which the bucket leaks (requests per millisecond)."""
+
+    last_leak_ms: float
+    """Timestamp of the last leak calculation in milliseconds since epoch."""
+
+
+class LeakyBucketWithQueueStatMetadata(TypedDict):
+    """
+    Metadata for `LeakyBucketWithQueueStrategy` statistics.
+
+    Enhanced leaky bucket that maintains a FIFO queue of requests
+    for strict ordering guarantees.
+    """
+
+    strategy: typing.Literal["leaky_bucket_with_queue"]
+    """Strategy identifier, always "leaky_bucket_with_queue"."""
+
+    queue_size: int
+    """Number of entries currently in the queue."""
+
+    queue_cost: float
+    """Total cost of all entries in the queue."""
+
+    bucket_capacity: int
+    """Maximum capacity of the bucket (rate limit)."""
+
+    leak_rate_per_ms: float
+    """Rate at which the bucket leaks (requests per millisecond)."""
+
+    last_leak_ms: float
+    """Timestamp of the last leak calculation in milliseconds since epoch."""
 
 
 @dataclass(frozen=True)
@@ -129,7 +188,7 @@ class LeakyBucketStrategy:
 
     async def get_stat(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
-    ) -> StrategyStat:
+    ) -> StrategyStat[LeakyBucketStatMetadata]:
         """
         Get current statistics for the rate limit.
 
@@ -190,18 +249,18 @@ class LeakyBucketStrategy:
         else:
             wait_ms = 0.0
 
-        return StrategyStat(
+        return StrategyStat[LeakyBucketStatMetadata](
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
-            metadata={
-                "strategy": "leaky_bucket",
-                "bucket_level": level,
-                "bucket_capacity": limit,
-                "leak_rate_per_ms": leak_rate,
-                "last_leak_ms": last_leak_time,
-            },
+            metadata=LeakyBucketStatMetadata(
+                strategy="leaky_bucket",
+                bucket_level=level,
+                bucket_capacity=limit,
+                leak_rate_per_ms=leak_rate,
+                last_leak_ms=last_leak_time,
+            ),
         )
 
 
@@ -350,7 +409,7 @@ class LeakyBucketWithQueueStrategy:
 
     async def get_stat(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
-    ) -> StrategyStat:
+    ) -> StrategyStat[LeakyBucketWithQueueStatMetadata]:
         """
         Get current statistics for the rate limit.
 
@@ -432,17 +491,17 @@ class LeakyBucketWithQueueStrategy:
         else:
             wait_ms = 0.0
 
-        return StrategyStat(
+        return StrategyStat[LeakyBucketWithQueueStatMetadata](
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
-            metadata={
-                "strategy": "leaky_bucket_with_queue",
-                "queue_size": len(simulated_queue),
-                "queue_cost": current_queue_cost,
-                "bucket_capacity": limit,
-                "leak_rate_per_ms": leak_rate,
-                "last_leak_ms": last_leak_time,
-            },
+            metadata=LeakyBucketWithQueueStatMetadata(
+                strategy="leaky_bucket_with_queue",
+                queue_size=len(simulated_queue),
+                queue_cost=current_queue_cost,
+                bucket_capacity=limit,
+                leak_rate_per_ms=leak_rate,
+                last_leak_ms=last_leak_time,
+            ),
         )

@@ -47,6 +47,7 @@ async def default_identifier(connection: HTTPConnection) -> typing.Any:
 async def connection_throttled(
     connection: HTTPConnection,
     wait_ms: WaitPeriod,
+    throttle: typing.Any,
     context: typing.Mapping[str, typing.Any],
 ) -> typing.NoReturn:
     """
@@ -54,6 +55,8 @@ async def connection_throttled(
 
     :param connection: The HTTP connection
     :param wait_ms: The wait period in milliseconds before the next connection can be made
+    :param throttle: The throttle instance that triggered the throttling
+    :param context: Additional context for the throttling event
     :raises ConnectionThrottled: Always raises this exception to indicate throttling
     """
     wait_seconds = math.ceil(wait_ms / 1000)
@@ -204,7 +207,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         namespace: str,
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[HTTPConnectionT]
+            ConnectionThrottledHandler[HTTPConnectionT, typing.Any]
         ] = None,
         persistent: bool = False,
         on_error: typing.Union[

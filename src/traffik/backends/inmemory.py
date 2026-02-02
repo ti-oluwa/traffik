@@ -114,7 +114,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         namespace: str = "inmemory",
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[HTTPConnectionT]
+            ConnectionThrottledHandler[HTTPConnectionT, typing.Any]
         ] = None,
         persistent: bool = False,
         on_error: typing.Union[

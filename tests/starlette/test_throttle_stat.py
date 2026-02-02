@@ -453,6 +453,4 @@ async def test_throttle_stat_fields(inmemory_backend: InMemoryBackend) -> None:
             assert data["hits_remaining_type"] in ["int", "float"], (
                 "hits_remaining should be numeric"
             )
-            assert data["wait_ms_type"] in ["int", "float"], (
-                "wait_ms should be numeric"
-            )
+            assert data["wait_ms_type"] in ["int", "float"], "wait_ms should be numeric"

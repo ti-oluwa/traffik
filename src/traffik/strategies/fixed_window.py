@@ -1,13 +1,37 @@
 """Fixed Window rate limiting strategy implementation."""
 
+import typing
 from dataclasses import dataclass, field
+
+from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import time
 
-__all__ = ["FixedWindowStrategy"]
+__all__ = ["FixedWindowStrategy", "FixedWindowStatMetadata"]
+
+
+class FixedWindowStatMetadata(TypedDict):
+    """
+    Metadata for `FixedWindowStrategy` statistics.
+
+    The fixed window strategy divides time into fixed intervals and counts
+    requests within each window.
+    """
+
+    strategy: typing.Literal["fixed_window"]
+    """Strategy identifier, always "fixed_window"."""
+
+    window_start_ms: float
+    """Start timestamp of the current window in milliseconds since epoch."""
+
+    window_end_ms: float
+    """End timestamp of the current window in milliseconds since epoch."""
+
+    current_count: int
+    """Number of requests (weighted by cost) in the current window."""
 
 
 @dataclass(frozen=True)
@@ -143,7 +167,7 @@ class FixedWindowStrategy:
 
     async def get_stat(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
-    ) -> StrategyStat:
+    ) -> StrategyStat[FixedWindowStatMetadata]:
         """
         Get current statistics for the rate limit.
 
@@ -206,10 +230,10 @@ class FixedWindowStrategy:
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
-            metadata={
-                "strategy": "fixed_window",
-                "window_start_ms": current_window_start,
-                "window_end_ms": window_end_ms,
-                "current_count": counter,
-            },
+            metadata=FixedWindowStatMetadata(
+                strategy="fixed_window",
+                window_start_ms=current_window_start,
+                window_end_ms=window_end_ms,
+                current_count=counter,
+            ),
         )

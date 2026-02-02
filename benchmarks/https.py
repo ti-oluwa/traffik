@@ -2,9 +2,9 @@
 Comprehensive benchmarks comparing Traffik and SlowAPI rate limiting libraries.
 
 Usage:
-    python benchmarks/comparison.py --help
-    python benchmarks/comparison.py --traffik-backend redis --traffik-strategy sliding-window-counter
-    python benchmarks/comparison.py --scenarios low,high,burst --iterations 3
+    python benchmarks/https.py --help
+    python benchmarks/https.py --traffik-backend redis --traffik-strategy sliding-window-counter
+    python benchmarks/https.py --scenarios low,high,burst --iterations 3
 """
 
 import argparse

@@ -2157,25 +2157,25 @@ You can run benchmarks yourself to verify results on your hardware:
 
 ```bash
 # HTTP comparison with InMemory backend
-uv run python benchmarks/comparison.py --scenarios low,high,burst,sustained --iterations 3
+uv run python benchmarks/https.py --scenarios low,high,burst,sustained --iterations 3
 
 # With Redis backend
-uv run python benchmarks/comparison.py --traffik-backend redis --slowapi-backend redis \
+uv run python benchmarks/https.py --traffik-backend redis --slowapi-backend redis \
     --traffik-redis-url redis://localhost:6379/0 --slowapi-redis-url redis://localhost:6379/0
 
 # With Memcached backend  
-uv run python benchmarks/comparison.py --traffik-backend memcached --slowapi-backend memcached \
+uv run python benchmarks/https.py --traffik-backend memcached --slowapi-backend memcached \
     --traffik-memcached-url memcached://localhost:11211 --slowapi-memcached-url memcached://localhost:11211
 
 # With sliding-window-counter strategy
-uv run python benchmarks/comparison.py --traffik-strategy sliding-window-counter \
+uv run python benchmarks/https.py --traffik-strategy sliding-window-counter \
     --slowapi-strategy sliding-window-counter
 
 # WebSocket benchmarks
 uv run python benchmarks/websockets.py --scenarios low,high,burst,sustained,concurrent --iterations 3
 
 # See all options
-uv run python benchmarks/comparison.py --help
+uv run python benchmarks/https.py --help
 uv run python benchmarks/websockets.py --help
 ```
 

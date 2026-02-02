@@ -64,7 +64,7 @@ class SlidingWindowLogStrategy:
     ```
     """
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
     """Configuration for backend locking during log updates."""
 
     async def __call__(
@@ -166,18 +166,28 @@ class SlidingWindowLogStrategy:
         hits_remaining = max(rate.limit - current_cost_sum, 0.0)
 
         # If over limit, calculate wait time
+        oldest_timestamp = None
         if current_cost_sum > rate.limit:
             oldest_timestamp = min(ts for ts, _ in valid_entries)
             wait_ms = (oldest_timestamp + window_duration_ms) - now
             wait_ms = max(wait_ms, 0.0)
         else:
             wait_ms = 0.0
+            if valid_entries:
+                oldest_timestamp = min(ts for ts, _ in valid_entries)
 
         return StrategyStat(
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
+            metadata={
+                "strategy": "sliding_window_log",
+                "window_start_ms": window_start,
+                "entry_count": len(valid_entries),
+                "current_cost_sum": current_cost_sum,
+                "oldest_entry_ms": oldest_timestamp,
+            },
         )
 
 
@@ -242,7 +252,7 @@ class SlidingWindowCounterStrategy:
     ```
     """
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
     """Configuration for backend locking during counter updates."""
 
     async def __call__(
@@ -375,4 +385,12 @@ class SlidingWindowCounterStrategy:
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
+            metadata={
+                "strategy": "sliding_window_counter",
+                "current_window_id": current_window_id,
+                "current_count": current_count,
+                "previous_count": previous_count,
+                "overlap_percentage": overlap_percentage,
+                "weighted_count": weighted_count,
+            },
         )

@@ -62,7 +62,6 @@ test = [
 dev = [
     "bandit>=1.7.10",
     "mypy>=1.14.1",
-    "orjson>=3.11.3",
     "pytest-watch>=4.2.0",
     "ruff>=0.12.1",
     "traffik[test]",
@@ -134,7 +133,6 @@ mypy_path = "src"
 dev = [
     "bandit>=1.7.10",
     "mypy>=1.14.1",
-    "orjson>=3.11.3",
     "pytest-watch>=4.2.0",
     "ruff>=0.12.1",
     "traffik[test]",

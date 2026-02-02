@@ -66,7 +66,7 @@ class LeakyBucketStrategy:
     ```
     """
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
     """Configuration for the lock used during rate limit checks."""
 
     async def __call__(
@@ -195,6 +195,13 @@ class LeakyBucketStrategy:
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
+            metadata={
+                "strategy": "leaky_bucket",
+                "bucket_level": level,
+                "bucket_capacity": limit,
+                "leak_rate_per_ms": leak_rate,
+                "last_leak_ms": last_leak_time,
+            },
         )
 
 
@@ -255,7 +262,7 @@ class LeakyBucketWithQueueStrategy:
     ```
     """
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
     """Configuration for the lock used during rate limit checks."""
 
     async def __call__(
@@ -430,4 +437,12 @@ class LeakyBucketWithQueueStrategy:
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
+            metadata={
+                "strategy": "leaky_bucket_with_queue",
+                "queue_size": len(simulated_queue),
+                "queue_cost": current_queue_cost,
+                "bucket_capacity": limit,
+                "leak_rate_per_ms": leak_rate,
+                "last_leak_ms": last_leak_time,
+            },
         )

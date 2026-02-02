@@ -63,7 +63,7 @@ class FixedWindowStrategy:
     ```
     """
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
 
     async def __call__(
@@ -200,9 +200,16 @@ class FixedWindowStrategy:
         else:
             wait_ms = 0.0
 
+        window_end_ms = current_window_start + window_duration_ms
         return StrategyStat(
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
+            metadata={
+                "strategy": "fixed_window",
+                "window_start_ms": current_window_start,
+                "window_end_ms": window_end_ms,
+                "current_count": counter,
+            },
         )

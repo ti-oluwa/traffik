@@ -10,7 +10,7 @@ from enum import IntEnum
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import LockConfig, Stringable, WaitPeriod
+from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
@@ -76,7 +76,7 @@ class TieredRateStrategy:
     default_tier: str = "free"
     """Default tier if not specified in key"""
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
     marker: str = "tier:"
     """
@@ -144,6 +144,64 @@ class TieredRateStrategy:
 
         return 0.0
 
+    async def get_stat(
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> StrategyStat:
+        """
+        Get current statistics for the rate limit.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: `StrategyStat` with current hits remaining and wait time.
+        """
+        if rate.unlimited:
+            return StrategyStat(
+                key=key,
+                rate=rate,
+                hits_remaining=float("inf"),
+                wait_ms=0.0,
+            )
+
+        tier = self._get_tier(str(key))
+        multiplier = self.tier_multipliers.get(tier, 1.0)
+        effective_limit = int(rate.limit * multiplier)
+
+        now = time() * 1000
+        window_duration_ms = rate.expire
+        current_window = int(now // window_duration_ms)
+
+        full_key = backend.get_key(str(key))
+        counter_key = f"{full_key}:tiered:{tier}:{current_window}"
+
+        counter_str = await backend.get(counter_key)
+        count = int(counter_str) if counter_str else 0
+
+        hits_remaining = max(effective_limit - count, 0)
+        if count > effective_limit:
+            time_in_window = now % window_duration_ms
+            wait_ms = window_duration_ms - time_in_window
+            wait_ms = max(wait_ms, 0.0)
+        else:
+            wait_ms = 0.0
+
+        window_start_ms = current_window * window_duration_ms
+        return StrategyStat(
+            key=key,
+            rate=rate,
+            hits_remaining=hits_remaining,
+            wait_ms=wait_ms,
+            metadata={
+                "strategy": "tiered_rate",
+                "tier": tier,
+                "tier_multiplier": multiplier,
+                "effective_limit": effective_limit,
+                "current_count": count,
+                "window_id": current_window,
+                "window_start_ms": window_start_ms,
+            },
+        )
+
 
 @dataclass(frozen=True)
 class AdaptiveThrottleStrategy:
@@ -194,7 +252,7 @@ class AdaptiveThrottleStrategy:
     min_limit_ratio: float = 0.3
     """Never go below this ratio of base limit"""
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
 
     def __post_init__(self) -> None:
@@ -270,6 +328,64 @@ class AdaptiveThrottleStrategy:
                 return max(wait_ms, 0.0)
             return 0.0
 
+    async def get_stat(
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> StrategyStat:
+        """
+        Get current statistics for the rate limit.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: `StrategyStat` with current hits remaining and wait time.
+        """
+        if rate.unlimited:
+            return StrategyStat(
+                key=key,
+                rate=rate,
+                hits_remaining=float("inf"),
+                wait_ms=0.0,
+            )
+
+        now = time() * 1000
+        window_duration_ms = rate.expire
+        current_window = int(now // window_duration_ms)
+
+        full_key = backend.get_key(str(key))
+        counter_key = f"{full_key}:adaptive:{current_window}:counter"
+        limit_key = f"{full_key}:adaptive:{current_window}:limit"
+
+        counter_str, limit_str = await backend.multi_get(counter_key, limit_key)
+        count = int(counter_str) if counter_str else 0
+        effective_limit = float(limit_str) if limit_str else float(rate.limit)
+
+        hits_remaining = max(effective_limit - count, 0.0)
+        load = count / effective_limit if effective_limit > 0 else 0.0
+
+        if count > effective_limit:
+            time_in_window = now % window_duration_ms
+            wait_ms = window_duration_ms - time_in_window
+            wait_ms = max(wait_ms, 0.0)
+        else:
+            wait_ms = 0.0
+
+        window_start_ms = current_window * window_duration_ms
+        return StrategyStat(
+            key=key,
+            rate=rate,
+            hits_remaining=hits_remaining,
+            wait_ms=wait_ms,
+            metadata={
+                "strategy": "adaptive_throttle",
+                "effective_limit": effective_limit,
+                "current_count": count,
+                "current_load": load,
+                "load_threshold": self.load_threshold,
+                "window_id": current_window,
+                "window_start_ms": window_start_ms,
+            },
+        )
+
 
 class Priority(IntEnum):
     """Request priority levels"""
@@ -329,7 +445,7 @@ class PriorityQueueStrategy:
     max_queue_size: int = 1000
     """Maximum queue size (prevents memory issues)"""
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
 
     marker: str = "priority:"
@@ -418,6 +534,74 @@ class PriorityQueueStrategy:
             await backend.set(queue_key, dump_data(queue), expire=ttl_seconds)
             return 0.0
 
+    async def get_stat(
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> StrategyStat:
+        """
+        Get current statistics for the rate limit.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: `StrategyStat` with current hits remaining and wait time.
+        """
+        if rate.unlimited:
+            return StrategyStat(
+                key=key,
+                rate=rate,
+                hits_remaining=float("inf"),
+                wait_ms=0.0,
+            )
+
+        now = time() * 1000
+        priority = self._get_priority(str(key))
+        full_key = backend.get_key(str(key))
+        queue_key = f"{full_key}:priority:queue"
+
+        queue_json = await backend.get(queue_key)
+        if queue_json:
+            try:
+                queue = load_data(queue_json)
+            except MsgPackDecodeError:
+                queue = []
+        else:
+            queue = []
+
+        # Remove expired entries
+        cutoff = now - rate.expire
+        queue = [[ts, pri, c] for ts, pri, c in queue if ts > cutoff]
+
+        # Calculate total cost of higher/equal priority requests
+        higher_priority_cost = sum(c for _, pri, c in queue if pri >= priority)
+        total_cost = sum(c for _, _, c in queue)
+
+        hits_remaining = max(rate.limit - higher_priority_cost, 0.0)
+
+        if higher_priority_cost >= rate.limit:
+            high_priority_entries = [ts for ts, pri, _ in queue if pri >= priority]
+            if high_priority_entries:
+                oldest = min(high_priority_entries)
+                wait_ms = rate.expire - (now - oldest)
+                wait_ms = max(wait_ms, 0.0)
+            else:
+                wait_ms = rate.expire
+        else:
+            wait_ms = 0.0
+
+        return StrategyStat(
+            key=key,
+            rate=rate,
+            hits_remaining=hits_remaining,
+            wait_ms=wait_ms,
+            metadata={
+                "strategy": "priority_queue",
+                "priority": int(priority),
+                "queue_size": len(queue),
+                "total_cost_in_queue": total_cost,
+                "higher_priority_cost": higher_priority_cost,
+            },
+        )
+
 
 @dataclass(frozen=True)
 class QuotaWithRolloverStrategy:
@@ -462,7 +646,7 @@ class QuotaWithRolloverStrategy:
     max_rollover: int = 500
     """Maximum requests that can roll over"""
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
 
     def __post_init__(self) -> None:
@@ -522,6 +706,64 @@ class QuotaWithRolloverStrategy:
             # Increment usage
             await backend.increment_with_ttl(used_key, amount=cost, ttl=ttl_seconds)
             return 0.0
+
+    async def get_stat(
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> StrategyStat:
+        """
+        Get current statistics for the rate limit.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: `StrategyStat` with current hits remaining and wait time.
+        """
+        if rate.unlimited:
+            return StrategyStat(
+                key=key,
+                rate=rate,
+                hits_remaining=float("inf"),
+                wait_ms=0.0,
+            )
+
+        now = time() * 1000
+        window_duration_ms = rate.expire
+        current_period = int(now // window_duration_ms)
+
+        full_key = backend.get_key(str(key))
+        used_key = f"{full_key}:quota:{current_period}:used"
+        rollover_key = f"{full_key}:quota:{current_period}:rollover"
+
+        used_str, rollover_str = await backend.multi_get(used_key, rollover_key)
+        used = int(used_str) if used_str else 0
+        rollover = int(rollover_str) if rollover_str else 0
+
+        effective_limit = rate.limit + rollover
+        hits_remaining = max(effective_limit - used, 0)
+
+        if used > effective_limit:
+            time_in_period = now % window_duration_ms
+            wait_ms = window_duration_ms - time_in_period
+            wait_ms = max(wait_ms, 0.0)
+        else:
+            wait_ms = 0.0
+
+        period_start_ms = current_period * window_duration_ms
+        return StrategyStat(
+            key=key,
+            rate=rate,
+            hits_remaining=hits_remaining,
+            wait_ms=wait_ms,
+            metadata={
+                "strategy": "quota_with_rollover",
+                "base_limit": rate.limit,
+                "rollover_amount": rollover,
+                "effective_limit": effective_limit,
+                "used": used,
+                "period_id": current_period,
+                "period_start_ms": period_start_ms,
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -587,7 +829,7 @@ class TimeOfDayStrategy:
     timezone_offset: int = 0
     """Timezone offset from UTC in hours. Time offset can range from -12 to +14."""
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
 
     def __post_init__(self) -> None:
@@ -649,6 +891,68 @@ class TimeOfDayStrategy:
             return max(wait_ms, 0.0)
         return 0.0
 
+    async def get_stat(
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> StrategyStat:
+        """
+        Get current statistics for the rate limit.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: `StrategyStat` with current hits remaining and wait time.
+        """
+        if rate.unlimited:
+            return StrategyStat(
+                key=key,
+                rate=rate,
+                hits_remaining=float("inf"),
+                wait_ms=0.0,
+            )
+
+        # Use wall clock time for time-of-day calculations
+        now = pytime.time() * 1000
+        window_duration_ms = rate.expire
+        current_window = int(now // window_duration_ms)
+
+        multiplier = self._get_current_multiplier(now)
+        effective_limit = int(rate.limit * multiplier)
+
+        full_key = backend.get_key(str(key))
+        counter_key = f"{full_key}:tod:{current_window}:counter"
+
+        counter_str = await backend.get(counter_key)
+        count = int(counter_str) if counter_str else 0
+
+        hits_remaining = max(effective_limit - count, 0)
+        if count > effective_limit:
+            time_in_window = now % window_duration_ms
+            wait_ms = window_duration_ms - time_in_window
+            wait_ms = max(wait_ms, 0.0)
+        else:
+            wait_ms = 0.0
+
+        # Calculate current hour for metadata
+        hours_since_epoch = (now / 1000 / 3600) + self.timezone_offset
+        hour_of_day = int(hours_since_epoch % 24)
+
+        window_start_ms = current_window * window_duration_ms
+        return StrategyStat(
+            key=key,
+            rate=rate,
+            hits_remaining=hits_remaining,
+            wait_ms=wait_ms,
+            metadata={
+                "strategy": "time_of_day",
+                "hour_of_day": hour_of_day,
+                "time_multiplier": multiplier,
+                "effective_limit": effective_limit,
+                "current_count": count,
+                "window_id": current_window,
+                "window_start_ms": window_start_ms,
+            },
+        )
+
 
 @dataclass(frozen=True)
 class CostBasedTokenBucketStrategy:
@@ -695,7 +999,7 @@ class CostBasedTokenBucketStrategy:
     min_refill_rate: float = 0.5
     """Minimum refill rate multiplier (prevents starvation)"""
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
 
     async def __call__(
@@ -779,6 +1083,93 @@ class CostBasedTokenBucketStrategy:
             await backend.set(state_key, dump_data(new_state), expire=ttl_seconds)
             return wait_ms
 
+    async def get_stat(
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> StrategyStat:
+        """
+        Get current statistics for the rate limit.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: `StrategyStat` with current hits remaining and wait time.
+        """
+        if rate.unlimited:
+            return StrategyStat(
+                key=key,
+                rate=rate,
+                hits_remaining=float("inf"),
+                wait_ms=0.0,
+            )
+
+        now = time() * 1000
+        refill_period_ms = rate.expire
+        base_refill_rate = rate.limit / refill_period_ms
+        capacity = self.burst_size if self.burst_size is not None else rate.limit
+
+        full_key = backend.get_key(str(key))
+        state_key = f"{full_key}:costbucket:state"
+        history_key = f"{full_key}:costbucket:history"
+
+        state_json, history_json = await backend.multi_get(state_key, history_key)
+
+        if state_json:
+            try:
+                state = load_data(state_json)
+                tokens = float(state["tokens"])
+                last_refill = float(state["last_refill"])
+            except (MsgPackDecodeError, KeyError, ValueError):
+                tokens = float(capacity)
+                last_refill = now
+        else:
+            tokens = float(capacity)
+            last_refill = now
+
+        if history_json:
+            try:
+                history = load_data(history_json)
+            except MsgPackDecodeError:
+                history = []
+        else:
+            history = []
+
+        # Calculate effective refill rate
+        if history:
+            avg_cost = sum(history) / len(history)
+            cost_multiplier = max(self.min_refill_rate, 1.0 / avg_cost)
+            effective_refill_rate = base_refill_rate * cost_multiplier
+        else:
+            avg_cost = 1.0
+            effective_refill_rate = base_refill_rate
+
+        # Refill tokens
+        time_elapsed = now - last_refill
+        tokens_to_add = effective_refill_rate * time_elapsed
+        tokens = min(tokens + tokens_to_add, float(capacity))
+
+        hits_remaining = max(tokens, 0.0)
+        if tokens < 0:
+            wait_ms = abs(tokens) / effective_refill_rate
+        else:
+            wait_ms = 0.0
+
+        return StrategyStat(
+            key=key,
+            rate=rate,
+            hits_remaining=hits_remaining,
+            wait_ms=wait_ms,
+            metadata={
+                "strategy": "cost_based_token_bucket",
+                "tokens": tokens,
+                "capacity": capacity,
+                "average_cost": avg_cost,
+                "cost_history_size": len(history),
+                "base_refill_rate_per_ms": base_refill_rate,
+                "effective_refill_rate_per_ms": effective_refill_rate,
+                "last_refill_ms": last_refill,
+            },
+        )
+
 
 @dataclass(frozen=True)
 class GCRAStrategy:
@@ -829,7 +1220,7 @@ class GCRAStrategy:
     burst_tolerance_ms: float = 0.0
     """How much burst to tolerate (0 = perfectly smooth). Can be any non-negative value."""
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
 
     def __post_init__(self) -> None:
@@ -859,13 +1250,70 @@ class GCRAStrategy:
 
             # Check if request is conformant
             if now >= (tat - self.burst_tolerance_ms):
-                # Allowed - update TAT
+                # Allowed request. Update TAT
                 await backend.set(tat_key, str(new_tat), expire=ttl_seconds)
                 return 0.0
 
             # Denied. Calculate wait time
             wait_ms = tat - now
             return max(wait_ms, 0.0)
+
+    async def get_stat(
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> StrategyStat:
+        """
+        Get current statistics for the rate limit.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: `StrategyStat` with current hits remaining and wait time.
+        """
+        if rate.unlimited:
+            return StrategyStat(
+                key=key,
+                rate=rate,
+                hits_remaining=float("inf"),
+                wait_ms=0.0,
+            )
+
+        now = time() * 1000
+        emission_interval = rate.expire / rate.limit
+
+        full_key = backend.get_key(str(key))
+        tat_key = f"{full_key}:gcra:tat"
+
+        tat_str = await backend.get(tat_key)
+        tat = float(tat_str) if tat_str else now
+
+        # Check if request would be conformant
+        if now >= (tat - self.burst_tolerance_ms):
+            # Would be allowed, calculate how many requests could be made
+            conformant = True
+            # Time ahead of schedule = how much buffer we have
+            time_ahead = now - (tat - self.burst_tolerance_ms)
+            hits_remaining = max(time_ahead / emission_interval, 0.0)
+            wait_ms = 0.0
+        else:
+            # Would be denied
+            conformant = False
+            hits_remaining = 0.0
+            wait_ms = tat - now
+            wait_ms = max(wait_ms, 0.0)
+
+        return StrategyStat(
+            key=key,
+            rate=rate,
+            hits_remaining=hits_remaining,
+            wait_ms=wait_ms,
+            metadata={
+                "strategy": "gcra",
+                "tat_ms": tat,
+                "emission_interval_ms": emission_interval,
+                "burst_tolerance_ms": self.burst_tolerance_ms,
+                "conformant": conformant,
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -905,7 +1353,7 @@ class DistributedFairnessStrategy:
     **Scenario:**
     - 3 instances, 900 req/min limit
     - Each gets: 300 req/min quota
-    - Instance A only uses 200 → donates 100
+    - Instance A only uses 200 and donates 100
     - Instances B & C can use extra capacity
 
     **Storage:**
@@ -933,12 +1381,7 @@ class DistributedFairnessStrategy:
     0 ms is not allowed.
     """
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=0.2,
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]
 
     def __post_init__(self) -> None:
         if not self.instance_id:
@@ -1028,6 +1471,95 @@ class DistributedFairnessStrategy:
             wait_ms = self.fairness_window_ms - time_in_window
             return max(wait_ms, 0.0)
 
+    async def get_stat(
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> StrategyStat:
+        """
+        Get current statistics for the rate limit.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: `StrategyStat` with current hits remaining and wait time.
+        """
+        if rate.unlimited:
+            return StrategyStat(
+                key=key,
+                rate=rate,
+                hits_remaining=float("inf"),
+                wait_ms=0.0,
+            )
+
+        now = time() * 1000
+        current_window = int(now // self.fairness_window_ms)
+
+        full_key = backend.get_key(str(key))
+        instances_key = f"{full_key}:dfq:instances"
+        usage_key = f"{full_key}:dfq:usage:{self.instance_id}:{current_window}"
+        deficit_key = f"{full_key}:dfq:deficit:{self.instance_id}:{current_window}"
+        global_usage_key = f"{full_key}:dfq:global:{current_window}"
+
+        (
+            instances_json,
+            usage_str,
+            deficit_str,
+            global_usage_str,
+        ) = await backend.multi_get(
+            instances_key, usage_key, deficit_key, global_usage_key
+        )
+
+        # Parse instances
+        if instances_json:
+            try:
+                instances = load_data(instances_json)
+            except MsgPackDecodeError:
+                instances = {}
+        else:
+            instances = {}
+
+        # Calculate fair share
+        total_weight = (
+            sum(data.get("weight", 1.0) for data in instances.values())
+            or self.instance_weight
+        )
+        fair_share = int((rate.limit * self.instance_weight) / total_weight)
+
+        usage = int(usage_str) if usage_str else 0
+        deficit = int(deficit_str) if deficit_str else 0
+        global_usage = int(global_usage_str) if global_usage_str else 0
+
+        quantum = fair_share + deficit
+        instance_remaining = max(quantum - usage, 0)
+        global_remaining = max(rate.limit - global_usage, 0)
+        hits_remaining = min(instance_remaining, global_remaining)
+
+        if usage >= quantum or global_usage >= rate.limit:
+            time_in_window = now % self.fairness_window_ms
+            wait_ms = self.fairness_window_ms - time_in_window
+            wait_ms = max(wait_ms, 0.0)
+        else:
+            wait_ms = 0.0
+
+        window_start_ms = current_window * self.fairness_window_ms
+        return StrategyStat(
+            key=key,
+            rate=rate,
+            hits_remaining=hits_remaining,
+            wait_ms=wait_ms,
+            metadata={
+                "strategy": "distributed_fairness",
+                "instance_id": self.instance_id,
+                "instance_weight": self.instance_weight,
+                "fair_share": fair_share,
+                "quantum": quantum,
+                "instance_usage": usage,
+                "global_usage": global_usage,
+                "deficit": deficit,
+                "active_instances": len(instances),
+                "window_start_ms": window_start_ms,
+            },
+        )
+
 
 @dataclass(frozen=True)
 class GeographicDistributionStrategy:
@@ -1088,7 +1620,7 @@ class GeographicDistributionStrategy:
     default_region: str = "default"
     """Fallback region if not specified"""
 
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
 
     marker: str = "region:"
@@ -1168,3 +1700,82 @@ class GeographicDistributionStrategy:
             time_in_window = now % window_duration_ms
             wait_ms = window_duration_ms - time_in_window
             return max(wait_ms, 0.0)
+
+    async def get_stat(
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+    ) -> StrategyStat:
+        """
+        Get current statistics for the rate limit.
+
+        :param key: The throttling key (e.g., user ID, IP address).
+        :param rate: The rate limit definition.
+        :param backend: The throttle backend instance.
+        :return: `StrategyStat` with current hits remaining and wait time.
+        """
+        if rate.unlimited:
+            return StrategyStat(
+                key=key,
+                rate=rate,
+                hits_remaining=float("inf"),
+                wait_ms=0.0,
+            )
+
+        now = time() * 1000
+        window_duration_ms = rate.expire
+        current_window = int(now // window_duration_ms)
+
+        region = self._get_region(str(key))
+        multiplier = self.region_multipliers.get(
+            region, self.region_multipliers.get("default", 1.0)
+        )
+        region_limit = int(rate.limit * multiplier)
+
+        full_key = backend.get_key(str(key))
+        region_key = f"{full_key}:geo:{region}:{current_window}"
+        spillover_key = f"{full_key}:geo:spillover:{current_window}"
+
+        region_count_str, spillover_count_str = await backend.multi_get(
+            region_key, spillover_key
+        )
+        region_count = int(region_count_str) if region_count_str else 0
+        spillover_count = int(spillover_count_str) if spillover_count_str else 0
+
+        # Calculate remaining hits
+        region_remaining = max(region_limit - region_count, 0)
+        if self.allow_spillover and region_remaining <= 0:
+            spillover_capacity = max(0, rate.limit - region_count)
+            spillover_remaining = max(spillover_capacity - spillover_count, 0)
+            hits_remaining = spillover_remaining
+        else:
+            hits_remaining = region_remaining
+
+        if region_count > region_limit:
+            if not self.allow_spillover or spillover_count > (
+                rate.limit - region_count
+            ):
+                time_in_window = now % window_duration_ms
+                wait_ms = window_duration_ms - time_in_window
+                wait_ms = max(wait_ms, 0.0)
+            else:
+                wait_ms = 0.0
+        else:
+            wait_ms = 0.0
+
+        window_start_ms = current_window * window_duration_ms
+        return StrategyStat(
+            key=key,
+            rate=rate,
+            hits_remaining=hits_remaining,
+            wait_ms=wait_ms,
+            metadata={
+                "strategy": "geographic_distribution",
+                "region": region,
+                "region_multiplier": multiplier,
+                "region_limit": region_limit,
+                "region_count": region_count,
+                "spillover_count": spillover_count,
+                "allow_spillover": self.allow_spillover,
+                "window_id": current_window,
+                "window_start_ms": window_start_ms,
+            },
+        )

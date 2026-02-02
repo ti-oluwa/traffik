@@ -120,7 +120,7 @@ class _AsyncRedisLock:
             # Add 1 second buffer to blocking timeout
             self._ttl = math.ceil(blocking_timeout) + 1
         else:
-            self._ttl = None
+            self._ttl = None  # type: ignore[assignment]
 
     def _get_task_locks(self) -> typing.Dict[str, tuple[int, int]]:
         """
@@ -621,7 +621,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     async def _ensure_lock_scripts_shas(self) -> None:
         """Ensure the lock Lua scripts are registered into the shared dict."""
         if self._lock_script_shas is None and self.connection is not None:
-            self._lock_script_shas = _LockScriptSHAs(
+            self._lock_script_shas = dict(  # type: ignore[assignment]
                 acquire=await _AsyncRedisLock._load_acquire_script(self.connection),
                 release=await _AsyncRedisLock._load_release_script(self.connection),
             )
@@ -635,12 +635,11 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
 
         if not self._use_redlock:
             # Ensure scripts are loaded (normally done in initialize(), but to guard against edge cases)
-            await self._ensure_lock_scripts_shas()
+            # await self._ensure_lock_scripts_shas()
             return _AsyncRedisLock(
                 name,
                 redis=self.connection,
-                # Shared dict allows lock to update SHAs on NOSCRIPT recovery
-                script_shas=self._lock_script_shas,  # type: ignore
+                script_shas=self._lock_script_shas,  # type: ignore[arg-type]
                 ttl=self.lock_ttl,
                 blocking_timeout=self.lock_blocking_timeout,
             )

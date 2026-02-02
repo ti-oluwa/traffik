@@ -1031,10 +1031,9 @@ Strategies can override global settings:
 
 ```python
 from traffik.strategies import FixedWindowStrategy
-from traffik.types import LockConfig
 
 strategy = FixedWindowStrategy(
-    lock_config=LockConfig(
+    lock_config=dict(
         ttl=10.0,  # Override global TTL
         blocking=True,
         blocking_timeout=1.0,  # Override global timeout
@@ -1097,12 +1096,12 @@ Under high concurrency with locking strategies, you may experience:
    ```python
    # For high-throughput, fail fast
    strategy = FixedWindowStrategy(
-       lock_config=LockConfig(blocking=True, blocking_timeout=0.05)  # 50ms
+       lock_config=dict(blocking=True, blocking_timeout=0.05)  # 50ms
    )
    
    # For accuracy-critical, wait longer
    strategy = TokenBucketStrategy(
-       lock_config=LockConfig(blocking=True, blocking_timeout=1.0)  # 1s
+       lock_config=dict(blocking=True, blocking_timeout=1.0)  # 1s
    )
    ```
 
@@ -1111,7 +1110,7 @@ Under high concurrency with locking strategies, you may experience:
 
    ```python
    strategy = TokenBucketStrategy(
-       lock_config=LockConfig(blocking=False)  # Fail immediately if lock unavailable
+       lock_config=dict(blocking=False)  # Fail immediately if lock unavailable
    )
    ```
 
@@ -1141,7 +1140,7 @@ async def error_handler(
     - connection: `HTTPConnection` - HTTP connection
     - cost: int - Request cost
     - rate: `Rate` - Rate limit configuration
-    - context: Mapping[str, Any] - Context passed to throttle
+    - context: Optional[Mapping[str, Any]] - Context passed to throttle
     - backend: `ThrottleBackend` - Backend that failed
     - throttle: `Throttle` - Throttle instance
     """
@@ -1215,7 +1214,7 @@ throttle = HTTPThrottle(
 1. Primary backend fails
 2. Attempts throttling with fallback backend
 3. If fallback succeeds, returns its wait period
-4. If fallback fails, fails closed (`min_wait_period` or 1000ms wait)
+4. If fallback fails, then propagate the error
 
 #### Retry Handler
 

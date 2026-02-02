@@ -89,7 +89,7 @@ class TokenBucketStrategy:
 
     burst_size: typing.Optional[int] = None
     """Maximum bucket capacity (positive tokens). If None, defaults to `rate.limit`."""
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
 
     async def __call__(
@@ -221,6 +221,13 @@ class TokenBucketStrategy:
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
+            metadata={
+                "strategy": "token_bucket",
+                "tokens": tokens,
+                "capacity": capacity,
+                "refill_rate_per_ms": refill_rate,
+                "last_refill_ms": last_refill,
+            },
         )
 
 
@@ -315,7 +322,7 @@ class TokenBucketWithDebtStrategy:
     """Maximum bucket capacity (positive tokens). If None, defaults to `rate.limit`."""
     max_debt: int = 0
     """Maximum negative tokens allowed (overdraft limit). Set to 0 for standard behavior."""
-    lock_config: LockConfig = field(default_factory=LockConfig)
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
 
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
@@ -445,4 +452,13 @@ class TokenBucketWithDebtStrategy:
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
+            metadata={
+                "strategy": "token_bucket_with_debt",
+                "tokens": tokens,
+                "capacity": capacity,
+                "max_debt": self.max_debt,
+                "current_debt": max(-tokens, 0.0) if tokens < 0 else 0.0,
+                "refill_rate_per_ms": refill_rate,
+                "last_refill_ms": last_refill,
+            },
         )

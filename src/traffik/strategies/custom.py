@@ -527,7 +527,7 @@ class PriorityQueueStrategy:
                     key=lambda x: (
                         x[1],
                         -x[0],
-                    ),  # Sort by: (priority DESC, timestamp DESC)
+                    ),  # Sort by priority descending & timestamp descending order
                 )
 
             # Save updated queue

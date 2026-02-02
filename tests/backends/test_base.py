@@ -1,12 +1,8 @@
-import asyncio
 
 import pytest
-from starlette.applications import Starlette
 
 from traffik.backends.base import (
-    BACKEND_STATE_KEY,
     ThrottleBackend,
-    get_throttle_backend,
 )
 
 

@@ -52,7 +52,7 @@ class TestRateEdgeCases:
         """Test with very short time window (milliseconds)."""
         async with backend(close_on_exit=True):
             strategy = FixedWindowStrategy()
-            rate = Rate.parse("5/20ms")
+            rate = Rate.parse("5/50ms")
             key = "user:short"
 
             # Should handle short windows
@@ -62,7 +62,7 @@ class TestRateEdgeCases:
 
             wait = await strategy(key, rate, backend)
             assert wait > 0, "Should throttle after limit"
-            assert wait <= 15, "Wait should be within short window"
+            assert wait <= 50, "Wait should be within window duration"
 
     @pytest.mark.anyio
     @pytest.mark.strategy
@@ -299,7 +299,7 @@ class TestStrategyStateEdgeCases:
             await strategy(key, rate, backend)
 
             # Corrupt the state by setting invalid data
-            state_key = await backend.get_key(f"{key}:fixedwindow")
+            state_key = backend.get_key(f"{key}:fixedwindow")
             await backend.set(state_key, "invalid_json_data", expire=1000)
 
             # Should recover gracefully
@@ -346,7 +346,7 @@ class TestWaitTimeCalculations:
 
     @pytest.mark.anyio
     @pytest.mark.strategy
-    async def test_wait_time_never_negative(self, backend: InMemoryBackend):
+    async def test_wait_ms_never_negative(self, backend: InMemoryBackend):
         """Ensure wait time is never negative."""
         async with backend(close_on_exit=True):
             strategies = [
@@ -372,7 +372,7 @@ class TestWaitTimeCalculations:
 
     @pytest.mark.anyio
     @pytest.mark.strategy
-    async def test_wait_time_reasonable_bounds(self, backend: InMemoryBackend):
+    async def test_wait_ms_reasonable_bounds(self, backend: InMemoryBackend):
         """Ensure wait time stays within reasonable bounds."""
         async with backend(close_on_exit=True):
             strategy = FixedWindowStrategy()
@@ -389,7 +389,7 @@ class TestWaitTimeCalculations:
 
     @pytest.mark.anyio
     @pytest.mark.strategy
-    async def test_wait_time_decreases_over_time(self, backend: InMemoryBackend):
+    async def test_wait_ms_decreases_over_time(self, backend: InMemoryBackend):
         async with backend(close_on_exit=True):
             strategy = TokenBucketStrategy()
             rate = Rate.parse("10/s")

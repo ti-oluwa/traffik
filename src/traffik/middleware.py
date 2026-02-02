@@ -2,6 +2,7 @@
 
 import re
 import typing
+import warnings
 
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
@@ -9,16 +10,18 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from typing_extensions import TypeAlias
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import ConfigurationError, build_exception_handler_getter
-from traffik.throttles import BaseThrottle
+from traffik.exceptions import ConfigurationError, _build_exception_handler_getter
+from traffik.throttles import Throttle
 from traffik.types import HTTPConnectionT, Matchable
 from traffik.utils import is_async_callable
 
-ThrottleHook: TypeAlias = typing.Callable[[HTTPConnectionT], typing.Awaitable[bool]]
+ThrottlePredicate: TypeAlias = typing.Callable[
+    [HTTPConnectionT], typing.Awaitable[bool]
+]
 """
 A type alias for a callable that takes an HTTP connection and returns a boolean.
 
-This is used as a hook to determine if the throttle should apply.
+This is used as a predicate to determine if the throttle should apply.
 """
 
 
@@ -42,7 +45,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
     from traffik.middleware import ThrottleMiddleware
 
     # Use a custom hook to use throttle for only premium users.
-    async def premium_user_hook(connection: HTTPConnection) -> bool:
+    async def is_premium_user(connection: HTTPConnection) -> bool:
         # Check if the user is a premium user
         return connection.headers.get("X-User-Tier") == "premium"
 
@@ -50,7 +53,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         HTTPThrottle(uid="...", rate="10/min"),
         path="/api/",
         methods={"GET", "POST"},
-        hook=premium_user_hook,
+        predicate=is_premium_user,
     )
 
     # Use the middleware throttle in your application
@@ -66,10 +69,11 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
 
     def __init__(
         self,
-        throttle: BaseThrottle[HTTPConnectionT],
+        throttle: Throttle[HTTPConnectionT],
         path: typing.Optional[Matchable] = None,
         methods: typing.Optional[typing.Iterable[str]] = None,
-        hook: typing.Optional[ThrottleHook[HTTPConnectionT]] = None,
+        hook: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
+        predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
     ) -> None:
         """
         Initialize the middleware throttle.
@@ -86,11 +90,24 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
 
         :param methods: A set of HTTP methods (e.g., 'GET', 'POST') to apply the throttle to.
             If None, the throttle applies to all methods.
-        :param hook: An optional callable that takes an HTTP connection and returns a boolean.
+        :param predicate: An optional callable that takes an HTTP connection and returns a boolean.
             If provided, the throttle will only apply if this hook returns True for the connection.
             This is useful for more complex conditions that cannot be expressed with just path and methods.
             It is run after checking the path and methods, so it should be used for more expensive checks.
+        :param hook: Deprecated alias for `predicate`. Use `predicate` instead.
         """
+        if hook is not None:
+            warnings.warn(
+                "`hook` parameter is deprecated and will be removed in future versions. "
+                "Use `predicate` instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if predicate is not None and hook is not None:
+            raise ConfigurationError(
+                "Cannot specify both `predicate` and `hook`. Use only `predicate`."
+            )
+
         self.throttle = throttle
 
         self.path: typing.Optional[re.Pattern[str]]
@@ -102,10 +119,15 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         if methods is None:
             self.methods = None
         else:
+            # Store both lowercase and uppercase versions.
+            # Although HTTP scope methods are typically uppercase
             self.methods = frozenset(
-                method.lower() for method in methods if isinstance(method, str)
+                m
+                for method in methods
+                if isinstance(method, str)
+                for m in (method.lower(), method.upper())
             )
-        self.hook = hook
+        self.predicate = predicate or hook
 
     async def __call__(self, connection: HTTPConnectionT) -> HTTPConnectionT:
         """
@@ -117,14 +139,13 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             a modified connection or raise a throttling exception.
         :raises: `HTTPException` if the connection exceeds rate limits.
         """
-        if (
-            self.methods is not None
-            and connection.scope["method"].lower() not in self.methods
-        ):
-            return connection
+        # Check methods first. Cheapest check is frozenset lookup
+        if self.methods is not None:
+            if connection.scope["method"] not in self.methods:
+                return connection
         if self.path is not None and not self.path.match(connection.scope["path"]):
             return connection
-        if self.hook is not None and not await self.hook(connection):
+        if self.predicate is not None and not await self.predicate(connection):
             return connection
 
         return await self.throttle(connection)
@@ -195,8 +216,10 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
             await self.app(scope, receive, send)
             return
 
-        connection = typing.cast(HTTPConnectionT, HTTPConnection(scope, receive))
-        if self.backend is None:
+        connection = HTTPConnection(scope, receive)
+        # Resolve backend once and cache it
+        backend = self.backend
+        if backend is None:
             backend = get_throttle_backend(connection.app)
             if backend is None:
                 raise ConfigurationError("No throttle backend configured.")
@@ -205,10 +228,10 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
         # The backend context must be not closed on context exit.
         # It must also be persistent to ensure throttles can maintain
         # state across multiple connections.
-        async with self.backend(close_on_exit=False, persistent=True):
+        async with backend(close_on_exit=False, persistent=True):
             for throttle in self.middleware_throttles:
                 try:
-                    connection = await throttle(connection)
+                    connection = await throttle(connection)  # type: ignore[arg-type]
                 except Exception as exc:
                     # This approach allows custom throttles to raise custom exceptions
                     # that will be handled if they register an exception handler with
@@ -216,14 +239,14 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
                     # `ServerErrorMiddleware` will properly handle it.
                     exc_handler = self.get_exception_handler
                     if exc_handler is None:
-                        exc_handler = build_exception_handler_getter(connection.app)
+                        exc_handler = _build_exception_handler_getter(connection.app)
                         # Cache the exception handler getter for future use
                         self.get_exception_handler = exc_handler  # type: ignore[assignment]
 
                     handler = exc_handler(exc)
                     if handler is not None:
                         if is_async_callable(handler):
-                            response = await handler(connection, exc)
+                            response = await handler(connection, exc)  # type: ignore
                         else:
                             response = await run_in_threadpool(handler, connection, exc)
 

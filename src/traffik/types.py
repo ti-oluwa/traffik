@@ -1,6 +1,7 @@
-"""Type definitions and protocols for the traffik package."""
+"""Type definitions and protocols."""
 
 import typing
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from starlette.requests import HTTPConnection
@@ -10,7 +11,7 @@ from typing_extensions import ParamSpec, TypeAlias, TypedDict
 from traffik.rates import Rate
 
 __all__ = [
-    "UNLIMITED",
+    "EXEMPTED",
     "HTTPConnectionT",
     "HTTPConnectionTcon",
     "WaitPeriod",
@@ -31,13 +32,14 @@ S = typing.TypeVar("S")
 T = typing.TypeVar("T")
 Rco = typing.TypeVar("Rco", covariant=True)
 
-UNLIMITED = object()
+EXEMPTED = object()
 """
 A sentinel value to identify that a connection should not be throttled.
 
 This value should be returned by the connection identifier function
 when the connection should not be subject to throttling.
 """
+
 
 Function: TypeAlias = typing.Callable[P, R]
 CoroutineFunction: TypeAlias = typing.Callable[P, typing.Awaitable[R]]
@@ -56,16 +58,27 @@ ExceptionHandler: TypeAlias = typing.Callable[
 
 AwaitableCallable = typing.Callable[..., typing.Awaitable[T]]
 
+MappingT = typing.TypeVar("MappingT", bound=typing.Mapping[typing.Any, typing.Any])
+ThrottleErrorHandler = typing.Callable[
+    [HTTPConnectionT, MappingT], typing.Awaitable[WaitPeriod]
+]
+"""
+A callable that handles errors during throttling.
+
+Takes the connection, the exception, and the cost as parameters.
+Returns an integer representing the wait period in milliseconds.
+"""
+
 
 class LockConfig(TypedDict, total=False):
-    """TypedDict for lock configuration parameters."""
+    """TypedDict defining configuration for locks."""
 
+    ttl: typing.Optional[float]
+    """Maximum time to wait for the lock to be released in seconds."""
     blocking: bool
     """Whether to block when acquiring the lock."""
     blocking_timeout: typing.Optional[float]
     """Maximum time to wait for the lock in seconds."""
-    release_timeout: typing.Optional[float]
-    """Maximum time to wait for the lock to be released in seconds."""
 
 
 class Stringable(typing.Protocol):
@@ -76,34 +89,35 @@ class Stringable(typing.Protocol):
         ...
 
 
-class ConnectionIdentifier(typing.Protocol, typing.Generic[HTTPConnectionTcon]):
-    """Protocol for connection identifier functions."""
+ConnectionIdentifier = typing.Callable[
+    [HTTPConnectionTcon], typing.Awaitable[typing.Union[Stringable, typing.Any]]
+]
+"""Type definition for connection identifier functions."""
 
-    async def __call__(
-        self, connection: HTTPConnectionTcon, *args: typing.Any, **kwargs: typing.Any
-    ) -> typing.Union[Stringable, typing.Any]:
-        """Identify a connection for throttling purposes."""
-        ...
+ConnectionThrottledHandler = typing.Callable[
+    [HTTPConnectionTcon, WaitPeriod, T, typing.Dict[str, typing.Any]],
+    typing.Awaitable[typing.Any],
+]
+"""
+Type definition for connection throttled handlers.
 
+Takes the connection, wait period, the throttle, and context as parameters.
+Returns an awaitable response.
+"""
 
-class ConnectionThrottledHandler(typing.Protocol, typing.Generic[HTTPConnectionTcon]):
-    """Protocol for connection throttled handlers."""
+RateFunc = typing.Callable[
+    [HTTPConnectionT, typing.Mapping[str, typing.Any]], typing.Awaitable[Rate]
+]
+"""Type definition for rate functions."""
+CostFunc = typing.Callable[
+    [HTTPConnectionT, typing.Mapping[str, typing.Any]], typing.Awaitable[int]
+]
+"""Type definition for cost functions."""
 
-    async def __call__(
-        self,
-        connection: HTTPConnectionTcon,
-        wait_ms: WaitPeriod,
-        *args: typing.Any,
-        **kwargs: typing.Any,
-    ) -> typing.Any:
-        """
-        Handle a throttled connection.
-
-        :param connection: The HTTP connection that was throttled.
-        :param wait_ms: The wait time in milliseconds before the next allowed request.
-        :return: A response or action to take when throttled.
-        """
-        ...
+RateType = typing.Union[Rate, RateFunc[HTTPConnectionT], str]
+"""Type definition for rate specifications."""
+CostType = typing.Union[int, CostFunc[HTTPConnectionT]]
+"""Type definition for cost specifications."""
 
 
 class Dependency(typing.Protocol, typing.Generic[P, Rco]):
@@ -116,14 +130,23 @@ class Dependency(typing.Protocol, typing.Generic[P, Rco]):
     ) -> typing.Union[Rco, typing.Awaitable[Rco]]: ...
 
 
+MapT = typing.TypeVar("MapT", bound=Mapping)
+
+
 @dataclass(frozen=True)
-class StrategyStat:
+class StrategyStat(typing.Generic[MapT]):
     """Statistics for a throttling strategy."""
 
     key: Stringable
+    """The throttling key."""
     rate: Rate
+    """The rate limit definition."""
     hits_remaining: float
-    wait_time: WaitPeriod
+    """Number of hits remaining in the current period."""
+    wait_ms: WaitPeriod
+    """Time to wait (in milliseconds) before the next allowed request."""
+    metadata: typing.Optional[MapT] = None
+    """Additional metadata related to the strategy."""
 
 
 class AsyncLock(typing.Protocol):

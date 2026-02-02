@@ -5,5 +5,4 @@
 **/logs/
 **/.*cache/
 .python-version
-issue.md
-feature.md
+profiling/

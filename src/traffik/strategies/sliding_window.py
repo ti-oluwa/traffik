@@ -3,12 +3,70 @@
 import typing
 from dataclasses import dataclass, field
 
+from typing_extensions import TypedDict
+
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
-from traffik.utils import JSONDecodeError, dump_json, load_json, time
+from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
-__all__ = ["SlidingWindowLogStrategy", "SlidingWindowCounterStrategy"]
+__all__ = [
+    "SlidingWindowLogStrategy",
+    "SlidingWindowCounterStrategy",
+    "SlidingWindowLogStatMetadata",
+    "SlidingWindowCounterStatMetadata",
+]
+
+
+class SlidingWindowLogStatMetadata(TypedDict):
+    """
+    Metadata for `SlidingWindowLogStrategy` statistics.
+
+    The sliding window log strategy maintains a log of request timestamps
+    for precise rate limiting over a continuously sliding time window.
+    """
+
+    strategy: typing.Literal["sliding_window_log"]
+    """Strategy identifier, always "sliding_window_log"."""
+
+    window_start_ms: float
+    """Start timestamp of the sliding window in milliseconds since epoch."""
+
+    entry_count: int
+    """Number of entries (requests) currently in the log within the window."""
+
+    current_cost_sum: float
+    """Total cost of all requests in the current sliding window."""
+
+    oldest_entry_ms: typing.Optional[float]
+    """Timestamp of the oldest entry in the log, or None if log is empty."""
+
+
+class SlidingWindowCounterStatMetadata(TypedDict):
+    """
+    Metadata for `SlidingWindowCounterStrategy` statistics.
+
+    The sliding window counter strategy uses weighted counters from
+    current and previous windows to approximate a true sliding window.
+    """
+
+    strategy: typing.Literal["sliding_window_counter"]
+    """Strategy identifier, always "sliding_window_counter"."""
+
+    current_window_id: int
+    """Identifier of the current time window (based on window duration)."""
+
+    current_count: int
+    """Request count in the current window."""
+
+    previous_count: int
+    """Request count in the previous window (used for weighted calculation)."""
+
+    overlap_percentage: float
+    """Percentage of the previous window that overlaps with the sliding window (0.0-1.0)."""
+
+    weighted_count: float
+    """Calculated weighted count: (previous_count * overlap_percentage) + current_count."""
 
 
 @dataclass(frozen=True)
@@ -62,19 +120,9 @@ class SlidingWindowLogStrategy:
         wait_seconds = int(wait_ms / 1000)
         raise HTTPException(429, f"Rate limited. Retry in {wait_seconds}s")
     ```
-
-    :param key: The throttling key (e.g., user ID, IP address).
-    :param rate: The rate limit definition.
-    :param backend: The throttle backend instance.
-    :return: Wait time in milliseconds if throttled, 0.0 if allowed.
     """
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=1.5,
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
     """Configuration for backend locking during log updates."""
 
     async def __call__(
@@ -96,7 +144,7 @@ class SlidingWindowLogStrategy:
         window_duration_ms = rate.expire
         window_start = now - window_duration_ms
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         log_key = f"{full_key}:slidinglog"
         ttl_seconds = max(int(window_duration_ms // 1000), 1)  # At least 1s
 
@@ -105,8 +153,8 @@ class SlidingWindowLogStrategy:
             # If log exists, load and parse entries as [timestamp, cost] tuples
             if old_log_json and old_log_json != "":
                 try:
-                    entries: typing.List[typing.List[float]] = load_json(old_log_json)
-                except JSONDecodeError:
+                    entries: typing.List[typing.List[float]] = load_data(old_log_json)
+                except MsgPackDecodeError:
                     entries = []
             else:
                 entries = []
@@ -122,12 +170,12 @@ class SlidingWindowLogStrategy:
                 # Find the oldest entry to calculate wait time
                 oldest_timestamp = min(ts for ts, _ in valid_entries)
                 wait_ms = (oldest_timestamp + window_duration_ms) - now
-                await backend.set(log_key, dump_json(valid_entries), expire=ttl_seconds)
+                await backend.set(log_key, dump_data(valid_entries), expire=ttl_seconds)
                 return wait_ms
 
             # If within limit, add this request as [timestamp, cost] entry
             valid_entries.append([now, float(cost)])
-            await backend.set(log_key, dump_json(valid_entries), expire=ttl_seconds)
+            await backend.set(log_key, dump_data(valid_entries), expire=ttl_seconds)
             return 0.0
 
     async def get_stat(
@@ -146,22 +194,22 @@ class SlidingWindowLogStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float("inf"),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         now = time() * 1000
         window_duration_ms = rate.expire
         window_start = now - window_duration_ms
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         log_key = f"{full_key}:slidinglog"
 
         old_log_json = await backend.get(log_key)
         # If log exists, load and parse entries as [timestamp, cost] tuples
         if old_log_json and old_log_json != "":
             try:
-                entries: typing.List[typing.List[float]] = load_json(old_log_json)
-            except JSONDecodeError:
+                entries: typing.List[typing.List[float]] = load_data(old_log_json)
+            except MsgPackDecodeError:
                 entries = []
         else:
             entries = []
@@ -176,18 +224,28 @@ class SlidingWindowLogStrategy:
         hits_remaining = max(rate.limit - current_cost_sum, 0.0)
 
         # If over limit, calculate wait time
+        oldest_timestamp = None
         if current_cost_sum > rate.limit:
             oldest_timestamp = min(ts for ts, _ in valid_entries)
             wait_ms = (oldest_timestamp + window_duration_ms) - now
             wait_ms = max(wait_ms, 0.0)
         else:
             wait_ms = 0.0
+            if valid_entries:
+                oldest_timestamp = min(ts for ts, _ in valid_entries)
 
         return StrategyStat(
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
-            wait_time=wait_ms,
+            wait_ms=wait_ms,
+            metadata=SlidingWindowLogStatMetadata(
+                strategy="sliding_window_log",
+                window_start_ms=window_start,
+                entry_count=len(valid_entries),
+                current_cost_sum=current_cost_sum,
+                oldest_entry_ms=oldest_timestamp,
+            ),
         )
 
 
@@ -252,12 +310,7 @@ class SlidingWindowCounterStrategy:
     ```
     """
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=1.5,
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
     """Configuration for backend locking during counter updates."""
 
     async def __call__(
@@ -284,14 +337,14 @@ class SlidingWindowCounterStrategy:
         time_in_current_window = now % window_duration_ms
         overlap_percentage = 1.0 - (time_in_current_window / window_duration_ms)
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         current_window_key = f"{full_key}:slidingcounter:{current_window_id}"
         previous_window_key = f"{full_key}:slidingcounter:{previous_window_id}"
 
         # TTL must be 2x window duration so previous window is available
         # throughout the entire current window. Minimum 1 second for cleanup.
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
-
+        limit = rate.limit
         async with await backend.lock(
             f"lock:{previous_window_key}", **self.lock_config
         ):
@@ -318,8 +371,8 @@ class SlidingWindowCounterStrategy:
             weighted_count = (previous_count * overlap_percentage) + current_count
 
             # If weighted count exceeds limit, reject request
-            if weighted_count > rate.limit:
-                requests_over = weighted_count - rate.limit
+            if weighted_count > limit:
+                requests_over = weighted_count - limit
                 if previous_count > 0:
                     wait_ratio = requests_over / previous_count
                     wait_ms = wait_ratio * time_in_current_window
@@ -330,7 +383,7 @@ class SlidingWindowCounterStrategy:
 
     async def get_stat(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
-    ) -> StrategyStat:
+    ) -> StrategyStat[SlidingWindowCounterStatMetadata]:
         """
         Get current statistics for the rate limit.
 
@@ -344,7 +397,7 @@ class SlidingWindowCounterStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float("inf"),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         now = time() * 1000
@@ -356,16 +409,15 @@ class SlidingWindowCounterStrategy:
         time_in_current_window = now % window_duration_ms
         overlap_percentage = 1.0 - (time_in_current_window / window_duration_ms)
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         current_window_key = f"{full_key}:slidingcounter:{current_window_id}"
         previous_window_key = f"{full_key}:slidingcounter:{previous_window_id}"
 
-        # Get current window counter
-        current_count_str = await backend.get(current_window_key)
+        # Get current and previous window counter
+        current_count_str, previous_count_str = await backend.multi_get(
+            current_window_key, previous_window_key
+        )
         current_count = int(current_count_str) if current_count_str else 0
-
-        # Get previous window counter
-        previous_count_str = await backend.get(previous_window_key)
         previous_count = int(previous_count_str) if previous_count_str else 0
 
         # Calculate weighted count using sliding window algorithm
@@ -390,5 +442,13 @@ class SlidingWindowCounterStrategy:
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
-            wait_time=wait_ms,
+            wait_ms=wait_ms,
+            metadata=SlidingWindowCounterStatMetadata(
+                strategy="sliding_window_counter",
+                current_window_id=current_window_id,
+                current_count=current_count,
+                previous_count=previous_count,
+                overlap_percentage=overlap_percentage,
+                weighted_count=weighted_count,
+            ),
         )

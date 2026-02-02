@@ -164,7 +164,7 @@ class TestLeakyBucketStrategy:
 
     @pytest.mark.anyio
     @pytest.mark.strategy
-    async def test_wait_time_calculation(self, backend: InMemoryBackend):
+    async def test_wait_ms_calculation(self, backend: InMemoryBackend):
         """Test that wait time is calculated correctly."""
         async with backend(close_on_exit=True):
             strategy = LeakyBucketStrategy()

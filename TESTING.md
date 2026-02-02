@@ -1,6 +1,6 @@
 # Traffik Library Testing Guide
 
-This comprehensive guide covers all testing approaches for the Traffik FastAPI throttling library, including Docker-based cross-platform testing and local development options.
+This comprehensive guide covers all testing approaches for the library, including Docker-based cross-platform testing and local development options.
 
 ## 🚀 Quick Start
 

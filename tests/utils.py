@@ -1,6 +1,6 @@
 from starlette.requests import HTTPConnection
 
-from traffik.types import UNLIMITED
+from traffik.types import EXEMPTED
 
 
 async def default_client_identifier(connection: HTTPConnection) -> str:
@@ -8,4 +8,4 @@ async def default_client_identifier(connection: HTTPConnection) -> str:
 
 
 async def unlimited_identifier(connection: HTTPConnection) -> object:
-    return UNLIMITED
+    return EXEMPTED

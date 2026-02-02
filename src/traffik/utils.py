@@ -1,50 +1,144 @@
 """`traffik` utilities."""
 
 import asyncio
+import base64
 import functools
 import inspect
-import ipaddress
+import os
+import sys
+import threading
 import typing
 from collections import deque
+from time import time_ns
 from types import TracebackType
 
+import msgpack  # type: ignore[import-untyped]
 from starlette.requests import HTTPConnection
 from typing_extensions import Self, TypeGuard
 
 from traffik.exceptions import LockTimeoutError
 from traffik.types import AsyncLock, AwaitableCallable, T
 
-try:
-    import orjson as json  # type: ignore[import]
-except ImportError:
-    import json  # type: ignore[no-redef]
+DEFAUL_BLOCKING_SETTING_ENV_VAR = "TRAFFIK_DEFAULT_BLOCKING"
+DEFAULT_BLOCKING_TIMEOUT_ENV_VAR = "TRAFFIK_DEFAULT_BLOCKING_TIMEOUT"
+DEFAULT_LOCK_TTL_ENV_VAR = "TRAFFIK_DEFAULT_LOCK_TTL"
 
 
-def get_ip_address(
-    connection: HTTPConnection,
-) -> typing.Optional[typing.Union[ipaddress.IPv4Address, ipaddress.IPv6Address]]:
+def get_lock_ttl() -> typing.Optional[float]:
     """
-    Returns the IP address of the connection client.
+    Get the default lock TTL from the environment variable `TRAFFIK_DEFAULT_LOCK_TTL`.
+
+    :return: The default lock TTL in seconds, or None if not set.
+    """
+    ttl_str = os.getenv(DEFAULT_LOCK_TTL_ENV_VAR)
+    if ttl_str is not None:
+        try:
+            ttl = float(ttl_str)
+        except ValueError:
+            raise ValueError(
+                f"Invalid value for {DEFAULT_LOCK_TTL_ENV_VAR}. Must be a non-negative float."
+            )
+
+        if ttl < 0:
+            raise ValueError("Lock TTL must be a non-negative float.")
+        return ttl
+    return None
+
+
+def get_lock_blocking() -> bool:
+    """
+    Get the default blocking setting from the environment variable `TRAFFIK_DEFAULT_BLOCKING`.
+
+    :return: The default blocking setting as a boolean. Defaults to True if not set.
+    """
+    blocking_str = os.getenv(DEFAUL_BLOCKING_SETTING_ENV_VAR)
+    if blocking_str is not None:
+        return blocking_str.lower() in ("1", "true", "yes", "on")
+    return True
+
+
+def get_lock_blocking_timeout() -> typing.Optional[float]:
+    """
+    Get the default blocking timeout from the environment variable `TRAFFIK_DEFAULT_BLOCKING_TIMEOUT`.
+
+    :return: The default blocking timeout in seconds, or None if not set.
+    """
+    timeout_str = os.getenv(DEFAULT_BLOCKING_TIMEOUT_ENV_VAR)
+    if timeout_str is not None:
+        try:
+            timeout = float(timeout_str)
+            if timeout < 0:
+                raise ValueError
+            return timeout
+        except ValueError:
+            raise ValueError(
+                f"Invalid value for {DEFAULT_BLOCKING_TIMEOUT_ENV_VAR}. Must be a non-negative float."
+            )
+    return None
+
+
+def set_lock_ttl(ttl: typing.Optional[float]) -> None:
+    """
+    Set the default global lock TTL in the environment variable `TRAFFIK_DEFAULT_LOCK_TTL`.
+
+    :param ttl: The lock TTL to set, or None to unset.
+    """
+    if ttl is None:
+        if DEFAULT_LOCK_TTL_ENV_VAR in os.environ:
+            del os.environ[DEFAULT_LOCK_TTL_ENV_VAR]
+    else:
+        if ttl < 0:
+            raise ValueError("Lock TTL must be a non-negative float.")
+        os.environ[DEFAULT_LOCK_TTL_ENV_VAR] = str(ttl)
+
+
+def set_lock_blocking(blocking: bool) -> None:
+    """
+    Set the default gloabl blocking setting in the environment variable `TRAFFIK_DEFAULT_BLOCKING`.
+
+    :param blocking: The blocking setting to set.
+    """
+    os.environ[DEFAUL_BLOCKING_SETTING_ENV_VAR] = "1" if blocking else "0"
+
+
+def set_lock_blocking_timeout(timeout: typing.Optional[float]) -> None:
+    """
+    Set the default global blocking timeout in the environment variable `TRAFFIK_DEFAULT_BLOCKING_TIMEOUT`.
+
+    :param timeout: The blocking timeout to set, or None to unset.
+    """
+    if timeout is None:
+        if DEFAULT_BLOCKING_TIMEOUT_ENV_VAR in os.environ:
+            del os.environ[DEFAULT_BLOCKING_TIMEOUT_ENV_VAR]
+    else:
+        if timeout < 0:
+            raise ValueError("Blocking timeout must be a non-negative float.")
+        os.environ[DEFAULT_BLOCKING_TIMEOUT_ENV_VAR] = str(timeout)
+
+
+def get_remote_address(connection: HTTPConnection) -> typing.Optional[str]:
+    """
+    Returns the Remote/IP address of the connection client.
 
     This function attempts to extract the IP address from the `x-forwarded-for` header
     or the `remote-addr` header. If neither is present, it falls back to the `client.host`
     attribute of the connection.
 
     :param connection: The HTTP connection
-    :return: The IP address of the connection client, or None if it cannot be determined.
+    :return: The Remote/IP address of the connection client, or None if it cannot be determined.
     """
     x_forwarded_for = connection.headers.get(
         "x-forwarded-for"
     ) or connection.headers.get("remote-addr")
     if x_forwarded_for:
-        return ipaddress.ip_address(x_forwarded_for.split(",")[0].strip())
+        return x_forwarded_for.split(",")[0].strip()
 
     if connection.client:
-        return ipaddress.ip_address(connection.client.host)
+        return connection.client.host
     return None
 
 
-def add_parameter_to_signature(
+def _add_parameter_to_signature(
     func: typing.Callable, parameter: inspect.Parameter, index: int = -1
 ) -> typing.Callable:
     """
@@ -61,6 +155,7 @@ def add_parameter_to_signature(
     :return: The updated function.
 
     Example Usage:
+
     ```python
     import inspect
     import typing
@@ -82,12 +177,12 @@ def add_parameter_to_signature(
 
     wrapped_func = decorator(my_func) # returns wrapper function
     assert "new_param" in inspect.signature(wrapped_func).parameters
-    >>> False
+    # False
 
     # This will fail because the signature of the wrapper function is overridden by the original function's signature,
-    # when functools.wraps is used. To fix this, we can use the `add_parameter_to_signature` function.
+    # when functools.wraps is used. To fix this, we can use the `_add_parameter_to_signature` function.
 
-    wrapped_func = add_parameter_to_signature(
+    wrapped_func = _add_parameter_to_signature(
         func=wrapped_func,
         parameter=inspect.Parameter(
             name="new_param",
@@ -97,10 +192,11 @@ def add_parameter_to_signature(
         index=0 # Add the new parameter at the beginning
     )
     assert "new_param" in inspect.signature(wrapped_func).parameters
-    >>> True
+    # True
 
     # This way any new parameters added to the wrapper function will be preserved and logic using the
     # function's signature will respect the new parameters.
+    ```
     """
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
@@ -138,31 +234,35 @@ def is_async_callable(obj: typing.Any) -> typing.Any:
     )
 
 
-def dump_json(data: typing.Any) -> str:
+def dump_data(obj: typing.Any) -> str:
     """
-    Serialize data to a JSON string using `orjson` if available, otherwise falls back to the built-in `json` module.
+    Serialize an object to msgpack bytes, then base64 encode as string.
 
-    :param data: The data to serialize.
-    :return: The serialized JSON string.
+    Uses msgpack for fast, compact binary serialization.
+    Approximately 5-10x faster and 30-50% smaller than JSON.
+
+    :param obj: Object to serialize (dict, list, int, float, str, bytes, etc.)
+    :return: Base64-encoded msgpack string
     """
-    dumped_data = json.dumps(data)
-    if isinstance(dumped_data, bytes):
-        return dumped_data.decode("utf-8")
-    return dumped_data
+    packed: bytes = msgpack.packb(obj, use_bin_type=True)  # type: ignore[no-untyped-call]
+    # Encode to base85 for slightly better compression than base64
+    return base64.b85encode(packed).decode("ascii")
 
 
-def load_json(data: str) -> typing.Any:
+def load_data(data: str) -> typing.Any:
     """
-    Deserialize a JSON string to a Python object using `orjson` if available, otherwise falls back to the built-in `json` module.
+    Deserialize base64-encoded msgpack string to a Python object.
 
-    :param data: The JSON string to deserialize.
-    :return: The deserialized Python object.
+    :param data: Base64-encoded msgpack string to deserialize
+    :return: Deserialized Python object
+    :raises msgpack.exceptions.UnpackException: If data is corrupted
     """
-    return json.loads(data)
+    packed = base64.b85decode(data.encode("ascii"))
+    return msgpack.unpackb(packed, raw=False)  # type: ignore[no-any-return, no-untyped-call]
 
 
-JSONDecodeError = json.JSONDecodeError  # type: ignore[attr-defined]
-"""Exception raised for JSON decoding errors. Either from `orjson` or built-in `json` module."""
+MsgPackDecodeError = msgpack.exceptions.UnpackException
+"""Exception raised for data decoding errors from msgpack."""
 
 
 def time() -> float:
@@ -174,43 +274,91 @@ def time() -> float:
     return asyncio.get_event_loop().time()
 
 
+class _FenceTokenGenerator:
+    """
+    A thread-safe fence token generator that produces unique, monotonically increasing integer tokens.
+
+    Each token is a combination of the current timestamp in nanoseconds and a sequence number
+    to ensure uniqueness even when multiple tokens are generated within the same nanosecond.
+
+    64-bit Token Structure:
+    - Upper 48 bits: Timestamp in nanoseconds.
+    - Lower 16 bits: Sequence number (0-65535).
+    """
+
+    __slots__ = ("_lock", "_last_timestamp", "_sequence_number")
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        """Lock for thread-safe token generation."""
+        self._last_timestamp = 0
+        """Last timestamp in nanoseconds."""
+        self._sequence_number = 0
+        """Sequence number for tokens generated within the same nanosecond."""
+
+    def next(self) -> int:
+        """Generate the next unique fence token."""
+        with self._lock:
+            timestamp = int(time_ns())
+
+            if timestamp == self._last_timestamp:
+                self._sequence_number += 1
+            else:
+                self._last_timestamp = timestamp
+                self._sequence_number = 0
+
+            return (timestamp << 16) | self._sequence_number
+
+
+fence_token_generator = _FenceTokenGenerator()
+"""Global fence token generator instance."""
+
+
 AsyncLockT = typing.TypeVar("AsyncLockT", bound=AsyncLock)
 
 
-class AsyncLockContext(typing.Generic[AsyncLockT]):
+class _AsyncLockContext(typing.Generic[AsyncLockT]):
     """
-    Asynchronous context manager for locks with optional timeout auto-release.
+    Asynchronous context manager for locks with optional lock TTL and blocking behavior.
 
-    Muilti-threaded or Distributed safety depends on the underlying `AsyncLock` implementation.
+    Multi-threaded/process or distributed safety depends on the underlying `AsyncLock` implementation.
 
-    Warning: Using `release_timeout` or `blocking_timeout` with reentrant locks may cause unexpected behavior
+    Warning: Using `ttl` or `blocking_timeout` with reentrant locks may cause unexpected behavior
     if nested contexts share the same lock instance.
     """
 
     __slots__ = (
         "_lock",
-        "_release_timeout",
+        "_ttl",
         "_blocking",
         "_blocking_timeout",
-        "_timer",
+        "_ttl_task",
         "_acquired",
-        "_released_by_timeout",
+        "_auto_released",
     )
 
     def __init__(
         self,
         lock: AsyncLockT,
-        release_timeout: typing.Optional[float] = None,
+        ttl: typing.Optional[float] = None,
         blocking: bool = True,
         blocking_timeout: typing.Optional[float] = None,
     ) -> None:
+        """
+        Initialize the async lock context.
+
+        :param lock: The async lock instance to manage.
+        :param ttl: How long the lock should live in seconds before auto-release (default: None = no auto-release).
+        :param blocking: Whether to block when acquiring the lock (default: True).
+        :param blocking_timeout: Max time to wait when acquiring lock (default: None = wait forever).
+        """
         self._lock = lock
-        self._release_timeout = release_timeout
+        self._ttl = ttl
         self._blocking = blocking
         self._blocking_timeout = blocking_timeout
-        self._timer: typing.Optional[asyncio.Task] = None
+        self._ttl_task: typing.Optional[asyncio.Task] = None
         self._acquired: bool = False
-        self._released_by_timeout: bool = False
+        self._auto_released: bool = False
 
     async def __aenter__(self) -> Self:
         # Try to acquire the lock
@@ -220,27 +368,27 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
         )
         if not acquired:
             raise LockTimeoutError(
-                f"Could not acquire {type(self._lock).__name__!r} lock"
+                f"Could not acquire {type(self._lock).__qualname__!r} lock"
             )
 
         self._acquired = acquired
         # Start auto-release timer if acquired and timeout is set
-        if acquired and self._release_timeout is not None:
-            self._timer = asyncio.create_task(self._release_on_timeout())
+        if acquired and self._ttl is not None:
+            self._ttl_task = asyncio.create_task(self._auto_release())
         return self
 
-    async def _release_on_timeout(self) -> None:
+    async def _auto_release(self) -> None:
         """Automatically releases the lock after the timeout."""
-        if self._release_timeout is None:
+        if self._ttl is None:
             return
 
         try:
-            await asyncio.sleep(self._release_timeout)
+            await asyncio.sleep(self._ttl)
             # Only release if we still think we have the lock
             if self._acquired:
                 try:
                     await self._lock.release()
-                    self._released_by_timeout = True
+                    self._auto_released = True
                     self._acquired = False
                 except RuntimeError:
                     # This needs to be a fast operation. Cannot use logger here as it blocks the event loop,
@@ -248,13 +396,13 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
 
                     # Lock might have been released already or not owned by us
                     # This can happen with reentrant locks
-                    print(
+                    sys.stderr.write(
                         "Failed to auto-release lock after timeout; it may have been released already."
-                        " This can happen with reentrant locks, and can lead to unexpected behavior.",
+                        " This can happen with reentrant locks, and can lead to unexpected behavior.\n",
                     )
-                    pass
+                    sys.stderr.flush()
         except asyncio.CancelledError:
-            # Timer cancelled because lock was released manually
+            # Auto-release task cancelled because lock was released manually
             pass
 
     async def __aexit__(
@@ -263,55 +411,47 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> None:
-        # Ensure the lock is released and timer cleaned up.
-        # Cancel and wait for timer completion
-        if self._timer is not None:
-            self._timer.cancel()
+        # Ensure the lock is released and auto-release task cleaned up.
+        # Cancel and wait for auto-release task completion
+        if self._ttl_task is not None:
+            self._ttl_task.cancel()
             try:
-                await self._timer
+                await self._ttl_task
             except asyncio.CancelledError:
                 pass
 
         # Release the lock if we acquired it and haven't released it yet
-        if self._acquired and not self._released_by_timeout:
+        if self._acquired and not self._auto_released:
             try:
                 await self._lock.release()
             except RuntimeError:
                 # This needs to be a fast operation. Cannot use logger here as it blocks the event loop,
                 # and it may cause deadlocks if logging uses the same backend
 
-                # Lock might have been released by timeout in a race
-                # or not owned by current task
-                print(
+                # Lock might have been released by timeout in a race or not owned by current task
+                sys.stderr.write(
                     "Failed to release lock on context exit; it may have been released already."
-                    " This can happen with reentrant locks, and can lead to unexpected behavior.",
+                    " This can happen with reentrant locks, and can lead to unexpected behavior.\n",
                 )
-                pass
+                sys.stderr.flush()
             finally:
                 self._acquired = False
 
 
-class AsyncRLock:
+class _AsyncRLock:
     """
     A fair reentrant lock for async programming. Fair means that it respects the order of acquisition.
 
-    Adapted from: https://github.com/Joshuaalbert/FairAsyncRLock/blob/81e0d89d64c0cbc81a91c2f45992c79471ecc3bb/fair_async_rlock/fair_async_rlock.py
+    Adapted from: https://github.com/Joshuaalbert/Fair_AsyncRLock/blob/81e0d89d64c0cbc81a91c2f45992c79471ecc3bb/fair_async_rlock/fair_async_rlock.py
     """
 
-    __slots__ = ("_owner", "_count", "_owner_transfer", "_queue", "_loop")
+    __slots__ = ("_owner", "_count", "_owner_transfer", "_queue")
 
     def __init__(self) -> None:
         self._owner: typing.Optional[asyncio.Task] = None
         self._count = 0
         self._owner_transfer = False
         self._queue: deque[asyncio.Future[None]] = deque()
-        self._loop: typing.Optional[asyncio.AbstractEventLoop] = None
-
-    @property
-    def loop(self) -> asyncio.AbstractEventLoop:
-        if not self._loop:
-            self._loop = asyncio.get_event_loop()
-        return self._loop
 
     def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
         return self._owner == (task or asyncio.current_task())
@@ -336,7 +476,7 @@ class AsyncRLock:
             return True
 
         # Only create future if we actually need to wait
-        fut = self.loop.create_future()
+        fut = asyncio.get_running_loop().create_future()
         self._queue.append(fut)
 
         # Wait for the lock to be free, then acquire
@@ -396,7 +536,7 @@ class AsyncRLock:
         self.release()
 
 
-class AsyncLockGroup:
+class _AsyncLockGroup:
     """
     Reentrant async group lock.
 
@@ -405,7 +545,10 @@ class AsyncLockGroup:
 
     __slots__ = ("_locks", "_owner", "_counter", "_meta_lock")
 
-    def __init__(self, locks: typing.Sequence[AsyncLock]) -> None:
+    def __init__(self, *locks: AsyncLock) -> None:
+        if not locks:
+            raise ValueError("At least one lock must be provided to the lock group.")
+
         # Sort locks by id() to ensure consistent ordering and prevent deadlocks
         self._locks = sorted(locks, key=id)
         self._owner: typing.Optional[asyncio.Task] = None
@@ -437,7 +580,7 @@ class AsyncLockGroup:
                 ):
                     acquired.append(lock)
                 else:
-                    # Failed to acquire - rollback
+                    # Failed to acquire, rollback
                     for acquired_lock in reversed(acquired):
                         await acquired_lock.release()
                     return False
@@ -456,6 +599,7 @@ class AsyncLockGroup:
 
     async def release(self) -> None:
         current_task = asyncio.current_task()
+        should_release = False
 
         async with self._meta_lock:
             if self._owner is not current_task:
@@ -464,11 +608,10 @@ class AsyncLockGroup:
             self._counter -= 1
             if self._counter == 0:
                 self._owner = None
-                # Release metadata lock before releasing actual locks
-                # to avoid holding it during potentially slow operations
+                should_release = True
 
         # Only release the actual locks after counter hits 0
-        if self._counter == 0:
+        if should_release:
             # Release in reverse order (though with sorted locks, order is consistent)
             for lock in reversed(self._locks):
                 await lock.release()

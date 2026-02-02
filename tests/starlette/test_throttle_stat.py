@@ -11,8 +11,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket
 
-from tests.asyncio_client import AsyncioTestClient
+from tests.asynctestclient import AsyncTestClient
 from tests.utils import default_client_identifier
+from traffik import connection_throttled
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
 from traffik.strategies.fixed_window import FixedWindowStrategy
@@ -43,13 +44,13 @@ async def test_http_throttle_stat_basic(inmemory_backend: InMemoryBackend) -> No
                         "hits_remaining": stat_before.hits_remaining
                         if stat_before
                         else None,
-                        "wait_time": stat_before.wait_time if stat_before else None,
+                        "wait_ms": stat_before.wait_ms if stat_before else None,
                     },
                     "after": {
                         "hits_remaining": stat_after.hits_remaining
                         if stat_after
                         else None,
-                        "wait_time": stat_after.wait_time if stat_after else None,
+                        "wait_ms": stat_after.wait_ms if stat_after else None,
                     },
                 }
             )
@@ -68,11 +69,11 @@ async def test_http_throttle_stat_basic(inmemory_backend: InMemoryBackend) -> No
 
             # Before first request: 10 hits remaining
             assert data["before"]["hits_remaining"] == 10
-            assert data["before"]["wait_time"] == 0.0
+            assert data["before"]["wait_ms"] == 0.0
 
             # After first request: 9 hits remaining
             assert data["after"]["hits_remaining"] == 9
-            assert data["after"]["wait_time"] == 0.0
+            assert data["after"]["wait_ms"] == 0.0
 
 
 @pytest.mark.asyncio
@@ -145,7 +146,7 @@ async def test_http_throttle_stat_at_limit(inmemory_backend: InMemoryBackend) ->
             return JSONResponse(
                 {
                     "hits_remaining": stat.hits_remaining if stat else None,
-                    "wait_time": stat.wait_time if stat else None,
+                    "wait_ms": stat.wait_ms if stat else None,
                     "throttled": throttled,
                 }
             )
@@ -170,7 +171,7 @@ async def test_http_throttle_stat_at_limit(inmemory_backend: InMemoryBackend) ->
             assert response.status_code == 200
             data = response.json()
             assert data["hits_remaining"] == 0
-            assert data["wait_time"] > 0.0
+            assert data["wait_ms"] > 0.0
             assert data["throttled"] is True
 
 
@@ -275,6 +276,8 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
             rate="5/s",
             identifier=default_client_identifier,
             strategy=FixedWindowStrategy(),
+            # Use this handler so an exception is raised on throttle
+            handle_throttled=connection_throttled,
         )
 
         async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -333,7 +336,7 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
         base_url = "http://0.0.0.0"
         running_loop = asyncio.get_running_loop()
         async with (
-            AsyncioTestClient(
+            AsyncTestClient(
                 app=app,
                 base_url=base_url,
                 event_loop=running_loop,
@@ -426,9 +429,9 @@ async def test_throttle_stat_fields(inmemory_backend: InMemoryBackend) -> None:
                         "has_key": hasattr(stat, "key"),
                         "has_rate": hasattr(stat, "rate"),
                         "has_hits_remaining": hasattr(stat, "hits_remaining"),
-                        "has_wait_time": hasattr(stat, "wait_time"),
+                        "has_wait_ms": hasattr(stat, "wait_ms"),
                         "hits_remaining_type": type(stat.hits_remaining).__name__,
-                        "wait_time_type": type(stat.wait_time).__name__,
+                        "wait_ms_type": type(stat.wait_ms).__name__,
                     }
                 )
             return JSONResponse({"stat": None})
@@ -446,10 +449,8 @@ async def test_throttle_stat_fields(inmemory_backend: InMemoryBackend) -> None:
             assert data["has_key"], "Stat should have 'key' field"
             assert data["has_rate"], "Stat should have 'rate' field"
             assert data["has_hits_remaining"], "Stat should have 'hits_remaining' field"
-            assert data["has_wait_time"], "Stat should have 'wait_time' field"
+            assert data["has_wait_ms"], "Stat should have 'wait_ms' field"
             assert data["hits_remaining_type"] in ["int", "float"], (
                 "hits_remaining should be numeric"
             )
-            assert data["wait_time_type"] in ["int", "float"], (
-                "wait_time should be numeric"
-            )
+            assert data["wait_ms_type"] in ["int", "float"], "wait_ms should be numeric"

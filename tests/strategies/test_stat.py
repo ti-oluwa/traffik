@@ -35,7 +35,7 @@ async def test_fixed_window_stat(backend: InMemoryBackend):
         assert stat.key == key
         assert stat.rate == rate
         assert stat.hits_remaining == 10, "Should have all 10 hits remaining"
-        assert stat.wait_time == 0.0, "Should have no wait time"
+        assert stat.wait_ms == 0.0, "Should have no wait time"
 
         # Make 3 requests
         await strategy(key, rate, backend, cost=1)
@@ -45,7 +45,7 @@ async def test_fixed_window_stat(backend: InMemoryBackend):
         # Check stat after requests
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining == 7, "Should have 7 hits remaining"
-        assert stat.wait_time == 0.0, "Should still have no wait time"
+        assert stat.wait_ms == 0.0, "Should still have no wait time"
 
         # Use up all remaining hits
         for _ in range(7):
@@ -54,7 +54,7 @@ async def test_fixed_window_stat(backend: InMemoryBackend):
         # Check stat when at limit
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining == 0, "Should have 0 hits remaining"
-        assert stat.wait_time == 0.0, "At limit but not exceeded"
+        assert stat.wait_ms == 0.0, "At limit but not exceeded"
 
         # Try one more (will be throttled)
         wait = await strategy(key, rate, backend, cost=1)
@@ -63,7 +63,7 @@ async def test_fixed_window_stat(backend: InMemoryBackend):
         # Check stat when throttled
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining == 0, "Should still have 0 hits remaining"
-        assert stat.wait_time > 0.0, "Should have wait time"
+        assert stat.wait_ms > 0.0, "Should have wait time"
 
 
 @pytest.mark.anyio
@@ -78,7 +78,7 @@ async def test_sliding_window_log_stat(backend: InMemoryBackend):
         # Initial stat
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining == 5
-        assert stat.wait_time == 0.0
+        assert stat.wait_ms == 0.0
 
         # Make 2 requests
         await strategy(key, rate, backend, cost=1)
@@ -131,7 +131,7 @@ async def test_token_bucket_stat(backend: InMemoryBackend):
         # Initial stat - bucket starts full at burst_size
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining == 15, "Should start with burst_size tokens"
-        assert stat.wait_time == 0.0
+        assert stat.wait_ms == 0.0
 
         # Consume 5 tokens
         await strategy(key, rate, backend, cost=5)
@@ -144,7 +144,7 @@ async def test_token_bucket_stat(backend: InMemoryBackend):
 
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining < 1, "Should have ~0 tokens left"
-        assert stat.wait_time >= 0.0, "At limit but not negative"
+        assert stat.wait_ms >= 0.0, "At limit but not negative"
 
         # Try to consume more (will be throttled)
         wait = await strategy(key, rate, backend, cost=1)
@@ -208,7 +208,7 @@ async def test_leaky_bucket_stat(backend: InMemoryBackend):
 
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining < 1, "Bucket should be ~full"
-        assert stat.wait_time >= 0.0, "Should have valid wait time"
+        assert stat.wait_ms >= 0.0, "Should have valid wait time"
 
 
 @pytest.mark.anyio
@@ -270,7 +270,7 @@ async def test_stat_unlimited_rate(backend: InMemoryBackend):
 
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining == float("inf"), "Should have infinite hits"
-        assert stat.wait_time == 0.0, "Should have no wait time"
+        assert stat.wait_ms == 0.0, "Should have no wait time"
 
         # Make some requests
         await strategy(key, rate, backend, cost=100)
@@ -303,7 +303,7 @@ async def test_stat_after_window_reset(backend: InMemoryBackend):
         # Stat should show reset
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining == 5, "Should be reset to full limit"
-        assert stat.wait_time == 0.0, "Should have no wait time"
+        assert stat.wait_ms == 0.0, "Should have no wait time"
 
 
 @pytest.mark.anyio
@@ -330,8 +330,8 @@ async def test_stat_keys_isolation(backend: InMemoryBackend):
 
 @pytest.mark.anyio
 @pytest.mark.strategy
-async def test_stat_wait_time_accuracy(backend: InMemoryBackend):
-    """Test that wait_time in stat is reasonably accurate."""
+async def test_stat_wait_ms_accuracy(backend: InMemoryBackend):
+    """Test that wait_ms in stat is reasonably accurate."""
     async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("3/s")
@@ -347,11 +347,11 @@ async def test_stat_wait_time_accuracy(backend: InMemoryBackend):
 
         # Get stat
         stat = await strategy.get_stat(key, rate, backend)
-        assert stat.wait_time > 0, "Stat should show wait time"
+        assert stat.wait_ms > 0, "Stat should show wait time"
 
         # Wait times should be close (allowing for small timing differences)
-        # The stat wait_time might be slightly different due to when it's calculated
-        assert abs(stat.wait_time - wait_from_call) < 100, "Wait times should be close"
+        # The stat wait_ms might be slightly different due to when it's calculated
+        assert abs(stat.wait_ms - wait_from_call) < 100, "Wait times should be close"
 
 
 @pytest.mark.anyio
@@ -415,10 +415,10 @@ async def test_stat_fields_present(backend: InMemoryBackend):
         assert hasattr(stat, "hits_remaining"), (
             "Stat should have 'hits_remaining' field"
         )
-        assert hasattr(stat, "wait_time"), "Stat should have 'wait_time' field"
+        assert hasattr(stat, "wait_ms"), "Stat should have 'wait_ms' field"
 
         # Check types
         assert isinstance(stat.hits_remaining, (int, float)), (
             "hits_remaining should be numeric"
         )
-        assert isinstance(stat.wait_time, (int, float)), "wait_time should be numeric"
+        assert isinstance(stat.wait_ms, (int, float)), "wait_ms should be numeric"

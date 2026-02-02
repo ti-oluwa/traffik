@@ -1,13 +1,37 @@
 """Fixed Window rate limiting strategy implementation."""
 
+import typing
 from dataclasses import dataclass, field
+
+from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import time
 
-__all__ = ["FixedWindowStrategy"]
+__all__ = ["FixedWindowStrategy", "FixedWindowStatMetadata"]
+
+
+class FixedWindowStatMetadata(TypedDict):
+    """
+    Metadata for `FixedWindowStrategy` statistics.
+
+    The fixed window strategy divides time into fixed intervals and counts
+    requests within each window.
+    """
+
+    strategy: typing.Literal["fixed_window"]
+    """Strategy identifier, always "fixed_window"."""
+
+    window_start_ms: float
+    """Start timestamp of the current window in milliseconds since epoch."""
+
+    window_end_ms: float
+    """End timestamp of the current window in milliseconds since epoch."""
+
+    current_count: int
+    """Number of requests (weighted by cost) in the current window."""
 
 
 @dataclass(frozen=True)
@@ -63,20 +87,8 @@ class FixedWindowStrategy:
     ```
     """
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=True,
-            blocking_timeout=1.5,
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
-
-    # The `backend.increment_with_ttl` method should have been used here but since using it
-    # means a new window start is based on the expiry of the counter key, and the minimum
-    # allowable TTL for the counter key is 1 second, it could lead to inaccuracies for very small windows.
-    # Especially for windows smaller than 1 second. So we either clamp the wait time to
-    # 1 second minimum, which is not ideal, assuming the throttling supports sub-second wait times,
-    # or we manually manage the window start time separately. Which is what we do here.
 
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
@@ -97,15 +109,35 @@ class FixedWindowStrategy:
         window_duration_ms = rate.expire
         current_window_start = (now // window_duration_ms) * window_duration_ms
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         base_key = f"{full_key}:fixedwindow"
-        window_start_key = f"{base_key}:start"
         counter_key = f"{base_key}:counter"
 
         # TTL should be at least 1 second for cleanup, but we track window time separately
         # Add buffer to ensure keys don't expire during a valid window
         ttl_seconds = max(int(window_duration_ms // 1000), 2)
+        # We only use complex logic for sub-second windows. For windows >= 1 second,
+        # we can use the simpler `increment_with_ttl` method. No need to acquire multi-op
+        # lock since we only using `increment_with_ttl` which is atomic.
+        if not rate.is_subsecond:
+            counter = await backend.increment_with_ttl(
+                counter_key, amount=cost, ttl=ttl_seconds
+            )
+            if counter > rate.limit:
+                time_in_window = now - current_window_start
+                wait_ms = window_duration_ms - time_in_window
+                return max(wait_ms, 0.0)
+            return 0.0
 
+        # For sub-second windows, we need to manage window start time separately for accuracy.
+
+        # The `backend.increment_with_ttl` method cannot be used here since using it
+        # means a new window start is based on the expiry of the counter key, and the minimum
+        # allowable TTL for the counter key is 1 second, it could lead to inaccuracies for very small windows.
+        # Especially for windows smaller than 1 second. So we either clamp the wait time to
+        # 1 second minimum, which is not ideal, assuming the throttling supports sub-second wait times,
+        # or we manually manage the window start time separately. Which is what we do here.
+        window_start_key = f"{base_key}:start"
         async with await backend.lock(f"lock:{base_key}", **self.lock_config):
             # Get the stored window start time
             stored_window_start = await backend.get(window_start_key)
@@ -116,10 +148,13 @@ class FixedWindowStrategy:
                 or int(stored_window_start) != current_window_start
             ):
                 # If we are in a new window, reset counter and store new window start
-                await backend.set(
-                    window_start_key, str(int(current_window_start)), expire=ttl_seconds
+                await backend.multi_set(
+                    {
+                        window_start_key: str(int(current_window_start)),
+                        counter_key: str(cost),
+                    },
+                    expire=ttl_seconds,
                 )
-                await backend.set(counter_key, str(cost), expire=ttl_seconds)
                 counter = cost
             else:
                 # If we are in the existing/same window, increment the counter by the cost
@@ -135,7 +170,7 @@ class FixedWindowStrategy:
 
     async def get_stat(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
-    ) -> StrategyStat:
+    ) -> StrategyStat[FixedWindowStatMetadata]:
         """
         Get current statistics for the rate limit.
 
@@ -149,32 +184,40 @@ class FixedWindowStrategy:
                 key=key,
                 rate=rate,
                 hits_remaining=float("inf"),
-                wait_time=0.0,
+                wait_ms=0.0,
             )
 
         now = time() * 1000
         window_duration_ms = rate.expire
         current_window_start = (now // window_duration_ms) * window_duration_ms
 
-        full_key = await backend.get_key(str(key))
+        full_key = backend.get_key(str(key))
         base_key = f"{full_key}:fixedwindow"
-        window_start_key = f"{base_key}:start"
         counter_key = f"{base_key}:counter"
 
-        # Get the stored window start time
-        stored_window_start = await backend.get(window_start_key)
-
-        # Check if we're in a new window or no data exists
-        if (
-            stored_window_start is None
-            or int(stored_window_start) != current_window_start
-        ):
-            # If we are in a new window or no data set counter as 0
-            counter = 0
+        # For non-subsecond windows, we only use the counter key (with TTL)
+        # For subsecond windows, we use both window_start and counter keys
+        if not rate.is_subsecond:
+            # Only read the counter for >= 1 second windows
+            stored_counter = await backend.get(counter_key)
+            counter = int(stored_counter) if stored_counter else 0
         else:
-            # If we are in an existing/valid window, get current counter value
-            counter_value = await backend.get(counter_key)
-            counter = int(counter_value) if counter_value else 0
+            # For subsecond windows, check if we're in the same window
+            window_start_key = f"{base_key}:start"
+            stored_window_start, stored_counter = await backend.multi_get(
+                window_start_key, counter_key
+            )
+
+            # Check if we're in a new window or no data exists
+            if (
+                stored_window_start is None
+                or int(stored_window_start) != current_window_start
+            ):
+                # If we are in a new window or no data set counter as 0
+                counter = 0
+            else:
+                # If we are in an existing/valid window, use the stored counter
+                counter = int(stored_counter) if stored_counter else 0
 
         hits_remaining = max(rate.limit - counter, 0)
         if counter > rate.limit:
@@ -184,9 +227,16 @@ class FixedWindowStrategy:
         else:
             wait_ms = 0.0
 
+        window_end_ms = current_window_start + window_duration_ms
         return StrategyStat(
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
-            wait_time=wait_ms,
+            wait_ms=wait_ms,
+            metadata=FixedWindowStatMetadata(
+                strategy="fixed_window",
+                window_start_ms=current_window_start,
+                window_end_ms=window_end_ms,
+                current_count=counter,
+            ),
         )

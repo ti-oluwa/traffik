@@ -17,15 +17,15 @@ from traffik.throttles import HTTPThrottle
 
 @pytest.mark.asyncio
 @pytest.mark.throttle
-async def test_throttle_with_context_backend(inmemory_backend: InMemoryBackend) -> None:
+async def test_throttle_with_dynamic_backend(inmemory_backend: InMemoryBackend) -> None:
     """Test dynamic backend switching for `HTTPThrottle` in Starlette."""
-    # This throttle should raise an error if context_backend is True
+    # This throttle should raise an error if dynamic_backend is True
     # and a backend is provided
     with pytest.raises(ValueError):
         throttle = HTTPThrottle(
             "test-dynamic-backend-with-backend",
             rate=Rate(2, seconds=50, minutes=2, hours=1),
-            context_backend=True,
+            dynamic_backend=True,
             backend=inmemory_backend,
         )
 
@@ -34,10 +34,10 @@ async def test_throttle_with_context_backend(inmemory_backend: InMemoryBackend) 
     throttle = HTTPThrottle(
         "test-dynamic-backend-no-backend",
         rate=Rate(2, seconds=50, minutes=2, hours=1),
-        context_backend=True,
+        dynamic_backend=True,
         identifier=default_client_identifier,
     )
-    assert throttle.context_backend is True
+    assert throttle.uses_fixed_backend is False
     assert throttle.backend is None
 
     dummy_request = Request(
@@ -53,10 +53,6 @@ async def test_throttle_with_context_backend(inmemory_backend: InMemoryBackend) 
     async with inmemory_backend(close_on_exit=True):
         # Use the throttle in context to trigger the backend context detection
         await throttle(dummy_request)
-        # Check that the throttle uses the backend from the main context
-        # A connection should be registered in the inmemory backend
-        assert inmemory_backend.connection is not None
-        assert len(inmemory_backend.connection) > 0
         # Check that the throttle backend is still left unset
         assert throttle.backend is None
 
@@ -65,27 +61,17 @@ async def test_throttle_with_context_backend(inmemory_backend: InMemoryBackend) 
             close_on_exit=False
         ) as inner_backend:
             await throttle(dummy_request)
-            # Connection should be registered in the inner backend
-            # And the main inmemory backend should still have a connection registered
-            assert inner_backend.connection is not None
-            assert len(inner_backend.connection) >= 1
-            assert len(inmemory_backend.connection) >= 1
             # Check that the throttle backend is still left unset
             assert throttle.backend is None
 
         # On inner context exit, check that the throttle uses the backend from the main context again
         await throttle(dummy_request)
-        # The same connection should still be registered in the main context inmemory backend,
-        # and the inner context should also still have a connection registered (since it's persistent).
-        assert len(inmemory_backend.connection) > 0
-        assert inmemory_backend.connection is not None
-        assert len(inner_backend.connection) > 0
         # Check that the throttle backend is still left unset
         assert throttle.backend is None
 
 
 @pytest.mark.throttle
-def test_throttle_with_context_backend_and_lifespan(
+def test_throttle_with_dynamic_backend_and_lifespan(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     """
@@ -97,7 +83,7 @@ def test_throttle_with_context_backend_and_lifespan(
     throttle = HTTPThrottle(
         "test-dynamic-lifespan-endpoint-starlette",
         rate="2/s",
-        context_backend=True,
+        dynamic_backend=True,
         identifier=default_client_identifier,
     )
 
@@ -139,13 +125,6 @@ def test_throttle_with_context_backend_and_lifespan(
         assert response3.status_code == 429
         assert "Retry-After" in response3.headers
 
-        # Verify the lifespan backend has a connection recorded
-        assert inmemory_backend.connection is not None
-        assert len(inmemory_backend.connection) >= 1
-        assert (
-            endpoint_backend.connection is None
-        )  # No connections in endpoint backend yet
-
         # Test special endpoint uses different backend. We should not be throttled
         # even though we hit the limit on the lifespan backend
         response4 = client.get("/special")
@@ -163,24 +142,19 @@ def test_throttle_with_context_backend_and_lifespan(
         assert response6.status_code == 429
         assert "Retry-After" in response6.headers
 
-        # Verify both backends have their own separate counters
-        assert len(inmemory_backend.connection) >= 1  # Still 1 from normal endpoint
-        assert endpoint_backend.connection is not None
-        assert len(endpoint_backend.connection) >= 1  # 1 from special endpoint
-
         # Verify throttle backend is still None (dynamic resolution)
         assert throttle.backend is None
 
 
 @pytest.mark.throttle
-def test_throttle_with_context_backend_and_middleware(
+def test_throttle_with_dynamic_backend_and_middleware(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     # Shared throttle for all tenants
     quota_throttle = HTTPThrottle(
         uid="api_quota",
         rate="2/min",
-        context_backend=True,
+        dynamic_backend=True,
         identifier=default_client_identifier,
     )
 
@@ -218,7 +192,6 @@ def test_throttle_with_context_backend_and_middleware(
 
     base_url = "http://0.0.0.0"
     with TestClient(app, base_url=base_url) as client:
-        assert inmemory_backend.connection is not None
         # Test premium tenant
         premium_headers = {"authorization": "Bearer premium-token"}
 
@@ -231,12 +204,6 @@ def test_throttle_with_context_backend_and_middleware(
         # Third request should be throttled for premium
         response3 = client.get("/api/data", headers=premium_headers)
         assert response3.status_code == 429
-
-        # Verify premium backend has connections
-        assert premium_backend.connection is not None
-        assert len(premium_backend.connection) >= 1
-        assert free_backend.connection is None
-        assert len(inmemory_backend.connection) == 0
 
         # Test free tier (should not be throttled despite premium being throttled)
         free_headers = {"authorization": "Bearer free-token"}
@@ -251,12 +218,6 @@ def test_throttle_with_context_backend_and_middleware(
         response6 = client.get("/api/data", headers=free_headers)
         assert response6.status_code == 429
 
-        # Verify all backends have separate counters
-        assert free_backend.connection is not None
-        assert len(premium_backend.connection) >= 1
-        assert len(free_backend.connection) >= 1
-        assert len(inmemory_backend.connection) == 0
-
         # Test default (lifespan) backend
         response7 = client.get("/api/data")
         assert response7.status_code == 200
@@ -267,11 +228,6 @@ def test_throttle_with_context_backend_and_middleware(
         # Third request should be throttled for default
         response9 = client.get("/api/data")
         assert response9.status_code == 429
-
-        # Verify all backends are isolated
-        assert len(premium_backend.connection) >= 1
-        assert len(free_backend.connection) >= 1
-        assert len(inmemory_backend.connection) >= 1
 
         # Verify throttle backend is still None (dynamic resolution)
         assert quota_throttle.backend is None

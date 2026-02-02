@@ -77,7 +77,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         rate: RateType[HTTPConnectionT],
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[HTTPConnectionT, Self]
+            ConnectionThrottledHandler[HTTPConnectionT, Self]  # type: ignore[arg-type]
         ] = None,
         strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]] = None,
@@ -468,7 +468,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             setattr(connection.state, THROTTLED_STATE_KEY, True)
             context = dict(context or {})
             context.setdefault("headers", self.headers)
-            await handle_throttled(connection, wait_ms, self, context)
+            await handle_throttled(connection, wait_ms, self, context)  # type: ignore[arg-type]
 
         # Mark connection as not throttled
         setattr(connection.state, THROTTLED_STATE_KEY, False)

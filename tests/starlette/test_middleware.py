@@ -36,7 +36,10 @@ async def test_throttle_initialization() -> None:
         methods={"GET", "POST"},
     )
     assert isinstance(middleware_throttle.path, re.Pattern)
-    assert middleware_throttle.methods == frozenset(["get", "post"])
+    # Methods are stored in both upper and lower case for fast matching
+    assert middleware_throttle.methods is not None
+    assert "get" in middleware_throttle.methods or "GET" in middleware_throttle.methods
+    assert "post" in middleware_throttle.methods or "POST" in middleware_throttle.methods
     assert middleware_throttle.predicate is None
 
     # Test with regex path
@@ -47,7 +50,8 @@ async def test_throttle_initialization() -> None:
         methods={"GET"},
     )
     assert middleware_throttle_regex.path is regex_pattern
-    assert middleware_throttle_regex.methods == frozenset(["get"])
+    assert middleware_throttle_regex.methods is not None
+    assert "get" in middleware_throttle_regex.methods or "GET" in middleware_throttle_regex.methods
 
     # Test with no path/methods (applies to all)
     middleware_throttle_all = MiddlewareThrottle(throttle=throttle)

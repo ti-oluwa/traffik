@@ -119,8 +119,13 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         if methods is None:
             self.methods = None
         else:
+            # Store both lowercase and uppercase versions.
+            # Although HTTP scope methods are typically uppercase
             self.methods = frozenset(
-                method.lower() for method in methods if isinstance(method, str)
+                m
+                for method in methods
+                if isinstance(method, str)
+                for m in (method.lower(), method.upper())
             )
         self.predicate = predicate or hook
 
@@ -134,11 +139,10 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             a modified connection or raise a throttling exception.
         :raises: `HTTPException` if the connection exceeds rate limits.
         """
-        if (
-            self.methods is not None
-            and connection.scope["method"].lower() not in self.methods
-        ):
-            return connection
+        # Check methods first. Cheapest check is frozenset lookup
+        if self.methods is not None:
+            if connection.scope["method"] not in self.methods:
+                return connection
         if self.path is not None and not self.path.match(connection.scope["path"]):
             return connection
         if self.predicate is not None and not await self.predicate(connection):
@@ -213,7 +217,9 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
             return
 
         connection = HTTPConnection(scope, receive)
-        if self.backend is None:
+        # Resolve backend once and cache it
+        backend = self.backend
+        if backend is None:
             backend = get_throttle_backend(connection.app)
             if backend is None:
                 raise ConfigurationError("No throttle backend configured.")
@@ -222,7 +228,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
         # The backend context must be not closed on context exit.
         # It must also be persistent to ensure throttles can maintain
         # state across multiple connections.
-        async with self.backend(close_on_exit=False, persistent=True):
+        async with backend(close_on_exit=False, persistent=True):
             for throttle in self.middleware_throttles:
                 try:
                     connection = await throttle(connection)  # type: ignore[arg-type]

@@ -18,7 +18,7 @@ ThrottleT = typing.TypeVar("ThrottleT", bound=Throttle)
 __all__ = ["throttled"]
 
 
-class DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
+class _DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
     """
     `fastapi.params.Depends` subclass that allows instances to be used as decorators.
 
@@ -56,8 +56,8 @@ class DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
         return self.dependency_decorator(decorated, self.dependency)
 
 
-# Is this worth it? Just because of the `throttle` decorator?
-def apply_throttle(
+# Is this worth it? I mean! Just because of the `@throttled(...)` decorator?
+def _apply_throttle(
     route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
     throttle: Throttle[HTTPConnectionT],
 ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
@@ -139,7 +139,7 @@ def route_wrapper(
 @typing.overload
 def throttled(
     *throttles: Throttle[Request],
-) -> DecoratorDepends[typing.Any, typing.Any, typing.Any, Request]: ...  # type: ignore[misc]
+) -> _DecoratorDepends[typing.Any, typing.Any, typing.Any, Request]: ...  # type: ignore[misc]
 
 
 @typing.overload
@@ -155,7 +155,7 @@ def throttled(
         typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]
     ] = None,
 ) -> typing.Union[
-    DecoratorDepends[P, R, Q, Request],
+    _DecoratorDepends[P, R, Q, Request],
     typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
 ]:
     """
@@ -199,7 +199,7 @@ def throttled(
         throttle = throttles[0]  # type: ignore[assignment]
 
     # Just to make the type checker happy
-    _apply_throttle = typing.cast(
+    decorator = typing.cast(
         typing.Callable[
             [
                 typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
@@ -207,12 +207,12 @@ def throttled(
             ],
             typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
         ],
-        apply_throttle,
+        _apply_throttle,
     )
-    _throttle = typing.cast(Dependency[Q, Request], throttle)
-    decorator_dependency = DecoratorDepends[P, R, Q, Request](
-        dependency_decorator=_apply_throttle,
-        dependency=_throttle,
+    dependency = typing.cast(Dependency[Q, Request], throttle)
+    decorator_dependency = _DecoratorDepends[P, R, Q, Request](
+        dependency_decorator=decorator,
+        dependency=dependency,
     )
     if route is not None:
         decorated = decorator_dependency(route)

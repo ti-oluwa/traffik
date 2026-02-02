@@ -70,14 +70,14 @@ Returns an integer representing the wait period in milliseconds.
 
 
 class LockConfig(TypedDict, total=False):
-    """TypedDict for lock configuration parameters."""
+    """TypedDict defining configuration for locks."""
 
+    ttl: typing.Optional[float]
+    """Maximum time to wait for the lock to be released in seconds."""
     blocking: bool
     """Whether to block when acquiring the lock."""
     blocking_timeout: typing.Optional[float]
     """Maximum time to wait for the lock in seconds."""
-    release_timeout: typing.Optional[float]
-    """Maximum time to wait for the lock to be released in seconds."""
 
 
 class Stringable(typing.Protocol):

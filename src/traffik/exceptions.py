@@ -99,7 +99,7 @@ def _lookup_exception_handler(
     return None
 
 
-def build_exception_handler_getter(
+def _build_exception_handler_getter(
     app: Starlette,
 ) -> typing.Callable[[Exception], typing.Optional[TraffikExceptionHandler]]:
     """

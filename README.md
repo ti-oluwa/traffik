@@ -47,6 +47,7 @@ Built for production workloads with battle-tested patterns from high-scale syste
 - [Custom Strategies](#custom-strategies)
 - [Custom Backends](#custom-backends)
 - [Testing](#testing)
+- [Benchmarks](#benchmarks)
 - [Performance](#performance)
 - [API Reference](#api-reference)
 
@@ -292,6 +293,10 @@ backend = InMemoryBackend(
     persistent=False,  # Don't persist across app restarts
     number_of_shards=16,  # Lock striping for concurrency
     cleanup_frequency=5.0,  # Cleanup expired keys every 5s
+    # Lock configuration (optional)
+    lock_ttl=5.0,  # Auto-release locks after 5 seconds
+    lock_blocking=True,  # Wait for locks (default)
+    lock_blocking_timeout=2.0,  # Max wait time for locks
 )
 ```
 
@@ -315,6 +320,10 @@ backend = RedisBackend(
     namespace="app",
     persistent=True,
     lock_type="redis",  # or "redlock" for distributed/multi-cluster redis at the cost of latency
+    # Lock configuration (optional)
+    lock_ttl=5.0,  # Auto-release locks after 5 seconds
+    lock_blocking=True,  # Wait for locks (default)
+    lock_blocking_timeout=2.0,  # Max wait time for locks
 )
 
 # From factory
@@ -354,6 +363,10 @@ backend = MemcachedBackend(
     pool_size=10,
     pool_minsize=2,
     persistent=False,
+    # Lock configuration (optional)
+    lock_ttl=5.0,  # Auto-release locks after 5 seconds
+    lock_blocking=True,  # Wait for locks (default)
+    lock_blocking_timeout=2.0,  # Max wait time for locks
 )
 ```
 
@@ -926,7 +939,7 @@ async def tenant_backend_middleware(request: Request, call_next):
     
     # Enter backend context before request handlers run.
     # close_on_exit=False keeps connection alive for connection pooling
-    # persistent=True maintains backend across requests
+    # persistent=True maintains backend/throttling state across requests
     async with backend(request.app, close_on_exit=False, persistent=True):
         return await call_next(request)
 
@@ -971,24 +984,30 @@ Traffik provides utilities to configure global defaults for lock behavior:
 
 ```python
 from traffik import (
-    set_blocking_setting,
-    set_blocking_timeout,
-    get_blocking_setting,
-    get_blocking_timeout,
+    set_lock_ttl,
+    set_lock_blocking,
+    set_lock_blocking_timeout,
+    get_lock_ttl,
+    get_lock_blocking,
+    get_lock_blocking_timeout,
 )
 
 # Configure global lock blocking behavior
-set_blocking_setting(True)  # Wait for locks (default)
-set_blocking_timeout(2.0)   # Wait max 2 seconds for locks
+set_lock_ttl(5.0)  # All locks auto-release after 5 seconds (except specified otherwise)
+set_lock_blocking(True)  # Wait for locks (default)
+set_lock_blocking_timeout(2.0)   # Wait max 2 seconds for locks
 
 # Or via environment variables
 import os
+
+os.environ["TRAFFIK_DEFAULT_LOCK_TTL"] = "5.0"
 os.environ["TRAFFIK_DEFAULT_BLOCKING"] = "true"
 os.environ["TRAFFIK_DEFAULT_BLOCKING_TIMEOUT"] = "2.0"
 
 # Read current settings
-blocking = get_blocking_setting()      # Returns bool
-timeout = get_blocking_timeout()       # Returns float or None
+ttl = get_lock_ttl()              # Returns float or None
+blocking = get_lock_blocking()      # Returns bool
+timeout = get_lock_blocking_timeout()       # Returns float or None
 ```
 
 **Lock blocking settings:**
@@ -1016,6 +1035,7 @@ from traffik.types import LockConfig
 
 strategy = FixedWindowStrategy(
     lock_config=LockConfig(
+        ttl=10.0,  # Override global TTL
         blocking=True,
         blocking_timeout=1.0,  # Override global timeout
     )
@@ -1024,6 +1044,7 @@ strategy = FixedWindowStrategy(
 
 **Environment variables:**
 
+- `TRAFFIK_DEFAULT_LOCK_TTL`: Float value in seconds (e.g., "5.0")
 - `TRAFFIK_DEFAULT_BLOCKING`: "true", "false", "1", "0", "yes", "no"
 - `TRAFFIK_DEFAULT_BLOCKING_TIMEOUT`: Float value in seconds (e.g., "2.0")
 
@@ -1043,8 +1064,6 @@ If you're pushing Traffik hard—think high concurrency, sub-second rate windows
 | LeakyBucketStrategy | Always | Queue level management |
 | LeakyBucketWithQueueStrategy | Always | Queue operations |
 | GCRAStrategy | Always | TAT calculations |
-| ConcurrencyLimitStrategy | Always | Active request tracking |
-| RegionalBurstStrategy | Always | Multi-region coordination |
 
 **Sub-second window considerations:**
 
@@ -1122,6 +1141,7 @@ async def error_handler(
     - connection: `HTTPConnection` - HTTP connection
     - cost: int - Request cost
     - rate: `Rate` - Rate limit configuration
+    - context: Mapping[str, Any] - Context passed to throttle
     - backend: `ThrottleBackend` - Backend that failed
     - throttle: `Throttle` - Throttle instance
     """
@@ -1133,7 +1153,7 @@ async def error_handler(
 
 ### Built-in Error Handlers
 
-Traffik includes several pre-built error handlers for common scenarios. From simple string shortcuts for development to sophisticated handlers that combine retries, circuit breakers, and failover logic.
+Traffik includes pre-built error handlers for common scenarios. From simple string shortcuts for development to sophisticated handlers that combine retries, circuit breakers, and failover logic.
 
 #### Basic Handlers (String Literals)
 
@@ -1196,48 +1216,6 @@ throttle = HTTPThrottle(
 2. Attempts throttling with fallback backend
 3. If fallback succeeds, returns its wait period
 4. If fallback fails, fails closed (`min_wait_period` or 1000ms wait)
-
-#### Circuit Breaker Handler
-
-Prevent cascading failures:
-
-```python
-from traffik.error_handlers import circuit_breaker, CircuitBreaker
-
-breaker = CircuitBreaker(
-    failure_threshold=5,      # Open after 5 failures
-    recovery_timeout=30.0,    # Test recovery after 30s
-    success_threshold=2,      # Need 2 successes to close
-)
-
-throttle = HTTPThrottle(
-    uid="protected",
-    rate="100/minute",
-    on_error=circuit_breaker(
-        circuit_breaker=breaker,
-        wait_ms=5000.0,  # Wait 5s when circuit open
-    ),
-)
-
-# Monitor circuit state
-@app.get("/health/circuit")
-async def circuit_status():
-    return breaker.info()
-```
-
-**States:**
-
-- **CLOSED**: Normal operation (failures < threshold)
-- **OPEN**: Too many failures (rejects all requests)
-- **HALF_OPEN**: Testing recovery (allows limited requests)
-
-**State transitions:**
-
-```
-CLOSED ──[5 failures]──> OPEN ──[30s timeout]──> HALF_OPEN
-   ↑                                                  |
-   └────────────[2 successes]────────────────────────┘
-```
 
 #### Retry Handler
 
@@ -1677,6 +1655,8 @@ Numbers matter when you're adding middleware to every request. We've run extensi
 
 **Test Environment:** Python 3.9, single-process, 3 iterations per scenario averaged across 3 separate benchmark runs. Performance is expected to improve by 5-15% on Python 3.11+ due to CPython optimizations.
 
+> **Note on Burst Scenario:** The burst test sends requests sequentially (one at a time) to measure per-request overhead. This results in higher latency than concurrent scenarios where async I/O batching benefits apply. Real-world API traffic typically resembles the sustained scenario with multiple concurrent clients.
+
 ### InMemory Backend (Fixed Window)
 
 | Scenario | Metric | Traffik | SlowAPI | Notes |
@@ -1853,7 +1833,7 @@ Rate limiting runs on every request, so even small inefficiencies add up. This s
        return f"user:{user.id}"
    ```
 
-6. **Avoid logging in backend operations:** Logging can cause ~10× slowdown**. Especially when the logging backend is slow (e.g., file I/O).
+6. **Avoid logging in backend operations: **Logging can cause ~10× slowdown**. Especially when the logging backend is slow (e.g., file I/O).
 
 ## API Reference
 
@@ -1876,6 +1856,7 @@ HTTPThrottle(
     min_wait_period: Optional[int] = None,
     headers: Optional[Mapping[str, str]] = None,
     on_error: Union[Literal["allow", "throttle", "raise"], ErrorHandler] = None,
+    cache_ids: bool = True,
 )
 ```
 
@@ -1892,6 +1873,7 @@ HTTPThrottle(
 - `min_wait_period`: Minimum wait time in milliseconds
 - `headers`: Extra headers for throttled responses
 - `on_error`: Error handling strategy
+- `cache_ids`: Cache computed identifiers in connection state (default: True). Avoids recomputation on multiple calls.
 
 #### `WebSocketThrottle`
 
@@ -1928,6 +1910,19 @@ All backends inherit from `ThrottleBackend[T, HTTPConnectionT]`:
 
 ```python
 class ThrottleBackend:
+    # Constructor parameters (all backends)
+    def __init__(
+        namespace: str,                          # Key prefix for isolation
+        identifier: ConnectionIdentifier = None, # Client identifier function
+        handle_throttled: ConnectionThrottledHandler = None,
+        persistent: bool = False,                # Persist data across restarts
+        on_error: Literal["allow", "throttle", "raise"] = "throttle",
+        lock_blocking: bool = None,              # Wait for locks (default: True)
+        lock_ttl: float = None,                  # Lock auto-release timeout
+        lock_blocking_timeout: float = None,     # Max lock wait time
+    )
+
+    # Methods
     async def initialize() -> None
     async def ready() -> bool
     async def get(key: str) -> Optional[str]
@@ -1939,6 +1934,12 @@ class ThrottleBackend:
     async def increment_with_ttl(key: str, amount: int, ttl: int) -> int
     async def multi_get(*keys: str) -> List[Optional[str]]
     async def get_lock(name: str) -> AsyncLock
+    async def lock(
+        name: str,
+        ttl: float = None,              # Override backend lock_ttl
+        blocking: bool = None,          # Override backend lock_blocking
+        blocking_timeout: float = None, # Override backend lock_blocking_timeout
+    ) -> AsyncLockContext
     async def reset() -> None
     async def close() -> None
     
@@ -1946,6 +1947,14 @@ class ThrottleBackend:
 async with backend(app, persistent=True, close_on_exit=True):
     ...
 ```
+
+**Backend-specific parameters:**
+
+| Backend | Extra Parameters |
+| ------- | ---------------- |
+| `InMemoryBackend` | `number_of_shards=3`, `cleanup_frequency=3.0` |
+| `RedisBackend` | `connection` (URL or factory), `lock_type="redis"\|"redlock"` |
+| `MemcachedBackend` | `host`, `port`, `pool_size`, `pool_minsize`, `track_keys=False` |
 
 ### Strategies
 
@@ -1994,10 +2003,12 @@ ThrottleMiddleware(
 ```python
 from traffik import (
     get_remote_address,
-    set_blocking_setting,
-    set_blocking_timeout,
-    get_blocking_setting,
-    get_blocking_timeout,
+    set_lock_ttl,
+    set_lock_blocking,
+    set_lock_blocking_timeout,
+    get_lock_ttl,
+    get_lock_blocking,
+    get_lock_blocking_timeout,
     is_throttled,
 )
 
@@ -2005,12 +2016,14 @@ from traffik import (
 ip = get_remote_address(connection)  # Checks X-Forwarded-For, then client.host
 
 # Configure global lock behavior
-set_blocking_setting(True)   # Enable blocking locks
-set_blocking_timeout(2.0)    # Max 2s wait for locks
+set_lock_ttl(5.0)         # Auto-release locks after 5 seconds
+set_lock_blocking(True)   # Enable blocking locks
+set_lock_blocking_timeout(2.0)    # Max 2s wait for locks
 
 # Read current configuration
-blocking = get_blocking_setting()    # bool
-timeout = get_blocking_timeout()     # float | None
+ttl = get_lock_ttl()      # float | None
+blocking = get_lock_blocking()    # bool
+timeout = get_lock_blocking_timeout()     # float | None
 
 # Check if connection was throttled
 if is_throttled(websocket):

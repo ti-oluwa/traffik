@@ -11,14 +11,7 @@ from enum import IntEnum
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, Stringable, WaitPeriod
-from traffik.utils import (
-    MsgPackDecodeError,
-    dump_data,
-    get_blocking_setting,
-    get_blocking_timeout,
-    load_data,
-    time,
-)
+from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
     "TieredRateStrategy",
@@ -83,12 +76,7 @@ class TieredRateStrategy:
     default_tier: str = "free"
     """Default tier if not specified in key"""
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during rate limit checks."""
     marker: str = "tier:"
     """
@@ -206,12 +194,7 @@ class AdaptiveThrottleStrategy:
     min_limit_ratio: float = 0.3
     """Never go below this ratio of base limit"""
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during rate limit checks."""
 
     def __post_init__(self) -> None:
@@ -346,12 +329,7 @@ class PriorityQueueStrategy:
     max_queue_size: int = 1000
     """Maximum queue size (prevents memory issues)"""
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during rate limit checks."""
 
     marker: str = "priority:"
@@ -445,6 +423,7 @@ class PriorityQueueStrategy:
 class QuotaWithRolloverStrategy:
     """
     Quota-based rate limiting with rollover of unused quota.
+    Implements fixed window quota with rollover.
 
     **Use case:** Monthly API quotas where unused quota should not be wasted
 
@@ -483,12 +462,7 @@ class QuotaWithRolloverStrategy:
     max_rollover: int = 500
     """Maximum requests that can roll over"""
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during rate limit checks."""
 
     def __post_init__(self) -> None:
@@ -599,7 +573,7 @@ class TimeOfDayStrategy:
     List of (start_hour, end_hour, multiplier) tuples (24-hour format)
     
     Best practice is that the time windows should cover the full 24-hour period without gaps.
-    
+
     For example:
     ```json
     [(0, 8, 2.0), (8, 17, 1.0), (17, 24, 1.5)]
@@ -613,12 +587,7 @@ class TimeOfDayStrategy:
     timezone_offset: int = 0
     """Timezone offset from UTC in hours. Time offset can range from -12 to +14."""
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during rate limit checks."""
 
     def __post_init__(self) -> None:
@@ -726,12 +695,7 @@ class CostBasedTokenBucketStrategy:
     min_refill_rate: float = 0.5
     """Minimum refill rate multiplier (prevents starvation)"""
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during rate limit checks."""
 
     async def __call__(
@@ -865,12 +829,7 @@ class GCRAStrategy:
     burst_tolerance_ms: float = 0.0
     """How much burst to tolerate (0 = perfectly smooth). Can be any non-negative value."""
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during rate limit checks."""
 
     def __post_init__(self) -> None:
@@ -1129,12 +1088,7 @@ class GeographicDistributionStrategy:
     default_region: str = "default"
     """Fallback region if not specified"""
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during rate limit checks."""
 
     marker: str = "region:"

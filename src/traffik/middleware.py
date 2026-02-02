@@ -10,7 +10,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from typing_extensions import TypeAlias
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import ConfigurationError, build_exception_handler_getter
+from traffik.exceptions import ConfigurationError, _build_exception_handler_getter
 from traffik.throttles import Throttle
 from traffik.types import HTTPConnectionT, Matchable
 from traffik.utils import is_async_callable
@@ -233,7 +233,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
                     # `ServerErrorMiddleware` will properly handle it.
                     exc_handler = self.get_exception_handler
                     if exc_handler is None:
-                        exc_handler = build_exception_handler_getter(connection.app)
+                        exc_handler = _build_exception_handler_getter(connection.app)
                         # Cache the exception handler getter for future use
                         self.get_exception_handler = exc_handler  # type: ignore[assignment]
 

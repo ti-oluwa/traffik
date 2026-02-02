@@ -20,9 +20,31 @@ from traffik.types import AsyncLock, AwaitableCallable, T
 
 DEFAUL_BLOCKING_SETTING_ENV_VAR = "TRAFFIK_DEFAULT_BLOCKING"
 DEFAULT_BLOCKING_TIMEOUT_ENV_VAR = "TRAFFIK_DEFAULT_BLOCKING_TIMEOUT"
+DEFAULT_LOCK_TTL_ENV_VAR = "TRAFFIK_DEFAULT_LOCK_TTL"
 
 
-def get_blocking_setting() -> bool:
+def get_lock_ttl() -> typing.Optional[float]:
+    """
+    Get the default lock TTL from the environment variable `TRAFFIK_DEFAULT_LOCK_TTL`.
+
+    :return: The default lock TTL in seconds, or None if not set.
+    """
+    ttl_str = os.getenv(DEFAULT_LOCK_TTL_ENV_VAR)
+    if ttl_str is not None:
+        try:
+            ttl = float(ttl_str)
+        except ValueError:
+            raise ValueError(
+                f"Invalid value for {DEFAULT_LOCK_TTL_ENV_VAR}. Must be a non-negative float."
+            )
+
+        if ttl < 0:
+            raise ValueError("Lock TTL must be a non-negative float.")
+        return ttl
+    return None
+
+
+def get_lock_blocking() -> bool:
     """
     Get the default blocking setting from the environment variable `TRAFFIK_DEFAULT_BLOCKING`.
 
@@ -34,7 +56,7 @@ def get_blocking_setting() -> bool:
     return True
 
 
-def get_blocking_timeout() -> typing.Optional[float]:
+def get_lock_blocking_timeout() -> typing.Optional[float]:
     """
     Get the default blocking timeout from the environment variable `TRAFFIK_DEFAULT_BLOCKING_TIMEOUT`.
 
@@ -54,7 +76,22 @@ def get_blocking_timeout() -> typing.Optional[float]:
     return None
 
 
-def set_blocking_setting(blocking: bool) -> None:
+def set_lock_ttl(ttl: typing.Optional[float]) -> None:
+    """
+    Set the default global lock TTL in the environment variable `TRAFFIK_DEFAULT_LOCK_TTL`.
+
+    :param ttl: The lock TTL to set, or None to unset.
+    """
+    if ttl is None:
+        if DEFAULT_LOCK_TTL_ENV_VAR in os.environ:
+            del os.environ[DEFAULT_LOCK_TTL_ENV_VAR]
+    else:
+        if ttl < 0:
+            raise ValueError("Lock TTL must be a non-negative float.")
+        os.environ[DEFAULT_LOCK_TTL_ENV_VAR] = str(ttl)
+
+
+def set_lock_blocking(blocking: bool) -> None:
     """
     Set the default gloabl blocking setting in the environment variable `TRAFFIK_DEFAULT_BLOCKING`.
 
@@ -63,7 +100,7 @@ def set_blocking_setting(blocking: bool) -> None:
     os.environ[DEFAUL_BLOCKING_SETTING_ENV_VAR] = "1" if blocking else "0"
 
 
-def set_blocking_timeout(timeout: typing.Optional[float]) -> None:
+def set_lock_blocking_timeout(timeout: typing.Optional[float]) -> None:
     """
     Set the default global blocking timeout in the environment variable `TRAFFIK_DEFAULT_BLOCKING_TIMEOUT`.
 
@@ -285,34 +322,42 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
 
     Muilti-threaded or Distributed safety depends on the underlying `AsyncLock` implementation.
 
-    Warning: Using `release_timeout` or `blocking_timeout` with reentrant locks may cause unexpected behavior
+    Warning: Using `ttl` or `blocking_timeout` with reentrant locks may cause unexpected behavior
     if nested contexts share the same lock instance.
     """
 
     __slots__ = (
         "_lock",
-        "_release_timeout",
+        "_ttl",
         "_blocking",
         "_blocking_timeout",
         "_timer",
         "_acquired",
-        "_released_by_timeout",
+        "_auto_released",
     )
 
     def __init__(
         self,
         lock: AsyncLockT,
-        release_timeout: typing.Optional[float] = None,
+        ttl: typing.Optional[float] = None,
         blocking: bool = True,
         blocking_timeout: typing.Optional[float] = None,
     ) -> None:
+        """
+        Initialize the async lock context.
+
+        :param lock: The async lock instance to manage.
+        :param ttl: How long the lock should live in seconds before auto-release (default: None = no auto-release).
+        :param blocking: Whether to block when acquiring the lock (default: True).
+        :param blocking_timeout: Max time to wait when acquiring lock (default: None = wait forever).
+        """
         self._lock = lock
-        self._release_timeout = release_timeout
+        self._ttl = ttl
         self._blocking = blocking
         self._blocking_timeout = blocking_timeout
         self._timer: typing.Optional[asyncio.Task] = None
         self._acquired: bool = False
-        self._released_by_timeout: bool = False
+        self._auto_released: bool = False
 
     async def __aenter__(self) -> Self:
         # Try to acquire the lock
@@ -327,22 +372,22 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
 
         self._acquired = acquired
         # Start auto-release timer if acquired and timeout is set
-        if acquired and self._release_timeout is not None:
-            self._timer = asyncio.create_task(self._release_on_timeout())
+        if acquired and self._ttl is not None:
+            self._timer = asyncio.create_task(self._auto_release())
         return self
 
-    async def _release_on_timeout(self) -> None:
+    async def _auto_release(self) -> None:
         """Automatically releases the lock after the timeout."""
-        if self._release_timeout is None:
+        if self._ttl is None:
             return
 
         try:
-            await asyncio.sleep(self._release_timeout)
+            await asyncio.sleep(self._ttl)
             # Only release if we still think we have the lock
             if self._acquired:
                 try:
                     await self._lock.release()
-                    self._released_by_timeout = True
+                    self._auto_released = True
                     self._acquired = False
                 except RuntimeError:
                     # This needs to be a fast operation. Cannot use logger here as it blocks the event loop,
@@ -375,7 +420,7 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
                 pass
 
         # Release the lock if we acquired it and haven't released it yet
-        if self._acquired and not self._released_by_timeout:
+        if self._acquired and not self._auto_released:
             try:
                 await self._lock.release()
             except RuntimeError:

@@ -77,7 +77,7 @@ def _wrap_methods_with_on_error_return(
             setattr(obj, method_name, wrapped_method)
 
 
-class AsyncMemcachedLock:
+class _AsyncMemcachedLock:
     """
     Name-based, best-effort, and "instance-reentrant" distributed (un-fair) lock implementation using Memcached's add operation.
 
@@ -90,7 +90,7 @@ class AsyncMemcachedLock:
     __slots__ = (
         "_name",
         "_client",
-        "_release_timeout",
+        "_ttl",
         "_acquired",
         "_fence_token",
     )
@@ -99,18 +99,19 @@ class AsyncMemcachedLock:
         self,
         name: str,
         client: MemcachedClient,
-        release_timeout: typing.Optional[float] = None,
+        ttl: typing.Optional[float] = None,
     ) -> None:
         """
         Initialize the lock.
 
         :param name: Unique lock name.
         :param client: `aiomcache.Client` instance.
-        :param release_timeout: Lock expiration time in seconds (default 2.0s).
+        :param ttl: How long to hold the lock in seconds before auto-release.
+            If None, lock has no expiration. This bad practice and may lead to deadlocks.
         """
         self._name = name
         self._client = client
-        self._release_timeout = math.ceil(release_timeout or 2.0)
+        self._ttl = math.ceil(ttl) if ttl is not None else 0
         self._acquired = False
         self._fence_token: typing.Optional[str] = None
 
@@ -142,12 +143,12 @@ class AsyncMemcachedLock:
         start = time()
         attempts = 0
         while True:
-            # add() is atomic, as only succeeds if key doesn't exist
+            # `add()` is atomic, as only succeeds if key doesn't exist
             # Returns True if added, False if key already exists
             added = await self._client.add(
                 self._name.encode(),
                 token.encode(),
-                exptime=self._release_timeout,
+                exptime=self._ttl,
             )
             if added:
                 self._acquired = True
@@ -249,6 +250,9 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             typing.Literal["allow", "throttle", "raise"],
             ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
         ] = "throttle",
+        lock_blocking: typing.Optional[bool] = None,
+        lock_ttl: typing.Optional[float] = None,
+        lock_blocking_timeout: typing.Optional[float] = None,
         track_keys: bool = False,
         **kwargs: typing.Any,
     ) -> None:
@@ -271,6 +275,12 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             - A custom callable that takes the connection and the exception as parameters
                 and returns an integer representing the wait period in milliseconds. Ensure this
                 function executes quickly to avoid additional latency.
+        :param lock_blocking: Whether locks should block when acquiring.
+            If None, uses the global default from `traffik.utils.get_lock_blocking()`.
+        :param lock_ttl: Default TTL for locks in seconds. If None, locks have
+            no expiration unless specified during lock acquisition.
+        :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
+            If None, uses the global default from `traffik.utils.get_lock_blocking_timeout()`.
         :param track_keys: Whether to track all keys in the namespace for clearing.
             Since Memcached doesn't support key listing like Redis, this enables
             a best-effort tracking mechanism using a special tracking key to store
@@ -301,6 +311,9 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             handle_throttled=handle_throttled,
             persistent=persistent,
             on_error=on_error,
+            lock_blocking=lock_blocking,
+            lock_ttl=lock_ttl,
+            lock_blocking_timeout=lock_blocking_timeout,
             **kwargs,
         )
 
@@ -396,18 +409,18 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         except ClientException:
             return False
 
-    async def get_lock(self, name: str) -> AsyncMemcachedLock:
+    async def get_lock(self, name: str) -> _AsyncMemcachedLock:
         """
         Get a distributed lock for the given name.
 
         :param name: Lock name.
-        :return: AsyncMemcachedLock instance.
+        :return: _AsyncMemcachedLock instance.
         """
         if self.connection is None:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
-        return AsyncMemcachedLock(name, client=self.connection, release_timeout=2.0)
+        return _AsyncMemcachedLock(name, client=self.connection, ttl=self.lock_ttl)
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any
@@ -644,6 +657,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         Override this method as so.
 
         ```python
+        ...
         async def clear(self) -> None:
             # Flush entire Memcached cache, if not tracking keys
             if self.connection is not None and not self.track_keys:

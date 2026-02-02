@@ -19,7 +19,7 @@ from traffik.types import (
 from traffik.utils import AsyncRLock, time
 
 
-class AsyncInMemoryLock:
+class _AsyncInMemoryLock:
     """Re-entrant async (un-fair) lock for in-memory backend."""
 
     __slots__ = "_lock"
@@ -121,6 +121,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             typing.Literal["allow", "throttle", "raise"],
             ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
         ] = "throttle",
+        lock_blocking: typing.Optional[bool] = None,
+        lock_ttl: typing.Optional[float] = None,
+        lock_blocking_timeout: typing.Optional[float] = None,
         number_of_shards: int = 3,
         cleanup_frequency: float = 3.0,
         **kwargs: typing.Any,
@@ -139,6 +142,12 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             - A custom callable that takes the connection and the exception as parameters
                 and returns an integer representing the wait period in milliseconds. Ensure this
                 function executes quickly to avoid additional latency.
+        :param lock_blocking: Whether locks should block when acquiring.
+            If None, uses the global default from `traffik.utils.get_lock_blocking()`.
+        :param lock_ttl: Default TTL for locks in seconds. If None, locks have
+            no expiration unless specified during lock acquisition.
+        :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
+            If None, uses the global default from `traffik.utils.get_lock_blocking_timeout()`.
         :param number_of_shards: Number of shards to split the in-memory store into for concurrency.
         :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys.
         """
@@ -149,6 +158,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             handle_throttled=handle_throttled,
             persistent=persistent,
             on_error=on_error,
+            lock_blocking=lock_blocking,
+            lock_ttl=lock_ttl,
+            lock_blocking_timeout=lock_blocking_timeout,
             **kwargs,
         )
         if number_of_shards < 1:
@@ -161,7 +173,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """In-memory storage shards."""
 
         # Separate registry for user-requested named locks
-        self._named_locks: typing.Dict[str, AsyncInMemoryLock] = {}
+        self._named_locks: typing.Dict[str, _AsyncInMemoryLock] = {}
         """Lock registry for named locks requested by users."""
         self._named_locks_lock = AsyncRLock()
         """Lock to protect access to the named locks registry."""
@@ -238,7 +250,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         return asyncio.create_task(_cleanup_task())
 
-    async def get_lock(self, name: str) -> AsyncInMemoryLock:
+    async def get_lock(self, name: str) -> _AsyncInMemoryLock:
         """
         Returns a reentrant lock for the given name.
 
@@ -247,7 +259,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         if name not in self._named_locks:
             async with self._named_locks_lock:
-                self._named_locks[name] = AsyncInMemoryLock()
+                self._named_locks[name] = _AsyncInMemoryLock()
         return self._named_locks[name]
 
     async def get(

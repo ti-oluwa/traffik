@@ -30,11 +30,11 @@ from .throttles import (
 )
 from .types import *  # noqa
 from .utils import (  # noqa
-    get_blocking_setting,
-    get_blocking_timeout,
+    get_lock_blocking,
+    get_lock_blocking_timeout,
     get_remote_address,
-    set_blocking_setting,
-    set_blocking_timeout,
+    set_lock_blocking,
+    set_lock_blocking_timeout,
 )
 
 __version__ = "1.0.0"

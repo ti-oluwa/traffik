@@ -6,14 +6,7 @@ from dataclasses import dataclass, field
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
-from traffik.utils import (
-    MsgPackDecodeError,
-    dump_data,
-    get_blocking_setting,
-    get_blocking_timeout,
-    load_data,
-    time,
-)
+from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = ["TokenBucketStrategy", "TokenBucketWithDebtStrategy"]
 
@@ -85,24 +78,18 @@ class TokenBucketStrategy:
     ```
 
     **Real-world scenario:**
-        User makes 150 requests instantly (burst):
-        - First 100 requests: Consume 100 tokens, bucket now has 50 tokens
-        - Next 50 requests: Consume 50 tokens, bucket now empty
-        - Request 151: Must wait ~0.6s for next token to refill
-        - After 30s: Bucket has refilled 50 tokens, can burst again
+    User makes 150 requests instantly (burst):
+    - First 100 requests: Consume 100 tokens, bucket now has 50 tokens
+    - Next 50 requests: Consume 50 tokens, bucket now empty
+    - Request 151: Must wait ~0.6s for next token to refill
+    aults to rate.limit
+    (no burst allowance beyond rate limit).   - After 30s: Bucket has refilled 50 tokens, can burst again
 
-    :param burst_size: Maximum bucket capacity. If None, defaults to rate.limit
-        (no burst allowance beyond rate limit).
     """
 
     burst_size: typing.Optional[int] = None
     """Maximum bucket capacity (positive tokens). If None, defaults to `rate.limit`."""
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),  # 100 milliseconds
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during rate limit checks."""
 
     async def __call__(
@@ -311,33 +298,24 @@ class TokenBucketWithDebtStrategy:
     ```
 
     **Real-world scenario:**
-        User makes 200 requests instantly:
-        - Requests 1-150: Consume 150 tokens (burst), bucket at 0
-        - Requests 151-200: Go into debt, bucket at -50 (max debt)
-        - Request 201: Rejected (debt limit hit)
-        - Next 30s: Refill 50 tokens, pay back debt to 0
-        - After 60s: Bucket back to 50 tokens, user can request again
+    User makes 200 requests instantly:
+    - Requests 1-150: Consume 150 tokens (burst), bucket at 0
+    - Requests 151-200: Go into debt, bucket at -50 (max debt)
+    - Request 201: Rejected (debt limit hit)
+    - Next 30s: Refill 50 tokens, pay back debt to 0
+    - After 60s: Bucket back to 50 tokens, user can request again
 
-        Compare to standard token bucket:
-        - Would reject after request 150 (no debt allowance)
-        - User experience: "Why did it suddenly stop working?"
+    Compare to standard token bucket:
+    - Would reject after request 150 (no debt allowance)
+    - User experience: "Why did it suddenly stop working?"
 
-    :param burst_size: Maximum bucket capacity (positive tokens).
-        If None, defaults to rate.limit.
-    :param max_debt: Maximum negative tokens allowed (overdraft limit).
-        Set to 0 for standard token bucket behavior.
     """
 
     burst_size: typing.Optional[int] = None
     """Maximum bucket capacity (positive tokens). If None, defaults to `rate.limit`."""
     max_debt: int = 0
     """Maximum negative tokens allowed (overdraft limit). Set to 0 for standard behavior."""
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),  # 100 milliseconds
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
 
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1

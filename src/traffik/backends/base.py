@@ -25,7 +25,13 @@ from traffik.types import (
     ThrottleErrorHandler,
     WaitPeriod,
 )
-from traffik.utils import AsyncLockContext, get_remote_address
+from traffik.utils import (
+    AsyncLockContext,
+    get_lock_blocking,
+    get_lock_blocking_timeout,
+    get_lock_ttl,
+    get_remote_address,
+)
 
 
 async def default_identifier(connection: HTTPConnection) -> typing.Any:
@@ -205,6 +211,9 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             typing.Literal["allow", "throttle", "raise"],
             ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
         ] = "throttle",
+        lock_blocking: typing.Optional[bool] = None,
+        lock_ttl: typing.Optional[float] = None,
+        lock_blocking_timeout: typing.Optional[float] = None,
     ) -> None:
         """
         Initialize the throttle backend with a prefix.
@@ -221,6 +230,12 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             - A custom callable that takes the connection and the exception as parameters
                 and returns an integer representing the wait period in milliseconds. Ensure this
                 function executes quickly to avoid additional latency.
+        :param lock_blocking: Whether locks should block when acquiring.
+            If None, uses the global default from `traffik.utils.get_lock_blocking()`.
+        :param lock_ttl: Default TTL for locks in seconds. If None, locks have
+            no expiration unless specified during lock acquisition.
+        :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
+            If None, uses the global default from `traffik.utils.get_lock_blocking_timeout()`.
         """
         self.connection = connection
         self.namespace = namespace
@@ -229,6 +244,15 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         self.persistent = persistent
         self.on_error = on_error
         self._error_callback = on_error if callable(on_error) else None
+        self.lock_blocking = (
+            lock_blocking if lock_blocking is not None else get_lock_blocking()
+        )
+        self.lock_blocking_timeout = (
+            lock_blocking_timeout
+            if lock_blocking_timeout is not None
+            else get_lock_blocking_timeout()
+        )
+        self.lock_ttl = lock_ttl if lock_ttl is not None else get_lock_ttl()
 
     def get_key(self, key: str, *args, **kwargs) -> str:
         """
@@ -303,24 +327,42 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     async def lock(
         self,
         name: str,
-        release_timeout: typing.Optional[float] = None,
-        blocking: bool = True,
+        ttl: typing.Optional[float] = None,
+        blocking: typing.Optional[bool] = None,
         blocking_timeout: typing.Optional[float] = None,
     ) -> AsyncLockContext[AsyncLock]:
         """
         Context manager to acquire a distributed lock for the given key.
 
+        Note that the `ttl`, `blocking`, and `blocking_timeout` parameters
+        default to the backend's settings if not provided. If these parameters
+        are provided, they override the backend's defaults for this lock acquisition.
+
+        `ttl` and `blocking_timeout` settings here only affect the lock context (`AsyncLockContext`)
+        returned and do not modify the underlying lock  returned by `get_lock(...)`. This allows
+        multiple lock contexts with different settings to be created from the same lock.
+
+        If `get_lock(...)` needs `ttl` or `blocking_timeout` to create the lock, it should
+        use the backend's `lock_ttl` and `lock_blocking_timeout` settings.
+
         :param name: The name of the lock.
-        :param release_timeout: Lock timeout in seconds. If the lock is not released within this time, it will be automatically released.
+        :param ttl: How long the lock should live in seconds before auto-release. If None, uses backend default.
         :param blocking: If False, do not wait for the lock if it's already held, raise a timeout error instead.
         :param blocking_timeout: Maximum time in seconds to wait for the lock if blocking is True. None means wait indefinitely.
         :return: An asynchronous context manager that acquires/releases the lock.
         """
         lock_name = self.get_key(name)
         lock = await self.get_lock(lock_name)
+        ttl = ttl if ttl is not None else self.lock_ttl
+        blocking = blocking if blocking is not None else self.lock_blocking
+        blocking_timeout = (
+            blocking_timeout
+            if blocking_timeout is not None
+            else self.lock_blocking_timeout
+        )
         return AsyncLockContext(
             lock,
-            release_timeout=release_timeout,
+            ttl=ttl,
             blocking=blocking,
             blocking_timeout=blocking_timeout,
         )
@@ -445,7 +487,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         app: typing.Optional[ASGIApp] = None,
         persistent: typing.Optional[bool] = None,
         close_on_exit: typing.Optional[bool] = None,
-    ) -> "ThrottleContext[Self]":
+    ) -> "_ThrottleContext[Self]":
         """
         Create a throttle context for the backend.
 
@@ -489,7 +531,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         else:
             # Context should not close on exit if it is nested inside another context
             context_close_on_exit = is_inner_context is False
-        return ThrottleContext(
+        return _ThrottleContext(
             backend=self,
             persistent=context_persistence,
             close_on_exit=context_close_on_exit,
@@ -501,7 +543,7 @@ ThrottleBackendTco = typing.TypeVar(
 )
 
 
-class ThrottleContext(typing.Generic[ThrottleBackendTco]):
+class _ThrottleContext(typing.Generic[ThrottleBackendTco]):
     """
     Context manager for throttle backends.
     """

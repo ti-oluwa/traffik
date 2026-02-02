@@ -6,14 +6,7 @@ from dataclasses import dataclass, field
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
-from traffik.utils import (
-    MsgPackDecodeError,
-    dump_data,
-    get_blocking_setting,
-    get_blocking_timeout,
-    load_data,
-    time,
-)
+from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = ["SlidingWindowLogStrategy", "SlidingWindowCounterStrategy"]
 
@@ -71,12 +64,7 @@ class SlidingWindowLogStrategy:
     ```
     """
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),  # 100 milliseconds
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during log updates."""
 
     async def __call__(
@@ -254,12 +242,7 @@ class SlidingWindowCounterStrategy:
     ```
     """
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),  # 100 milliseconds
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during counter updates."""
 
     async def __call__(

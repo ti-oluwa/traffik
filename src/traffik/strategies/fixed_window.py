@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
-from traffik.utils import get_blocking_setting, get_blocking_timeout, time
+from traffik.utils import time
 
 __all__ = ["FixedWindowStrategy"]
 
@@ -63,12 +63,7 @@ class FixedWindowStrategy:
     ```
     """
 
-    lock_config: LockConfig = field(
-        default_factory=lambda: LockConfig(
-            blocking=get_blocking_setting(),
-            blocking_timeout=get_blocking_timeout(),  # 100 milliseconds
-        )
-    )
+    lock_config: LockConfig = field(default_factory=LockConfig)
     """Configuration for backend locking during rate limit checks."""
 
     async def __call__(
@@ -185,7 +180,7 @@ class FixedWindowStrategy:
             stored_window_start, stored_counter = await backend.multi_get(
                 window_start_key, counter_key
             )
-            
+
             # Check if we're in a new window or no data exists
             if (
                 stored_window_start is None

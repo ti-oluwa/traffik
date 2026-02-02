@@ -351,7 +351,7 @@ class TestQuotaWithRolloverStrategy:
                 await strategy(key, rate, backend)
 
             # Wait for new period
-            await asyncio.sleep(1.1)
+            await asyncio.sleep(1.05)
 
             # New period should have only base quota (100), no rollover
             for i in range(100):

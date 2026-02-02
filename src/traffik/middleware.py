@@ -122,7 +122,9 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             # Store both lowercase and uppercase versions.
             # Although HTTP scope methods are typically uppercase
             self.methods = frozenset(
-                m for method in methods if isinstance(method, str) 
+                m
+                for method in methods
+                if isinstance(method, str)
                 for m in (method.lower(), method.upper())
             )
         self.predicate = predicate or hook

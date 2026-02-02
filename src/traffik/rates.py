@@ -4,6 +4,30 @@ from typing import Annotated
 
 from annotated_types import Ge
 
+_PERIOD_RE = re.compile(r"^(\d+)?\s*([a-z]+)$")
+_SPLIT_RE = re.compile(r"\s*per\s*|\/", re.IGNORECASE)
+# Maps unit to Rate constructor parameters
+_UNIT_MAPPING = {
+    "ms": ("milliseconds", 1),
+    "millisecond": ("milliseconds", 1),
+    "milliseconds": ("milliseconds", 1),
+    "s": ("seconds", 1),
+    "sec": ("seconds", 1),
+    "second": ("seconds", 1),
+    "seconds": ("seconds", 1),
+    "m": ("minutes", 1),
+    "min": ("minutes", 1),
+    "minute": ("minutes", 1),
+    "minutes": ("minutes", 1),
+    "h": ("hours", 1),
+    "hr": ("hours", 1),
+    "hour": ("hours", 1),
+    "hours": ("hours", 1),
+    "d": ("days", 24),  # days are represented as hours
+    "day": ("days", 24),
+    "days": ("days", 24),
+}
+
 
 @dataclass(frozen=True, eq=False)
 class Rate:
@@ -19,7 +43,20 @@ class Rate:
     """Time period in minutes"""
     hours: Annotated[int, Ge(0)] = 0
     """Time period in hours"""
-    _expire: float = field(init=False, repr=False)
+    expire: float = field(init=False, repr=False)
+    """Total time period in milliseconds"""
+    is_subsecond: bool = field(init=False, repr=False)
+    """Whether the rate limit window is less than one second"""
+    unlimited: bool = field(init=False, repr=False)
+    """Whether the rate limit is unlimited"""
+    rps: float = field(init=False, repr=False)
+    """Requests per second"""
+    rpm: float = field(init=False, repr=False)
+    """Requests per minute"""
+    rph: float = field(init=False, repr=False)
+    """Requests per hour"""
+    rpd: float = field(init=False, repr=False)
+    """Requests per day"""
 
     def __post_init__(self) -> None:
         if self.limit < 0:
@@ -37,45 +74,18 @@ class Rate:
         if self.limit != 0 and expire == 0:
             raise ValueError("Expire must be greater than 0 when limit is set")
 
-        object.__setattr__(self, "_expire", expire)
-
-    @property
-    def expire(self) -> float:
-        """Total time period in milliseconds, per limit"""
-        return self._expire
-
-    @property
-    def unlimited(self) -> bool:
-        """Whether the rate limit is unlimited"""
-        return self.limit == 0 and self.expire == 0
-
-    @property
-    def rps(self) -> float:
-        """Requests per second"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 1000)
-
-    @property
-    def rpm(self) -> float:
-        """Requests per minute"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 60000)
-
-    @property
-    def rph(self) -> float:
-        """Requests per hour"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 3600000)
-
-    @property
-    def rpd(self) -> float:
-        """Requests per day"""
-        if self.limit == 0 or self.expire == 0:
-            return float("inf")
-        return self.limit / (self.expire / 86400000)
+        unlimited = self.limit == 0 and expire == 0
+        rps = float("inf") if unlimited else self.limit / (expire / 1000)
+        rpm = float("inf") if unlimited else self.limit / (expire / 60000)
+        rph = float("inf") if unlimited else self.limit / (expire / 3600000)
+        rpd = float("inf") if unlimited else self.limit / (expire / 86400000)
+        object.__setattr__(self, "expire", expire)
+        object.__setattr__(self, "is_subsecond", expire < 1000)
+        object.__setattr__(self, "unlimited", unlimited)
+        object.__setattr__(self, "rps", rps)
+        object.__setattr__(self, "rpm", rpm)
+        object.__setattr__(self, "rph", rph)
+        object.__setattr__(self, "rpd", rpd)
 
     def __eq__(self, other: object, /) -> bool:
         return isinstance(other, Rate) and self.rps == other.rps
@@ -89,6 +99,8 @@ class Rate:
         - "<limit>/<unit>": e.g., "5/m" means 5 requests per minute
         - "<limit>/<period><unit>": e.g., "2/5s" means 2 requests per 5 seconds
         - "<limit>/<period> <unit>": e.g., "10/30 seconds" means 10 requests per 30 seconds
+        - "<limit> per <period> <unit>": e.g., "2 per second" means 2 requests per 1 second.
+        - "<limit> per <period><unit>": e.g., "2 persecond" means 2 requests per 1 second.
 
         Where:
         - <limit>: Maximum number of requests (integer)
@@ -103,6 +115,7 @@ class Rate:
         Examples:
             - "5/m" -> 5 requests per minute
             - "100/h" -> 100 requests per hour
+            - "10 per second" -> 10 requests per second
             - "2/5s" -> 2 requests per 5 seconds
             - "10/30 seconds" -> 10 requests per 30 seconds
             - "1000/500ms" -> 1000 requests per 500 milliseconds
@@ -118,12 +131,11 @@ class Rate:
         if not rate:
             raise ValueError("Rate string cannot be empty")
 
-        # Split on forward slash
-        parts = rate.split("/")
+        parts = _SPLIT_RE.split(rate)
         if len(parts) != 2:
             raise ValueError(
-                f"Invalid rate format '{rate}'. Expected format: '<limit>/<period>' "
-                f"(e.g., '5/m', '2/5s', '10/30 seconds')"
+                f"Invalid rate format '{rate}'. Expected format: '<limit>/<period><unit>' or '<limit> per <period><unit>'"
+                f"(e.g., '5 per m', '2/5s', '10/30 seconds')"
             )
 
         # Parse limit (left side)
@@ -145,7 +157,7 @@ class Rate:
 
         # Extract number and unit from period string
         # Regex matches: optional number + optional whitespace + unit
-        match = re.match(r"^(\d+)?\s*([a-z]+)$", period_str)
+        match = _PERIOD_RE.match(period_str)
         if not match:
             raise ValueError(
                 f"Invalid period format '{period_str}'. Expected format: "
@@ -160,35 +172,13 @@ class Rate:
                 f"Period multiplier must be positive, got {period_multiplier}"
             )
 
-        # Map unit to Rate constructor parameters
-        unit_mapping = {
-            "ms": ("milliseconds", 1),
-            "millisecond": ("milliseconds", 1),
-            "milliseconds": ("milliseconds", 1),
-            "s": ("seconds", 1),
-            "sec": ("seconds", 1),
-            "second": ("seconds", 1),
-            "seconds": ("seconds", 1),
-            "m": ("minutes", 1),
-            "min": ("minutes", 1),
-            "minute": ("minutes", 1),
-            "minutes": ("minutes", 1),
-            "h": ("hours", 1),
-            "hr": ("hours", 1),
-            "hour": ("hours", 1),
-            "hours": ("hours", 1),
-            "d": ("days", 24),  # days are represented as hours
-            "day": ("days", 24),
-            "days": ("days", 24),
-        }
-
-        if unit not in unit_mapping:
-            valid_units = sorted(set(unit_mapping.keys()))
+        if unit not in _UNIT_MAPPING:
+            valid_units = sorted(set(_UNIT_MAPPING.keys()))
             raise ValueError(
                 f"Invalid time unit '{unit}'. Valid units: {', '.join(valid_units)}"
             )
 
-        param_name, base_multiplier = unit_mapping[unit]
+        param_name, base_multiplier = _UNIT_MAPPING[unit]
         # For days, we use hours internally
         if param_name == "days":
             return cls(limit=limit, hours=period_multiplier * base_multiplier)

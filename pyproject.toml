@@ -1,7 +1,7 @@
 [project]
 name = "traffik"
-version = "1.0.0b2"
-description = "Distributed rate limiting for Starlette applications."
+version = "1.0.0"
+description = "Distributed rate limiting for Starlette and FastAPI applications."
 readme = "README.md"
 authors = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
@@ -10,7 +10,12 @@ maintainers = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
 ]
 license = { file = "LICENSE" }
-keywords = ["starlette", "fastapi", "throttling", "rate-limiting", "api", "distributed-rate-limiting"]
+keywords = [
+    "starlette", "fastapi", "throttling", "rate-limiting", "api", 
+    "distributed-rate-limiting", "fastapi", "starlette", "rate-limiting", 
+    "rate-limiter", "throttling", "redis", "memcached", "distributed",
+    "websocket", "async", "asyncio", "middleware",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -23,6 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Framework :: FastAPI",
+    "Framework :: AsyncIO",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Networking",
@@ -31,6 +37,7 @@ requires-python = ">=3.9"
 dependencies = [
     "starlette>=0.14.0",
     "annotated-types>=0.7.0",
+    "msgpack>=1.1.2",
 ]
 
 [project.urls]
@@ -55,10 +62,18 @@ test = [
 dev = [
     "bandit>=1.7.10",
     "mypy>=1.14.1",
-    "orjson>=3.11.3",
     "pytest-watch>=4.2.0",
     "ruff>=0.12.1",
     "traffik[test]",
+]
+benchmark = [
+    "traffik[dev]",
+    "slowapi>=0.1.4",
+    "psutil>=5.9.5",
+    "uvicorn>=0.22.0",
+    "memory-profiler>=0.61.0",
+    "line-profiler>=5.0.0",
+    "pymemcache>=4.0.0",
 ]
 redis = ["pottery>=3.0.1", "redis>=5.0.0"]
 memcached = [
@@ -107,7 +122,7 @@ show_missing = true
 [tool.ruff]
 line-length = 88
 target-version = "py39"
-lint.extend-select = ["I", "UP", "TID", "F"]
+lint.extend-select = ["I", "TID", "F"]
 
 
 [tool.mypy]
@@ -118,8 +133,13 @@ mypy_path = "src"
 dev = [
     "bandit>=1.7.10",
     "mypy>=1.14.1",
-    "orjson>=3.11.3",
     "pytest-watch>=4.2.0",
     "ruff>=0.12.1",
     "traffik[test]",
+    "slowapi>=0.1.4",
+    "psutil>=5.9.5",
+    "uvicorn>=0.22.0",
+    "memory-profiler>=0.61.0",
+    "line-profiler>=5.0.0",
+    "pymemcache>=4.0.0",
 ]

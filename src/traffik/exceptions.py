@@ -27,7 +27,23 @@ class ConfigurationError(TraffikException):
 class BackendError(TraffikException):
     """Exception raised for backend related errors."""
 
-    pass
+    def __init__(
+        self,
+        *args: typing.Any,
+        cause: typing.Optional[BaseException] = None,
+        **kwargs: typing.Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._cause = cause
+
+    @property
+    def cause(self) -> typing.Optional[BaseException]:
+        """
+        The underlying cause of the backend error, if any.
+
+        Basically the exception that triggered this exception.
+        """
+        return self._cause or self.__cause__
 
 
 class BackendConnectionError(BackendError):
@@ -36,19 +52,8 @@ class BackendConnectionError(BackendError):
     pass
 
 
-class LockTimeoutError(TraffikException, TimeoutError):
+class LockTimeoutError(BackendError, TimeoutError):
     """Exception raised when a lock timeout occurs"""
-
-    pass
-
-
-class AnonymousConnection(TraffikException):
-    """
-    Exception raised when the connection identifier cannot be determined.
-
-    This exception is raised when the throttle backend cannot generate a unique identifier
-    for the connection, which is necessary for throttling to work correctly.
-    """
 
     pass
 
@@ -94,14 +99,14 @@ def _lookup_exception_handler(
     return None
 
 
-def build_exception_handler_getter(
+def _build_exception_handler_getter(
     app: Starlette,
 ) -> typing.Callable[[Exception], typing.Optional[TraffikExceptionHandler]]:
     """
     Build an exception handler getter for the given Starlette app.
     """
     # Here we use a neat trick to retrieve the exception handlers from the app
-    # by creating an instance of ExceptionMiddleware with the app and its handlers,
+    # by creating an instance of `ExceptionMiddleware` with the app and its handlers,
     # and trying to resolve the handler from both the status handlers and the exception handlers.
     exception_middleware = ExceptionMiddleware(
         app,

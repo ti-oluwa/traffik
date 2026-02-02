@@ -1,17 +1,17 @@
 """Tests for cost functionality in HTTP and WebSocket throttles."""
 
 import asyncio
+import typing
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from starlette.applications import Starlette
-from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from tests.asyncio_client import AsyncioTestClient
+from tests.asynctestclient import AsyncTestClient
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
@@ -139,39 +139,45 @@ async def test_http_throttle_override_cost_per_request(
 async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -> None:
     """Test WebSocketThrottle with variable costs."""
     async with inmemory_backend(close_on_exit=True):
+
+        async def ws_throttled(
+            connection: WebSocket,
+            wait_ms: float,
+            context: typing.Mapping[str, typing.Any],
+        ) -> None:
+            await connection.send_text("Throttled")
+            await asyncio.sleep(0.1)  # Give time for message to be sent
+            await connection.close(code=1008, reason="Throttled")
+
         ws_throttle = WebSocketThrottle(
             "test-ws-cost",
             rate="10/2s",
             identifier=default_client_identifier,
             cost=2,
+            handle_throttled=ws_throttled,
         )
 
         async def websocket_endpoint(websocket: WebSocket) -> None:
             await websocket.accept()
             print("Accepted websocket connection")
-            close_code = 1000  # Normal closure
-            close_reason = "Normal closure"
 
             while True:
                 try:
                     data = await websocket.receive_text()
                     await ws_throttle(websocket)
                     await websocket.send_text(f"Echo: {data}")
-                except HTTPException as exc:
-                    print("HTTPException caught in websocket:", exc)
-                    await websocket.send_text("Throttled")
-                    close_code = 1008  # Policy Violation
-                    close_reason = exc.detail
+                except WebSocketDisconnect:
+                    # Throttle handler may have closed the connection
                     break
                 except Exception as exc:
                     print("Exception caught in websocket:", exc)
-                    await websocket.send_text("Internal error")
-                    close_code = 1011  # Internal Error
-                    close_reason = "Internal error"
+                    # Only try to send if websocket is still connected
+                    if websocket.client_state.value != 3:  # 3 = DISCONNECTED
+                        try:
+                            await websocket.send_text("Internal error")
+                        except Exception:
+                            pass
                     break
-
-            await asyncio.sleep(1)  # Ensure message is sent before closing
-            await websocket.close(code=close_code, reason=close_reason)
 
         routes = [WebSocketRoute("/ws", websocket_endpoint)]
         app = Starlette(routes=routes)
@@ -179,7 +185,7 @@ async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -
         base_url = "http://0.0.0.0"
         running_loop = asyncio.get_running_loop()
         async with (
-            AsyncioTestClient(
+            AsyncTestClient(
                 app=app,
                 base_url=base_url,
                 event_loop=running_loop,

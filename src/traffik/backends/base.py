@@ -13,7 +13,7 @@ from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
 from typing_extensions import Self
 
-from traffik.exceptions import AnonymousConnection, BackendError, ConnectionThrottled
+from traffik.exceptions import BackendError, ConnectionThrottled
 from traffik.types import (
     AsyncLock,
     ConnectionIdentifier,
@@ -22,36 +22,48 @@ from traffik.types import (
     P,
     R,
     T,
+    ThrottleErrorHandler,
     WaitPeriod,
 )
-from traffik.utils import AsyncLockContext, get_ip_address
+from traffik.utils import (
+    AsyncLockContext,
+    get_lock_blocking,
+    get_lock_blocking_timeout,
+    get_lock_ttl,
+    get_remote_address,
+)
 
 
-async def connection_identifier(connection: HTTPConnection) -> str:
-    client_ip = get_ip_address(connection)
-    if not client_ip:
-        raise AnonymousConnection("Unable to determine client IP from connection")
-    return f"{client_ip.exploded}:{connection.scope['path']}"
+async def default_identifier(connection: HTTPConnection) -> typing.Any:
+    """
+    Default connection identifier using the remote address.
+
+    :param connection: The HTTP connection
+    :return: The remote address or "__anonymous__" if not available
+    """
+    return get_remote_address(connection) or "__anonymous__"
 
 
 async def connection_throttled(
-    connection: HTTPConnection, wait_ms: WaitPeriod, *args, **kwargs
+    connection: HTTPConnection,
+    wait_ms: WaitPeriod,
+    context: typing.Mapping[str, typing.Any],
 ) -> typing.NoReturn:
     """
     Handler for throttled HTTP connections
 
     :param connection: The HTTP connection
     :param wait_ms: The wait period in milliseconds before the next connection can be made
-    :return: None
+    :raises ConnectionThrottled: Always raises this exception to indicate throttling
     """
     wait_seconds = math.ceil(wait_ms / 1000)
     raise ConnectionThrottled(
         wait_period=wait_seconds,
-        detail=kwargs.get(
+        detail=context.get(
             "detail", f"Too many requests. Retry in {wait_seconds} seconds."
         ),
-        status_code=kwargs.get("status_code", 429),
-        headers=kwargs.get("headers", None),
+        status_code=context.get("status_code", 429),
+        headers=context.get("headers", None),
     )
 
 
@@ -59,7 +71,7 @@ throttle_backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVa
     "throttle_backend_ctx", default=None
 )
 
-BACKEND_STATE_KEY = "__traffik_throttle_backend"
+BACKEND_STATE_KEY = "__traffik_throttle_backend__"
 
 
 def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
@@ -88,7 +100,7 @@ def _raises_error(
 
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:  # type: ignore[no-redefined]
             try:
-                return await func(*args, **kwargs)
+                return await func(*args, **kwargs)  # type: ignore
             except asyncio.CancelledError:
                 raise
             except target_exc_type as exc:
@@ -138,8 +150,9 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     The `get()`, `set()`, and `delete()` methods need explicit locking when utilized in racy conditions.
     Hence, locks should not be implemented implicitly in these methods.
 
-    NOTE: All backend operation must be done as fast as possible and should not block the event loop.
+    NOTE: All backend operation must be done as fast and efficient as possible and should not block the event loop.
     Operations like logging should not be done on critical paths to prevent deadlocks or performance issues.
+    Logging degrades performance significantly and should be avoided in backend operations.
     """
 
     base_exception_type: typing.ClassVar[typing.Type[BaseException]] = BaseException
@@ -194,6 +207,13 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             ConnectionThrottledHandler[HTTPConnectionT]
         ] = None,
         persistent: bool = False,
+        on_error: typing.Union[
+            typing.Literal["allow", "throttle", "raise"],
+            ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
+        ] = "throttle",
+        lock_blocking: typing.Optional[bool] = None,
+        lock_ttl: typing.Optional[float] = None,
+        lock_blocking_timeout: typing.Optional[float] = None,
     ) -> None:
         """
         Initialize the throttle backend with a prefix.
@@ -203,24 +223,56 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :param identifier: The connected client identifier generator.
         :param handle_throttled: The handler to call when the client connection is throttled.
         :param persistent: Whether to persist throttling data across application restarts.
+        :param on_error: Strategy to handle errors during throttling operations.
+            - "allow": Allow the request to proceed without throttling.
+            - "throttle": Throttle the request as if it exceeded the rate limit.
+            - "raise": Raise the exception encountered during throttling.
+            - A custom callable that takes the connection and the exception as parameters
+                and returns an integer representing the wait period in milliseconds. Ensure this
+                function executes quickly to avoid additional latency.
+        :param lock_blocking: Whether locks should block when acquiring.
+            If None, uses the global default from `traffik.utils.get_lock_blocking()`.
+        :param lock_ttl: Default TTL for locks in seconds. If None, locks have
+            no expiration unless specified during lock acquisition.
+        :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
+            If None, uses the global default from `traffik.utils.get_lock_blocking_timeout()`.
         """
         self.connection = connection
         self.namespace = namespace
-        self.identifier = identifier or connection_identifier
+        self.identifier = identifier or default_identifier
         self.handle_throttled = handle_throttled or connection_throttled
         self.persistent = persistent
+        self.on_error = on_error
+        self._error_callback = on_error if callable(on_error) else None
+        self.lock_blocking = (
+            lock_blocking if lock_blocking is not None else get_lock_blocking()
+        )
+        self.lock_blocking_timeout = (
+            lock_blocking_timeout
+            if lock_blocking_timeout is not None
+            else get_lock_blocking_timeout()
+        )
+        self.lock_ttl = lock_ttl if lock_ttl is not None else get_lock_ttl()
 
-    async def get_key(self, key: str, *args, **kwargs) -> str:
+    def get_key(self, key: str, *args, **kwargs) -> str:
         """
-        Return a namespaced key.
+        Return a backend namespaced key.
 
         :param key: The throttling key.
         :return: The full key with namespace.
         """
         if args or kwargs:
-            base_key = build_key(key, *args, **kwargs)
-            return f"{self.namespace}:{base_key}"
+            tail = build_key(*args, **kwargs)
+            return f"{self.namespace}:{key}:{tail}"
         return f"{self.namespace}:{key}"
+
+    async def ready(self) -> bool:
+        """
+        Check if the backend is ready for operations.
+
+        :return: True if backend is ready, False otherwise.
+        """
+        return bool(self.connection)
 
     async def initialize(self) -> None:
         """
@@ -229,7 +281,9 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         Subclasses must implement this method to set up connections,
         create tables/collections, or perform any necessary setup.
         """
-        raise NotImplementedError("`initialize()` must be implemented by the backend.")
+        raise NotImplementedError(
+            "`initialize(...)` must be implemented by the backend."
+        )
 
     async def get(self, key: str, *args, **kwargs) -> typing.Optional[str]:
         """
@@ -238,7 +292,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :param key: The throttling key to retrieve.
         :return: The value associated with the key, or None if key doesn't exist.
         """
-        raise NotImplementedError("`get()` must be implemented by the backend.")
+        raise NotImplementedError("`get(...)` must be implemented by the backend.")
 
     async def set(
         self, key: str, value: str, expire: typing.Optional[int] = None
@@ -250,7 +304,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :param value: The value to set.
         :param expire: Optional expiration time in seconds.
         """
-        raise NotImplementedError("`set()` must be implemented by the backend.")
+        raise NotImplementedError("`set(...)` must be implemented by the backend.")
 
     async def delete(self, key: str, *args, **kwargs) -> bool:
         """
@@ -259,38 +313,56 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :param key: The throttling key to delete.
         :return: True if key was deleted, False if key didn't exist.
         """
-        raise NotImplementedError("`delete()` must be implemented by the backend.")
+        raise NotImplementedError("`delete(...)` must be implemented by the backend.")
 
     async def get_lock(self, name: str) -> AsyncLock:
         """
-        Acquire a distributed lock with the given name.
+        Get a distributed lock with the given name.
 
         :param name: The name of the lock.
         :return: An asynchronous lock object that implements the `traffik.types.AsyncLock` protocol.
         """
-        raise NotImplementedError("`lock()` must be implemented by the backend.")
+        raise NotImplementedError("`get_lock(...)` must be implemented by the backend.")
 
     async def lock(
         self,
         name: str,
-        release_timeout: typing.Optional[float] = None,
-        blocking: bool = True,
+        ttl: typing.Optional[float] = None,
+        blocking: typing.Optional[bool] = None,
         blocking_timeout: typing.Optional[float] = None,
     ) -> AsyncLockContext[AsyncLock]:
         """
         Context manager to acquire a distributed lock for the given key.
 
+        Note that the `ttl`, `blocking`, and `blocking_timeout` parameters
+        default to the backend's settings if not provided. If these parameters
+        are provided, they override the backend's defaults for this lock acquisition.
+
+        `ttl` and `blocking_timeout` settings here only affect the lock context (`AsyncLockContext`)
+        returned and do not modify the underlying lock  returned by `get_lock(...)`. This allows
+        multiple lock contexts with different settings to be created from the same lock.
+
+        If `get_lock(...)` needs `ttl` or `blocking_timeout` to create the lock, it should
+        use the backend's `lock_ttl` and `lock_blocking_timeout` settings.
+
         :param name: The name of the lock.
-        :param release_timeout: Lock timeout in seconds. If the lock is not released within this time, it will be automatically released.
+        :param ttl: How long the lock should live in seconds before auto-release. If None, uses backend default.
         :param blocking: If False, do not wait for the lock if it's already held, raise a timeout error instead.
         :param blocking_timeout: Maximum time in seconds to wait for the lock if blocking is True. None means wait indefinitely.
         :return: An asynchronous context manager that acquires/releases the lock.
         """
-        lock_name = await self.get_key(name)
+        lock_name = self.get_key(name)
         lock = await self.get_lock(lock_name)
+        ttl = ttl if ttl is not None else self.lock_ttl
+        blocking = blocking if blocking is not None else self.lock_blocking
+        blocking_timeout = (
+            blocking_timeout
+            if blocking_timeout is not None
+            else self.lock_blocking_timeout
+        )
         return AsyncLockContext(
             lock,
-            release_timeout=release_timeout,
+            ttl=ttl,
             blocking=blocking,
             blocking_timeout=blocking_timeout,
         )
@@ -320,7 +392,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         ```
         """
         raise NotImplementedError(
-            "`increment()` must be implemented by the backend for atomic operations."
+            "`increment(...)` must be implemented by the backend for atomic operations."
         )
 
     async def decrement(self, key: str, amount: int = 1) -> int:
@@ -352,7 +424,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :return: True if expiration was set, False if key doesn't exist
         """
         raise NotImplementedError(
-            "`expire()` must be implemented by the backend for atomic operations."
+            "`expire(...)` must be implemented by the backend for atomic operations."
         )
 
     async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int = 60) -> int:
@@ -415,7 +487,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         app: typing.Optional[ASGIApp] = None,
         persistent: typing.Optional[bool] = None,
         close_on_exit: typing.Optional[bool] = None,
-    ) -> "ThrottleContext[Self]":
+    ) -> "_ThrottleContext[Self]":
         """
         Create a throttle context for the backend.
 
@@ -459,7 +531,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         else:
             # Context should not close on exit if it is nested inside another context
             context_close_on_exit = is_inner_context is False
-        return ThrottleContext(
+        return _ThrottleContext(
             backend=self,
             persistent=context_persistence,
             close_on_exit=context_close_on_exit,
@@ -471,7 +543,7 @@ ThrottleBackendTco = typing.TypeVar(
 )
 
 
-class ThrottleContext(typing.Generic[ThrottleBackendTco]):
+class _ThrottleContext(typing.Generic[ThrottleBackendTco]):
     """
     Context manager for throttle backends.
     """
@@ -492,6 +564,9 @@ class ThrottleContext(typing.Generic[ThrottleBackendTco]):
     async def __aenter__(self) -> ThrottleBackendTco:
         backend = self.backend
         await backend.initialize()
+        if not await backend.ready():
+            raise BackendError("Throttle backend is not ready for operations.")
+
         # Set the throttle backend in the context variable
         self._context_token = throttle_backend_ctx.set(backend)
         return backend
@@ -526,14 +601,12 @@ def get_throttle_backend(
         and (app_state := getattr(app, "state", None)) is not None
     ):
         backend = getattr(app_state, BACKEND_STATE_KEY, None)
-    return typing.cast(
-        typing.Optional[ThrottleBackend[typing.Any, HTTPConnection]], backend
-    )
+    return backend
 
 
 __all__ = [
     "ThrottleBackend",
-    "connection_identifier",
+    "default_identifier",
     "connection_throttled",
     "get_throttle_backend",
 ]

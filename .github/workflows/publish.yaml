@@ -11,7 +11,7 @@ on:
       test_only:
         description: 'Publish to TestPyPI only'
         type: boolean
-        default: true
+        default: false
 
 jobs:
   # Run code quality workflow 
@@ -214,7 +214,7 @@ jobs:
           async def test():
               backend = InMemoryBackend()
               async with backend():
-                  throttle = HTTPThrottle(limit=5, seconds=60)
+                  throttle = HTTPThrottle(uid="test", rate="60/s")
                   print('✅ Basic functionality works')
           
           asyncio.run(test())
@@ -227,13 +227,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build, publish-testpypi]
     if: >
-      github.event_name == 'release' && 
+      (github.event_name == 'workflow_dispatch' || 
+      (github.event_name == 'release' && 
       github.event.action == 'published' &&
-      !github.event.release.prerelease &&
+      !github.event.release.prerelease)) &&
       (github.event.inputs.test_only != 'true' || github.event.inputs.test_only == '') &&
       always() &&
       needs.build.result == 'success' &&
-      needs.publish-testpypi.result == 'success'
+      (needs.publish-testpypi.result == 'success' || needs.publish-testpypi.outputs.exists == 'true')
     
     environment:
       name: pypi

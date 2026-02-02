@@ -198,6 +198,8 @@ docker-compose -f docker-compose.yml up shell
 
 - `REDIS_HOST` - Redis hostname (default: redis)
 - `REDIS_PORT` - Redis port (default: 6379)
+- `MEMCACHED_HOST` - Memcached hostname (default: memcached)
+- `MEMCACHED_PORT` - Memcached port (default: 11211)
 - `PYTHON_VERSION` - Python version for matrix testing
 - `COMPOSE_FILE` - Custom compose file path
 

@@ -1,4 +1,4 @@
-"""Throttle decorators. FastAPI only."""
+"""Throttle decorator. For FastAPI only."""
 
 import asyncio
 import functools
@@ -6,18 +6,19 @@ import inspect
 import typing
 from typing import Annotated
 
+from fastapi import Request
 from fastapi.params import Depends
 
-from traffik.throttles import BaseThrottle
+from traffik.throttles import Throttle
 from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S
 from traffik.utils import add_parameter_to_signature
 
-ThrottleT = typing.TypeVar("ThrottleT", bound=BaseThrottle)
+ThrottleT = typing.TypeVar("ThrottleT", bound=Throttle)
 
 __all__ = ["throttled"]
 
 
-class DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
+class _DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
     """
     `fastapi.params.Depends` subclass that allows instances to be used as decorators.
 
@@ -55,10 +56,10 @@ class DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
         return self.dependency_decorator(decorated, self.dependency)
 
 
-# Is this worth it? Just because of the `throttle` decorator?
-def apply_throttle(
+# Is this worth it? I mean! Just because of the `@throttled(...)` decorator?
+def _apply_throttle(
     route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
-    throttle: BaseThrottle[HTTPConnectionT],
+    throttle: Throttle[HTTPConnectionT],
 ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
     """
     Create and returns an wrapper that applies throttling to an route
@@ -137,30 +138,30 @@ def route_wrapper(
 
 @typing.overload
 def throttled(
-    throttle: BaseThrottle[HTTPConnectionT],
-) -> DecoratorDepends[typing.Any, typing.Any, typing.Any, HTTPConnectionT]: ...
+    *throttles: Throttle[Request],
+) -> _DecoratorDepends[typing.Any, typing.Any, typing.Any, Request]: ...  # type: ignore[misc]
 
 
 @typing.overload
 def throttled(
-    throttle: BaseThrottle[HTTPConnectionT],
+    *throttles: Throttle[Request],
     route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
 ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]: ...
 
 
 def throttled(
-    throttle: BaseThrottle[HTTPConnectionT],
+    *throttles: Throttle[Request],
     route: typing.Optional[
         typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]
     ] = None,
 ) -> typing.Union[
-    DecoratorDepends[P, R, Q, HTTPConnectionT],
+    _DecoratorDepends[P, R, Q, Request],
     typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
 ]:
     """
-    Throttles connections to decorated route using the provided throttle.
+    Throttles connections to decorated route using the provided HTTP throttle(s).
 
-    :param throttle: The throttle to apply to the route.
+    :param throttles: A single throttle or a sequence of throttles to apply to the route.
     :param route: The route to be throttled. If not provided, returns a decorator that can be used to apply throttling to routes.
     :return: A decorator that applies throttling to the route, or the wrapped route if `route` is provided.
 
@@ -172,11 +173,7 @@ def throttled(
     sustained_throttle = HTTPThrottle(uid="sustained", rate="100/min")
     burst_throttle = HTTPThrottle(uid="burst", rate="20/sec")
 
-    router = fastapi.APIRouter(
-        dependencies=[
-            sustained_throttle
-        ]
-    )
+    router = fastapi.APIRouter(dependencies=[sustained_throttle])
 
     @router.get("/throttled1")
     async def throttled_route1():
@@ -189,21 +186,33 @@ def throttled(
 
     ```
     """
+    if len(throttles) == 0:
+        raise ValueError("At least one throttle must be provided.")
+
+    if len(throttles) > 1:
+
+        async def throttle(connection: Request) -> None:
+            nonlocal throttles
+            for t in throttles:
+                await t(connection)
+    else:
+        throttle = throttles[0]  # type: ignore[assignment]
+
     # Just to make the type checker happy
-    _apply_throttle = typing.cast(
+    decorator = typing.cast(
         typing.Callable[
             [
                 typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
-                Dependency[Q, HTTPConnectionT],
+                Dependency[Q, Request],
             ],
             typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
         ],
-        apply_throttle,
+        _apply_throttle,
     )
-    _throttle = typing.cast(Dependency[Q, HTTPConnectionT], throttle)
-    decorator_dependency = DecoratorDepends[P, R, Q, HTTPConnectionT](
-        dependency_decorator=_apply_throttle,
-        dependency=_throttle,
+    dependency = typing.cast(Dependency[Q, Request], throttle)
+    decorator_dependency = _DecoratorDepends[P, R, Q, Request](
+        dependency_decorator=decorator,
+        dependency=dependency,
     )
     if route is not None:
         decorated = decorator_dependency(route)

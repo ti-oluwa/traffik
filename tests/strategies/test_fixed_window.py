@@ -137,7 +137,7 @@ async def test_fixed_window_boundary_burst(backend: InMemoryBackend):
 
 @pytest.mark.anyio
 @pytest.mark.strategy
-async def test_fixed_window_wait_time_accuracy(backend: InMemoryBackend):
+async def test_fixed_window_wait_ms_accuracy(backend: InMemoryBackend):
     """Test that wait time calculation is accurate."""
     async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()

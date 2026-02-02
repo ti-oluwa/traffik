@@ -1,7 +1,7 @@
 """
 In-memory implementation of a throttle backend using an `OrderedDict` for storage.
 
-NOTE: This is NOT suitable for multi-process or distributed setups.
+NOTE: This is not suitable for multi-process or distributed setups.
 """
 
 import asyncio
@@ -14,12 +14,13 @@ from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
+    ThrottleErrorHandler,
 )
 from traffik.utils import AsyncRLock, time
 
 
-class AsyncInMemoryLock:
-    """Lock for in-memory backend."""
+class _AsyncInMemoryLock:
+    """Re-entrant async (un-fair) lock for in-memory backend."""
 
     __slots__ = "_lock"
 
@@ -96,22 +97,11 @@ class AsyncInMemoryLock:
         self._lock.release()
 
 
-class InMemoryBackend(
-    ThrottleBackend[
-        typing.MutableMapping[
-            str,
-            typing.Tuple[str, typing.Optional[float]],
-        ],
-        HTTPConnectionT,
-    ]
-):
+class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     """
-    In-memory throttle backend with proper atomic operations support.
+    In-memory throttle backend.
 
-    Uses a SINGLE global lock to protect ALL operations on the shared storage.
-    This ensures true atomicity and prevents race conditions.
-
-    Storage format: key -> (value: str, expires_at: Optional[float])
+    Uses shards improve concurrent access.
 
     Warning: Only use for testing or single-process applications.
     Does not work across multiple processes/servers.
@@ -127,70 +117,171 @@ class InMemoryBackend(
             ConnectionThrottledHandler[HTTPConnectionT]
         ] = None,
         persistent: bool = False,
+        on_error: typing.Union[
+            typing.Literal["allow", "throttle", "raise"],
+            ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
+        ] = "throttle",
+        lock_blocking: typing.Optional[bool] = None,
+        lock_ttl: typing.Optional[float] = None,
+        lock_blocking_timeout: typing.Optional[float] = None,
+        number_of_shards: int = 3,
+        cleanup_frequency: float = 3.0,
+        **kwargs: typing.Any,
     ) -> None:
+        """
+        Initialize the in-memory throttle backend.
+
+        :param namespace: The namespace to be used for all throttling keys.
+        :param identifier: The connected client identifier generator.
+        :param handle_throttled: The handler to call when the client connection is throttled.
+        :param persistent: Whether to persist throttling data across application restarts.
+        :param on_error: Strategy to handle errors during throttling operations.
+            - "allow": Allow the request to proceed without throttling.
+            - "throttle": Throttle the request as if it exceeded the rate limit.
+            - "raise": Raise the exception encountered during throttling.
+            - A custom callable that takes the connection and the exception as parameters
+                and returns an integer representing the wait period in milliseconds. Ensure this
+                function executes quickly to avoid additional latency.
+        :param lock_blocking: Whether locks should block when acquiring.
+            If None, uses the global default from `traffik.utils.get_lock_blocking()`.
+        :param lock_ttl: Default TTL for locks in seconds. If None, locks have
+            no expiration unless specified during lock acquisition.
+        :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
+            If None, uses the global default from `traffik.utils.get_lock_blocking_timeout()`.
+        :param number_of_shards: Number of shards to split the in-memory store into for concurrency.
+        :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys.
+        """
         super().__init__(
             None,
             namespace=namespace,
             identifier=identifier,
             handle_throttled=handle_throttled,
             persistent=persistent,
+            on_error=on_error,
+            lock_blocking=lock_blocking,
+            lock_ttl=lock_ttl,
+            lock_blocking_timeout=lock_blocking_timeout,
+            **kwargs,
         )
-        # Global lock for all storage operations
-        self._global_lock = AsyncRLock()
+        if number_of_shards < 1:
+            raise ValueError("`number_of_shards` must be at least 1")
+
+        self._num_shards = number_of_shards
+        self._shard_locks: typing.List[AsyncRLock] = []
+        """Locks for each shard to allow concurrent access."""
+        self._shard_stores: typing.List[OrderedDict] = []
+        """In-memory storage shards."""
+
+        # Separate registry for user-requested named locks
+        self._named_locks: typing.Dict[str, _AsyncInMemoryLock] = {}
+        """Lock registry for named locks requested by users."""
+        self._named_locks_lock = AsyncRLock()
+        """Lock to protect access to the named locks registry."""
+
+        self._cleanup_task: typing.Optional[asyncio.Task] = None
+        self._cleanup_frequency = cleanup_frequency
+        self._initialized = False
 
     async def initialize(self) -> None:
         """Initialize the in-memory storage."""
-        if self.connection is None:
-            # Use `OrderedDict` to maintain insertion order (for predictable expiration cleanup)
-            self.connection = OrderedDict()
-
-    async def _cleanup_expired(self) -> None:
-        """
-        Remove expired keys.
-
-        MUST be called with `_global_lock` held!
-        """
-        if self.connection is None:
+        if self._initialized:
             return
 
-        now = time()
-        expired = [
-            key
-            for key, (_, expires_at) in list(self.connection.items())
-            if expires_at is not None and expires_at < now
-        ]
-        for key in expired:
-            del self.connection[key]
+        if not self._shard_locks:
+            self._shard_locks = [AsyncRLock() for _ in range(self._num_shards)]
+        if not self._shard_stores:
+            self._shard_stores = [OrderedDict() for _ in range(self._num_shards)]
 
-    async def get_lock(self, name: str) -> AsyncInMemoryLock:
-        """
-        Returns a lock for the given name.
+        if self._cleanup_task is None:
+            self._cleanup_task = await self._start_cleanup_task(
+                frequency=self._cleanup_frequency
+            )
+        self._initialized = True
 
-        Note: For InMemory backend, all operations use the global lock internally,
-        so this is mainly for API compatibility.
-        """
-        # Return a wrapper around the global lock
-        lock = AsyncInMemoryLock()
-        lock._lock = self._global_lock
-        return lock
+    async def ready(self) -> bool:
+        return self._initialized
 
-    async def get(self, key: str) -> typing.Optional[str]:
-        """Get value by key."""
-        if self.connection is None:
+    def _get_shard(self, key: str) -> typing.Tuple[int, AsyncRLock, OrderedDict]:
+        """Get shard index, lock, and store for a key."""
+        shard_idx = hash(key) % self._num_shards
+        return shard_idx, self._shard_locks[shard_idx], self._shard_stores[shard_idx]
+
+    async def keys(self) -> typing.List[str]:
+        """Get all keys in the backend."""
+        if not self._initialized:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
 
-        async with self._global_lock:
-            await self._cleanup_expired()
-            entry = self.connection.get(key)
+        all_keys = []
+        # Acquire all shard locks in order
+        for lock, store in zip(self._shard_locks, self._shard_stores):
+            async with lock:
+                all_keys.extend(list(store.keys()))
+        return all_keys
+
+    async def _cleanup_expired(self) -> None:
+        """Remove expired keys from all shards."""
+        now = time()
+
+        # Clean each shard independently
+        for lock, store in zip(self._shard_locks, self._shard_stores):
+            async with lock:
+                expired = [
+                    key
+                    for key, (_, expires_at) in list(store.items())
+                    if expires_at is not None and expires_at < now
+                ]
+                for key in expired:
+                    del store[key]
+
+    async def _start_cleanup_task(self, frequency: float = 0.1) -> asyncio.Task[None]:
+        """
+        Start background task to cleanup expired keys.
+
+        :param frequency: Cleanup interval in seconds.
+        :return: The created asyncio Task.
+        """
+
+        async def _cleanup_task():
+            while self._initialized:
+                await asyncio.sleep(frequency)  # Cleanup interval
+                await self._cleanup_expired()
+
+        return asyncio.create_task(_cleanup_task())
+
+    async def get_lock(self, name: str) -> _AsyncInMemoryLock:
+        """
+        Returns a reentrant lock for the given name.
+
+        This is for user-requested locks (e.g., strategy locking, multi-key operations).
+        Internal shard locks are separate and automatic.
+        """
+        if name not in self._named_locks:
+            async with self._named_locks_lock:
+                self._named_locks[name] = _AsyncInMemoryLock()
+        return self._named_locks[name]
+
+    async def get(
+        self, key: str, *args: typing.Any, **kwargs: typing.Any
+    ) -> typing.Optional[str]:
+        """Get value by key."""
+        if not self._initialized:
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
+
+        _, lock, store = self._get_shard(key)
+
+        async with lock:
+            entry = store.get(key)
             if entry is None:
                 return None
 
             value, expires_at = entry
             # Check if expired
             if expires_at is not None and expires_at < time():
-                del self.connection[key]
+                del store[key]
                 return None
             return value
 
@@ -198,27 +289,29 @@ class InMemoryBackend(
         self, key: str, value: str, expire: typing.Optional[float] = None
     ) -> None:
         """Set value by key."""
-        if self.connection is None:
+        if not self._initialized:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
 
-        async with self._global_lock:
+        _, lock, store = self._get_shard(key)
+        async with lock:
             expires_at = None
             if expire is not None:
                 expires_at = time() + expire
-            self.connection[key] = (value, expires_at)
+            store[key] = (value, expires_at)
 
-    async def delete(self, key: str) -> bool:
+    async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
         """Delete key if exists."""
-        if self.connection is None:
+        if not self._initialized:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
 
-        async with self._global_lock:
-            if key in self.connection:
-                del self.connection[key]
+        _, lock, store = self._get_shard(key)
+        async with lock:
+            if key in store:
+                del store[key]
                 return True
             return False
 
@@ -230,25 +323,24 @@ class InMemoryBackend(
         :param amount: Amount to increment by
         :return: New value after increment
         """
-        if self.connection is None:
+        if not self._initialized:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
 
-        async with self._global_lock:
-            await self._cleanup_expired()
-
-            entry = self.connection.get(key)
+        _, lock, store = self._get_shard(key)
+        async with lock:
+            entry = store.get(key)
             if entry is None:
                 # Key doesn't exist, initialize
-                self.connection[key] = (str(amount), None)
+                store[key] = (str(amount), None)
                 return amount
 
             value, expires_at = entry
             # Check if expired
             if expires_at is not None and expires_at < time():
                 # Expired, reinitialize
-                self.connection[key] = (str(amount), None)
+                store[key] = (str(amount), None)
                 return amount
 
             # Increment existing value
@@ -256,11 +348,11 @@ class InMemoryBackend(
                 current = int(value)
             except (ValueError, TypeError):
                 # Invalid value, reset
-                self.connection[key] = (str(amount), expires_at)
+                store[key] = (str(amount), expires_at)
                 return amount
 
             new_value = current + amount
-            self.connection[key] = (str(new_value), expires_at)
+            store[key] = (str(new_value), expires_at)
             return new_value
 
     async def expire(self, key: str, seconds: int) -> bool:
@@ -271,20 +363,20 @@ class InMemoryBackend(
         :param seconds: TTL in seconds
         :return: True if expiration was set, False if key doesn't exist
         """
-        if self.connection is None:
+        if not self._initialized:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
 
-        async with self._global_lock:
-            entry = self.connection.get(key)
-
+        _, lock, store = self._get_shard(key)
+        async with lock:
+            entry = store.get(key)
             if entry is None:
                 return False
 
             value, _ = entry
             expires_at = time() + seconds
-            self.connection[key] = (value, expires_at)
+            store[key] = (value, expires_at)
             return True
 
     async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int = 60) -> int:
@@ -296,27 +388,26 @@ class InMemoryBackend(
         :param ttl: TTL to set if key is new (seconds)
         :return: New value after increment
         """
-        if self.connection is None:
+        if not self._initialized:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
 
-        async with self._global_lock:
-            await self._cleanup_expired()
-
-            entry = self.connection.get(key)
+        _, lock, store = self._get_shard(key)
+        async with lock:
+            entry = store.get(key)
             if entry is None:
                 # New key, initialize with TTL
                 expires_at = time() + ttl
-                self.connection[key] = (str(amount), expires_at)
+                store[key] = (str(amount), expires_at)
                 return amount
 
-            value, expires_at = entry # type: ignore[assignment]
+            value, expires_at = entry  # type: ignore[assignment]
             # Check if expired
             if expires_at is not None and expires_at < time():
                 # Expired, reinitialize with new TTL
                 expires_at = time() + ttl
-                self.connection[key] = (str(amount), expires_at)
+                store[key] = (str(amount), expires_at)
                 return amount
 
             # Increment existing value
@@ -325,7 +416,7 @@ class InMemoryBackend(
             except (ValueError, TypeError):
                 # Invalid value, reset with TTL
                 expires_at = time() + ttl
-                self.connection[key] = (str(amount), expires_at)
+                store[key] = (str(amount), expires_at)
                 return amount
 
             new_value = current + amount
@@ -334,17 +425,17 @@ class InMemoryBackend(
             if expires_at is None:
                 expires_at = time() + ttl
 
-            self.connection[key] = (str(new_value), expires_at)
+            store[key] = (str(new_value), expires_at)
             return new_value
 
     async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
         """
-        Batch get - all values retrieved atomically.
+        Batch get all values retrieved atomically.
 
         :param keys: List of keys to get
         :return: List of values (None for missing keys), same order as keys
         """
-        if self.connection is None:
+        if not self._initialized:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
@@ -352,47 +443,86 @@ class InMemoryBackend(
         if not keys:
             return []
 
-        async with self._global_lock:
-            await self._cleanup_expired()
+        # Group keys by shard
+        shard_keys: typing.Dict[int, typing.List[str]] = {}
+        key_to_shard: typing.Dict[str, int] = {}
 
-            now = time()
-            results: typing.List[typing.Optional[str]] = []
+        for key in keys:
+            shard_idx, _, _ = self._get_shard(key)
+            key_to_shard[key] = shard_idx
+            if shard_idx not in shard_keys:
+                shard_keys[shard_idx] = []
+            shard_keys[shard_idx].append(key)
 
-            for key in keys:
-                entry = self.connection.get(key)
-                if entry is None:
-                    results.append(None)
-                    continue
+        # Acquire locks in sorted order to prevent deadlocks
+        results: typing.Dict[str, typing.Optional[str]] = {}
+        now = time()
 
-                value, expires_at = entry
-                if expires_at is None or expires_at > now:
-                    results.append(value)
-                else:
-                    # Expired, remove and return None
-                    del self.connection[key]
-                    results.append(None)
-            return results
+        for shard_idx in sorted(shard_keys.keys()):
+            lock = self._shard_locks[shard_idx]
+            store = self._shard_stores[shard_idx]
+
+            async with lock:
+                for key in shard_keys[shard_idx]:
+                    entry = store.get(key)
+                    if entry is None:
+                        results[key] = None
+                        continue
+
+                    value, expires_at = entry
+                    if expires_at is None or expires_at > now:
+                        results[key] = value
+                    else:
+                        del store[key]
+                        results[key] = None
+
+        # Return results in original key order
+        return [results[key] for key in keys]
 
     async def clear(self) -> None:
         """Clear all keys in the namespace."""
-        if self.connection is None:
+        if not self._initialized:
             return
 
-        async with self._global_lock:
-            keys_to_delete = [
-                key
-                for key in list(self.connection.keys())
-                if key.startswith(f"{self.namespace}:")
-            ]
-            for key in keys_to_delete:
-                del self.connection[key]
+        # Acquire all shard locks in order
+        for lock, store in zip(self._shard_locks, self._shard_stores):
+            async with lock:
+                keys_to_delete = [
+                    key
+                    for key in list(store.keys())
+                    if key.startswith(f"{self.namespace}:")
+                ]
+                for key in keys_to_delete:
+                    del store[key]
 
     async def reset(self) -> None:
         """Reset the backend by clearing all data."""
-        async with self._global_lock:
-            if self.connection is not None:
-                self.connection.clear()
+        if not self._initialized:
+            return
+
+        # Acquire all shard locks in order
+        for lock, store in zip(self._shard_locks, self._shard_stores):
+            async with lock:
+                store.clear()
 
     async def close(self) -> None:
         """Close the backend."""
-        self.connection = None
+        # Clear all keys
+        await self.clear()
+        self._initialized = False
+
+        # Stop cleanup task
+        if self._cleanup_task and not self._cleanup_task.done():
+            try:
+                await asyncio.wait_for(self._cleanup_task, timeout=1.0)
+            except asyncio.TimeoutError:
+                self._cleanup_task.cancel()
+                try:
+                    await self._cleanup_task
+                except asyncio.CancelledError:
+                    pass
+            self._cleanup_task = None
+
+        # Clear named locks
+        async with self._named_locks_lock:
+            self._named_locks.clear()

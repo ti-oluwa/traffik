@@ -16,7 +16,7 @@ async def test_increment_high_concurrency(backends: BackendGen) -> None:
     """Test increment with 100 concurrent async tasks."""
     for backend in backends(namespace="concurrent_increment_100"):
         async with backend(close_on_exit=True):
-            key = await backend.get_key("counter")
+            key = backend.get_key("counter")
 
             # 100 concurrent increments
             results = await asyncio.gather(
@@ -42,7 +42,7 @@ async def test_decrement_high_concurrency(backends: BackendGen) -> None:
     """Test decrement with 100 concurrent async tasks."""
     for backend in backends(namespace="concurrent_decrement_100"):
         async with backend(close_on_exit=True):
-            key = await backend.get_key("counter")
+            key = backend.get_key("counter")
 
             # Set initial value to 100
             await backend.set(key, "100")
@@ -72,7 +72,7 @@ async def test_increment_with_ttl_concurrent(backends: BackendGen) -> None:
     """Test increment_with_ttl with 50 concurrent async tasks."""
     for backend in backends(namespace="concurrent_increment_ttl"):
         async with backend(close_on_exit=True):
-            key = await backend.get_key("ttl_counter")
+            key = backend.get_key("ttl_counter")
 
             # 50 concurrent increments with TTL
             results = await asyncio.gather(
@@ -95,7 +95,7 @@ async def test_mixed_operations_concurrent(backends: BackendGen) -> None:
     """Test mixed increment/decrement operations concurrently."""
     for backend in backends(namespace="concurrent_mixed_ops"):
         async with backend(close_on_exit=True):
-            key = await backend.get_key("mixed_counter")
+            key = backend.get_key("mixed_counter")
             # Start at 100
             await backend.set(key, "100")
 
@@ -119,7 +119,7 @@ async def test_stress_concurrent_operations(backends: BackendGen) -> None:
     """Stress test with 500 concurrent operations."""
     for backend in backends(namespace="stress_concurrent"):
         async with backend(close_on_exit=True):
-            key = await backend.get_key("stress_counter")
+            key = backend.get_key("stress_counter")
 
             # 500 concurrent increments
             results = await asyncio.gather(

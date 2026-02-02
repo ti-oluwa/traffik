@@ -11,13 +11,13 @@ from starlette.exceptions import HTTPException
 from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocket
 
-from tests.asyncio_client import AsyncioTestClient
+from tests.asynctestclient import AsyncTestClient
 from tests.conftest import BackendGen
 from tests.utils import default_client_identifier, unlimited_identifier
 from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
-from traffik.throttles import BaseThrottle, HTTPThrottle, WebSocketThrottle
+from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 
 
 @pytest.fixture(scope="function")
@@ -34,7 +34,7 @@ def lifespan_app(inmemory_backend: InMemoryBackend) -> FastAPI:
 @pytest.mark.fastapi
 async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> None:
     with pytest.raises(ValueError):
-        BaseThrottle("test-init-1", rate="-1/s")
+        Throttle("test-init-1", rate="-1/s")
 
     async def _throttle_handler(connection: HTTPConnection, wait_ms: float) -> None:
         # do nothing, just a placeholder for testing
@@ -42,7 +42,7 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
 
     # Test initialization behaviour
     async with inmemory_backend(close_on_exit=True):
-        throttle = BaseThrottle(
+        throttle = Throttle(
             "test-init-2",
             rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
             handle_throttled=_throttle_handler,
@@ -121,7 +121,7 @@ def test_throttle_exemption_with_unlimited_identifier(
         assert response.status_code == 200
         assert response.json() == {"message": "PONG"}
 
-        # Third request should be throttled but since the identifier is UNLIMITED,
+        # Third request should be throttled but since the identifier is EXEMPTED,
         # it should not be throttled and should succeed
         response = client.get("/")
         assert response.status_code == 200
@@ -282,7 +282,7 @@ async def test_websocket_throttle(backends: BackendGen) -> None:
             base_url = "http://0.0.0.0"
             running_loop = asyncio.get_running_loop()
             async with (
-                AsyncioTestClient(
+                AsyncTestClient(
                     app=app,
                     base_url=base_url,
                     event_loop=running_loop,

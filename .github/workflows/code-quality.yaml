@@ -34,11 +34,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
-      - name: Check code formatting
-        run: |
-          echo "Checking code formatting..."
-          uv run ruff format src/ tests/
-
       - name: Run security analysis
         run: |
           echo "Running Bandit security analysis..."

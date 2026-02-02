@@ -3,6 +3,7 @@
 import asyncio
 import functools
 import math
+import sys
 import typing
 from urllib.parse import urlparse
 
@@ -181,18 +182,20 @@ class _AsyncMemcachedLock:
             if current and current.decode() == self._fence_token:
                 await self._client.delete(self._name.encode())
             else:
-                print(f"Warning: Lock '{self._name}' expired or stolen")
+                sys.stderr.write(f"Warning: Lock '{self._name}' expired or stolen\n")
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # nosec
             # Lock might have expired or been released already
             # Log and ignore release errors to avoid deadlocks
-            print(f"Warning: Failed to release lock '{self._name}': {str(exc)}")
-            pass  # nosec
+            sys.stderr.write(
+                f"Warning: Failed to release lock '{self._name}': {str(exc)}\n"
+            )
         finally:
             # Reset state
             self._acquired = False
             self._fence_token = None
+            sys.stderr.flush()
 
     async def __aenter__(self):
         acquired = await self.acquire()
@@ -327,10 +330,13 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             return
 
         if "||" in key:
-            print(
+            sys.stderr.write(
                 f"Warning: Key '{key}' contains '||' character which is used as separator in tracking."
-                " Ensure keys do not contain this sequence."
+                " Ensure keys do not contain this sequence.\n"
             )
+            sys.stderr.flush()
+            # No use tracking this key as it will break the tracking mechanism
+            return
 
         tracking_key = self._get_tracking_key()
         try:
@@ -352,7 +358,8 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                         exptime=0,
                     )
         except Exception as exc:
-            print(f"Warning: Failed to track key '{key}': {exc}")
+            sys.stderr.write(f"Warning: Failed to track key '{key}': {exc}\n")
+            sys.stderr.flush()
 
     async def _untrack_key(self, key: str) -> None:
         """Best-effort remove key from tracking set."""
@@ -378,7 +385,8 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 else:
                     await self.connection.delete(tracking_key.encode())
         except Exception as exc:
-            print(f"Warning: Failed to untrack key '{key}': {exc}")
+            sys.stderr.write(f"Warning: Failed to untrack key '{key}': {exc}\n")
+            sys.stderr.flush()
 
     async def initialize(self) -> None:
         """Initialize the Memcached connection."""
@@ -646,6 +654,41 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             else:
                 results.append(None)
         return results
+
+    async def multi_set(
+        self,
+        items: typing.Mapping[str, str],
+        expire: typing.Optional[int] = None,
+    ) -> None:
+        """
+        Batch set multiple keys using concurrent set operations.
+
+        Memcached doesn't have native multi-set, so we use `asyncio.gather(...)`
+        to execute sets concurrently over the connection pool.
+
+        :param items: Mapping of keys to values
+        :param expire: Optional TTL in seconds for all keys
+        """
+        if self.connection is None:
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
+
+        if not items:
+            return
+
+        exptime = int(expire) if expire is not None else 0
+
+        async def _set_one(key: str, value: str) -> None:
+            await self.connection.set(  # type: ignore[union-attr]
+                key.encode(),
+                value.encode(),
+                exptime=exptime,
+            )
+            if self.track_keys:
+                await self._track_key(key)
+
+        await asyncio.gather(*[_set_one(k, v) for k, v in items.items()])
 
     async def clear(self) -> None:
         """

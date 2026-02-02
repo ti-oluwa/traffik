@@ -1057,3 +1057,333 @@ async def test_all_strategies_handle_concurrent_requests(backend: InMemoryBacken
             )
             # Just verify no crashes
             assert all(isinstance(r, float) for r in results)
+
+
+class TestCustomStrategiesGetStat:
+    """Tests for get_stat methods on custom strategies."""
+
+    @pytest.mark.anyio
+    @pytest.mark.strategy
+    async def test_tiered_rate_strategy_get_stat(self, backend: InMemoryBackend):
+        """Test TieredRateStrategy get_stat method."""
+        async with backend(close_on_exit=True):
+            strategy = TieredRateStrategy(
+                tier_multipliers={"free": 1.0, "premium": 5.0},
+                default_tier="free",
+            )
+            rate = Rate.parse("10/s")
+            key = "tier:premium:user:stat"
+
+            # Initial stat
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.key == key
+            assert stat.rate == rate
+            assert stat.hits_remaining == 50  # 10 * 5.0 multiplier
+            assert stat.wait_ms == 0.0
+            assert stat.metadata is not None
+            assert stat.metadata["strategy"] == "tiered_rate"
+            assert stat.metadata["tier"] == "premium"
+            assert stat.metadata["tier_multiplier"] == 5.0
+            assert stat.metadata["effective_limit"] == 50
+
+            # Make some requests
+            for _ in range(20):
+                await strategy(key, rate, backend)
+
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.hits_remaining == 30
+            assert stat.metadata["current_count"] == 20  # type: ignore
+
+    @pytest.mark.anyio
+    @pytest.mark.strategy
+    async def test_adaptive_throttle_strategy_get_stat(self, backend: InMemoryBackend):
+        """Test AdaptiveThrottleStrategy get_stat method."""
+        async with backend(close_on_exit=True):
+            strategy = AdaptiveThrottleStrategy(load_threshold=0.8)
+            rate = Rate.parse("20/s")
+            key = "user:adaptive_stat"
+
+            # Initial stat
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.key == key
+            assert stat.hits_remaining >= 0
+            assert stat.metadata is not None
+            assert stat.metadata["strategy"] == "adaptive_throttle"
+            assert stat.metadata["load_threshold"] == 0.8
+
+            # Make requests to increase load
+            for _ in range(10):
+                await strategy(key, rate, backend)
+
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.metadata["current_count"] == 10  # type: ignore
+            assert stat.metadata["current_load"] > 0  # type: ignore
+
+    @pytest.mark.anyio
+    @pytest.mark.strategy
+    async def test_priority_queue_strategy_get_stat(self, backend: InMemoryBackend):
+        """Test PriorityQueueStrategy get_stat method."""
+        async with backend(close_on_exit=True):
+            strategy = PriorityQueueStrategy()
+            rate = Rate.parse("10/s")
+            key = "user:priority_stat"
+
+            # Initial stat
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.key == key
+            assert stat.metadata is not None
+            assert stat.metadata["strategy"] == "priority_queue"
+            assert stat.metadata["queue_size"] == 0
+            assert stat.metadata["total_cost_in_queue"] == 0.0
+
+            # Add requests with different priorities
+            await strategy(key, rate, backend, cost=2)
+            await strategy(key, rate, backend, cost=3)
+
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.metadata["queue_size"] >= 0  # type: ignore
+
+    @pytest.mark.anyio
+    @pytest.mark.strategy
+    async def test_quota_with_rollover_strategy_get_stat(
+        self, backend: InMemoryBackend
+    ):
+        """Test QuotaWithRolloverStrategy get_stat method."""
+        async with backend(close_on_exit=True):
+            strategy = QuotaWithRolloverStrategy(
+                rollover_percentage=0.5,
+                max_rollover=500,
+            )
+            rate = Rate.parse("20/s")
+            key = "user:quota_stat"
+
+            # Initial stat
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.key == key
+            assert stat.hits_remaining >= 0
+            assert stat.metadata is not None
+            assert stat.metadata["strategy"] == "quota_with_rollover"
+            assert stat.metadata["base_limit"] == 20
+
+            # Make some requests
+            for _ in range(5):
+                await strategy(key, rate, backend)
+
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.metadata["used"] == 5  # type: ignore
+
+    @pytest.mark.anyio
+    @pytest.mark.strategy
+    async def test_time_of_day_strategy_get_stat(self, backend: InMemoryBackend):
+        """Test TimeOfDayStrategy get_stat method."""
+        async with backend(close_on_exit=True):
+            strategy = TimeOfDayStrategy(
+                time_windows=[
+                    (0, 6, 0.5),  # Night
+                    (6, 12, 1.0),  # Morning
+                    (12, 18, 1.5),  # Afternoon
+                    (18, 24, 1.0),  # Evening
+                ],
+                timezone_offset=0,
+            )
+            rate = Rate.parse("10/s")
+            key = "user:tod_stat"
+
+            # Get stat
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.key == key
+            assert stat.metadata is not None
+            assert stat.metadata["strategy"] == "time_of_day"
+            assert 0 <= stat.metadata["hour_of_day"] <= 23
+            assert stat.metadata["time_multiplier"] > 0
+            assert stat.metadata["effective_limit"] > 0
+
+    @pytest.mark.anyio
+    @pytest.mark.strategy
+    async def test_cost_based_token_bucket_strategy_get_stat(
+        self, backend: InMemoryBackend
+    ):
+        """Test CostBasedTokenBucketStrategy get_stat method."""
+        async with backend(close_on_exit=True):
+            strategy = CostBasedTokenBucketStrategy(burst_size=15)
+            rate = Rate.parse("10/s")
+            key = "user:costbucket_stat"
+
+            # Initial stat
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.key == key
+            assert stat.hits_remaining >= 0
+            assert stat.metadata is not None
+            assert stat.metadata["strategy"] == "cost_based_token_bucket"
+            assert stat.metadata["capacity"] == 15
+
+            # Make requests with varying costs
+            await strategy(key, rate, backend, cost=3)
+            await strategy(key, rate, backend, cost=5)
+
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.metadata["cost_history_size"] >= 0  # type: ignore
+
+    @pytest.mark.anyio
+    @pytest.mark.strategy
+    async def test_gcra_strategy_get_stat(self, backend: InMemoryBackend):
+        """Test GCRAStrategy get_stat method."""
+        async with backend(close_on_exit=True):
+            strategy = GCRAStrategy(burst_tolerance_ms=100)
+            rate = Rate.parse("10/s")  # emission interval = 100ms
+            key = "user:gcra_stat"
+
+            # Initial stat
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.key == key
+            assert stat.metadata is not None
+            assert stat.metadata["strategy"] == "gcra"
+            assert stat.metadata["emission_interval_ms"] == 100.0  # 1000ms / 10
+            assert stat.metadata["burst_tolerance_ms"] == 100
+            assert stat.metadata["conformant"] is True
+
+            # Make a request
+            await strategy(key, rate, backend)
+
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.metadata["tat_ms"] > 0  # type: ignore
+
+    @pytest.mark.anyio
+    @pytest.mark.strategy
+    async def test_distributed_fairness_strategy_get_stat(
+        self, backend: InMemoryBackend
+    ):
+        """Test DistributedFairnessStrategy get_stat method."""
+        async with backend(close_on_exit=True):
+            strategy = DistributedFairnessStrategy(
+                instance_id="test-instance",
+                instance_weight=1.0,
+            )
+            rate = Rate.parse("100/s")
+            key = "user:fairness_stat"
+
+            # Initial stat
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.key == key
+            assert stat.metadata is not None
+            assert stat.metadata["strategy"] == "distributed_fairness"
+            assert stat.metadata["instance_id"] == "test-instance"
+            assert stat.metadata["instance_weight"] == 1.0
+
+            # Make some requests
+            for _ in range(10):
+                await strategy(key, rate, backend)
+
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.metadata["instance_usage"] == 10  # type: ignore
+
+    @pytest.mark.anyio
+    @pytest.mark.strategy
+    async def test_geographic_distribution_strategy_get_stat(
+        self, backend: InMemoryBackend
+    ):
+        """Test GeographicDistributionStrategy get_stat method."""
+        async with backend(close_on_exit=True):
+            strategy = GeographicDistributionStrategy(
+                region_multipliers={
+                    "us-east": 0.6,
+                    "eu-west": 0.4,
+                },
+                default_region="us-east",
+            )
+            rate = Rate.parse("50/s")
+            key = "region:eu-west:user:stat"
+
+            # Initial stat
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.key == key
+            assert stat.metadata is not None
+            assert stat.metadata["strategy"] == "geographic_distribution"
+            assert stat.metadata["region"] == "eu-west"
+            assert stat.metadata["region_multiplier"] == 0.4
+            assert stat.metadata["region_limit"] == 20  # 50 * 0.4
+
+            # Make some requests
+            for _ in range(10):
+                await strategy(key, rate, backend)
+
+            stat = await strategy.get_stat(key, rate, backend)
+            assert stat.metadata["region_count"] == 10  # type: ignore
+
+    @pytest.mark.anyio
+    @pytest.mark.strategy
+    async def test_all_custom_strategies_get_stat_unlimited(
+        self, backend: InMemoryBackend
+    ):
+        """Test all custom strategies handle unlimited rate in get_stat."""
+        async with backend(close_on_exit=True):
+            rate = Rate(limit=0, seconds=0)  # Unlimited
+            key = "user:stat_unlimited"
+
+            strategies = [
+                TieredRateStrategy(),
+                AdaptiveThrottleStrategy(),
+                PriorityQueueStrategy(),
+                QuotaWithRolloverStrategy(),
+                TimeOfDayStrategy(),
+                CostBasedTokenBucketStrategy(),
+                GCRAStrategy(),
+                DistributedFairnessStrategy(instance_id="test"),
+                GeographicDistributionStrategy(),
+            ]
+
+            for strategy in strategies:
+                stat = await strategy.get_stat(key, rate, backend)
+                assert stat.hits_remaining == float("inf"), (
+                    f"{strategy.__class__.__name__} should return inf for unlimited"
+                )
+                assert stat.wait_ms == 0.0, (
+                    f"{strategy.__class__.__name__} should have no wait for unlimited"
+                )
+
+    @pytest.mark.anyio
+    @pytest.mark.strategy
+    async def test_all_custom_strategies_get_stat_has_required_fields(
+        self, backend: InMemoryBackend
+    ):
+        """Test all custom strategies return stats with required fields."""
+        async with backend(close_on_exit=True):
+            rate = Rate.parse("100/s")
+            key = "user:stat_fields"
+
+            strategies = [
+                TieredRateStrategy(),
+                AdaptiveThrottleStrategy(),
+                PriorityQueueStrategy(),
+                QuotaWithRolloverStrategy(),
+                TimeOfDayStrategy(),
+                CostBasedTokenBucketStrategy(),
+                GCRAStrategy(),
+                DistributedFairnessStrategy(instance_id="test"),
+                GeographicDistributionStrategy(),
+            ]
+
+            for strategy in strategies:
+                stat = await strategy.get_stat(key, rate, backend)
+                name = strategy.__class__.__name__
+
+                # Check required fields
+                assert hasattr(stat, "key"), f"{name} stat missing 'key'"
+                assert hasattr(stat, "rate"), f"{name} stat missing 'rate'"
+                assert hasattr(stat, "hits_remaining"), (
+                    f"{name} stat missing 'hits_remaining'"
+                )
+                assert hasattr(stat, "wait_ms"), f"{name} stat missing 'wait_ms'"
+                assert hasattr(stat, "metadata"), f"{name} stat missing 'metadata'"
+
+                # Check types
+                assert isinstance(stat.hits_remaining, (int, float)), (
+                    f"{name} hits_remaining should be numeric"
+                )
+                assert isinstance(stat.wait_ms, (int, float)), (
+                    f"{name} wait_ms should be numeric"
+                )
+                assert stat.metadata is not None, f"{name} metadata should not be None"
+                assert "strategy" in stat.metadata, (
+                    f"{name} metadata should have 'strategy' key"
+                )

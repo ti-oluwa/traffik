@@ -148,10 +148,13 @@ class FixedWindowStrategy:
                 or int(stored_window_start) != current_window_start
             ):
                 # If we are in a new window, reset counter and store new window start
-                await backend.set(
-                    window_start_key, str(int(current_window_start)), expire=ttl_seconds
+                await backend.multi_set(
+                    {
+                        window_start_key: str(int(current_window_start)),
+                        counter_key: str(cost),
+                    },
+                    expire=ttl_seconds,
                 )
-                await backend.set(counter_key, str(cost), expire=ttl_seconds)
                 counter = cost
             else:
                 # If we are in the existing/same window, increment the counter by the cost

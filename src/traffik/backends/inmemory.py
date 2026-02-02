@@ -16,7 +16,7 @@ from traffik.types import (
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
-from traffik.utils import AsyncRLock, time
+from traffik.utils import _AsyncRLock, time
 
 
 class _AsyncInMemoryLock:
@@ -25,7 +25,7 @@ class _AsyncInMemoryLock:
     __slots__ = "_lock"
 
     def __init__(self) -> None:
-        self._lock = AsyncRLock()
+        self._lock = _AsyncRLock()
 
     def locked(self) -> bool:
         return self._lock.locked()
@@ -62,7 +62,7 @@ class _AsyncInMemoryLock:
         #     # Acquire lock without timeout to avoid cancellation issues
         #     return await self._lock.acquire()
 
-        # # Blocking with timeout. Can't use `asyncio.wait_for` as `AsyncRLock.acquire()`
+        # # Blocking with timeout. Can't use `asyncio.wait_for` as `_AsyncRLock.acquire()`
         # # cancellation on timeout leads to a corrupted state in the lock.
         # # Hence we use a separate timeout task.
         # acquire_task = asyncio.create_task(self._lock.acquire())
@@ -168,7 +168,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             raise ValueError("`number_of_shards` must be at least 1")
 
         self._num_shards = number_of_shards
-        self._shard_locks: typing.List[AsyncRLock] = []
+        self._shard_locks: typing.List[_AsyncRLock] = []
         """Locks for each shard to allow concurrent access."""
         self._shard_stores: typing.List[OrderedDict] = []
         """In-memory storage shards."""
@@ -176,7 +176,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         # Separate registry for user-requested named locks
         self._named_locks: typing.Dict[str, _AsyncInMemoryLock] = {}
         """Lock registry for named locks requested by users."""
-        self._named_locks_lock = AsyncRLock()
+        self._named_locks_lock = _AsyncRLock()
         """Lock to protect access to the named locks registry."""
 
         self._cleanup_task: typing.Optional[asyncio.Task] = None
@@ -189,7 +189,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             return
 
         if not self._shard_locks:
-            self._shard_locks = [AsyncRLock() for _ in range(self._num_shards)]
+            self._shard_locks = [_AsyncRLock() for _ in range(self._num_shards)]
         if not self._shard_stores:
             self._shard_stores = [OrderedDict() for _ in range(self._num_shards)]
 
@@ -202,7 +202,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     async def ready(self) -> bool:
         return self._initialized
 
-    def _get_shard(self, key: str) -> typing.Tuple[int, AsyncRLock, OrderedDict]:
+    def _get_shard(self, key: str) -> typing.Tuple[int, _AsyncRLock, OrderedDict]:
         """Get shard index, lock, and store for a key."""
         shard_idx = hash(key) % self._num_shards
         return shard_idx, self._shard_locks[shard_idx], self._shard_stores[shard_idx]
@@ -479,6 +479,47 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         # Return results in original key order
         return [results[key] for key in keys]
+
+    async def multi_set(
+        self,
+        items: typing.Mapping[str, str],
+        expire: typing.Optional[int] = None,
+    ) -> None:
+        """
+        Batch set multiple values atomically.
+
+        Groups keys by shard and acquires locks in sorted order to prevent deadlocks.
+
+        :param items: Mapping of keys to values
+        :param expire: Optional TTL in seconds for all keys
+        """
+        if not self._initialized:
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
+
+        if not items:
+            return
+
+        # Group items by shard
+        shard_items: typing.Dict[int, typing.List[typing.Tuple[str, str]]] = {}
+        for key, value in items.items():
+            shard_idx, _, _ = self._get_shard(key)
+            if shard_idx not in shard_items:
+                shard_items[shard_idx] = []
+            shard_items[shard_idx].append((key, value))
+
+        # Calculate expiration time once
+        expires_at = time() + expire if expire is not None else None
+
+        # Acquire locks in sorted order to prevent deadlocks
+        for shard_idx in sorted(shard_items.keys()):
+            lock = self._shard_locks[shard_idx]
+            store = self._shard_stores[shard_idx]
+
+            async with lock:
+                for key, value in shard_items[shard_idx]:
+                    store[key] = (value, expires_at)
 
     async def clear(self) -> None:
         """Clear all keys in the namespace."""

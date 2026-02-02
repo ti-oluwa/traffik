@@ -42,8 +42,8 @@ from .utils import (  # noqa
 __version__ = "1.0.0"
 
 
-# NOTE: All operations by traffik must be fast and non-blocking.
-# Hence, avoid using logging or any blocking IO in the main code paths, especially in backends, locks, strategies, and throttles.
+# NOTE: All operations by traffik must be fast, efficient and non-blocking.
+# Hence, avoid or reduce the use of logging or any blocking IO in the main code paths, especially in backends, locks, strategies, and throttles.
 # Logging can be used in non-performance critical paths such as startup/shutdown but should be kept to a minimum.
 # One other detriment of using logging is that it may cause deadlocks if the logging backend uses the same resources as traffik.
-# If logging is absolutely necessary, use `print` statements instead (but keep it brief).
+# If logging is absolutely necessary, use `sys.stderr.write` & `sys.stderr.flush` statements instead (and keep it brief).

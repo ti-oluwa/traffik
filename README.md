@@ -2326,7 +2326,7 @@ class ThrottleBackend:
         ttl: float = None,              # Override backend lock_ttl
         blocking: bool = None,          # Override backend lock_blocking
         blocking_timeout: float = None, # Override backend lock_blocking_timeout
-    ) -> AsyncLockContext
+    ) -> _AsyncLockContext
     async def reset() -> None
     async def close() -> None
     

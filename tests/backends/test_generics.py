@@ -325,6 +325,113 @@ async def test_multi_get_single(backends: BackendGen) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.backend
+async def test_multi_set(backends: BackendGen) -> None:
+    """Test setting multiple keys at once."""
+    for backend in backends(namespace="set_multi_test"):
+        async with backend(close_on_exit=True):
+            key1 = backend.get_key("key1")
+            key2 = backend.get_key("key2")
+            key3 = backend.get_key("key3")
+
+            # Set multiple keys
+            await backend.multi_set({
+                key1: "value1",
+                key2: "value2",
+                key3: "value3",
+            })
+
+            # Verify all keys were set
+            assert await backend.get(key1) == "value1"
+            assert await backend.get(key2) == "value2"
+            assert await backend.get(key3) == "value3"
+
+
+@pytest.mark.asyncio
+@pytest.mark.backend
+async def test_multi_set_with_expire(backends: BackendGen) -> None:
+    """Test setting multiple keys with expiration."""
+    for backend in backends(namespace="set_multi_expire_test"):
+        async with backend(close_on_exit=True):
+            key1 = backend.get_key("expkey1")
+            key2 = backend.get_key("expkey2")
+
+            # Set multiple keys with 1 second expiration
+            await backend.multi_set({
+                key1: "expvalue1",
+                key2: "expvalue2",
+            }, expire=1)
+
+            # Values should exist immediately
+            assert await backend.get(key1) == "expvalue1"
+            assert await backend.get(key2) == "expvalue2"
+
+            # Wait for expiration
+            await asyncio.sleep(1.5)
+
+            # Values should be expired
+            assert await backend.get(key1) is None
+            assert await backend.get(key2) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.backend
+async def test_multi_set_empty(backends: BackendGen) -> None:
+    """Test setting with empty dictionary."""
+    for backend in backends(namespace="set_multi_empty_test"):
+        async with backend(close_on_exit=True):
+            # Should not raise
+            await backend.multi_set({})
+
+
+@pytest.mark.asyncio
+@pytest.mark.backend
+async def test_multi_set_overwrite(backends: BackendGen) -> None:
+    """Test that multi_set overwrites existing keys."""
+    for backend in backends(namespace="set_multi_overwrite_test"):
+        async with backend(close_on_exit=True):
+            key1 = backend.get_key("overkey1")
+            key2 = backend.get_key("overkey2")
+
+            # Set initial values
+            await backend.set(key1, "old1")
+            await backend.set(key2, "old2")
+
+            # Overwrite with multi_set
+            await backend.multi_set({
+                key1: "new1",
+                key2: "new2",
+            })
+
+            # Verify overwritten
+            assert await backend.get(key1) == "new1"
+            assert await backend.get(key2) == "new2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.backend
+async def test_multi_set_and_multi_get_roundtrip(backends: BackendGen) -> None:
+    """Test that multi_set values can be retrieved with multi_get."""
+    for backend in backends(namespace="set_get_roundtrip_test"):
+        async with backend(close_on_exit=True):
+            key1 = backend.get_key("rtkey1")
+            key2 = backend.get_key("rtkey2")
+            key3 = backend.get_key("rtkey3")
+
+            # Set using multi_set
+            await backend.multi_set({
+                key1: "rtvalue1",
+                key2: "rtvalue2",
+                key3: "rtvalue3",
+            })
+
+            # Get using multi_get
+            values = await backend.multi_get(key1, key2, key3)
+
+            assert values == ["rtvalue1", "rtvalue2", "rtvalue3"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.backend
 async def test_get_key_with_args(backends: BackendGen) -> None:
     """Test get_key with additional arguments for building composite keys."""
     for backend in backends(namespace="composite_key_test"):

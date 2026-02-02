@@ -26,7 +26,7 @@ from traffik.types import (
     WaitPeriod,
 )
 from traffik.utils import (
-    AsyncLockContext,
+    _AsyncLockContext,
     get_lock_blocking,
     get_lock_blocking_timeout,
     get_lock_ttl,
@@ -175,6 +175,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         "expire",
         "reset",
         "multi_get",
+        "multi_set",
         "increment_with_ttl",
         "close",
     )
@@ -333,7 +334,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         ttl: typing.Optional[float] = None,
         blocking: typing.Optional[bool] = None,
         blocking_timeout: typing.Optional[float] = None,
-    ) -> AsyncLockContext[AsyncLock]:
+    ) -> _AsyncLockContext[AsyncLock]:
         """
         Context manager to acquire a distributed lock for the given key.
 
@@ -341,7 +342,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         default to the backend's settings if not provided. If these parameters
         are provided, they override the backend's defaults for this lock acquisition.
 
-        `ttl` and `blocking_timeout` settings here only affect the lock context (`AsyncLockContext`)
+        `ttl` and `blocking_timeout` settings here only affect the lock context (`_AsyncLockContext`)
         returned and do not modify the underlying lock  returned by `get_lock(...)`. This allows
         multiple lock contexts with different settings to be created from the same lock.
 
@@ -363,7 +364,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             if blocking_timeout is not None
             else self.lock_blocking_timeout
         )
-        return AsyncLockContext(
+        return _AsyncLockContext(
             lock,
             ttl=ttl,
             blocking=blocking,
@@ -467,6 +468,23 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             results.append(value)
         return results
 
+    async def multi_set(
+        self,
+        items: typing.Mapping[str, str],
+        expire: typing.Optional[int] = None,
+    ) -> None:
+        """
+        Atomically set multiple keys in one operation.
+
+        This should set all keys as a single atomic operation.
+        but backends can override for better performance.
+
+        :param items: Mapping of keys to values to set
+        :param expire: Optional expiration time in seconds for all keys
+        """
+        for key, value in items.items():
+            await self.set(key, value, expire=expire)
+
     async def close(self) -> None:
         """
         Close the backend connection and perform cleanup.
@@ -550,6 +568,8 @@ class _ThrottleContext(typing.Generic[ThrottleBackendTco]):
     """
     Context manager for throttle backends.
     """
+
+    __slots__ = ("backend", "persistent", "close_on_exit", "_context_token")
 
     def __init__(
         self,

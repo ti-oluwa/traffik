@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+import sys
 import typing
 
 from starlette.requests import HTTPConnection, Request
@@ -445,9 +446,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            print(
-                f"Warning: An error occurred while utilizing strategy '{self.strategy!r}': {exc}",
+            sys.stderr.write(
+                f"Warning: An error occurred while utilizing strategy '{self.strategy!r}': {exc}\n"
             )
+            sys.stderr.flush()
             wait_ms = await self._handle_error(
                 connection,
                 exc=exc,

@@ -125,7 +125,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
         number_of_shards: int = 3,
-        cleanup_frequency: float = 3.0,
+        cleanup_frequency: typing.Optional[float] = 3.0,
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -149,7 +149,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
             If None, uses the global default from `traffik.utils.get_lock_blocking_timeout()`.
         :param number_of_shards: Number of shards to split the in-memory store into for concurrency.
-        :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys.
+        :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys. If None, no automatic cleanup is performed.
+        :param kwargs: Additional keyword arguments.
         """
         super().__init__(
             None,
@@ -192,7 +193,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         if not self._shard_stores:
             self._shard_stores = [OrderedDict() for _ in range(self._num_shards)]
 
-        if self._cleanup_task is None:
+        if self._cleanup_task is None and self._cleanup_frequency:
             self._cleanup_task = await self._start_cleanup_task(
                 frequency=self._cleanup_frequency
             )

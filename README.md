@@ -163,6 +163,7 @@ async def get_data(request: Request = Depends(api_throttle)):
 
 ```python
 from contextlib import asynccontextmanager
+from fastapi import Depends
 from traffik import WebSocketThrottle, is_throttled
 from traffik.backends.redis import RedisBackend
 from traffik.strategies import SlidingWindowCounterStrategy
@@ -208,14 +209,14 @@ ws_throttle = WebSocketThrottle(
 )
 
 @app.websocket("/ws/data")
-async def ws_endpoint(websocket: WebSocket):
+async def ws_endpoint(websocket: WebSocket = Depends(ws_throttle)): # Throttle websocket connection too
     await websocket.accept()
     close_code = 1000
     reason = "Normal closure"
     while True:
         try:
             data = await websocket.receive_json()
-            # Hit throttle. Default handler sends a throttle response if limit reached
+            # Hit throttle. Default handler sends a throttles message if limit reached
             await ws_throttle(websocket, context={"scope": "<some_scope>"})
             # If throttled, do not process further
             if is_throttled(websocket):

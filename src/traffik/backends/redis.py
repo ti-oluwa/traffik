@@ -211,7 +211,7 @@ class _AsyncRedisLock:
                 0.001 * (2 ** min(attempts, 6)), 0.05
             )  # 1ms to 64ms, capped at 50ms
             # Add jitter (±25%) to prevent thundering herd
-            jitter = base_delay * 0.25 * (random.random() * 2 - 1)
+            jitter = base_delay * 0.25 * (random.random() * 2 - 1)  # nosec
             delay = base_delay + jitter
             await asyncio.sleep(delay)
 

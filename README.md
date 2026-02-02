@@ -22,7 +22,7 @@ Rate limiting doesn't have to be complicated. Traffik gives you the tools to pro
 - **Observable**: Rich error context, and strategy statistics for monitoring
 - **Performance-Optimized**: Lock striping, connection pooling, script caching, and minimal memory footprint
 
-Built for production workloads with battle-tested patterns from high-scale systems.
+**Built for production workloads.**
 
 ## Table of Contents
 
@@ -43,6 +43,8 @@ Built for production workloads with battle-tested patterns from high-scale syste
   - [Multiple Limits](#multiple-limits)
   - [Exemptions](#exemptions)
   - [Context-Aware Backends](#context-aware-backends)
+  - [Strategy Statistics](#strategy-statistics)
+  - [Custom Throttled Handlers](#custom-throttled-handlers)
 - [Error Handling](#error-handling)
 - [Custom Strategies](#custom-strategies)
 - [Custom Backends](#custom-backends)
@@ -163,6 +165,7 @@ async def get_data(request: Request = Depends(api_throttle)):
 
 ```python
 from contextlib import asynccontextmanager
+from fastapi import Depends
 from traffik import WebSocketThrottle, is_throttled
 from traffik.backends.redis import RedisBackend
 from traffik.strategies import SlidingWindowCounterStrategy
@@ -208,14 +211,14 @@ ws_throttle = WebSocketThrottle(
 )
 
 @app.websocket("/ws/data")
-async def ws_endpoint(websocket: WebSocket):
+async def ws_endpoint(websocket: WebSocket = Depends(ws_throttle)): # Throttle websocket connection too
     await websocket.accept()
     close_code = 1000
     reason = "Normal closure"
     while True:
         try:
             data = await websocket.receive_json()
-            # Hit throttle. Default handler sends a throttle response if limit reached
+            # Hit throttle. Default handler sends a throttles message if limit reached
             await ws_throttle(websocket, context={"scope": "<some_scope>"})
             # If throttled, do not process further
             if is_throttled(websocket):
@@ -389,6 +392,8 @@ Not all rate limiting algorithms are created equal. Each strategy makes differen
 | **Sliding Window Log** | High | O(limit) | No | Financial, security |
 | **Token Bucket** | Medium | O(1) | Yes (configurable) | Mobile apps, APIs |
 | **Leaky Bucket** | Medium | O(1) | No | Smooth output |
+
+Traffik also provides some advanced strategies like GCRA, Adaptive, Tiered, Priority Queue, etc., for specialized use cases. Check `traffik.strategies.custom` to access them.
 
 #### Fixed Window (Default)
 
@@ -975,6 +980,389 @@ api_throttle = HTTPThrottle(uid="api", rate="1000/h", backend=shared_redis)
 ```
 
 **Performance impact:** ~1-20ms overhead per request for backend resolution, depending on backend initialization/connection speed.
+
+### Strategy Statistics
+
+Need to know how close a user is to their rate limit? Want to show remaining quota in your API responses or build rate limit dashboards? Traffik provides detailed strategy statistics through the `throttle.stat()` method.
+
+#### Using `throttle.stat()` Directly
+
+The `stat()` method returns a `StrategyStat` object containing the current rate limit state without consuming any quota:
+
+```python
+from fastapi import FastAPI, Request
+from traffik import HTTPThrottle
+
+throttle = HTTPThrottle(uid="api", rate="100/hour", backend=backend)
+
+@app.get("/usage")
+async def get_usage(request: Request):
+    # Get current statistics without consuming quota
+    stat = await throttle.stat(request, context={"scope": "<some_optional_request_scope>"})
+    if stat is None:
+        return {"error": "Could not retrieve statistics"}
+    
+    return {
+        "remaining": stat.hits_remaining,
+        "limit": stat.rate.limit,
+        "window": stat.rate.expire,
+        "wait_ms": stat.wait_ms,  # 0 if not throttled
+    }
+```
+
+#### Dependency Injection with `Depends(throttle.stat)`
+
+For cleaner code, you can inject statistics as a FastAPI dependency:
+
+```python
+from fastapi import FastAPI, Request, Depends
+from traffik import HTTPThrottle
+from traffik.types import StrategyStat
+
+throttle = HTTPThrottle(uid="api", rate="100/hour", backend=backend)
+
+@app.get("/data", dependencies=[Depends(throttle)])
+async def get_data(
+    request: Request,
+    stat: StrategyStat = Depends(throttle.stat),  # Injected via Depends
+):
+    # stat contains the current throttle state
+    return {
+        "data": "your response",
+        "rate_limit": {
+            "remaining": stat.hits_remaining,
+            "limit": stat.rate.limit,
+        }
+    }
+```
+
+#### Typed Metadata for Strategy-Specific Information
+
+Each strategy provides typed metadata with strategy-specific details. Import the corresponding `TypedDict` for full type safety:
+
+```python
+from fastapi import FastAPI, Request, Depends
+from traffik import HTTPThrottle
+from traffik.strategies import (
+    TokenBucketStrategy,
+    TokenBucketStatMetadata,
+)
+from traffik.types import StrategyStat
+
+throttle = HTTPThrottle(
+    uid="api",
+    rate="100/hour",
+    strategy=TokenBucketStrategy(burst_size=150),
+    backend=backend,
+)
+
+@app.get("/status", dependencies=[Depends(throttle)])
+async def get_status(
+    request: Request,
+    stat: StrategyStat[TokenBucketStatMetadata] = Depends(throttle.stat),
+):
+    if stat and stat.metadata:
+        return {
+            "tokens": stat.metadata["tokens"],
+            "capacity": stat.metadata["capacity"],
+            "refill_rate": stat.metadata["refill_rate_per_ms"],
+        }
+    return {"status": "ok"}
+```
+
+**Available metadata types:**
+
+| Strategy | Metadata Type | Key Fields |
+| -------- | ------------- | ---------- |
+| `FixedWindowStrategy` | `FixedWindowStatMetadata` | `window_start_ms`, `window_end_ms`, `current_count` |
+| `SlidingWindowLogStrategy` | `SlidingWindowLogStatMetadata` | `entry_count`, `current_cost_sum`, `oldest_entry_ms` |
+| `SlidingWindowCounterStrategy` | `SlidingWindowCounterStatMetadata` | `current_count`, `previous_count`, `weighted_count` |
+| `TokenBucketStrategy` | `TokenBucketStatMetadata` | `tokens`, `capacity`, `refill_rate_per_ms` |
+| `TokenBucketWithDebtStrategy` | `TokenBucketWithDebtStatMetadata` | `tokens`, `current_debt`, `max_debt` |
+| `LeakyBucketStrategy` | `LeakyBucketStatMetadata` | `bucket_level`, `bucket_capacity`, `leak_rate_per_ms` |
+| `LeakyBucketWithQueueStrategy` | `LeakyBucketWithQueueStatMetadata` | `queue_size`, `queue_cost` |
+| `TieredRateStrategy` | `TieredRateStatMetadata` | `tier`, `tier_multiplier`, `effective_limit` |
+| `AdaptiveThrottleStrategy` | `AdaptiveThrottleStatMetadata` | `effective_limit`, `current_load` |
+| `GCRAStrategy` | `GCRAStatMetadata` | `tat_ms`, `emission_interval_ms`, `conformant` |
+
+#### Adding Rate Limit Headers
+
+A common pattern is to include rate limit information in response headers:
+
+```python
+from fastapi import FastAPI, Request, Response, Depends
+from traffik import HTTPThrottle
+from traffik.types import StrategyStat
+
+throttle = HTTPThrottle(uid="api", rate="100/hour", backend=backend)
+
+@app.get("/data", dependencies=[Depends(throttle)])
+async def get_data(
+    request: Request,
+    response: Response,
+    stat: StrategyStat = Depends(throttle.stat),
+):
+    # Add standard rate limit headers
+    if stat:
+        response.headers["X-RateLimit-Limit"] = str(stat.rate.limit)
+        response.headers["X-RateLimit-Remaining"] = str(int(stat.hits_remaining))
+        response.headers["X-RateLimit-Reset"] = str(int(stat.rate.expire / 1000))
+**
+    return {"data": "value"}
+```
+
+#### Monitoring and Dashboards
+
+Use statistics to build monitoring dashboards or expose metrics:
+
+```python
+from fastapi import Request, Depends
+from prometheus_client import Gauge
+
+# Prometheus metrics
+rate_limit_remaining = Gauge(
+    "rate_limit_remaining",
+    "Remaining requests in rate limit window",
+    ["throttle_uid", "user_id"]
+)
+
+@app.get("/api/resource", dependencies=[Depends(throttle)])
+async def get_resource(
+    request: Request,
+    stat: StrategyStat = Depends(throttle.stat),
+):
+    user_id = get_user_id(request)
+    if stat:
+        rate_limit_remaining.labels(
+            throttle_uid="api",
+            user_id=user_id
+        ).set(stat.hits_remaining)
+    
+    return {"data": "value"}
+```
+
+### Custom Throttled Handlers
+
+When a client exceeds their rate limit, Traffik invokes a "throttled handler" to respond. By default, `HTTPThrottle` raises a `ConnectionThrottled` exception (which returns HTTP 429), and `WebSocketThrottle` sends a JSON message to the client. You can customize this behavior for both throttle types.
+
+#### Handler Signature
+
+The throttled handler receives four parameters:
+
+```python
+from starlette.requests import HTTPConnection
+from traffik.throttles import Throttle
+from traffik.types import WaitPeriod
+
+async def custom_handler(
+    connection: HTTPConnection,       # The HTTP/WebSocket connection
+    wait_ms: WaitPeriod,              # Wait time in milliseconds before next allowed request
+    throttle: Throttle,               # The throttle instance that triggered this
+    context: dict[str, typing.Any],   # Additional context (headers, detail, extras, etc.)
+) -> typing.Any:
+    ...
+```
+
+#### Custom HTTP Throttled Handler
+
+Customize the HTTP 429 response with additional headers, different status codes, or include rate limit statistics:
+
+```python
+import math
+from fastapi import FastAPI, Request, Depends
+from starlette.requests import HTTPConnection
+from traffik import HTTPThrottle
+from traffik.exceptions import ConnectionThrottled
+from traffik.types import WaitPeriod
+
+async def custom_http_throttled(
+    connection: HTTPConnection,
+    wait_ms: WaitPeriod,
+    throttle: HTTPThrottle,
+    context: dict,
+) -> None:
+    """Custom handler that includes rate limit stats in headers."""
+    wait_seconds = math.ceil(wait_ms / 1000)
+    # Get current stats for additional context
+    stat = await throttle.stat(connection, context=context)
+    
+    # Build custom headers
+    headers = {
+        "Retry-After": str(wait_seconds),
+        "X-RateLimit-Limit": str(stat.rate.limit) if stat else "unknown",
+        "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Reset": str(wait_seconds),
+    }
+    
+    # Merge with any headers from context
+    headers.update(context.get("headers", {}))
+    raise ConnectionThrottled(
+        wait_period=wait_seconds,
+        detail=f"Rate limit exceeded. Please retry in {wait_seconds} seconds.",
+        status_code=429,
+        headers=headers,
+    )
+
+throttle = HTTPThrottle(
+    uid="api",
+    rate="100/hour",
+    handle_throttled=custom_http_throttled,
+    backend=backend,
+)
+
+@app.get("/data", dependencies=[Depends(throttle)])
+async def get_data():
+    return {"data": "value"}
+```
+
+#### Custom WebSocket Throttled Handler
+
+For WebSocket connections, you have two main approaches:
+
+**Option 1: Send a throttled message (default behavior, recommended)**
+
+```python
+import math
+from starlette.websockets import WebSocket
+from traffik import WebSocketThrottle
+from traffik.types import WaitPeriod
+
+async def custom_ws_throttled(
+    connection: WebSocket,
+    wait_ms: WaitPeriod,
+    throttle: WebSocketThrottle,
+    context: dict,
+) -> None:
+    """Send a custom rate limit message without closing the connection."""
+    wait_seconds = math.ceil(wait_ms / 1000)
+    
+    # Send custom throttled message
+    await connection.send_json({
+        "type": "error",
+        "code": "RATE_LIMITED",
+        "message": "You're sending messages too fast",
+        "retry_after_seconds": wait_seconds,
+        "retry_after_ms": wait_ms,
+        # Include any extras from context
+        **context.get("extras", {}),
+    })
+
+ws_throttle = WebSocketThrottle(
+    uid="ws_chat",
+    rate="30/minute",
+    handle_throttled=custom_ws_throttled,
+    backend=backend,
+)
+```
+
+**Option 2: Raise an exception (not recommended due to overhead)**
+
+If you prefer to handle throttling in your WebSocket route using exception handling, you can raise an exception instead. However, this approach has performance overhead and is generally not recommended for high-throughput scenarios:
+
+```python
+import math
+from fastapi import WebSocketDisconnect, Depends
+from starlette.websockets import WebSocket
+from traffik import WebSocketThrottle
+from traffik.types import WaitPeriod
+from traffik.exceptions import ConnectionThrottled
+
+async def raising_ws_handler(
+    connection: WebSocket,
+    wait_ms: WaitPeriod,
+    throttle: WebSocketThrottle,
+    context: dict,
+) -> None:
+    """Raise exception instead of sending message (not recommended)."""
+    wait_seconds = math.ceil(wait_ms / 1000)
+    raise ConnectionThrottled(
+        wait_period=wait_seconds,
+        detail="WebSocket rate limit exceeded",
+        status_code=429,
+    )
+
+ws_throttle = WebSocketThrottle(
+    uid="ws_api",
+    rate="60/minute",
+    handle_throttled=raising_ws_handler,
+    backend=backend,
+)
+
+@app.websocket("/ws", dependencies=[Depends(ws_throttle)])
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    while True:
+        try:
+            data = await websocket.receive_text()
+            await ws_throttle.hit(websocket)  # May raise `ConnectionThrottled`
+            await websocket.send_text(f"Echo: {data}")
+        except ConnectionThrottled as e:
+            # Handle in route - has overhead compared to handler sending message
+            await websocket.send_json({
+                "error": "rate_limited",
+                "retry_after": e.wait_period,
+            })
+        except WebSocketDisconnect:
+            break
+```
+
+> **⚠️ Performance Note:** Exception handling in Python has overhead. For WebSocket connections with high message rates, prefer sending throttled messages directly in the handler (Option 1) rather than raising exceptions (Option 2).
+
+#### Close WebSocket on Throttle
+
+If you want to close the WebSocket connection when throttled:
+
+```python
+async def closing_ws_handler(
+    connection: WebSocket,
+    wait_ms: WaitPeriod,
+    throttle: WebSocketThrottle,
+    context: dict,
+) -> None:
+    """Close connection when rate limited."""
+    wait_seconds = math.ceil(wait_ms / 1000)
+    
+    # Send final message before closing
+    await connection.send_json({
+        "type": "rate_limit",
+        "message": "Connection closed due to rate limiting",
+        "retry_after": wait_seconds,
+    })
+    await asyncio.sleep(0.01)  # Ensure message is sent
+    # Close with policy violation code (1008)
+    await connection.close(code=1008, reason="Rate limit exceeded")
+
+ws_throttle = WebSocketThrottle(
+    uid="ws_strict",
+    rate="10/minute",
+    handle_throttled=closing_ws_handler,
+    backend=backend,
+)
+```
+
+#### Backend-Level Default Handler
+
+You can also set a default throttled handler at the backend level, which applies to all throttles using that backend unless overridden:
+
+```python
+from traffik.backends.inmemory import InMemoryBackend
+
+backend = InMemoryBackend(
+    namespace="api",
+    handle_throttled=custom_http_throttled,  # Default for all throttles
+)
+
+# This throttle uses the backend's default handler
+throttle1 = HTTPThrottle(uid="api1", rate="100/hour", backend=backend)
+
+# This throttle overrides with its own handler
+throttle2 = HTTPThrottle(
+    uid="api2",
+    rate="50/hour",
+    backend=backend,
+    handle_throttled=another_custom_handler,  # Overrides backend default
+)
+```
 
 ## Configuration
 
@@ -1832,7 +2220,7 @@ Rate limiting runs on every request, so even small inefficiencies add up. This s
        return f"user:{user.id}"
    ```
 
-6. **Avoid logging in backend operations: **Logging can cause ~10× slowdown**. Especially when the logging backend is slow (e.g., file I/O).
+6. Avoid logging in backend operations: **Logging can cause ~10× slowdown**. Especially when the logging backend is slow (e.g., file I/O).
 
 ## API Reference
 
@@ -1938,7 +2326,7 @@ class ThrottleBackend:
         ttl: float = None,              # Override backend lock_ttl
         blocking: bool = None,          # Override backend lock_blocking
         blocking_timeout: float = None, # Override backend lock_blocking_timeout
-    ) -> AsyncLockContext
+    ) -> _AsyncLockContext
     async def reset() -> None
     async def close() -> None
     

@@ -11,7 +11,7 @@ from fastapi.params import Depends
 
 from traffik.throttles import Throttle
 from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S
-from traffik.utils import add_parameter_to_signature
+from traffik.utils import _add_parameter_to_signature
 
 ThrottleT = typing.TypeVar("ThrottleT", bound=Throttle)
 
@@ -124,7 +124,7 @@ def route_wrapper(
     # uses the signature of the function to determine the params, hence the dependencies of the function.
 
     # So, we update the signature of the wrapper to include the throttle dependency
-    route_wrapper = add_parameter_to_signature(
+    route_wrapper = _add_parameter_to_signature(
         func=route_wrapper,
         parameter=inspect.Parameter(
             name=throttle_dep_param_name,

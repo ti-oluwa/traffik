@@ -1,7 +1,8 @@
 """Type definitions and protocols."""
 
 import typing
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 from starlette.requests import HTTPConnection
 from starlette.responses import Response
@@ -94,10 +95,15 @@ ConnectionIdentifier = typing.Callable[
 """Type definition for connection identifier functions."""
 
 ConnectionThrottledHandler = typing.Callable[
-    [HTTPConnectionTcon, WaitPeriod, typing.Dict[str, typing.Any]],
+    [HTTPConnectionTcon, WaitPeriod, T, typing.Dict[str, typing.Any]],
     typing.Awaitable[typing.Any],
 ]
-"""Type definition for connection throttled handlers."""
+"""
+Type definition for connection throttled handlers.
+
+Takes the connection, wait period, the throttle, and context as parameters.
+Returns an awaitable response.
+"""
 
 RateFunc = typing.Callable[
     [HTTPConnectionT, typing.Mapping[str, typing.Any]], typing.Awaitable[Rate]
@@ -124,8 +130,11 @@ class Dependency(typing.Protocol, typing.Generic[P, Rco]):
     ) -> typing.Union[Rco, typing.Awaitable[Rco]]: ...
 
 
+MapT = typing.TypeVar("MapT", bound=Mapping)
+
+
 @dataclass(frozen=True)
-class StrategyStat:
+class StrategyStat(typing.Generic[MapT]):
     """Statistics for a throttling strategy."""
 
     key: Stringable
@@ -136,7 +145,7 @@ class StrategyStat:
     """Number of hits remaining in the current period."""
     wait_ms: WaitPeriod
     """Time to wait (in milliseconds) before the next allowed request."""
-    metadata: typing.Dict[str, typing.Any] = field(default_factory=dict)
+    metadata: typing.Optional[MapT] = None
     """Additional metadata related to the strategy."""
 
 

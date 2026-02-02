@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import math
 import random
+import sys
 import typing
 
 import redis.asyncio as aioredis
@@ -281,6 +282,13 @@ class _AsyncRedLock:
     ] = contextvars.ContextVar("_task_locks")
     """Per-task storage of lock objects and reentrancy counts."""
 
+    __slots__ = (
+        "_name",
+        "_redis",
+        "_blocking_timeout",
+        "_ttl",
+    )
+
     def __init__(
         self,
         name: str,
@@ -403,8 +411,10 @@ class _AsyncRedLock:
         except Exception as exc:  # nosec
             # Lock might have expired or been released already
             # Log and ignore release errors to avoid deadlocks
-            print(f"Warning: Failed to release lock '{self._name}': {str(exc)}")
-            pass
+            sys.stderr.write(
+                f"Warning: Failed to release lock '{self._name}': {str(exc)}\n"
+            )
+            sys.stderr.flush()
         finally:
             del task_locks[self._name]
 
@@ -479,7 +489,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         namespace: str,
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[HTTPConnectionT]
+            ConnectionThrottledHandler[HTTPConnectionT, typing.Any]
         ] = None,
         persistent: bool = False,
         on_error: typing.Union[
@@ -521,7 +531,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         if isinstance(connection, str):
 
             async def _getter():
-                return await aioredis.from_url(connection, decode_responses=False)
+                return await aioredis.from_url(connection, decode_responses=True)
 
             self._get_connection = _getter
         else:
@@ -659,10 +669,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                 "Connection error! Ensure backend is initialized."
             )
 
-        value = await self.connection.get(key)
-        if value is None:
-            return None
-        return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+        return await self.connection.get(key)
 
     async def set(
         self, key: str, value: typing.Any, expire: typing.Optional[int] = None
@@ -786,16 +793,37 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         if not keys:
             return []
 
-        values = await self.connection.mget(keys)
-        result: typing.List[typing.Optional[str]] = []
-        for value in values:
-            if value is None:
-                result.append(None)
-            else:
-                result.append(
-                    value.decode("utf-8") if isinstance(value, bytes) else str(value)
-                )
-        return result
+        return await self.connection.mget(keys)
+
+    async def multi_set(
+        self,
+        items: typing.Mapping[str, str],
+        expire: typing.Optional[int] = None,
+    ) -> None:
+        """
+        Set multiple values atomically using Redis pipeline.
+
+        Uses Redis pipeline for batch setting in a single round-trip.
+        All operations execute atomically on the Redis server.
+
+        :param items: Mapping of keys to values
+        :param expire: Optional TTL in seconds for all keys
+        """
+        if self.connection is None:
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
+
+        if not items:
+            return
+
+        async with self.connection.pipeline(transaction=True) as pipe:
+            for key, value in items.items():
+                if expire is not None:
+                    pipe.set(key, value, ex=expire)
+                else:
+                    pipe.set(key, value)
+            await pipe.execute()
 
     async def clear(self) -> None:
         """Clear all keys in the namespace."""

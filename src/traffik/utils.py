@@ -5,6 +5,7 @@ import base64
 import functools
 import inspect
 import os
+import sys
 import threading
 import typing
 from collections import deque
@@ -137,7 +138,7 @@ def get_remote_address(connection: HTTPConnection) -> typing.Optional[str]:
     return None
 
 
-def add_parameter_to_signature(
+def _add_parameter_to_signature(
     func: typing.Callable, parameter: inspect.Parameter, index: int = -1
 ) -> typing.Callable:
     """
@@ -179,9 +180,9 @@ def add_parameter_to_signature(
     # False
 
     # This will fail because the signature of the wrapper function is overridden by the original function's signature,
-    # when functools.wraps is used. To fix this, we can use the `add_parameter_to_signature` function.
+    # when functools.wraps is used. To fix this, we can use the `_add_parameter_to_signature` function.
 
-    wrapped_func = add_parameter_to_signature(
+    wrapped_func = _add_parameter_to_signature(
         func=wrapped_func,
         parameter=inspect.Parameter(
             name="new_param",
@@ -273,7 +274,7 @@ def time() -> float:
     return asyncio.get_event_loop().time()
 
 
-class FenceTokenGenerator:
+class _FenceTokenGenerator:
     """
     A thread-safe fence token generator that produces unique, monotonically increasing integer tokens.
 
@@ -309,18 +310,18 @@ class FenceTokenGenerator:
             return (timestamp << 16) | self._sequence_number
 
 
-fence_token_generator = FenceTokenGenerator()
+fence_token_generator = _FenceTokenGenerator()
 """Global fence token generator instance."""
 
 
 AsyncLockT = typing.TypeVar("AsyncLockT", bound=AsyncLock)
 
 
-class AsyncLockContext(typing.Generic[AsyncLockT]):
+class _AsyncLockContext(typing.Generic[AsyncLockT]):
     """
-    Asynchronous context manager for locks with optional timeout auto-release.
+    Asynchronous context manager for locks with optional lock TTL and blocking behavior.
 
-    Muilti-threaded or Distributed safety depends on the underlying `AsyncLock` implementation.
+    Multi-threaded/process or distributed safety depends on the underlying `AsyncLock` implementation.
 
     Warning: Using `ttl` or `blocking_timeout` with reentrant locks may cause unexpected behavior
     if nested contexts share the same lock instance.
@@ -331,7 +332,7 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
         "_ttl",
         "_blocking",
         "_blocking_timeout",
-        "_timer",
+        "_ttl_task",
         "_acquired",
         "_auto_released",
     )
@@ -355,7 +356,7 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
         self._ttl = ttl
         self._blocking = blocking
         self._blocking_timeout = blocking_timeout
-        self._timer: typing.Optional[asyncio.Task] = None
+        self._ttl_task: typing.Optional[asyncio.Task] = None
         self._acquired: bool = False
         self._auto_released: bool = False
 
@@ -373,7 +374,7 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
         self._acquired = acquired
         # Start auto-release timer if acquired and timeout is set
         if acquired and self._ttl is not None:
-            self._timer = asyncio.create_task(self._auto_release())
+            self._ttl_task = asyncio.create_task(self._auto_release())
         return self
 
     async def _auto_release(self) -> None:
@@ -395,13 +396,13 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
 
                     # Lock might have been released already or not owned by us
                     # This can happen with reentrant locks
-                    print(
+                    sys.stderr.write(
                         "Failed to auto-release lock after timeout; it may have been released already."
-                        " This can happen with reentrant locks, and can lead to unexpected behavior.",
+                        " This can happen with reentrant locks, and can lead to unexpected behavior.\n",
                     )
-                    pass
+                    sys.stderr.flush()
         except asyncio.CancelledError:
-            # Timer cancelled because lock was released manually
+            # Auto-release task cancelled because lock was released manually
             pass
 
     async def __aexit__(
@@ -410,12 +411,12 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> None:
-        # Ensure the lock is released and timer cleaned up.
-        # Cancel and wait for timer completion
-        if self._timer is not None:
-            self._timer.cancel()
+        # Ensure the lock is released and auto-release task cleaned up.
+        # Cancel and wait for auto-release task completion
+        if self._ttl_task is not None:
+            self._ttl_task.cancel()
             try:
-                await self._timer
+                await self._ttl_task
             except asyncio.CancelledError:
                 pass
 
@@ -428,36 +429,29 @@ class AsyncLockContext(typing.Generic[AsyncLockT]):
                 # and it may cause deadlocks if logging uses the same backend
 
                 # Lock might have been released by timeout in a race or not owned by current task
-                print(
+                sys.stderr.write(
                     "Failed to release lock on context exit; it may have been released already."
-                    " This can happen with reentrant locks, and can lead to unexpected behavior.",
+                    " This can happen with reentrant locks, and can lead to unexpected behavior.\n",
                 )
-                pass
+                sys.stderr.flush()
             finally:
                 self._acquired = False
 
 
-class AsyncRLock:
+class _AsyncRLock:
     """
     A fair reentrant lock for async programming. Fair means that it respects the order of acquisition.
 
-    Adapted from: https://github.com/Joshuaalbert/FairAsyncRLock/blob/81e0d89d64c0cbc81a91c2f45992c79471ecc3bb/fair_async_rlock/fair_async_rlock.py
+    Adapted from: https://github.com/Joshuaalbert/Fair_AsyncRLock/blob/81e0d89d64c0cbc81a91c2f45992c79471ecc3bb/fair_async_rlock/fair_async_rlock.py
     """
 
-    __slots__ = ("_owner", "_count", "_owner_transfer", "_queue", "_loop")
+    __slots__ = ("_owner", "_count", "_owner_transfer", "_queue")
 
     def __init__(self) -> None:
         self._owner: typing.Optional[asyncio.Task] = None
         self._count = 0
         self._owner_transfer = False
         self._queue: deque[asyncio.Future[None]] = deque()
-        self._loop: typing.Optional[asyncio.AbstractEventLoop] = None
-
-    @property
-    def loop(self) -> asyncio.AbstractEventLoop:
-        if not self._loop:
-            self._loop = asyncio.get_event_loop()
-        return self._loop
 
     def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
         return self._owner == (task or asyncio.current_task())
@@ -482,7 +476,7 @@ class AsyncRLock:
             return True
 
         # Only create future if we actually need to wait
-        fut = self.loop.create_future()
+        fut = asyncio.get_running_loop().create_future()
         self._queue.append(fut)
 
         # Wait for the lock to be free, then acquire
@@ -542,7 +536,7 @@ class AsyncRLock:
         self.release()
 
 
-class AsyncLockGroup:
+class _AsyncLockGroup:
     """
     Reentrant async group lock.
 
@@ -551,7 +545,10 @@ class AsyncLockGroup:
 
     __slots__ = ("_locks", "_owner", "_counter", "_meta_lock")
 
-    def __init__(self, locks: typing.Sequence[AsyncLock]) -> None:
+    def __init__(self, *locks: AsyncLock) -> None:
+        if not locks:
+            raise ValueError("At least one lock must be provided to the lock group.")
+
         # Sort locks by id() to ensure consistent ordering and prevent deadlocks
         self._locks = sorted(locks, key=id)
         self._owner: typing.Optional[asyncio.Task] = None
@@ -583,7 +580,7 @@ class AsyncLockGroup:
                 ):
                     acquired.append(lock)
                 else:
-                    # Failed to acquire - rollback
+                    # Failed to acquire, rollback
                     for acquired_lock in reversed(acquired):
                         await acquired_lock.release()
                     return False
@@ -602,6 +599,7 @@ class AsyncLockGroup:
 
     async def release(self) -> None:
         current_task = asyncio.current_task()
+        should_release = False
 
         async with self._meta_lock:
             if self._owner is not current_task:
@@ -610,11 +608,10 @@ class AsyncLockGroup:
             self._counter -= 1
             if self._counter == 0:
                 self._owner = None
-                # Release metadata lock before releasing actual locks
-                # to avoid holding it during potentially slow operations
+                should_release = True
 
         # Only release the actual locks after counter hits 0
-        if self._counter == 0:
+        if should_release:
             # Release in reverse order (though with sorted locks, order is consistent)
             for lock in reversed(self._locks):
                 await lock.release()

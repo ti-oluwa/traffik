@@ -3,12 +3,70 @@
 import typing
 from dataclasses import dataclass, field
 
+from typing_extensions import TypedDict
+
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
-__all__ = ["SlidingWindowLogStrategy", "SlidingWindowCounterStrategy"]
+__all__ = [
+    "SlidingWindowLogStrategy",
+    "SlidingWindowCounterStrategy",
+    "SlidingWindowLogStatMetadata",
+    "SlidingWindowCounterStatMetadata",
+]
+
+
+class SlidingWindowLogStatMetadata(TypedDict):
+    """
+    Metadata for `SlidingWindowLogStrategy` statistics.
+
+    The sliding window log strategy maintains a log of request timestamps
+    for precise rate limiting over a continuously sliding time window.
+    """
+
+    strategy: typing.Literal["sliding_window_log"]
+    """Strategy identifier, always "sliding_window_log"."""
+
+    window_start_ms: float
+    """Start timestamp of the sliding window in milliseconds since epoch."""
+
+    entry_count: int
+    """Number of entries (requests) currently in the log within the window."""
+
+    current_cost_sum: float
+    """Total cost of all requests in the current sliding window."""
+
+    oldest_entry_ms: typing.Optional[float]
+    """Timestamp of the oldest entry in the log, or None if log is empty."""
+
+
+class SlidingWindowCounterStatMetadata(TypedDict):
+    """
+    Metadata for `SlidingWindowCounterStrategy` statistics.
+
+    The sliding window counter strategy uses weighted counters from
+    current and previous windows to approximate a true sliding window.
+    """
+
+    strategy: typing.Literal["sliding_window_counter"]
+    """Strategy identifier, always "sliding_window_counter"."""
+
+    current_window_id: int
+    """Identifier of the current time window (based on window duration)."""
+
+    current_count: int
+    """Request count in the current window."""
+
+    previous_count: int
+    """Request count in the previous window (used for weighted calculation)."""
+
+    overlap_percentage: float
+    """Percentage of the previous window that overlaps with the sliding window (0.0-1.0)."""
+
+    weighted_count: float
+    """Calculated weighted count: (previous_count * overlap_percentage) + current_count."""
 
 
 @dataclass(frozen=True)
@@ -181,13 +239,13 @@ class SlidingWindowLogStrategy:
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
-            metadata={
-                "strategy": "sliding_window_log",
-                "window_start_ms": window_start,
-                "entry_count": len(valid_entries),
-                "current_cost_sum": current_cost_sum,
-                "oldest_entry_ms": oldest_timestamp,
-            },
+            metadata=SlidingWindowLogStatMetadata(
+                strategy="sliding_window_log",
+                window_start_ms=window_start,
+                entry_count=len(valid_entries),
+                current_cost_sum=current_cost_sum,
+                oldest_entry_ms=oldest_timestamp,
+            ),
         )
 
 
@@ -325,7 +383,7 @@ class SlidingWindowCounterStrategy:
 
     async def get_stat(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
-    ) -> StrategyStat:
+    ) -> StrategyStat[SlidingWindowCounterStatMetadata]:
         """
         Get current statistics for the rate limit.
 
@@ -385,12 +443,12 @@ class SlidingWindowCounterStrategy:
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
-            metadata={
-                "strategy": "sliding_window_counter",
-                "current_window_id": current_window_id,
-                "current_count": current_count,
-                "previous_count": previous_count,
-                "overlap_percentage": overlap_percentage,
-                "weighted_count": weighted_count,
-            },
+            metadata=SlidingWindowCounterStatMetadata(
+                strategy="sliding_window_counter",
+                current_window_id=current_window_id,
+                current_count=current_count,
+                previous_count=previous_count,
+                overlap_percentage=overlap_percentage,
+                weighted_count=weighted_count,
+            ),
         )

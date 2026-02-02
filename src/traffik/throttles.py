@@ -2,11 +2,12 @@
 
 import asyncio
 import math
+import sys
 import typing
 
 from starlette.requests import HTTPConnection, Request
 from starlette.websockets import WebSocket
-from typing_extensions import TypedDict
+from typing_extensions import Self, TypedDict
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import ConfigurationError
@@ -25,7 +26,14 @@ from traffik.types import (
     WaitPeriod,
 )
 
-__all__ = ["Throttle", "HTTPThrottle", "WebSocketThrottle", "is_throttled"]
+__all__ = [
+    "Throttle",
+    "HTTPThrottle",
+    "WebSocketThrottle",
+    "is_throttled",
+    "ExceptionInfo",
+    "websocket_throttled",
+]
 
 THROTTLED_STATE_KEY = "__traffik_throttled_state__"
 CONNECTION_IDS_STATE_KEY = "__traffik_connection_ids__"
@@ -69,7 +77,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         rate: RateType[HTTPConnectionT],
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[HTTPConnectionT]
+            ConnectionThrottledHandler[HTTPConnectionT, Self]
         ] = None,
         strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]] = None,
@@ -352,16 +360,16 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :return: The wait period in milliseconds.
         """
         if self._error_callback:
-            exc_info = ExceptionInfo(
+            exc_info = dict(
                 exception=exc,
                 connection=connection,
                 cost=cost,
                 rate=rate,
                 context=context,
-                backend=backend,  # type: ignore
-                throttle=self,  # type: ignore
+                backend=backend,
+                throttle=self,
             )
-            return await self._error_callback(connection, exc_info)
+            return await self._error_callback(connection, exc_info)  # type: ignore[arg-type]
         elif self.on_error == "allow":
             return 0.0
         elif self.on_error == "throttle":
@@ -369,16 +377,16 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         elif not self.uses_fixed_backend and self.on_error is None:
             # For dynamic backend throttles, check backend's on_error
             if backend._error_callback:
-                exc_info = ExceptionInfo(
+                exc_info = dict(
                     exception=exc,
                     connection=connection,
                     cost=cost,
                     rate=rate,
                     context=context,
-                    backend=backend,  # type: ignore
-                    throttle=self,  # type: ignore
+                    backend=backend,
+                    throttle=self,
                 )
-                return await backend._error_callback(connection, exc_info)
+                return await backend._error_callback(connection, exc_info)  # type: ignore[arg-type]
             elif backend.on_error == "allow":
                 return 0.0
             elif backend.on_error == "throttle":
@@ -438,9 +446,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            print(
-                f"Warning: An error occurred while utilizing strategy '{self.strategy!r}': {exc}",
+            sys.stderr.write(
+                f"Warning: An error occurred while utilizing strategy '{self.strategy!r}': {exc}\n"
             )
+            sys.stderr.flush()
             wait_ms = await self._handle_error(
                 connection,
                 exc=exc,
@@ -459,7 +468,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             setattr(connection.state, THROTTLED_STATE_KEY, True)
             context = dict(context or {})
             context.setdefault("headers", self.headers)
-            await handle_throttled(connection, wait_ms, context)
+            await handle_throttled(connection, wait_ms, self, context)
 
         # Mark connection as not throttled
         setattr(connection.state, THROTTLED_STATE_KEY, False)
@@ -531,6 +540,7 @@ class HTTPThrottle(Throttle[Request]):
         scope = context.get("scope", "default") if context else "default"
         return f"http:{method}:{path}:{scope}"
 
+    # Redefine signatures so that they can resolved byt FastAPI dependency injection systems
     async def __call__(
         self,
         connection: Request,
@@ -539,10 +549,18 @@ class HTTPThrottle(Throttle[Request]):
     ) -> Request:
         return await super().__call__(connection, cost=cost, context=context)
 
+    async def stat(
+        self,
+        connection: Request,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+    ) -> typing.Optional[StrategyStat]:
+        return await super().stat(connection, context=context)
+
 
 async def websocket_throttled(
     connection: WebSocket,
     wait_ms: WaitPeriod,
+    throttle: Throttle[WebSocket],
     context: typing.Mapping[str, typing.Any],
 ) -> None:
     """
@@ -552,7 +570,9 @@ async def websocket_throttled(
 
     :param connection: The WebSocket connection that is throttled.
     :param wait_ms: The wait period in milliseconds before the client can send messages again.
+    :param throttle: The throttle instance that triggered the throttling.
     :param context: Additional context for the throttled handler.
+    :return: None
     """
     wait_seconds = math.ceil(wait_ms / 1000)
     await connection.send_json(
@@ -573,7 +593,9 @@ class WebSocketThrottle(Throttle[WebSocket]):
         uid: str,
         rate: RateType[WebSocket],
         identifier: typing.Optional[ConnectionIdentifier[WebSocket]] = None,
-        handle_throttled: typing.Optional[ConnectionThrottledHandler[WebSocket]] = None,
+        handle_throttled: typing.Optional[
+            ConnectionThrottledHandler[WebSocket, "WebSocketThrottle"]
+        ] = None,
         strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, WebSocket]] = None,
         cost: CostType[WebSocket] = 1,
@@ -635,3 +657,10 @@ class WebSocketThrottle(Throttle[WebSocket]):
         :return: The throttled `WebSocket` connection.
         """
         return await super().__call__(connection, cost=cost, context=context)
+
+    async def stat(
+        self,
+        connection: WebSocket,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+    ) -> typing.Optional[StrategyStat]:
+        return await super().stat(connection, context=context)

@@ -3,12 +3,73 @@
 import typing
 from dataclasses import dataclass, field
 
+from typing_extensions import TypedDict
+
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
-__all__ = ["TokenBucketStrategy", "TokenBucketWithDebtStrategy"]
+__all__ = [
+    "TokenBucketStrategy",
+    "TokenBucketWithDebtStrategy",
+    "TokenBucketStatMetadata",
+    "TokenBucketWithDebtStatMetadata",
+]
+
+
+class TokenBucketStatMetadata(TypedDict):
+    """
+    Metadata for `TokenBucketStrategy` statistics.
+
+    The token bucket strategy models rate limiting as a bucket that holds
+    tokens, which refill at a constant rate.
+    """
+
+    strategy: typing.Literal["token_bucket"]
+    """Strategy identifier, always "token_bucket"."""
+
+    tokens: float
+    """Current number of tokens in the bucket."""
+
+    capacity: int
+    """Maximum capacity of the bucket (burst size)."""
+
+    refill_rate_per_ms: float
+    """Rate at which tokens are added to the bucket (tokens per millisecond)."""
+
+    last_refill_ms: float
+    """Timestamp of the last token refill calculation in milliseconds since epoch."""
+
+
+class TokenBucketWithDebtStatMetadata(TypedDict):
+    """
+    Metadata for `TokenBucketWithDebtStrategy` statistics.
+
+    Enhanced token bucket that allows going into "debt" (negative token balance)
+    for smoother handling of traffic spikes.
+    """
+
+    strategy: typing.Literal["token_bucket_with_debt"]
+    """Strategy identifier, always "token_bucket_with_debt"."""
+
+    tokens: float
+    """Current token balance (can be negative when in debt)."""
+
+    capacity: int
+    """Maximum positive token capacity (burst size)."""
+
+    max_debt: int
+    """Maximum allowed negative token balance (overdraft limit)."""
+
+    current_debt: float
+    """Current debt amount (0.0 if tokens >= 0, otherwise abs(tokens))."""
+
+    refill_rate_per_ms: float
+    """Rate at which tokens are added to the bucket (tokens per millisecond)."""
+
+    last_refill_ms: float
+    """Timestamp of the last token refill calculation in milliseconds since epoch."""
 
 
 @dataclass(frozen=True)
@@ -161,7 +222,7 @@ class TokenBucketStrategy:
 
     async def get_stat(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
-    ) -> StrategyStat:
+    ) -> StrategyStat[TokenBucketStatMetadata]:
         """
         Get current statistics for the rate limit.
 
@@ -221,13 +282,13 @@ class TokenBucketStrategy:
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
-            metadata={
-                "strategy": "token_bucket",
-                "tokens": tokens,
-                "capacity": capacity,
-                "refill_rate_per_ms": refill_rate,
-                "last_refill_ms": last_refill,
-            },
+            metadata=TokenBucketStatMetadata(
+                strategy="token_bucket",
+                tokens=tokens,
+                capacity=capacity,
+                refill_rate_per_ms=refill_rate,
+                last_refill_ms=last_refill,
+            ),
         )
 
 
@@ -391,7 +452,7 @@ class TokenBucketWithDebtStrategy:
 
     async def get_stat(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend
-    ) -> StrategyStat:
+    ) -> StrategyStat[TokenBucketWithDebtStatMetadata]:
         """
         Get current statistics for the rate limit.
 
@@ -447,18 +508,18 @@ class TokenBucketWithDebtStrategy:
         else:
             wait_ms = 0.0
 
-        return StrategyStat(
+        return StrategyStat[TokenBucketWithDebtStatMetadata](
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
             wait_ms=wait_ms,
-            metadata={
-                "strategy": "token_bucket_with_debt",
-                "tokens": tokens,
-                "capacity": capacity,
-                "max_debt": self.max_debt,
-                "current_debt": max(-tokens, 0.0) if tokens < 0 else 0.0,
-                "refill_rate_per_ms": refill_rate,
-                "last_refill_ms": last_refill,
-            },
+            metadata=TokenBucketWithDebtStatMetadata(
+                strategy="token_bucket_with_debt",
+                tokens=tokens,
+                capacity=capacity,
+                max_debt=self.max_debt,
+                current_debt=max(-tokens, 0.0) if tokens < 0 else 0.0,
+                refill_rate_per_ms=refill_rate,
+                last_refill_ms=last_refill,
+            ),
         )

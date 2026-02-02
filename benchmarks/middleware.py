@@ -1,10 +1,10 @@
 """
-HTTP benchmarks comparing Traffik and SlowAPI rate limiting.
+Middleware benchmarks comparing Traffik and SlowAPI rate limiting.
 
 Usage:
-    python benchmarks/https.py --help
-    python benchmarks/https.py --traffik-backend redis --traffik-strategy sliding-window-counter
-    python benchmarks/https.py --scenarios low,high,burst --iterations 3
+    python benchmarks/middleware.py --help
+    python benchmarks/middleware.py --traffik-backend redis --traffik-strategy sliding-window-counter
+    python benchmarks/middleware.py --scenarios low,high,burst --iterations 3
 """
 
 import argparse
@@ -18,12 +18,13 @@ import httpx
 from base import BenchmarkMemcachedBackend, custom_identifier  # type: ignore[import]
 from fastapi import FastAPI, Request
 from slowapi import Limiter as SlowAPILimiter
+from slowapi.middleware import SlowAPIASGIMiddleware
 from starlette.testclient import TestClient
 
 from traffik import HTTPThrottle, get_remote_address
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.redis import RedisBackend
-from traffik.decorators import throttled
+from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
 from traffik.strategies.custom import GCRAStrategy
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.strategies.leaky_bucket import (
@@ -53,6 +54,7 @@ class BenchmarkConfig:
             "burst",
             "race",
             "distributed",
+            "selective",
         ]
     )
     iterations: int = 3
@@ -60,15 +62,14 @@ class BenchmarkConfig:
 
     # Traffik configuration
     traffik_backend: str = "inmemory"  # inmemory, redis, memcached
-    traffik_strategy: str = "fixed-window"  # fixed-window, sliding-window-counter, sliding-window-log, token-bucket, token-bucket-debt, leaky-bucket, leaky-bucket-queue
+    traffik_strategy: str = "fixed-window"
     traffik_redis_url: Optional[str] = None
     traffik_memcached_url: Optional[str] = None
-    # We will not track keys for memcached backend by default to avoid performance overhead
     traffik_memcached_track_keys: bool = False
 
     # SlowAPI configuration
     slowapi_backend: str = "inmemory"  # inmemory, redis, memcached
-    slowapi_strategy: str = "fixed-window"  # fixed-window, sliding-window-counter, fixed-window-elastic-expiry, moving-window
+    slowapi_strategy: str = "fixed-window"
     slowapi_redis_url: Optional[str] = None
     slowapi_memcached_url: Optional[str] = None
 
@@ -168,7 +169,7 @@ def create_traffik_strategy(config: BenchmarkConfig):
 def create_traffik_app(
     limit: int = 100, window: int = 60, config: Optional[BenchmarkConfig] = None
 ):
-    """Create FastAPI app with Traffik rate limiting."""
+    """Create FastAPI app with Traffik middleware rate limiting."""
     if config is None:
         config = BenchmarkConfig()
 
@@ -184,10 +185,25 @@ def create_traffik_app(
         strategy=strategy,
     )
 
+    # Apply middleware with path matching
+    app.add_middleware(
+        ThrottleMiddleware[Request],  # type: ignore[arg-type]
+        middleware_throttles=[
+            MiddlewareThrottle(
+                throttle=throttle,
+                path="/test",
+                methods={"GET"},
+            )
+        ],
+        backend=backend,  # type: ignore[arg-type]
+    )
+
     @app.get("/test")
-    @throttled(throttle)
     async def test_endpoint(request: Request):
-        await throttle(request)
+        return {"status": "ok"}
+
+    @app.get("/unthrottled")
+    async def unthrottled_endpoint(request: Request):
         return {"status": "ok"}
 
     return app
@@ -210,7 +226,7 @@ def create_slowapi_backend(config: BenchmarkConfig):
 def create_slowapi_app(
     limit: int = 100, window: int = 60, config: Optional[BenchmarkConfig] = None
 ):
-    """Create FastAPI app with SlowAPI rate limiting."""
+    """Create FastAPI app with SlowAPI middleware rate limiting."""
     if config is None:
         config = BenchmarkConfig()
 
@@ -223,14 +239,21 @@ def create_slowapi_app(
         or "anonymous",
         storage_uri=storage_uri,
         strategy=config.slowapi_strategy.replace("_", "-"),
+        default_limits=[f"{limit}/{window}second"],
     )
 
+    app.state.limiter = limiter
+    app.add_middleware(SlowAPIASGIMiddleware)  # type: ignore[arg-type]
+
     @app.get("/test")
-    @limiter.limit(f"{limit}/{window}second")
     async def test_endpoint(request: Request):
         return {"status": "ok"}
 
-    app.state.limiter = limiter
+    @app.get("/unthrottled")
+    @limiter.exempt
+    async def unthrottled_endpoint(request: Request):
+        return {"status": "ok"}
+
     return app
 
 
@@ -323,7 +346,7 @@ async def run_scenario_sustained_load(
         app = create_slowapi_app(limit=1000, window=60, config=config)
 
     num_requests = 500
-    concurrency = 50  # 50 concurrent requests at a time
+    concurrency = 50
 
     latencies = []
     successful = 0
@@ -535,19 +558,79 @@ async def run_scenario_distributed(
     )
 
 
+async def run_scenario_selective_throttling(
+    app: FastAPI, config: BenchmarkConfig
+) -> ScenarioResult:
+    """Scenario 7: Test selective throttling (throttled vs unthrottled endpoints)."""
+    library = "Traffik" if hasattr(app.state, "backend") else "SlowAPI"
+
+    # Create new app with 50 req/min limit
+    if library == "Traffik":
+        app = create_traffik_app(limit=50, window=60, config=config)
+    else:
+        app = create_slowapi_app(limit=50, window=60, config=config)
+
+    num_throttled_requests = 100
+    num_unthrottled_requests = 100
+
+    latencies = []
+    successful = 0
+    throttled = 0
+
+    start_time = time.perf_counter()
+
+    with TestClient(app) as client:
+        # First, send throttled requests
+        for _ in range(num_throttled_requests):
+            req_start = time.perf_counter()
+            response = client.get("/test")
+            req_end = time.perf_counter()
+
+            latencies.append(req_end - req_start)
+
+            if response.status_code == 200:
+                successful += 1
+            elif response.status_code == 429:
+                throttled += 1
+
+        # Then, send unthrottled requests (should all succeed)
+        for _ in range(num_unthrottled_requests):
+            req_start = time.perf_counter()
+            response = client.get("/unthrottled")
+            req_end = time.perf_counter()
+
+            latencies.append(req_end - req_start)
+
+            if response.status_code == 200:
+                successful += 1
+            elif response.status_code == 429:
+                throttled += 1
+
+    end_time = time.perf_counter()
+    return ScenarioResult(
+        name="Selective Throttling",
+        library=library,
+        total_requests=num_throttled_requests + num_unthrottled_requests,
+        successful_requests=successful,
+        throttled_requests=throttled,
+        total_time=end_time - start_time,
+        latencies=latencies,
+    )
+
+
 async def run_benchmark_suite(
     library: str, config: BenchmarkConfig
 ) -> Dict[str, List[ScenarioResult]]:
     """Run all benchmark scenarios for a library."""
     print(f"\n{'=' * 60}")
-    print(f"Running benchmarks for: {library}")
+    print(f"Running middleware benchmarks for: {library}")
     print(f"{'=' * 60}\n")
 
     if library == "Traffik":
         print(f"Backend: {config.traffik_backend}")
         print(f"Strategy: {config.traffik_strategy}\n")
     else:
-        print(f"Backend: {config.slowapi_backend}\n")
+        print(f"Backend: {config.slowapi_backend}")
         print(f"Strategy: {config.slowapi_strategy}\n")
 
     results = {}
@@ -559,6 +642,7 @@ async def run_benchmark_suite(
         "burst": ("Burst Load", run_scenario_burst_traffic),
         "race": ("Race Condition Test", run_scenario_race_conditions),
         "distributed": ("Distributed Correctness", run_scenario_distributed),
+        "selective": ("Selective Throttling", run_scenario_selective_throttling),
     }
 
     for scenario_key in config.scenarios:
@@ -585,10 +669,10 @@ async def run_benchmark_suite(
                 await app.state.backend.close()
 
             if i < config.iterations - 1:
-                await asyncio.sleep(0.5)  # Brief pause between iterations
+                await asyncio.sleep(0.5)
 
         results[scenario_name] = scenario_results
-        await asyncio.sleep(1.0)  # Pause between scenarios
+        await asyncio.sleep(1.0)
 
     return results
 
@@ -623,17 +707,23 @@ def print_comparison(
 ):
     """Print comparison table of results."""
     print("\n" + "=" * 80)
-    print("BENCHMARK RESULTS COMPARISON")
+    print("MIDDLEWARE BENCHMARK RESULTS COMPARISON")
     print("=" * 80)
 
     print("\nPERFORMANCE BENCHMARKS")
     print("-" * 80)
     print(
-        f"{'Scenario':<20} {'Metric':<25} {'Traffik':<15} {'SlowAPI':<15} {'Winner':<10}"
+        f"{'Scenario':<25} {'Metric':<20} {'Traffik':<15} {'SlowAPI':<15} {'Winner':<10}"
     )
     print("-" * 80)
 
-    performance_scenarios = ["Low Load", "High Load", "Sustained Load", "Burst Load"]
+    performance_scenarios = [
+        "Low Load",
+        "High Load",
+        "Sustained Load",
+        "Burst Load",
+        "Selective Throttling",
+    ]
 
     traffik_wins = 0
     slowapi_wins = 0
@@ -658,42 +748,42 @@ def print_comparison(
             traffik_wins += 1
         elif rps_winner == "SlowAPI":
             slowapi_wins += 1
-        else:  # Tie
+        else:
             ties += 1
 
         diff_pct = ((t_rps - s_rps) / s_rps * 100) if s_rps > 0 else 0
 
         print(
-            f"{scenario:<20} {'Requests/sec':<25} {t_rps:<15.2f} {s_rps:<15.2f} {rps_winner:<10}"
+            f"{scenario:<25} {'Requests/sec':<20} {t_rps:<15.2f} {s_rps:<15.2f} {rps_winner:<10}"
         )
-        print(f"{'':<20} {'  Difference':<25} {diff_pct:+.1f}%")
+        print(f"{'':<25} {'  Difference':<20} {diff_pct:+.1f}%")
 
         # Latency comparison
         p50_winner = "Traffik" if t_agg.p50_latency < s_agg.p50_latency else "SlowAPI"
         print(
-            f"{'':<20} {'P50 Latency (ms)':<25} {t_agg.p50_latency:<15.2f} {s_agg.p50_latency:<15.2f} {p50_winner:<10}"
+            f"{'':<25} {'P50 Latency (ms)':<20} {t_agg.p50_latency:<15.2f} {s_agg.p50_latency:<15.2f} {p50_winner:<10}"
         )
 
         p95_winner = "Traffik" if t_agg.p95_latency < s_agg.p95_latency else "SlowAPI"
         print(
-            f"{'':<20} {'P95 Latency (ms)':<25} {t_agg.p95_latency:<15.2f} {s_agg.p95_latency:<15.2f} {p95_winner:<10}"
+            f"{'':<25} {'P95 Latency (ms)':<20} {t_agg.p95_latency:<15.2f} {s_agg.p95_latency:<15.2f} {p95_winner:<10}"
         )
 
         p99_winner = "Traffik" if t_agg.p99_latency < s_agg.p99_latency else "SlowAPI"
         print(
-            f"{'':<20} {'P99 Latency (ms)':<25} {t_agg.p99_latency:<15.2f} {s_agg.p99_latency:<15.2f} {p99_winner:<10}"
+            f"{'':<25} {'P99 Latency (ms)':<20} {t_agg.p99_latency:<15.2f} {s_agg.p99_latency:<15.2f} {p99_winner:<10}"
         )
 
         print(
-            f"{'':<20} {'Success Rate (%)':<25} {t_agg.success_rate:<15.1f} {s_agg.success_rate:<15.1f}"
+            f"{'':<25} {'Success Rate (%)':<20} {t_agg.success_rate:<15.1f} {s_agg.success_rate:<15.1f}"
         )
         print()
 
     # Correctness tests
     print("\nCORRECTNESS TESTS")
     print("-" * 80)
-    print(f"{'Test':<30} {'Traffik':<20} {'SlowAPI':<20}")
-    print("-" * 70)
+    print(f"{'Test':<35} {'Traffik':<20} {'SlowAPI':<20}")
+    print("-" * 75)
 
     if (
         "Race Condition Test" in traffik_results
@@ -702,7 +792,6 @@ def print_comparison(
         t_race = aggregate_results(traffik_results["Race Condition Test"])
         s_race = aggregate_results(slowapi_results["Race Condition Test"])
 
-        # Number of iterations determines expected values
         num_iterations = len(traffik_results["Race Condition Test"])
         expected_success = 100 * num_iterations
         expected_success_min = 95 * num_iterations
@@ -710,13 +799,13 @@ def print_comparison(
 
         print("Race Condition Test")
         print(
-            f"  {'Successful':<28} {t_race.successful_requests:<20} {s_race.successful_requests:<20}"
+            f"  {'Successful':<33} {t_race.successful_requests:<20} {s_race.successful_requests:<20}"
         )
         print(
-            f"  {'Throttled':<28} {t_race.throttled_requests:<20} {s_race.throttled_requests:<20}"
+            f"  {'Throttled':<33} {t_race.throttled_requests:<20} {s_race.throttled_requests:<20}"
         )
         print(
-            f"  {'Expected Success':<28} {'~' + str(expected_success):<20} {'~' + str(expected_success):<20}"
+            f"  {'Expected Success':<33} {'~' + str(expected_success):<20} {'~' + str(expected_success):<20}"
         )
 
         t_race_ok = (
@@ -726,7 +815,7 @@ def print_comparison(
             expected_success_min <= s_race.successful_requests <= expected_success_max
         )
         print(
-            f"  {'Within Expected Range':<28} {'Yes' if t_race_ok else 'No':<20} {'Yes' if s_race_ok else 'No':<20}"
+            f"  {'Within Expected Range':<33} {'Yes' if t_race_ok else 'No':<20} {'Yes' if s_race_ok else 'No':<20}"
         )
         print()
 
@@ -737,7 +826,6 @@ def print_comparison(
         t_dist = aggregate_results(traffik_results["Distributed Correctness"])
         s_dist = aggregate_results(slowapi_results["Distributed Correctness"])
 
-        # Number of iterations determines expected values
         num_iterations = len(traffik_results["Distributed Correctness"])
         expected_success = 1000 * num_iterations
         expected_throttled = 200 * num_iterations
@@ -746,16 +834,16 @@ def print_comparison(
 
         print("Distributed Correctness")
         print(
-            f"  {'Successful':<28} {t_dist.successful_requests:<20} {s_dist.successful_requests:<20}"
+            f"  {'Successful':<33} {t_dist.successful_requests:<20} {s_dist.successful_requests:<20}"
         )
         print(
-            f"  {'Throttled':<28} {t_dist.throttled_requests:<20} {s_dist.throttled_requests:<20}"
+            f"  {'Throttled':<33} {t_dist.throttled_requests:<20} {s_dist.throttled_requests:<20}"
         )
         print(
-            f"  {'Expected Success':<28} {'~' + str(expected_success):<20} {'~' + str(expected_success):<20}"
+            f"  {'Expected Success':<33} {'~' + str(expected_success):<20} {'~' + str(expected_success):<20}"
         )
         print(
-            f"  {'Expected Throttled':<28} {'~' + str(expected_throttled):<20} {'~' + str(expected_throttled):<20}"
+            f"  {'Expected Throttled':<33} {'~' + str(expected_throttled):<20} {'~' + str(expected_throttled):<20}"
         )
 
         t_dist_ok = (
@@ -765,7 +853,32 @@ def print_comparison(
             expected_success_min <= s_dist.successful_requests <= expected_success_max
         )
         print(
-            f"  {'Within Expected Range':<28} {'Yes' if t_dist_ok else 'No':<20} {'Yes' if s_dist_ok else 'No':<20}"
+            f"  {'Within Expected Range':<33} {'Yes' if t_dist_ok else 'No':<20} {'Yes' if s_dist_ok else 'No':<20}"
+        )
+        print()
+
+    if (
+        "Selective Throttling" in traffik_results
+        and "Selective Throttling" in slowapi_results
+    ):
+        t_sel = aggregate_results(traffik_results["Selective Throttling"])
+        s_sel = aggregate_results(slowapi_results["Selective Throttling"])
+
+        num_iterations = len(traffik_results["Selective Throttling"])
+        # 100 unthrottled should all succeed
+        expected_unthrottled_success = 100 * num_iterations
+        # ~50 throttled should succeed
+        expected_throttled_success = 50 * num_iterations
+
+        print("Selective Throttling")
+        print(
+            f"  {'Total Successful':<33} {t_sel.successful_requests:<20} {s_sel.successful_requests:<20}"
+        )
+        print(
+            f"  {'Total Throttled':<33} {t_sel.throttled_requests:<20} {s_sel.throttled_requests:<20}"
+        )
+        print(
+            f"  {'Expected Min Success':<33} {'~' + str(expected_unthrottled_success + expected_throttled_success):<20} {'~' + str(expected_unthrottled_success + expected_throttled_success):<20}"
         )
 
     # Summary
@@ -790,7 +903,7 @@ def print_comparison(
 
 async def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark Traffik vs SlowAPI rate limiting libraries",
+        description="Benchmark Traffik vs SlowAPI middleware rate limiting",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -798,7 +911,7 @@ async def main():
     parser.add_argument(
         "--scenarios",
         type=str,
-        default="low,high,sustained,burst,race,distributed",
+        default="low,high,sustained,burst,race,distributed,selective",
         help="Comma-separated list of scenarios to run (default: all)",
     )
     parser.add_argument(
@@ -904,7 +1017,7 @@ async def main():
 
     libraries = args.libraries.split(",")
 
-    print("Starting benchmarks...")
+    print("Starting middleware benchmarks...")
     print(f"Scenarios: {', '.join(config.scenarios)}")
     print(f"Iterations per scenario: {config.iterations}")
     print(f"Libraries to test: {', '.join(libraries)}\n")

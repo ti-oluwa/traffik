@@ -6,10 +6,14 @@ import sys
 import typing
 
 from starlette.requests import HTTPConnection, Request
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketState
 from typing_extensions import Self, TypedDict
 
-from traffik.backends.base import ThrottleBackend, get_throttle_backend
+from traffik.backends.base import (
+    ThrottleBackend,
+    connection_throttled,
+    get_throttle_backend,
+)
 from traffik.exceptions import ConfigurationError
 from traffik.rates import Rate
 from traffik.strategies import default_strategy
@@ -567,7 +571,8 @@ async def websocket_throttled(
     """
     Handler for throttled WebSocket connections.
 
-    Sends rate limit message to client without closing connection.
+    If the connection is established, it sends rate limit message to client without closing connection.
+    Else, it raises the throttled exception.
 
     :param connection: The WebSocket connection that is throttled.
     :param wait_ms: The wait period in milliseconds before the client can send messages again.
@@ -575,15 +580,26 @@ async def websocket_throttled(
     :param context: Additional context for the throttled handler.
     :return: None
     """
+    # If the connection is not yet established, do not attempt to send a message
+    # Just raise the throttled exception
+    if connection.application_state != WebSocketState.CONNECTED:
+        await connection_throttled(connection, wait_ms, throttle, context)
+
     wait_seconds = math.ceil(wait_ms / 1000)
-    await connection.send_json(
-        {
-            "type": "rate_limit",
-            "error": "Too many messages",
-            "retry_after": wait_seconds,
-            **context.get("extras", {}),
-        }
-    )
+    try:
+        await connection.send_json(
+            {
+                "type": "rate_limit",
+                "error": "Too many messages",
+                "retry_after": wait_seconds,
+                **context.get("extras", {}),
+            }
+        )
+    except RuntimeError as exc:
+        # Connection was closed between check and send
+        # Silently ignore since client is already disconnected
+        sys.stderr.write(f"An error occurred while sending throttled message: {exc}\n")
+        sys.stderr.flush()
 
 
 class WebSocketThrottle(Throttle[WebSocket]):

@@ -1223,9 +1223,10 @@ For WebSocket connections, you have two main approaches:
 
 ```python
 import math
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketState
 from traffik import WebSocketThrottle
 from traffik.types import WaitPeriod
+from traffik.exceptions import ConnectionThrottled
 
 async def custom_ws_throttled(
     connection: WebSocket,
@@ -1235,6 +1236,14 @@ async def custom_ws_throttled(
 ) -> None:
     """Send a custom rate limit message without closing the connection."""
     wait_seconds = math.ceil(wait_ms / 1000)
+    # We can only send a message if the connection has been accepted and is open
+    if connection.application_state != WebSocketState.CONNECTED:
+        # We just raised a regular http exception if not connected
+        raise ConnectionThrottled(
+            wait_period=wait_seconds,
+            detail="WebSocket rate limit exceeded",
+            status_code=429,
+        )
     
     # Send custom throttled message
     await connection.send_json({
@@ -1321,6 +1330,12 @@ async def closing_ws_handler(
 ) -> None:
     """Close connection when rate limited."""
     wait_seconds = math.ceil(wait_ms / 1000)
+    if connection.application_state != WebSocketState.CONNECTED:
+        raise ConnectionThrottled(
+            wait_period=wait_seconds,
+            detail="WebSocket rate limit exceeded",
+            status_code=429,
+        )
     
     # Send final message before closing
     await connection.send_json({

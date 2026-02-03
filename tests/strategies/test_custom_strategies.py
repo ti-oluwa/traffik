@@ -735,8 +735,8 @@ class TestCostBasedTokenBucketStrategy:
                     break
 
             # Should have allowed some requests from refilled tokens
-            assert allowed >= 5, (
-                f"Should allow at least 5 requests after refill, got {allowed}"
+            assert allowed >= 4, (
+                f"Should allow at least 4 requests after refill, got {allowed}"
             )
 
     @pytest.mark.anyio

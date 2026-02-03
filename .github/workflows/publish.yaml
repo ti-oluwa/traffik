@@ -214,7 +214,7 @@ jobs:
           async def test():
               backend = InMemoryBackend()
               async with backend():
-                  throttle = HTTPThrottle(uid="test", rate="60/s")
+                  throttle = HTTPThrottle(uid='test', rate='60/s')
                   print('✅ Basic functionality works')
           
           asyncio.run(test())

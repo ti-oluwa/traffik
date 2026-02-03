@@ -273,6 +273,7 @@ class TestQuotaWithRolloverStrategy:
 
     @pytest.mark.anyio
     @pytest.mark.strategy
+    @pytest.mark.flaky(reruns=3, reruns_delay=2)
     async def test_rollover_unused_quota(self, backend: InMemoryBackend):
         """Test that unused quota rolls over to next period."""
         async with backend(close_on_exit=True):

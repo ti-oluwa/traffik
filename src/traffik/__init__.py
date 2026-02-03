@@ -39,7 +39,7 @@ from .utils import (  # noqa
     set_lock_ttl,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 
 # NOTE: All operations by traffik must be fast, efficient and non-blocking.

@@ -55,6 +55,7 @@ test = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=5.0.0",
+    "pytest-rerunfailures>=16.0.1",
     "httpx>=0.28.0",
     "anyio>=4.0.0",
     "requests>=2.32.4",
@@ -96,6 +97,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
+    "flaky: marks tests as flaky and reruns them on failure",
     "slow: marks tests as slow",
     "benchmark: marks tests that benchmark performance",
     "backend: tests that test a throttle backend",

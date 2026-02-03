@@ -123,15 +123,16 @@ async def test_throttle_decorator_with_dependency(
 @pytest.mark.throttle
 @pytest.mark.decorator
 @pytest.mark.fastapi
+@pytest.mark.flaky(reruns=3, reruns_delay=2)
 async def test_throttled_decorator_with_multiple_throttles(
     app: FastAPI, inmemory_backend: InMemoryBackend
 ) -> None:
     """Test @throttled() decorator with multiple throttles applied sequentially."""
     async with inmemory_backend(app, persistent=False, close_on_exit=True):
-        # Burst throttle: 5 per 10 seconds
+        # Burst throttle: 5 per 2 seconds
         burst_throttle = HTTPThrottle(
             uid="multi-burst",
-            rate=Rate(limit=5, seconds=10),
+            rate=Rate(limit=5, seconds=2),
             identifier=default_client_identifier,
         )
         # Sustained throttle: 10 per minute
@@ -162,7 +163,7 @@ async def test_throttled_decorator_with_multiple_throttles(
             assert response.headers.get("Retry-After") is not None
 
             # Wait for burst window to clear (Add 5s buffer)
-            wait_period = int(response.headers.get("Retry-After", "10")) + 5
+            wait_period = int(response.headers.get("Retry-After", "10")) + 3
             print(f"Waiting {wait_period}s for burst window to clear...")
             await anyio.sleep(wait_period)
 

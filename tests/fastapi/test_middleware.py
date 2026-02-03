@@ -38,7 +38,9 @@ async def test_throttle_initialization() -> None:
     # Methods are stored in both upper and lower case for fast matching
     assert middleware_throttle.methods is not None
     assert "get" in middleware_throttle.methods or "GET" in middleware_throttle.methods
-    assert "post" in middleware_throttle.methods or "POST" in middleware_throttle.methods
+    assert (
+        "post" in middleware_throttle.methods or "POST" in middleware_throttle.methods
+    )
     assert middleware_throttle.predicate is None
 
     # Test with regex path
@@ -50,7 +52,10 @@ async def test_throttle_initialization() -> None:
     )
     assert middleware_throttle_regex.path is regex_pattern
     assert middleware_throttle_regex.methods is not None
-    assert "get" in middleware_throttle_regex.methods or "GET" in middleware_throttle_regex.methods
+    assert (
+        "get" in middleware_throttle_regex.methods
+        or "GET" in middleware_throttle_regex.methods
+    )
 
     # Test with no path/methods (applies to all)
     middleware_throttle_all = MiddlewareThrottle(throttle=throttle)
@@ -817,7 +822,9 @@ def test_middleware_multiple_overlapping_patterns(
 @pytest.mark.asyncio
 @pytest.mark.middleware
 @pytest.mark.fastapi
-async def test_middleware_complex_regex_patterns(inmemory_backend: InMemoryBackend) -> None:
+async def test_middleware_complex_regex_patterns(
+    inmemory_backend: InMemoryBackend,
+) -> None:
     """Test middleware with complex regex patterns including groups, alternation, and anchors."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
@@ -840,7 +847,10 @@ async def test_middleware_complex_regex_patterns(inmemory_backend: InMemoryBacke
             ("/api/users/550e8400-e29b-41d4-a716-446655440000", True),  # Valid UUID
             ("/api/products/123e4567-e89b-12d3-a456-426614174000", True),  # Valid UUID
             ("/api/users/123", False),  # Not a UUID
-            ("/api/orders/550e8400-e29b-41d4-a716-446655440000", False),  # Wrong resource
+            (
+                "/api/orders/550e8400-e29b-41d4-a716-446655440000",
+                False,
+            ),  # Wrong resource
             ("/api/users/not-a-uuid", False),  # Invalid UUID format
         ]
 
@@ -856,7 +866,9 @@ async def test_middleware_complex_regex_patterns(inmemory_backend: InMemoryBacke
 @pytest.mark.asyncio
 @pytest.mark.middleware
 @pytest.mark.fastapi
-async def test_middleware_string_auto_compile_to_regex(inmemory_backend: InMemoryBackend) -> None:
+async def test_middleware_string_auto_compile_to_regex(
+    inmemory_backend: InMemoryBackend,
+) -> None:
     """Test that string paths are automatically compiled to regex patterns."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
@@ -931,7 +943,9 @@ async def test_middleware_regex_with_query_params_ignored(
 @pytest.mark.asyncio
 @pytest.mark.middleware
 @pytest.mark.fastapi
-async def test_middleware_case_sensitive_regex(inmemory_backend: InMemoryBackend) -> None:
+async def test_middleware_case_sensitive_regex(
+    inmemory_backend: InMemoryBackend,
+) -> None:
     """Test that regex patterns are case-sensitive by default."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(

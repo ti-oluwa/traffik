@@ -469,6 +469,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             context = dict(context or {})
             context.setdefault("headers", self.headers)
             await handle_throttled(connection, wait_ms, self, context)  # type: ignore[arg-type]
+            return connection
 
         # Mark connection as not throttled
         setattr(connection.state, THROTTLED_STATE_KEY, False)

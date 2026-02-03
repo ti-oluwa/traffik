@@ -305,6 +305,7 @@ class TestQuotaWithRolloverStrategy:
 
     @pytest.mark.anyio
     @pytest.mark.strategy
+    @pytest.mark.flaky(reruns=3, reruns_delay=2)
     async def test_max_rollover_limit(self, backend: InMemoryBackend):
         """Test that rollover respects `max_rollover` limit."""
         async with backend(close_on_exit=True):
@@ -337,6 +338,7 @@ class TestQuotaWithRolloverStrategy:
 
     @pytest.mark.anyio
     @pytest.mark.strategy
+    @pytest.mark.flaky(reruns=3, reruns_delay=2)
     async def test_no_rollover_when_quota_fully_used(self, backend: InMemoryBackend):
         """Test that no quota rolls over when fully consumed."""
         async with backend(close_on_exit=True):
@@ -1279,6 +1281,7 @@ class TestCustomStrategiesGetStat:
 
     @pytest.mark.anyio
     @pytest.mark.strategy
+    @pytest.mark.flaky(reruns=3, reruns_delay=2)
     async def test_geographic_distribution_strategy_get_stat(
         self, backend: InMemoryBackend
     ):

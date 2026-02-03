@@ -143,6 +143,7 @@ async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -
         async def ws_throttled(
             connection: WebSocket,
             wait_ms: float,
+            throttle: WebSocketThrottle,
             context: typing.Mapping[str, typing.Any],
         ) -> None:
             await connection.send_text("Throttled")

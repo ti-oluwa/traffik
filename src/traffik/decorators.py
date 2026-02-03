@@ -191,10 +191,11 @@ def throttled(
 
     if len(throttles) > 1:
 
-        async def throttle(connection: Request) -> None:
+        async def throttle(connection: Request) -> Request:
             nonlocal throttles
             for t in throttles:
                 await t(connection)
+            return connection
     else:
         throttle = throttles[0]  # type: ignore[assignment]
 

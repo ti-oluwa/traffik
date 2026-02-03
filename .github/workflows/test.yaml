@@ -90,7 +90,8 @@ jobs:
             --cov-report=term-missing \
             --cov-fail-under=70 \
             --tb=short \
-            -v
+            -v \
+            -x
 
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.11'
@@ -135,7 +136,7 @@ jobs:
           SKIP_REDIS_TESTS: true
           SKIP_MEMCACHED_TESTS: true
         run: |
-          uv run pytest tests/ -v --tb=short
+          uv run pytest tests/ -v --tb=short -x
 
   # Test installation from built package
   test-install:
@@ -202,4 +203,4 @@ jobs:
           SKIP_REDIS_TESTS: true
           SKIP_MEMCACHED_TESTS: true
         run: |
-          uv run pytest tests/ -m "not (slow or concurrent)" --strict-markers -v --tb=short
+          uv run pytest tests/ -m "not (slow or concurrent)" --strict-markers -v --tb=short -x

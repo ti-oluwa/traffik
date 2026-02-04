@@ -10,7 +10,7 @@ from traffik.rates import Rate
 from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import time
 
-__all__ = ["FixedWindowStrategy", "FixedWindowStatMetadata"]
+__all__ = ["FixedWindowStrategy", "FixedWindow", "FixedWindowStatMetadata"]
 
 
 class FixedWindowStatMetadata(TypedDict):
@@ -240,3 +240,6 @@ class FixedWindowStrategy:
                 current_count=counter,
             ),
         )
+
+
+FixedWindow = FixedWindowStrategy  # Alias for convenience

@@ -69,8 +69,8 @@ def _apply_throttle(
     :param throttle: The throttle to apply to the route.
     :return: The wrapper that enforces the throttle on the route.
     """
-    # * This approach is necessary because FastAPI does not support dependencies
-    # * that are not in the signature of the route function.
+    # This approach is necessary because FastAPI does not support dependencies
+    # that are not in the signature of the route function.
 
     # Use unique (throttle) dependency parameter name to avoid conflicts
     # with other dependencies that may be applied to the route, or in the case

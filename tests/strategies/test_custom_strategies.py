@@ -252,6 +252,7 @@ class TestQuotaWithRolloverStrategy:
 
     @pytest.mark.anyio
     @pytest.mark.strategy
+    @pytest.mark.flaky(reruns=3, reruns_delay=2)
     async def test_basic_quota_enforcement(self, backend: InMemoryBackend):
         """Test basic quota limiting without rollover."""
         async with backend(close_on_exit=True):

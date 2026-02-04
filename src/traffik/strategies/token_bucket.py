@@ -11,6 +11,8 @@ from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
+    "TokenBucket",
+    "TokenBucketWithDebt",
     "TokenBucketStrategy",
     "TokenBucketWithDebtStrategy",
     "TokenBucketStatMetadata",
@@ -508,7 +510,7 @@ class TokenBucketWithDebtStrategy:
         else:
             wait_ms = 0.0
 
-        return StrategyStat[TokenBucketWithDebtStatMetadata](
+        return StrategyStat(
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
@@ -523,3 +525,7 @@ class TokenBucketWithDebtStrategy:
                 last_refill_ms=last_refill,
             ),
         )
+
+
+TokenBucket = TokenBucketStrategy  # Alias for convenience
+TokenBucketWithDebt = TokenBucketWithDebtStrategy  # Alias for convenience

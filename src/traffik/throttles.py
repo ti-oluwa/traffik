@@ -521,6 +521,19 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """
         self._error_callback = handler
 
+    def as_dependency(self, **kwargs: typing.Any) -> typing.Any:
+        """
+        **For FastAPI Integration**
+
+        Returns the throttle as a FastAPI dependency.
+
+        :param kwargs: Additional keyword arguments to pass to `fastapi.Depends`.
+        :return: A FastAPI dependency that applies the throttle.
+        """
+        from fastapi import Depends  # type: ignore[import]
+
+        return Depends(self, **kwargs)
+
 
 def is_throttled(connection: HTTPConnection) -> bool:
     """

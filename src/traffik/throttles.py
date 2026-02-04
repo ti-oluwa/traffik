@@ -19,10 +19,13 @@ from traffik.rates import Rate
 from traffik.strategies import default_strategy
 from traffik.types import (
     EXEMPTED,
+    ApplyOnError,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     CostType,
     HTTPConnectionT,
+    LockConfig,
+    OnQuotaExhausted,
     RateType,
     StrategyStat,
     Stringable,
@@ -510,6 +513,50 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         stat = await self.strategy.get_stat(key, self.rate, backend)  # type: ignore[attr-defined, arg-type]
         return stat
 
+    async def check(
+        self,
+        connection: HTTPConnectionT,
+        cost: typing.Optional[int] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+    ) -> bool:
+        """
+        Check if there's sufficient quota to proceed without consuming quota.
+
+        This performs a non-consuming check of the throttle's current state.
+        Useful for pre-checking before expensive operations.
+
+        :param connection: The HTTP connection to check.
+        :param cost: Cost to check against. If None, uses the throttle's default cost.
+        :param context: Additional throttle context.
+        :return: True if sufficient quota is available to proceed, False otherwise.
+            If the throttle's state cannot be determined (e.g., strategy doesn't
+            support stats), returns True (optimistic).
+
+        Example:
+        ```python
+        if await throttle.check(request, cost=5):
+            # Sufficient quota, proceed with operation
+            result = await expensive_operation()
+            await throttle(request, cost=5)  # Actually consume quota
+        else:
+            raise HTTPException(429, "Rate limit would be exceeded")
+        ```
+        """
+        stat = await self.stat(connection, context)
+        if stat is None:
+            return True  # Can't determine, assume OK (optimistic)
+
+        # Resolve cost
+        check_cost: int
+        if cost is not None:
+            check_cost = cost
+        elif self._uses_cost_func:
+            check_cost = await self.cost(connection, context)  # type: ignore[misc]
+        else:
+            check_cost = self.cost  # type: ignore[assignment]
+
+        return stat.hits_remaining >= check_cost
+
     def set_error_handler(
         self,
         handler: ThrottleErrorHandler[HTTPConnectionT, ExceptionInfo],
@@ -521,18 +568,122 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """
         self._error_callback = handler
 
-    def as_dependency(self, **kwargs: typing.Any) -> typing.Any:
+    def transaction(
+        self,
+        connection: HTTPConnectionT,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        *,
+        apply_on_error: ApplyOnError = False,
+        on_quota_exhausted: OnQuotaExhausted = "raise",
+        commit_on_exit: bool = True,
+        lock: typing.Union[bool, str, None] = None,
+        lock_config: typing.Optional[LockConfig] = None,
+        parent: typing.Optional[typing.Any] = None,
+    ):
         """
-        **For FastAPI Integration**
+        Creates a throttle transaction bound to this throttle for deferred throttling.
 
-        Returns the throttle as a FastAPI dependency.
+        The transaction is bound to this throttle, meaning calling `tx()` without
+        arguments will automatically use this throttle. You can still add other
+        throttles explicitly by passing them as arguments.
 
-        :param kwargs: Additional keyword arguments to pass to `fastapi.Depends`.
-        :return: A FastAPI dependency that applies the throttle.
+        Throttles are queued within the transaction and only applied on commit/exit.
+        This enables atomic throttling of multiple operations and conditional throttling
+        based on operation success.
+
+        :param connection: The HTTP connection to throttle.
+        :param context: Additional throttle context. Can contain any relevant information needed
+            to uniquely identify the connection for throttling purposes.
+        :param apply_on_error: Whether to apply throttles even when an exception occurs.
+            - `False` (default): Don't apply throttles on any exception
+            - `True`: Apply throttles on all exceptions
+            - `tuple[Exception, ...]`: Apply throttles only for these exception types
+        :param on_quota_exhausted: Behavior when quota is exhausted at commit time.
+            - "raise": Raise `QuotaExhaustedError` (default)
+            - "force": Apply throttle anyway (may go over limit)
+            - "skip": Silently skip throttling
+            - ("delay", seconds_or_backoff): Wait and retry until quota available
+        :param commit_on_exit: Whether to auto-commit on successful context exit.
+            Set to `False` for nested transactions that should only commit with parent.
+        :param lock: Controls locking to prevent race conditions.
+            - `None` (default): Use this throttle's UID as the lock key
+            - `True`: Same as None (use this throttle's UID as lock key)
+            - `False`: Disable locking (not recommended for concurrent scenarios)
+            - `str`: Use the provided string as the lock key
+
+            When enabled, the lock is acquired on context entry and released on exit,
+            ensuring the entire transaction is atomic. Keep operations fast.
+        :param lock_config: Configuration for lock acquisition (ttl, blocking, blocking_timeout).
+            See `LockConfig` TypedDict for options.
+        :param parent: Parent transaction for nested transactions.
+            Child commits are deferred to parent's commit.
+        :return: A `ThrottleTransaction` context manager bound to this throttle.
+
+        Example (using owner throttle):
+
+        ```python
+        async with throttle.transaction(conn) as tx:
+            # Lock is acquired here using throttle.uid as key
+
+            # Uses the owner throttle (no throttle argument needed)
+            await tx(cost=2)          # Queue with cost=2
+            await tx()                # Queue with default cost
+
+            # Can still use other throttles
+            await tx(other_throttle, cost=1)
+
+            if not await tx.check():
+                raise InsufficientQuotaError()
+
+            result = await expensive_operation()  # Keep this fast!
+
+        # On successful exit: throttles applied, then lock released
+        # On exception: throttles NOT applied (unless apply_on_error=True)
+        ```
+
+        Example with custom lock key and config:
+
+        ```python
+        async with throttle.transaction(
+            conn,
+            lock="user:123:api_calls",
+            lock_config={"ttl": 30, "blocking_timeout": 5}
+        ) as tx:
+            await tx(cost=2)
+            await process()
+        ```
+
+        Nested transactions:
+
+        ```python
+        async with throttle.transaction(conn) as parent_tx:
+            # Lock acquired by parent
+            await parent_tx(cost=2)
+
+            async with parent_tx.nested() as child_tx:
+                # Child doesn't acquire its own lock (under parent's lock)
+                await child_tx(cost=1)
+            # Child merges into parent's queue
+
+        # Lock released after all throttles applied
+        ```
         """
-        from fastapi import Depends  # type: ignore[import]
+        from traffik.transactions import ThrottleTransaction
 
-        return Depends(self, **kwargs)
+        return ThrottleTransaction(
+            connection=connection,
+            context=context,
+            owner=self,
+            apply_on_error=apply_on_error,
+            on_quota_exhausted=on_quota_exhausted,
+            commit_on_exit=commit_on_exit,
+            lock=lock,
+            lock_config=lock_config,
+            parent=parent,
+        )
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__} {self.uid!r} rate={self.rate!r} cost={self.cost!r}>"
 
 
 def is_throttled(connection: HTTPConnection) -> bool:
@@ -573,6 +724,14 @@ class HTTPThrottle(Throttle[Request]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> typing.Optional[StrategyStat]:
         return await super().stat(connection, context=context)
+
+    async def check(
+        self,
+        connection: Request,
+        cost: typing.Optional[int] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+    ) -> bool:
+        return await super().check(connection, cost=cost, context=context)
 
 
 async def websocket_throttled(
@@ -694,3 +853,11 @@ class WebSocketThrottle(Throttle[WebSocket]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> typing.Optional[StrategyStat]:
         return await super().stat(connection, context=context)
+
+    async def check(
+        self,
+        connection: WebSocket,
+        cost: typing.Optional[int] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+    ) -> bool:
+        return await super().check(connection, cost=cost, context=context)

@@ -508,7 +508,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         app: typing.Optional[ASGIApp] = None,
         persistent: typing.Optional[bool] = None,
         close_on_exit: typing.Optional[bool] = None,
-    ) -> "_ThrottleContext[Self]":
+    ) -> "_BackendContext[Self]":
         """
         Create a throttle context for the backend.
 
@@ -552,7 +552,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         else:
             # Context should not close on exit if it is nested inside another context
             context_close_on_exit = is_inner_context is False
-        return _ThrottleContext(
+        return _BackendContext(
             backend=self,
             persistent=context_persistence,
             close_on_exit=context_close_on_exit,
@@ -564,7 +564,7 @@ ThrottleBackendTco = typing.TypeVar(
 )
 
 
-class _ThrottleContext(typing.Generic[ThrottleBackendTco]):
+class _BackendContext(typing.Generic[ThrottleBackendTco]):
     """
     Context manager for throttle backends.
     """

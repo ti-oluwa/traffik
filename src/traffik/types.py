@@ -120,6 +120,69 @@ CostType = typing.Union[int, CostFunc[HTTPConnectionT]]
 """Type definition for cost specifications."""
 
 
+BackoffStrategy = typing.Callable[[int, float], float]
+"""
+A callable that implements a backoff strategy.
+
+Takes the current attempt number and base delay, and returns the delay in seconds before the next retry.
+"""
+
+
+class _TransactionExceptionInfo(TypedDict):
+    """Information about an exception that occurred during throttling transaction."""
+
+    connection: HTTPConnection
+    exception: BaseException
+    attempt: int
+    cost: int
+    context: typing.Optional[typing.Mapping[str, typing.Any]]
+
+
+RetryOn = typing.Union[
+    typing.Type[BaseException],
+    typing.Tuple[typing.Type[BaseException], ...],
+    typing.Callable[
+        [_TransactionExceptionInfo],
+        typing.Union[bool, typing.Awaitable[bool]],
+    ],
+]
+"""
+Type for retry decision logic.
+
+Can be either:
+- A single exception type to retry on
+- A tuple of exception types to retry on
+- A callable that takes (connection, exception, cost, context, attempt) and returns bool
+"""
+
+ApplyOnError = typing.Union[
+    bool, typing.Type[BaseException], typing.Tuple[typing.Type[BaseException], ...]
+]
+"""
+Type for applying throttles on error.
+
+Can be either:
+- `False`: Don't apply on any exception
+- `True`: Apply on all exceptions
+- A single exception type to apply on
+- A tuple of exception types to apply on
+"""
+
+OnQuotaExhausted = typing.Union[
+    typing.Literal["raise", "force", "skip"],
+    typing.Tuple[typing.Literal["delay"], typing.Union[float, BackoffStrategy]],
+]
+"""
+Type for handling quota exhaustion.
+
+Can be either:
+- "raise": Raise `QuotaExhaustedError`
+- "force": Apply throttle anyway
+- "skip": Skip applying the throttle
+- ("delay", seconds_or_backoff): Wait and retry until quota is available
+"""
+
+
 class Dependency(typing.Protocol, typing.Generic[P, Rco]):
     """Protocol for dependencies that can be used in FastAPI routes."""
 

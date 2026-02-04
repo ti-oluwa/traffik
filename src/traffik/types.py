@@ -168,20 +168,6 @@ Can be either:
 - A tuple of exception types to apply on
 """
 
-OnQuotaExhausted = typing.Union[
-    typing.Literal["raise", "force", "skip"],
-    typing.Tuple[typing.Literal["delay"], typing.Union[float, BackoffStrategy]],
-]
-"""
-Type for handling quota exhaustion.
-
-Can be either:
-- "raise": Raise `QuotaExhaustedError`
-- "force": Apply throttle anyway
-- "skip": Skip applying the throttle
-- ("delay", seconds_or_backoff): Wait and retry until quota is available
-"""
-
 
 class Dependency(typing.Protocol, typing.Generic[P, Rco]):
     """Protocol for dependencies that can be used in FastAPI routes."""

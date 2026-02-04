@@ -25,7 +25,6 @@ from traffik.types import (
     CostType,
     HTTPConnectionT,
     LockConfig,
-    OnQuotaExhausted,
     RateType,
     StrategyStat,
     Stringable,
@@ -491,7 +490,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> typing.Optional[StrategyStat]:
         """
-        Get the current throttling statistics for the connection.
+        Get the current throttling strategy statistics for the connection.
 
         :param connection: The HTTP connection to get statistics for.
         :param context: Additional throttle context. Can contain any relevant information needed
@@ -520,10 +519,17 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> bool:
         """
-        Check if there's sufficient quota to proceed without consuming quota.
+        **Best-effort** check if there's sufficient quota to proceed without consuming quota.
 
         This performs a non-consuming check of the throttle's current state.
         Useful for pre-checking before expensive operations.
+
+        Note:
+            This should be used as a best-effort pre-check only. The actual
+            quota may change between this check and the eventual consumption
+            (classic Time-of-Check to Time-of-Use issue).
+            A way to avoid this is to ensure that the throttle is only used for one route/operation,
+            and no other. Or best, throttle optimistically and handle rejections gracefully.
 
         :param connection: The HTTP connection to check.
         :param cost: Cost to check against. If None, uses the throttle's default cost.
@@ -568,26 +574,25 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """
         self._error_callback = handler
 
-    def transaction(
+    def batch(
         self,
         connection: HTTPConnectionT,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         *,
         apply_on_error: ApplyOnError = False,
-        on_quota_exhausted: OnQuotaExhausted = "raise",
-        commit_on_exit: bool = True,
+        apply_on_exit: bool = True,
         lock: typing.Union[bool, str, None] = None,
         lock_config: typing.Optional[LockConfig] = None,
         parent: typing.Optional[typing.Any] = None,
     ):
         """
-        Creates a throttle transaction bound to this throttle for deferred throttling.
+        Create a throttle batch bound to this throttle for deferred throttling.
 
-        The transaction is bound to this throttle, meaning calling `tx()` without
+        The batch is bound to this throttle, meaning calling `batch()` without
         arguments will automatically use this throttle. You can still add other
         throttles explicitly by passing them as arguments.
 
-        Throttles are queued within the transaction and only applied on commit/exit.
+        Throttles are queued within the batch and only applied on apply/exit.
         This enables atomic throttling of multiple operations and conditional throttling
         based on operation success.
 
@@ -598,13 +603,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             - `False` (default): Don't apply throttles on any exception
             - `True`: Apply throttles on all exceptions
             - `tuple[Exception, ...]`: Apply throttles only for these exception types
-        :param on_quota_exhausted: Behavior when quota is exhausted at commit time.
-            - "raise": Raise `QuotaExhaustedError` (default)
-            - "force": Apply throttle anyway (may go over limit)
-            - "skip": Silently skip throttling
-            - ("delay", seconds_or_backoff): Wait and retry until quota available
-        :param commit_on_exit: Whether to auto-commit on successful context exit.
-            Set to `False` for nested transactions that should only commit with parent.
+        :param apply_on_exit: Whether to auto-apply on successful context exit.
+            Set to `False` for nested batches that should only apply with parent.
         :param lock: Controls locking to prevent race conditions.
             - `None` (default): Use this throttle's UID as the lock key
             - `True`: Same as None (use this throttle's UID as lock key)
@@ -612,27 +612,27 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             - `str`: Use the provided string as the lock key
 
             When enabled, the lock is acquired on context entry and released on exit,
-            ensuring the entire transaction is atomic. Keep operations fast.
+            ensuring the entire batch is atomic. Keep operations fast.
         :param lock_config: Configuration for lock acquisition (ttl, blocking, blocking_timeout).
             See `LockConfig` TypedDict for options.
-        :param parent: Parent transaction for nested transactions.
-            Child commits are deferred to parent's commit.
-        :return: A `ThrottleTransaction` context manager bound to this throttle.
+        :param parent: Parent batch for nested batches.
+            Child applies are deferred to parent's apply.
+        :return: A `ThrottleBatch` context manager bound to this throttle.
 
         Example (using owner throttle):
 
         ```python
-        async with throttle.transaction(conn) as tx:
+        async with throttle.batch(conn) as batch:
             # Lock is acquired here using throttle.uid as key
 
             # Uses the owner throttle (no throttle argument needed)
-            await tx(cost=2)          # Queue with cost=2
-            await tx()                # Queue with default cost
+            await batch(cost=2)          # Queue with cost=2
+            await batch()                # Queue with default cost
 
             # Can still use other throttles
-            await tx(other_throttle, cost=1)
+            await batch(other_throttle, cost=1)
 
-            if not await tx.check():
+            if not await batch.check():
                 raise InsufficientQuotaError()
 
             result = await expensive_operation()  # Keep this fast!
@@ -644,39 +644,38 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         Example with custom lock key and config:
 
         ```python
-        async with throttle.transaction(
+        async with throttle.batch(
             conn,
             lock="user:123:api_calls",
             lock_config={"ttl": 30, "blocking_timeout": 5}
-        ) as tx:
-            await tx(cost=2)
+        ) as batch:
+            await batch(cost=2)
             await process()
         ```
 
-        Nested transactions:
+        Nested batches:
 
         ```python
-        async with throttle.transaction(conn) as parent_tx:
+        async with throttle.batch(conn) as parent:
             # Lock acquired by parent
-            await parent_tx(cost=2)
+            await parent(cost=2)
 
-            async with parent_tx.nested() as child_tx:
+            async with parent.nested() as child:
                 # Child doesn't acquire its own lock (under parent's lock)
-                await child_tx(cost=1)
+                await child(cost=1)
             # Child merges into parent's queue
 
         # Lock released after all throttles applied
         ```
         """
-        from traffik.transactions import ThrottleTransaction
+        from traffik.batch import ThrottleBatch
 
-        return ThrottleTransaction(
+        return ThrottleBatch(
             connection=connection,
             context=context,
             owner=self,
             apply_on_error=apply_on_error,
-            on_quota_exhausted=on_quota_exhausted,
-            commit_on_exit=commit_on_exit,
+            apply_on_exit=apply_on_exit,
             lock=lock,
             lock_config=lock_config,
             parent=parent,

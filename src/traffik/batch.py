@@ -3,17 +3,17 @@ import inspect
 import math
 import random
 import typing
-import warnings
 from collections import deque
 from contextlib import AsyncExitStack
 from types import TracebackType
 
+from starlette.exceptions import HTTPException
 from typing_extensions import Self
 
 from traffik.exceptions import (
-    QuotaExhaustedError,
-    TransactionCommittedError,
-    TransactionRolledBackError,
+    BatchAppliedError,
+    BatchDiscardedError,
+    BatchError,
 )
 from traffik.throttles import Throttle
 from traffik.types import (
@@ -21,29 +21,37 @@ from traffik.types import (
     BackoffStrategy,
     HTTPConnectionT,
     LockConfig,
-    OnQuotaExhausted,
     RetryOn,
+    StrategyStat,
 )
 
 __all__ = [
-    "ThrottleTransaction",
+    "ThrottleBatch",
     "ConstantBackoff",
     "LinearBackoff",
     "ExponentialBackoff",
     "LogarithmicBackoff",
 ]
 
+_NON_RETRYABLE_EXCEPTIONS: typing.Tuple[typing.Type[BaseException], ...] = (
+    asyncio.CancelledError,
+    HTTPException,
+    KeyboardInterrupt,
+    SystemExit,
+)
+"""Tuple of exceptions that should not be retried. They are considered non-retryable signals."""
+
 
 def ConstantBackoff(
     attempt: int,
     base_delay: float,
 ) -> float:
-    """Constant backoff - delay remains the same for each attempt."""
+    """Delay remains the same for each attempt."""
     return base_delay
 
 
 class LinearBackoff:
-    """Linear backoff - delay increases linearly with each attempt."""
+    """Delay increases linearly with each attempt."""
 
     def __init__(self, increment: float = 1.0) -> None:
         """
@@ -56,7 +64,7 @@ class LinearBackoff:
 
 
 class ExponentialBackoff:
-    """Exponential backoff - delay doubles (or multiplies) with each attempt."""
+    """Delay doubles (or multiplies) with each attempt."""
 
     def __init__(
         self,
@@ -83,7 +91,7 @@ class ExponentialBackoff:
 
 
 class LogarithmicBackoff:
-    """Logarithmic backoff - delay increases logarithmically."""
+    """Delay increases logarithmically with each attempt."""
 
     def __init__(self, base: float = 2.0) -> None:
         """
@@ -97,7 +105,7 @@ class LogarithmicBackoff:
 
 @typing.final
 class _QueuedThrottle(typing.Generic[HTTPConnectionT]):
-    """Represents a throttle queued for deferred application."""
+    """A throttle queued for deferred application."""
 
     __slots__ = (
         "throttle",
@@ -130,9 +138,9 @@ class _QueuedThrottle(typing.Generic[HTTPConnectionT]):
         self.backoff = backoff or ExponentialBackoff()
         self.base_delay = base_delay
 
-        # Precompute values for fast commit
+        # Precompute values for fast apply
         self.max_attempts = retry + 1
-        # For cost, if the throttle uses a cost function, we can't determine the actual cost until commit time,
+        # For cost, if the throttle uses a cost function, we can't determine the actual cost until apply time,
         # so we default to 1 for retry logic purposes.
         # If it doesn't use a cost function, we can use the throttle's defined cost.
         self.resolved_cost: int = (
@@ -154,29 +162,55 @@ class _QueuedThrottle(typing.Generic[HTTPConnectionT]):
         else:
             self._retry_type = None
 
+    async def resolve_cost(
+        self,
+        connection: HTTPConnectionT,
+        context: typing.Optional[typing.Mapping[str, typing.Any]],
+    ) -> int:
+        """Resolve the actual cost of the throttle, calling cost function if needed."""
+        if self.cost is not None:
+            return self.cost
 
-class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
+        throttle = self.throttle
+        if throttle._uses_cost_func:
+            return await throttle.cost(connection, context)  # type: ignore[call-arg]
+
+        return throttle.cost  # type: ignore[return-value]
+
+
+class ThrottleBatch(typing.Generic[HTTPConnectionT]):
     """
-    A transaction context manager for deferred throttle application.
+    A batch context manager for deferred throttle application.
 
-    Throttles are queued within the transaction and only applied when the
-    transaction is committed (either explicitly via `commit()` or implicitly
+    Throttles are queued within the batch and applied together when the
+    batch is applied (either explicitly via `apply()` or implicitly
     on successful context exit).
+
+    **Batch Semantics (not Transaction!):**
+
+    - ✅ Queued together (deferred application on successful exit or manual apply)
+    - ✅ Applied in order (predictable)
+    - ✅ Applied atomically with respect to locking (isolated from other requests)
+    - ❌ NOT rolled back on failure (partial application is acceptable)
+    - ✅ Optionally skipped on errors (`apply_on_error`)
+
+    Think of it as: "Apply multiple throttles together, under a lock, but
+    without all-or-nothing guarantees."
 
     Can be used in two modes:
 
-    1. **Bound mode** (usually created via `throttle.transaction()`): Transaction is tied
-       to a specific throttle. Calling `tx()` without arguments uses the owner throttle.
+    1. **Bound mode** (usually created via `throttle.batch()`): Batch is tied
+       to a specific throttle. Calling `batch()` without arguments uses the owner throttle.
 
-    2. **Unbound mode** (created directly): Transaction is not tied to any throttle.
-       You must always specify a throttle when calling `tx(throttle)`..
+    2. **Unbound mode** (created directly): Batch is not tied to any throttle.
+       You must always specify a throttle when calling `batch(throttle)`.
 
     Features:
-    - Deferred throttling: Throttles applied only on commit
+
+    - Deferred throttling: Throttles applied only on `apply()`
     - Conditional throttling: Skip throttles on errors (configurable)
-    - Nested transactions: Parent-child relationships with cascading commits
+    - Nested batches: Parent-child relationships with cascading applies
     - Retry with backoff: Configurable retry logic per throttle
-    - Quota checking: Pre-check if quota is available before operations
     - Context-wide locking: Lock acquired on entry, released on exit
 
     Note:
@@ -187,18 +221,18 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
     Example (bound mode):
 
     ```python
-    async with throttle.transaction(conn) as tx:
-        await tx(cost=2)          # Uses owner throttle with cost=2
-        await tx()                 # Uses owner throttle with default cost
-        await tx(other_throttle)   # Can still use other throttles
+    async with ThrottleBatch(conn, owner=throttle) as batch:
+        await batch(cost=2)          # Uses owner throttle with cost=2
+        await batch()                 # Uses owner throttle with default cost
+        await batch(other_throttle)   # Can still use other throttles
     ```
 
     Example (unbound mode):
 
     ```python
-    async with ThrottleTransaction(conn) as tx:
-        await tx(throttle1, cost=2)
-        await tx(throttle2)
+    async with ThrottleBatch(conn) as batch:
+        await batch(throttle1, cost=2)
+        await batch(throttle2)
     ```
     """
 
@@ -207,22 +241,19 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         "default_context",
         "owner",
         "apply_on_error",
-        "on_quota_exhausted",
-        "commit_on_exit",
+        "apply_on_exit",
         "lock_config",
         "parent",
         "_lock_key",
         "_queue",
         "_children",
-        "_committed",
-        "_rolled_back",
+        "_applied",
+        "_discarded",
         "_entered",
         "_bound",
         "_nested",
-        "_quota_exhausted_mode",
-        "_delay_config",
-        "_total_queued_cost",
-        "_total_applied_cost",
+        "_queued_cost",
+        "_applied_cost",
         "_exit_stack",
     )
 
@@ -233,29 +264,23 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         *,
         owner: typing.Optional[Throttle[HTTPConnectionT]] = None,
         apply_on_error: ApplyOnError = False,
-        on_quota_exhausted: OnQuotaExhausted = "raise",
-        commit_on_exit: bool = True,
+        apply_on_exit: bool = True,
         lock: typing.Union[bool, str, None] = None,
         lock_config: typing.Optional[LockConfig] = None,
-        parent: typing.Optional["ThrottleTransaction[HTTPConnectionT]"] = None,
+        parent: typing.Optional["ThrottleBatch[HTTPConnectionT]"] = None,
     ) -> None:
         """
-        Initialize a throttle transaction.
+        Initialize a throttle batch.
 
         :param connection: The HTTP connection to throttle.
         :param context: Default context for all queued throttles.
-        :param owner: The throttle this transaction is bound to (if any).
-            When set, calling `tx()` without a throttle argument will use the owner.
+        :param owner: The throttle this batch is bound to (if any).
+            When set, calling the batch without a throttle argument will use the owner.
         :param apply_on_error: Whether to apply throttles even on exceptions.
             - `False` (default): Don't apply on any exception
             - `True`: Apply on all exceptions
             - `tuple[Exception, ...]`: Apply only for these exception types
-        :param on_quota_exhausted: Behavior when quota is exhausted at commit.
-            - "raise": Raise `QuotaExhaustedError` (default)
-            - "force": Apply throttle anyway (may go over limit)
-            - "skip": Silently skip throttling
-            - ("delay", seconds_or_backoff): Wait and retry until quota available
-        :param commit_on_exit: Whether to auto-commit on successful exit.
+        :param apply_on_exit: Whether to auto-apply on successful exit.
         :param lock: Controls locking to prevent race conditions.
             - `None` (default): Use throttle UID as lock key if bound, else disable locking
             - `True`: Same as None (use throttle UID if bound, else disable)
@@ -263,59 +288,42 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
             - `str`: Use the provided string as the lock key
 
             When enabled, the lock is acquired on context entry and released on exit.
-            This ensures the entire transaction (including user code) is atomic with
-            respect to other transactions using the same lock key.
+            This ensures the entire batch (including user code) is atomic with
+            respect to other batches using the same lock key.
 
-            **Important:** Keep operations within the transaction fast since the lock
+            **Important:** Keep operations within the batch fast since the lock
             is held for the entire duration.
         :param lock_config: Configuration for lock acquisition. See `LockConfig`.
-        :param parent: Parent transaction for nesting.
+        :param parent: Parent batch for nesting.
         """
         self.connection = connection
         self.default_context = context
         self.owner = owner
         self.apply_on_error = apply_on_error
-        self.on_quota_exhausted = on_quota_exhausted
-        self.commit_on_exit = commit_on_exit
+        self.apply_on_exit = apply_on_exit
         self.lock_config = lock_config or {}
         self.parent = parent
 
-        # Locking configuration: derive lock key
-        # - None/True with owner: use owner.uid as lock key
-        # - None/True without owner: no locking (random key is useless)
-        # - False: explicitly disabled
-        # - str: use provided key
         if lock is None or lock is True:
             self._lock_key: typing.Optional[str] = (
-                f"tx:{owner.uid}" if owner is not None else None
+                f"batch:{owner.uid}" if owner is not None else None
             )
         elif lock is False:
             self._lock_key = None
         else:
-            self._lock_key = f"tx:{lock}"
+            self._lock_key = f"batch:{lock}"
 
-        # Use deque for thread-safe append operations
+        # We use deque for thread-safe append operations
         self._queue: typing.Deque[_QueuedThrottle[HTTPConnectionT]] = deque()
-        self._children: typing.List["ThrottleTransaction[HTTPConnectionT]"] = []
-        self._committed = False
-        self._rolled_back = False
+        self._children: typing.List["ThrottleBatch[HTTPConnectionT]"] = []
+        self._applied = False
+        self._discarded = False
         self._entered = False
         self._bound = owner is not None
         self._nested = parent is not None
 
-        # Precompute quota exhausted mode for fast access
-        self._quota_exhausted_mode: str = (
-            on_quota_exhausted[0]
-            if isinstance(on_quota_exhausted, tuple)
-            else on_quota_exhausted
-        )
-        # Precompute delay config if using delay mode
-        self._delay_config: typing.Optional[typing.Union[float, BackoffStrategy]] = (
-            on_quota_exhausted[1] if isinstance(on_quota_exhausted, tuple) else None
-        )
-
-        self._total_queued_cost = 0
-        self._total_applied_cost = 0
+        self._queued_cost = 0
+        self._applied_cost = 0
 
         # For managing context-wide lock
         self._exit_stack: typing.Optional[AsyncExitStack] = None
@@ -324,28 +332,28 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
             parent._children.append(self)
 
     @property
-    def committed(self) -> bool:
-        """Whether this transaction has been committed."""
-        return self._committed
+    def applied(self) -> bool:
+        """Whether this batch has been applied."""
+        return self._applied
 
     @property
-    def rolled_back(self) -> bool:
-        """Whether this transaction has been rolled back."""
-        return self._rolled_back
+    def discarded(self) -> bool:
+        """Whether this batch has been discarded."""
+        return self._discarded
 
     @property
     def active(self) -> bool:
-        """Whether this transaction is still active (not committed or rolled back)."""
-        return not self._committed and not self._rolled_back
+        """Whether this batch is still active (not applied or discarded)."""
+        return not (self._applied or self._discarded)
 
     @property
     def is_bound(self) -> bool:
-        """Whether this transaction is bound to an owner throttle."""
+        """Whether this batch is bound to an owner throttle."""
         return self._bound
 
     @property
     def is_nested(self) -> bool:
-        """Whether this transaction has a parent. Is this transaction nested?"""
+        """Whether this batch has a parent. Is this batch nested?"""
         return self._nested
 
     @property
@@ -353,29 +361,24 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         """
         **Estimated** cost of all queued throttles (including children).
 
-        notE: This is an estimate since some throttles may use cost functions.
-        In those cases, we assume the throttle's defined cost or 1 as a fallback for retry logic purposes.
+        Note: This is an estimate since some throttles may use cost functions.
+        In those cases, we assume the throttle's defined cost or 1 as a fallback.
         """
         child_cost = sum(child.queued_cost for child in self._children)
-        return self._total_queued_cost + child_cost
+        return self._queued_cost + child_cost
 
     @property
     def applied_cost(self) -> int:
-        """
-        **Estimated** cost that has been applied.
-
-        notE: This is an estimate since some throttles may use cost functions.
-        In those cases, we track the resolved cost at enqueue time for retry logic purposes, but the actual applied cost may differ.
-        """
-        return self._total_applied_cost
+        """Cost that has been applied."""
+        return self._applied_cost
 
     @property
     def nesting_depth(self) -> int:
-        """How deep this transaction is nested."""
+        """How deep this batch is nested."""
         depth = 0
-        tx: typing.Optional[ThrottleTransaction[HTTPConnectionT]] = self
-        while tx is not None:
-            tx = tx.parent
+        batch: typing.Optional[ThrottleBatch[HTTPConnectionT]] = self
+        while batch is not None:
+            batch = batch.parent
             depth += 1
         return depth - 1
 
@@ -397,49 +400,60 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> typing.Optional[bool]:
-        try:
-            # If already committed or rolled back, do nothing
-            if self._committed or self._rolled_back:
-                return None
+        if not self._entered or not self.active:
+            return
 
-            should_commit = False
+        exit_exc: typing.Optional[BaseException] = None
+        try:
+            should_apply = False
             if exc_type is None:
-                # No exception occured, only commit if configured to do so
-                should_commit = self.commit_on_exit
+                # No exception occurred, only apply if configured to do so
+                should_apply = self.apply_on_exit
             else:
                 # Exception occurred, check `apply_on_error` configuration
                 if self.apply_on_error is True:
-                    should_commit = True
-                elif isinstance(self.apply_on_error, tuple):
-                    should_commit = issubclass(exc_type, self.apply_on_error)
-                # else: apply_on_error is False, don't commit
+                    should_apply = True
+                elif self.apply_on_error is not False:
+                    should_apply = issubclass(exc_type, self.apply_on_error)
+                # Else, `apply_on_error=False`, so don't apply
 
-            if should_commit:
-                if self._nested:
-                    # For nested transactions, merge queue into parent
-                    self._merge_into_parent(mark_as_committed=True)
+            if should_apply:
+                if self.is_nested:
+                    self._merge_into_parent(mark_as_applied=True)
                 else:
-                    await self._commit()
+                    await self.apply()
+            return
 
-            return None
+        except BaseException as exc:
+            # Store exception to raise after lock release
+            exit_exc = exc
         finally:
-            # Release lock if we acquired one
             if self._exit_stack is not None:
                 await self._exit_stack.aclose()
                 self._exit_stack = None
 
-    def _merge_into_parent(self, mark_as_committed: bool = True) -> None:
-        """
-        Merge this transaction's queue into the parent's queue if bounded.
+        # Raise stored exception after lock is released. This ensures we don't
+        # hold the lock while propagating exceptions.
+        if exit_exc is not None:
+            raise exit_exc
 
-        Marks this transaction as committed.
+    def _merge_into_parent(self, mark_as_applied: bool = True) -> None:
+        """
+        Merge this batch's queue into the parent's queue.
+
+        :param mark_as_applied: Whether to mark this batch as applied once merged.
         """
         if self.parent is None:
             return
 
-        self.parent._queue.extend(self._queue)
-        self.parent._total_queued_cost += self._total_queued_cost
-        self._committed = mark_as_committed
+        parent = self.parent
+        parent._queue.extend(self._queue)
+        parent._queued_cost += self._queued_cost
+        self._applied = mark_as_applied
+
+        # Clean up parent reference to prevent memory leaks
+        if self in parent._children:
+            parent._children.remove(self)
 
     async def __call__(
         self,
@@ -456,7 +470,7 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         Queue a throttle for deferred application.
 
         :param throttle: The throttle to queue. If not provided, uses the owner
-            throttle (only valid for bound transactions).
+            throttle (only valid for bound batches).
         :param cost: Override cost for this throttle.
         :param context: Override context for this throttle.
         :param retry: Number of retry attempts if an error occurs.
@@ -468,21 +482,21 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         :param base_delay: Base delay in seconds between retries.
         :return: Self for chaining.
 
-        Example (bound transaction):
+        Example (bound batch):
 
         ```python
-        async with throttle.transaction(conn) as tx:
-            await tx(cost=2)        # Uses owner throttle
-            await tx()              # Uses owner throttle with default cost
-            await tx(other, cost=1) # Uses different throttle
+        async with throttle.batch(conn) as batch:
+            await batch(cost=2)        # Uses owner throttle
+            await batch()              # Uses owner throttle with default cost
+            await batch(other, cost=1) # Uses different throttle
         ```
 
         Example (with retry on specific exceptions):
 
         ```python
-        async with ThrottleTransaction(conn) as tx:
-            await tx(throttle1, cost=2, retry=3, retry_on=(TimeoutError,))
-            await tx(throttle2)
+        async with ThrottleBatch(conn) as batch:
+            await batch(throttle1, cost=2, retry=3, retry_on=(TimeoutError,))
+            await batch(throttle2)
         ```
         """
         return self._enqueue(
@@ -495,8 +509,8 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
             base_delay=base_delay,
         )
 
-    # Alias for `__call__` method. Makes it compatible with the `Throttle` class' API.
-    hit = __call__
+    # Aliases for `__call__(...)` method
+    add = __call__
 
     def _enqueue(
         self,
@@ -512,9 +526,6 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         """
         Enqueue a throttle for deferred application.
 
-        This method handles the actual queueing logic and is thread-safe
-        due to the use of `collections.deque`.
-
         :param throttle: The throttle to queue.
         :param cost: Override cost for this throttle.
         :param context: Override context for this throttle.
@@ -524,20 +535,16 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         :param base_delay: Base delay in seconds between retries.
         :return: Self for chaining.
         """
-        if self._rolled_back:
-            raise TransactionRolledBackError(
-                "Cannot queue throttles on a rolled-back transaction"
-            )
-        if self._committed:
-            raise TransactionCommittedError(
-                "Cannot queue throttles on a committed transaction"
-            )
+        if self._discarded:
+            raise BatchDiscardedError("Cannot queue throttles on a discarded batch")
+        if self._applied:
+            raise BatchAppliedError("Cannot queue throttles on an applied batch")
 
         resolved_throttle = throttle if throttle is not None else self.owner
         if resolved_throttle is None:
             raise ValueError(
                 "No throttle specified. Either provide a throttle argument or "
-                "create the transaction via `ThrottleTransaction(owner=...)` or `throttle.transaction(...)` to bind it to a throttle."
+                "create the batch via `ThrottleBatch(owner=...)` or `throttle.batch(...)` to bind it to a throttle."
             )
 
         merged_context = dict(self.default_context or {})
@@ -553,11 +560,12 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
             backoff=backoff or ExponentialBackoff(),
             base_delay=base_delay,
         )
-        # deque.append is thread-safe
         self._queue.append(entry)
 
         # Track queued cost (`resolved_cost` is precomputed in `_QueuedThrottle`)
-        self._total_queued_cost += entry.resolved_cost
+        # This still may be an estimate if cost function is used.
+        # But will be resolved properly at apply time.
+        self._queued_cost += entry.resolved_cost
         return self
 
     async def check(
@@ -566,11 +574,20 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         cost: typing.Optional[int] = None,
     ) -> bool:
         """
-        Check if there's sufficient quota to proceed.
+        **Best-effort** check if there's sufficient quota to proceed.
+
+        If the throttle's state cannot be determined, assumes sufficient quota.
 
         This performs a non-consuming check of the throttle's current state.
 
-        :param throttle: Specific throttle to check. If None and transaction is bound,
+        Note:
+            This should be used as a best-effort pre-check only. The actual
+            quota may change between this check and the eventual apply
+            (classic Time-of-Check to Time-of-Use issue).
+            A way to avoid this is to ensure that the throttle checked/used is unique to this batch,
+            or best, throttle optimistically and handle rejections gracefully.
+
+        :param throttle: Specific throttle to check. If None and batch is bound,
             checks the owner throttle. If None and unbound, checks all queued throttles.
         :param cost: Override cost to check against.
         :return: True if sufficient quota is available to proceed, False otherwise.
@@ -597,25 +614,22 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
                 return False
         return True
 
-    async def get_available_quota(
+    async def stat(
         self,
         throttle: typing.Optional[Throttle[HTTPConnectionT]] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-    ) -> typing.Optional[float]:
+    ) -> typing.Optional[StrategyStat]:
         """
-        Get the available quota for a specific throttle.
+        Get the current throttle strategy statistics for the connection.
 
-        :param throttle: The throttle to check. If None and transaction is bound to an owner,
-            uses the owner throttle.
-        :param context: Context for the throttle stat lookup.
-        :return: Available quota, or None if unavailable.
-        :raises ValueError: If no throttle specified and transaction is unbound.
+        :param throttle: Specific throttle to get stats for. If None, uses owner throttle.
+        :param context: Override context for the stat retrieval.
         """
         _throttle = throttle if throttle is not None else self.owner
         if _throttle is None:
             raise ValueError(
                 "No throttle specified. Either provide a throttle argument or "
-                "create the transaction via `throttle.transaction()` to bind it to a throttle."
+                "create the batch via `throttle.batch()` to bind it to a throttle."
             )
 
         merged_context = dict(self.default_context or {})
@@ -625,105 +639,103 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         stat = await _throttle.stat(
             self.connection, merged_context if merged_context else None
         )
-        return stat.hits_remaining if stat else None
+        return stat
 
-    async def commit(self) -> None:
+    async def apply(self) -> None:
         """
-        Apply all queued throttles.
+        Apply all throttles in the batch.
 
-        This commits all queued throttles in order, including any from
-        nested child transactions.
+        This applies all queued throttles in order, including any from
+        nested child batches.
+
+        This method is idempotent and assumes a lock is already held 
+        if locking is enabled (via context manager).
 
         Note:
-            If called manually (outside of context manager), locking is not applied.
-            The lock is only held when using the context manager (`async with`).
-            For manual commits with locking, acquire the lock yourself before calling commit.
+        If called manually (outside of context manager), locking is not applied.
+        The lock is only held when using the context manager (`async with`).
+        For manual applies with locking, acquire the lock yourself before calling apply.
 
-        :raises `TransactionCommittedError`: If already committed.
-        :raises `QuotaExhaustedError`: If quota exhausted and on_quota_exhausted="raise".
+        :raises `BatchDiscardedError`: If batch was discarded
         """
-        await self._commit()
+        if self._discarded:
+            raise BatchDiscardedError("Cannot apply a discarded batch")
 
-    async def rollback(self) -> None:
+        if self._applied:
+            return
+
+        # First, merge all children that haven't been applied
+        for child in self._children:
+            if not child._applied:
+                child._merge_into_parent(mark_as_applied=True)
+
+        # Apply all queued throttles
+        for entry in self._queue:
+            # Resolve the actual cost now (in case cost function is used)
+            actual_cost = await entry.resolve_cost(self.connection, entry.context)
+            entry.resolved_cost = actual_cost  # Update resolved cost for retry logic
+            # Update the cost attribute with the resolved cost, so the throttle doesn't have to resolve it again
+            entry.cost = actual_cost
+            await self._hit_entry(entry)
+
+        self._applied = True
+
+    async def discard(self) -> None:
         """
-        Rollback the transaction, discarding all queued throttles.
+        Discard the batch, clearing all queued throttles without applying them.
 
-        This clears the queue without applying any throttles and marks the
-        transaction as rolled back. After rollback, no further operations
-        (enqueue or commit) are allowed on this transaction.
+        This clears the queue and marks the batch as discarded. After discard,
+        no further operations (enqueue or apply) are allowed on this batch.
 
-        If the transaction holds a lock, it will be released.
+        If the batch holds a lock, it will be released.
 
-        For nested transactions, rollback detaches the child from the parent
+        For nested batches, discard detaches the child from the parent
         (its throttles will not be merged into the parent).
 
         This method is idempotent, i.e., calling it multiple times has no additional effect.
 
-        :raises `TransactionCommittedError`: If the transaction has already been committed.
+        :raises `BatchAppliedError`: If the batch has already been applied.
 
         Example:
         ```python
-        async with throttle.transaction(conn, commit_on_exit=False) as tx:
-            await tx(cost=5)
-            await tx(throttle2, cost=3)
+        async with throttle.batch(conn, apply_on_exit=False) as batch:
+            await batch(cost=5)
+            await batch(throttle2, cost=3)
 
             if not await validate_operation():
-                await tx.rollback()  # Discard queued throttles
+                await batch.discard()  # Discard queued throttles
                 return error_response()
 
             await perform_operation()
-            await tx.commit()  # Manually commit
+            await batch.apply()  # Manually apply
         ```
         """
-        if self._committed:
-            raise TransactionCommittedError("Cannot rollback a committed transaction")
+        if self._applied:
+            raise BatchAppliedError("Cannot discard an applied batch")
 
-        if self._rolled_back:
-            return  # Already rolled back, idempotent
+        if self._discarded:
+            return  # Already discarded, idempotent
 
-        # Rollback all uncommitted children first
+        # Discard all unapplied children first
         for child in self._children:
-            if not child._committed and not child._rolled_back:
-                await child.rollback()
+            if child.active:
+                await child.discard()
 
         # Clear the queue
         self._queue.clear()
-        self._total_queued_cost = 0
+        self._queued_cost = 0
 
         # Detach from parent if nested
-        if self.parent is not None and self in self.parent._children:
-            self.parent._children.remove(self)
+        if self._nested and self in self.parent._children:  # type: ignore[union-attr]
+            self.parent._children.remove(self)  # type: ignore[union-attr]
 
-        # Mark as rolled back
-        self._rolled_back = True
+        # Mark as discarded
+        self._discarded = True
 
         # Release lock early if we're holding one
         if self._exit_stack is not None:
             await self._exit_stack.aclose()
             self._exit_stack = None
-
-    async def _commit(self) -> None:
-        """
-        Private commit implementation.
-
-        Assumes lock is already held if locking is enabled (via context manager).
-        """
-        if self._rolled_back:
-            raise TransactionRolledBackError("Cannot commit a rolled-back transaction")
-        if self._committed:
-            raise TransactionCommittedError("Transaction has already been committed")
-
-        # First, commit all children that haven't been committed
-        for child in self._children:
-            if not child._committed:
-                child._merge_into_parent(mark_as_committed=True)
-
-        # Apply all queued throttles
-        # Note: Lock is already held if using context manager
-        for entry in self._queue:
-            await self._apply_throttle(entry)
-
-        self._committed = True
 
     async def _should_retry(
         self,
@@ -732,14 +744,14 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         attempt: int,
     ) -> bool:
         """
-        Determine if we should retry based on retry_on configuration.
+        Determine if we should retry based on `retry_on` configuration.
 
         :param entry: The queued throttle entry.
         :param exc: The exception that occurred.
         :param attempt: Current attempt number.
         :return: True if should retry, False otherwise.
         """
-        # If no `retry_on` is specified, we can retry on any exception
+        # If no `retry_on` is specified, we can retry on any other exception
         if entry._retry_type is None:
             return True
 
@@ -758,56 +770,28 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
             return await entry.retry_on(exc_info)  # type: ignore[call-arg,arg-type]
         return entry.retry_on(exc_info)  # type: ignore[call-arg,arg-type]
 
-    async def _apply_throttle(self, entry: _QueuedThrottle[HTTPConnectionT]) -> None:
-        """Apply a single throttle entry with retry logic."""
+    async def _hit_entry(self, entry: _QueuedThrottle[HTTPConnectionT]) -> None:
+        """Hit/apply a queued throttle with retry logic."""
         attempt = 0
-        delay_attempt = 0  # For quota exhausted delay backoff
-        # Use precomputed values
         max_attempts = entry.max_attempts
-        required_cost = entry.resolved_cost
-        quota_exhausted_mode = self._quota_exhausted_mode
-        delay_config = self._delay_config
+        cost = entry.resolved_cost
 
         while attempt < max_attempts:
             attempt += 1
             try:
-                # Check quota before applying
-                if quota_exhausted_mode != "force":
-                    stat = await entry.throttle.stat(self.connection, entry.context)
-                    if stat is not None and stat.hits_remaining < required_cost:
-                        if quota_exhausted_mode == "raise":
-                            raise QuotaExhaustedError(
-                                f"Insufficient quota for throttle '{entry.throttle.uid}'",
-                                throttle=entry.throttle,
-                                required_cost=required_cost,
-                                available_quota=stat.hits_remaining,
-                            )
-                        elif quota_exhausted_mode == "skip":
-                            return  # Skip this throttle
-                        elif quota_exhausted_mode == "delay":
-                            # Wait and retry
-                            delay_attempt += 1
-                            if callable(delay_config):
-                                delay = delay_config(delay_attempt, 1.0)
-                            else:
-                                delay = typing.cast(float, delay_config)
-                            await asyncio.sleep(delay)
-                            continue  # Retry quota check
-
-                # Apply the throttle
+                # Hit the throttle
                 await entry.throttle(
                     self.connection,
                     cost=entry.cost,
                     context=entry.context,
                 )
-                # Track applied cost using precomputed value
-                self._total_applied_cost += required_cost
+                # Track applied cost
+                self._applied_cost += cost
                 return
 
-            except QuotaExhaustedError:
+            except _NON_RETRYABLE_EXCEPTIONS:
                 raise
-
-            except Exception as exc:
+            except BaseException as exc:
                 if attempt >= max_attempts or not await self._should_retry(
                     entry, exc, attempt
                 ):
@@ -824,59 +808,52 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         apply_on_error: typing.Optional[
             typing.Union[bool, typing.Tuple[typing.Type[BaseException], ...]]
         ] = None,
-        on_quota_exhausted: typing.Optional[
-            typing.Union[
-                typing.Literal["raise", "force", "skip"],
-                typing.Tuple[
-                    typing.Literal["delay"], typing.Union[float, "BackoffStrategy"]
-                ],
-            ]
-        ] = None,
-        commit_on_exit: bool = True,
+        apply_on_exit: bool = True,
         lock: typing.Union[bool, str, None] = None,
         lock_config: typing.Optional[LockConfig] = None,
-    ) -> "ThrottleTransaction[HTTPConnectionT]":
+        reentrant_lock: bool = False,
+    ) -> "ThrottleBatch[HTTPConnectionT]":
         """
-        Create a nested child transaction.
+        Create a nested child batch.
 
-        Child transactions merge their queued throttles into the parent
+        Child batches merge their queued throttles into the parent
         when they exit successfully. The parent applies all throttles
-        (including children's) when it commits.
+        (including children's) when it applies.
 
         :param context: Override default context for the child.
         :param apply_on_error: Override error handling (inherits from parent if None).
-        :param on_quota_exhausted: Override quota handling (inherits from parent if None).
-        :param commit_on_exit: Whether child auto-commits to parent on exit.
-        :param lock: Controls locking for this nested transaction.
+        :param apply_on_exit: Whether child auto-applies to parent on exit.
+        :param lock: Controls locking for this nested batch.
             - `None` (default): No lock (operates under parent's lock context)
             - `False`: Explicitly disable locking
             - `True`: Use child's owner throttle UID as lock key (if bound)
             - `str`: Use the provided string as the lock key
 
-            .. warning:: **Pitfalls of nested transaction locks:**
+            **Pitfalls of nested batch locks:**
 
-                1. **Deadlock Risk**: If you use the same lock key as the parent,
-                   the child will deadlock waiting for a lock the parent holds.
-                   A warning is emitted if this is detected.
+            1. **Deadlock Risk**: If you use the same lock key as the parent,
+                the child will deadlock waiting for a lock the parent holds.
+                An error is raised if this is detected.
 
-                2. **Lock Ordering**: If parent holds lock "A" and child acquires "B",
-                   while another transaction holds "B" and wants "A", deadlock occurs.
-                   Always acquire locks in a consistent order across your application.
+            2. **Lock Ordering**: If parent holds lock "A" and child acquires "B",
+                while another batch holds "B" and wants "A", deadlock occurs.
+                Always acquire locks in a consistent order across your application.
 
-                3. **Partial Atomicity**: The child releases its lock on exit, but the
-                   parent may fail later. This means the child's protected resources
-                   could be accessed by other requests before the parent commits.
+            3. **Partial Atomicity**: The child releases its lock on exit, but the
+                parent may fail later. This means the child's protected resources
+                could be accessed by other requests before the parent applies.
 
-                4. **Use Case**: Nested locks are useful when the child operates on a
-                   *different* resource than the parent and needs independent protection.
+            4. **Use Case**: Nested locks are useful when the child operates on a
+                *different* resource than the parent and needs independent protection.
 
         :param lock_config: Configuration for lock acquisition (ttl, blocking, etc.).
-        :return: A new child transaction.
+        :param reentrant_lock: If True, allows same lock key as parent (for re-entrant locks).
+        :return: A new child batch.
 
         Example (no lock - default, safest):
 
         ```python
-        async with throttle_a.transaction(conn) as parent:
+        async with throttle_a.batch(conn) as parent:
             await parent(cost=1)
 
             async with parent.nested() as child:
@@ -887,7 +864,7 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
         Example (child with different lock for different resource):
 
         ```python
-        async with throttle_a.transaction(conn) as parent:
+        async with throttle_a.batch(conn) as parent:
             await parent(cost=1)
 
             # Child protects a different resource
@@ -905,19 +882,21 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
             child_lock_key = None
         elif lock is True:
             # Use owner's UID if bound
-            child_lock_key = f"tx:{self.owner.uid}" if self.owner else None
+            child_lock_key = f"batch:{self.owner.uid}" if self.owner else None
         else:
-            child_lock_key = f"tx:{lock}"
+            child_lock_key = f"batch:{lock}"
 
-        # Warn about potential deadlock if child uses same lock as parent
-        if child_lock_key is not None and child_lock_key == self._lock_key:
-            warnings.warn(
-                f"Nested transaction is using the same lock key as its parent "
+        # Raise error about potential deadlock if child uses same lock as parent
+        if (
+            child_lock_key is not None
+            and child_lock_key == self._lock_key
+            and not reentrant_lock
+        ):
+            raise BatchError(
+                f"Nested batch is using the same lock key as its parent "
                 f"({child_lock_key!r}). This will cause a deadlock if the parent lock is not re-entrant, "
                 f"because the parent already holds this lock. Use a different lock key or "
                 f"set lock=None to operate under the parent's lock context.",
-                UserWarning,
-                stacklevel=2,
             )
 
         return self.__class__(
@@ -927,25 +906,21 @@ class ThrottleTransaction(typing.Generic[HTTPConnectionT]):
             apply_on_error=(
                 apply_on_error if apply_on_error is not None else self.apply_on_error
             ),
-            on_quota_exhausted=(
-                on_quota_exhausted
-                if on_quota_exhausted is not None
-                else self.on_quota_exhausted  # type: ignore[arg-type]
-            ),
-            commit_on_exit=commit_on_exit,
+            apply_on_exit=apply_on_exit,
             lock=lock if lock is not None else False,
             lock_config=lock_config,
             parent=self,
         )
 
-    transaction = nested  # Alias for `nested()` method.
+    # Alias for `nested(...)` method
+    batch = nested
 
     def __repr__(self) -> str:
         owner_info = f"owner={self.owner.uid!r} " if self.owner else ""
         state = (
-            "rolled_back"
-            if self._rolled_back
-            else ("committed" if self._committed else "active")
+            "discarded"
+            if self._discarded
+            else ("applied" if self._applied else "active")
         )
         return (
             f"<{self.__class__.__name__} "

@@ -58,42 +58,20 @@ class LockTimeoutError(BackendError, TimeoutError):
     pass
 
 
-class TransactionError(TraffikException):
-    """Base exception for transaction-related errors."""
+class BatchError(TraffikException):
+    """Base exception for batch-related errors."""
 
     pass
 
 
-class QuotaExhaustedError(TransactionError):
-    """
-    Raised when quota is exhausted at transaction commit time.
-
-    This occurs when another request consumed the quota between
-    the transaction start and commit.
-    """
-
-    def __init__(
-        self,
-        message: str = "Quota exhausted during transaction commit",
-        *,
-        throttle: typing.Optional[typing.Any] = None,
-        required_cost: typing.Optional[int] = None,
-        available_quota: typing.Optional[float] = None,
-    ) -> None:
-        super().__init__(message)
-        self.throttle = throttle
-        self.required_cost = required_cost
-        self.available_quota = available_quota
-
-
-class TransactionCommittedError(TransactionError):
-    """Raised when attempting to modify a committed transaction."""
+class BatchAppliedError(BatchError):
+    """Raised when attempting to modify an already applied batch."""
 
     pass
 
 
-class TransactionRolledBackError(TransactionError):
-    """Raised when attempting to modify a rolled-back transaction."""
+class BatchDiscardedError(BatchError):
+    """Raised when attempting to modify a discarded batch."""
 
     pass
 

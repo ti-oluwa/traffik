@@ -297,9 +297,9 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             raise ValueError("Specify either 'url' or 'host'/'port', not both.")
 
         if url is not None:
-            params = _parse_memcached_url(url)
-            host = params["host"]
-            port = params["port"]
+            parsed = _parse_memcached_url(url)
+            host = parsed["host"]
+            port = parsed["port"]
 
         self.host = host
         self.port = port

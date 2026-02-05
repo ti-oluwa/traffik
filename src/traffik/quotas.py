@@ -55,6 +55,8 @@ def ConstantBackoff(
 class LinearBackoff:
     """Delay increases linearly with each attempt."""
 
+    __slots__ = ("increment",)
+
     def __init__(self, increment: float = 1.0) -> None:
         """
         :param increment: Amount to increase delay per attempt (in seconds).
@@ -67,6 +69,8 @@ class LinearBackoff:
 
 class ExponentialBackoff:
     """Delay doubles (or multiplies) with each attempt."""
+
+    __slots__ = ("multiplier", "max_delay", "jitter")
 
     def __init__(
         self,
@@ -95,6 +99,8 @@ class ExponentialBackoff:
 class LogarithmicBackoff:
     """Delay increases logarithmically with each attempt."""
 
+    __slots__ = ("base",)
+
     def __init__(self, base: float = 2.0) -> None:
         """
         :param base: Logarithm base.
@@ -103,6 +109,9 @@ class LogarithmicBackoff:
 
     def __call__(self, attempt: int, base_delay: float) -> float:
         return base_delay * math.log(attempt + 1, self.base)
+
+
+DEFAULT_BACKOFF = ExponentialBackoff(multiplier=2.0, max_delay=60.0, jitter=True)
 
 
 def _resolve_lock_key(
@@ -158,7 +167,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         self.context = context
         self.retry = retry
         self.retry_on = retry_on
-        self.backoff = backoff or ExponentialBackoff()
+        self.backoff = backoff or DEFAULT_BACKOFF
         self.base_delay = base_delay
 
         # Precompute values for fast apply
@@ -199,6 +208,15 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
             return await throttle.cost(connection, context)  # type: ignore[operator]
 
         return throttle.cost  # type: ignore[return-value]
+
+    def __hash__(self) -> int:
+        # Hash based on throttle UID and context for potential aggregation
+        return hash(
+            (
+                self.throttle.uid,
+                frozenset(self.context.items()) if self.context else None,
+            )
+        )
 
 
 class QuotaContext(typing.Generic[HTTPConnectionT]):
@@ -594,7 +612,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         can_aggregate = False
         if self._queue:
             last_entry = self._queue[-1]
-            backoff_to_use = backoff or ExponentialBackoff()
+            backoff_to_use = backoff or DEFAULT_BACKOFF
 
             # Compare all relevant attributes
             if (
@@ -623,7 +641,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 context=merged_context if merged_context else None,
                 retry=retry,
                 retry_on=retry_on,
-                backoff=backoff or ExponentialBackoff(),
+                backoff=backoff or DEFAULT_BACKOFF,
                 base_delay=base_delay,
             )
             self._queue.append(entry)

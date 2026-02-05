@@ -42,7 +42,7 @@ __all__ = [
 ]
 
 THROTTLED_STATE_KEY = "__traffik_throttled_state__"
-CONNECTION_IDS_STATE_KEY = "__traffik_connection_ids__"
+CONNECTION_IDS_CONTEXT_KEY = "__traffik_connection_ids__"
 DEFAULT_SCOPE = "default"
 
 ThrottleStrategy = typing.Callable[
@@ -304,7 +304,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         # Check the connection state cache first
         cached_connection_ids: typing.Dict[str, Stringable] = getattr(
-            connection.state, CONNECTION_IDS_STATE_KEY, {}
+            connection.state, CONNECTION_IDS_CONTEXT_KEY, {}
         )
         connection_id = cached_connection_ids.get(self.uid, None)
         if connection_id is not None:
@@ -315,7 +315,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         connection_id = await identifier(connection)
         setattr(
             connection.state,
-            CONNECTION_IDS_STATE_KEY,
+            CONNECTION_IDS_CONTEXT_KEY,
             {**cached_connection_ids, self.uid: connection_id},
         )
         return connection_id
@@ -493,14 +493,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         )
         if wait_ms:
             handle_throttled = self.handle_throttled or backend.handle_throttled
-            if "headers" in context and self.headers:
-                context["headers"].update(self.headers)
-            else:
-                context["headers"] = self.headers
-
             # Mark connection as throttled
             setattr(connection.state, THROTTLED_STATE_KEY, True)
-            await handle_throttled(connection, wait_ms, self, context)  # type: ignore[arg-type]
+            await handle_throttled(connection, wait_ms, self, context or {})  # type: ignore[arg-type]
             return connection
 
         # Mark connection as not throttled
@@ -703,6 +698,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         # Lock released after all quota consumed
         ```
+        
         """
         from traffik.quotas import QuotaContext
 
@@ -749,7 +745,7 @@ class HTTPThrottle(Throttle[Request]):
         scope = context["scope"] if context else DEFAULT_SCOPE
         return f"http:{method}:{path}:{scope}"
 
-    # Redefine signatures so that they can resolved byt FastAPI dependency injection systems
+    # Redefine signatures so that they can resolved by the FastAPI dependency injection systems
     async def __call__(
         self,
         connection: Request,

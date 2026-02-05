@@ -127,6 +127,7 @@ def create_backend(config: BenchmarkConfig):
         namespace="bench",
         identifier=custom_identifier,
         persistent=False,
+        number_of_shards=5,
     )
 
 

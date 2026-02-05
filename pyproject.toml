@@ -110,6 +110,7 @@ markers = [
     "decorator: tests that test decorator functionality",
     "concurrent: tests that test concurrent/parallel behavior",
     "middleware: tests that test middleware functionality",
+    "quota: tests that test `QuotaContext` functionality",
     "multithreaded: test that test multithreading functionality",
 ]
 

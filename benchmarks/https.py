@@ -141,6 +141,7 @@ def create_traffik_backend(config: BenchmarkConfig):
         namespace="traffik:bench",
         identifier=custom_identifier,
         persistent=False,
+        number_of_shards=5,
     )
 
 

@@ -538,9 +538,9 @@ class _AsyncRLock:
 
 class _AsyncLockGroup:
     """
-    Reentrant async group lock.
+    Re-entrant async lock group.
 
-    Acquires and releases a collection of `AsyncLock` instances atomically.
+    Acquires and releases a collection of `AsyncLock` atomically.
     """
 
     __slots__ = ("_locks", "_owner", "_counter", "_meta_lock")

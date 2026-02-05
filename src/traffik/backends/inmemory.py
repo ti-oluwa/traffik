@@ -1,7 +1,7 @@
 """
 In-memory implementation of a throttle backend using an `OrderedDict` for storage.
 
-NOTE: This is not suitable for multi-process or distributed setups.
+Note! This is not suitable for multi-process or distributed setups.
 """
 
 import asyncio

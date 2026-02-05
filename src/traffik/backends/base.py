@@ -5,11 +5,11 @@ import functools
 import hashlib
 import inspect
 import math
+import sys
 import typing
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
 
-from starlette.datastructures import State
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
 from typing_extensions import Self
@@ -74,11 +74,13 @@ async def connection_throttled(
     )
 
 
-throttle_backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVar(
-    "throttle_backend_ctx", default=None
+_backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVar(
+    "_backend_ctx", default=None
 )
+"""Throttle backend contextvar. Private variable !!!Do not use directly!!!"""
 
-BACKEND_STATE_KEY = "__traffik_throttle_backend__"
+BACKEND_APP_CONTEXT_KEY = "__traffik_throttle_backend__"
+APP_CONTEXT_ATTR = "state"
 
 
 def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
@@ -460,17 +462,17 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         This should be a snapshot of all keys at a single point in time.
         but backends can override for better performance.
 
+        By default, atomicity is best-effort by getting keys concurrently without guarantees.
+        Backends that support true atomic multi-get should override this method.
+
         :param keys: Sequence of keys to retrieve
         :return: List of values (None for missing keys), same order as keys
 
         Note: This is different from non-atomic batch get - values should be
         consistent snapshot, not interleaved with writes.
         """
-        results = []
-        for key in keys:
-            value = await self.get(key)
-            results.append(value)
-        return results
+        tasks = [self.get(key) for key in keys]
+        return await asyncio.gather(*tasks, return_exceptions=False)
 
     async def multi_set(
         self,
@@ -483,11 +485,15 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         This should set all keys as a single atomic operation.
         but backends can override for better performance.
 
+        By default, atomicity is best-effort by setting keys concurrently without guarantees.
+        Backends that support true atomic multi-set should override this method.
+
         :param items: Mapping of keys to values to set
         :param expire: Optional expiration time in seconds for all keys
         """
-        for key, value in items.items():
-            await self.set(key, value, expire=expire)
+        tasks = [self.set(key, value, expire=expire) for key, value in items.items()]
+        await asyncio.gather(*tasks)
+        return None
 
     async def close(self) -> None:
         """
@@ -502,7 +508,10 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     @asynccontextmanager
     async def lifespan(self, app: ASGIApp) -> typing.AsyncIterator[None]:
         """
-        ASGI lifespan context manager for the throttle backend.
+        ASGI lifespan context manager for the backend.
+
+        :param app: The ASGI application
+        :yield: None
         """
         async with self(app):
             yield
@@ -532,34 +541,36 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :return: A context manager for the throttle backend.
         """
         if app is not None:
-            # Ensure app.state exists
-            app.state = getattr(app, "state", State())  # type: ignore
-            setattr(app.state, BACKEND_STATE_KEY, self)  # type: ignore
+            # Ensure app context attribute exists and set the backend in
+            # the app context for retrieval in `get_throttle_backend(...)`.
+            # Use `dict()` as default context
+            setattr(app, APP_CONTEXT_ATTR, getattr(app, APP_CONTEXT_ATTR, dict()))  # type: ignore
+            setattr(getattr(app, APP_CONTEXT_ATTR), BACKEND_APP_CONTEXT_KEY, self)  # type: ignore
 
         parent_backend = get_throttle_backend(app)
-        is_inner_context = parent_backend is not None
+        is_inner_ctx = parent_backend is not None
 
         if persistent is not None:
-            context_persistence = persistent
+            persistent_ctx = persistent
 
         # For non-nested contexts, use the backend's persistence settings.
         # For nested contexts, context is persistent if outer context's backend
         # is the same as this context's backend.
         # This is so the inner context does not clear the outer context's data unintentionally.
-        elif is_inner_context is False or parent_backend is not self:
-            context_persistence = self.persistent
+        elif is_inner_ctx is False or parent_backend is not self:
+            persistent_ctx = self.persistent
         else:
-            context_persistence = True
+            persistent_ctx = True
 
         if close_on_exit is not None:
-            context_close_on_exit = close_on_exit
+            close_ctx_on_exit = close_on_exit
         else:
             # Context should not close on exit if it is nested inside another context
-            context_close_on_exit = is_inner_context is False
+            close_ctx_on_exit = is_inner_ctx is False
         return _BackendContext(
             backend=self,
-            persistent=context_persistence,
-            close_on_exit=context_close_on_exit,
+            persistent=persistent_ctx,
+            close_on_exit=close_ctx_on_exit,
         )
 
 
@@ -573,7 +584,7 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
     Context manager for throttle backends.
     """
 
-    __slots__ = ("backend", "persistent", "close_on_exit", "_context_token")
+    __slots__ = ("backend", "persistent", "close_on_exit", "_ctx_token")
 
     def __init__(
         self,
@@ -584,9 +595,7 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
         self.backend = backend
         self.persistent = persistent
         self.close_on_exit = close_on_exit
-        self._context_token: typing.Optional[
-            Token[typing.Optional[ThrottleBackend]]
-        ] = None
+        self._ctx_token: typing.Optional[Token[typing.Optional[ThrottleBackend]]] = None
 
     async def __aenter__(self) -> ThrottleBackendTco:
         backend = self.backend
@@ -594,21 +603,42 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
         if not await backend.ready():
             raise BackendError("Throttle backend is not ready for operations.")
 
-        # Set the throttle backend in the context variable
-        self._context_token = throttle_backend_ctx.set(backend)
+        self._ctx_token = _backend_ctx.set(backend)
         return backend
 
     async def __aexit__(self, exc_type, exc_value, traceback) -> None:
-        if self._context_token is not None:
-            throttle_backend_ctx.reset(self._context_token)
-            self._context_token = None
+        if self._ctx_token is not None:
+            _backend_ctx.reset(self._ctx_token)
+            self._ctx_token = None
 
         backend = self.backend
+
+        # Store any exception that occurs during reset/close to raise later
+        # This is to ensure that we atleast call `close()` even if `reset()` fails.
+        exit_exc: typing.Optional[BaseException] = None
         if not self.persistent:
-            await backend.reset()
+            try:
+                await backend.reset()
+            except BaseException as exc:
+                sys.stderr.write(
+                    f"Error resetting throttle backend during context exit: {exc}\n"
+                )
+                sys.stderr.flush()
+                exit_exc = exc
 
         if self.close_on_exit:
-            await backend.close()
+            try:
+                await backend.close()
+            except BaseException as exc:
+                sys.stderr.write(
+                    f"Error closing throttle backend during context exit: {exc}\n"
+                )
+                sys.stderr.flush()
+                if exit_exc is None:
+                    exit_exc = exc
+
+        if exit_exc is not None:
+            raise exit_exc
 
 
 def get_throttle_backend(
@@ -620,14 +650,15 @@ def get_throttle_backend(
     :param app: The ASGI application to check for a throttle backend.
     :return: The current throttle backend or None if not set.
     """
-    # Try to get from contextvar, then check `app.state`
-    backend = throttle_backend_ctx.get(None)
+    # Try to get from contextvar, then check `app.APP_CONTEXT_ATTR` which
+    # is "app.state" by default.
+    backend = _backend_ctx.get(None)
     if (
         backend is None
         and app is not None
-        and (app_state := getattr(app, "state", None)) is not None
+        and (app_ctx := getattr(app, APP_CONTEXT_ATTR, None)) is not None
     ):
-        backend = getattr(app_state, BACKEND_STATE_KEY, None)
+        backend = getattr(app_ctx, BACKEND_APP_CONTEXT_KEY, None)
     return backend
 
 

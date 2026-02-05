@@ -505,7 +505,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         """
         Initialize the Redis backend.
 
-        :param connection: Redis connection URL or async getter function.
+        :param connection: Redis connection URL or async factory function that returns an `aioredis.Redis` instance.
         :param namespace: The namespace to be used for all throttling keys.
         :param identifier: The connected client identifier generator.
         :param handle_throttled: The handler to call when the client connection is throttled.
@@ -529,11 +529,11 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
               Redis clusters or multiple Redis instances.
         """
         if isinstance(connection, str):
-
-            async def _getter():
+            # Create a redis connection factory with the provided URL
+            async def _factory():
                 return await aioredis.from_url(connection, decode_responses=True)
 
-            self._get_connection = _getter
+            self._get_connection = _factory
         else:
             self._get_connection = connection
 
@@ -644,8 +644,6 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             )
 
         if not self._use_redlock:
-            # Ensure scripts are loaded (normally done in initialize(), but to guard against edge cases)
-            # await self._ensure_lock_scripts_shas()
             return _AsyncRedisLock(
                 name,
                 redis=self.connection,
@@ -668,7 +666,6 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
-
         return await self.connection.get(key)
 
     async def set(
@@ -792,7 +789,6 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
 
         if not keys:
             return []
-
         return await self.connection.mget(keys)
 
     async def multi_set(

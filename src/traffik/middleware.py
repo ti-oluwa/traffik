@@ -12,7 +12,7 @@ from typing_extensions import TypeAlias
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import ConfigurationError, _build_exception_handler_getter
 from traffik.throttles import Throttle
-from traffik.types import HTTPConnectionT, Matchable
+from traffik.types import ExceptionHandler, HTTPConnectionT, Matchable
 from traffik.utils import is_async_callable
 
 ThrottlePredicate: TypeAlias = typing.Callable[
@@ -66,6 +66,8 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
     )
     ```
     """
+
+    __slots__ = ("throttle", "path", "methods", "predicate")
 
     def __init__(
         self,
@@ -153,7 +155,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
 
 class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
     """
-    ASGI middleware that applies throttling to HTTP connections.
+    Traffik ASGI middleware.
 
     This middleware processes incoming HTTP connections and applies throttles based on
     the provided `MiddlewareThrottle` instances. It integrates with throttle backends
@@ -167,9 +169,9 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
     from traffik.middleware import ThrottleMiddleware
     from traffik.throttles import HTTPThrottle
 
-    throttle_backend = InMemoryBackend()
+    backend = InMemoryBackend()
+    app = Starlette(lifespan=backend.lifespan)
 
-    app = Starlette(lifespan=throttle_backend.lifespan)
     app.add_middleware(
         ThrottleMiddleware,
         middleware_throttles=[
@@ -179,18 +181,25 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
                 methods={"GET", "POST"},
             )
         ],
-        backend=throttle_backend, # Optional, can be omitted to use the context(lifespan) backend
+        backend=backend, # Optional, can be omitted to use the context(lifespan) backend
     )
     ... # Other routes and/or middleware
     ```
 
     """
 
+    __slots__ = ("app", "middleware_throttles", "backend", "get_exception_handler")
+
     def __init__(
         self,
         app: ASGIApp,
         middleware_throttles: typing.Sequence[MiddlewareThrottle[HTTPConnectionT]],
         backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]] = None,
+        exception_handler_getter: typing.Optional[
+            typing.Callable[
+                [Exception], typing.Optional[ExceptionHandler[HTTPConnectionT]]
+            ]
+        ] = None,
     ) -> None:
         """
         Initialize the middleware with the application and throttles.
@@ -198,11 +207,12 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
         :param app: The ASGI application to wrap.
         :param middleware_throttles: A sequence of `MiddlewareThrottle` instances to apply.
         :param backend: An optional throttle backend to use.
+        :param exception_handler_getter: An optional callable that takes an exception and returns an ASGI exception handler.
         """
         self.app = app
         self.middleware_throttles = middleware_throttles
-        self.backend = backend or get_throttle_backend()
-        self.get_exception_handler = None
+        self.backend = backend or get_throttle_backend(app)
+        self.get_exception_handler = exception_handler_getter
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """
@@ -237,13 +247,15 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
                     # that will be handled if they register an exception handler with
                     # the application. If not, the exception will propagate and the
                     # `ServerErrorMiddleware` will properly handle it.
-                    exc_handler = self.get_exception_handler
-                    if exc_handler is None:
-                        exc_handler = _build_exception_handler_getter(connection.app)
+                    get_exc_handler = self.get_exception_handler
+                    if get_exc_handler is None:
+                        get_exc_handler = _build_exception_handler_getter(
+                            connection.app
+                        )
                         # Cache the exception handler getter for future use
-                        self.get_exception_handler = exc_handler  # type: ignore[assignment]
+                        self.get_exception_handler = get_exc_handler
 
-                    handler = exc_handler(exc)
+                    handler = get_exc_handler(exc)
                     if handler is not None:
                         if is_async_callable(handler):
                             response = await handler(connection, exc)  # type: ignore

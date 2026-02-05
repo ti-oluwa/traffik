@@ -143,6 +143,8 @@ def create_traffik_backend(config: BenchmarkConfig):
         namespace="traffik:bench",
         identifier=custom_identifier,
         persistent=False,
+        # High concurrency in benchmarks may benefit from more shards to reduce contention
+        number_of_shards=5,
     )
 
 

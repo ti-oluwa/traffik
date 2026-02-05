@@ -53,7 +53,7 @@ WaitPeriod: TypeAlias = float
 Matchable: TypeAlias = typing.Union[str, typing.Pattern[str]]
 """A type alias for a matchable path, which can be a string or a compiled regex pattern."""
 ExceptionHandler: TypeAlias = typing.Callable[
-    [HTTPConnection, Exception], typing.Union[Response, typing.Awaitable[Response]]
+    [HTTPConnectionT, Exception], typing.Union[Response, typing.Awaitable[Response]]
 ]
 
 AwaitableCallable = typing.Callable[..., typing.Awaitable[T]]

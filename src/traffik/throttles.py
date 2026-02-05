@@ -574,7 +574,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """
         self._error_callback = handler
 
-    def batch(
+    def quota(
         self,
         connection: HTTPConnectionT,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
@@ -586,25 +586,28 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         parent: typing.Optional[typing.Any] = None,
     ):
         """
-        Create a throttle batch bound to this throttle for deferred throttling.
+        Create a quota context bound to this throttle for deferred quota consumption.
 
-        The batch is bound to this throttle, meaning calling `batch()` without
+        The context is bound to this throttle, meaning calling `quota()` without
         arguments will automatically use this throttle. You can still add other
         throttles explicitly by passing them as arguments.
 
-        Throttles are queued within the batch and only applied on apply/exit.
-        This enables atomic throttling of multiple operations and conditional throttling
-        based on operation success.
+        Quota entries are queued within the context and only consumed on apply/exit.
+        This enables atomic quota consumption of multiple operations and conditional
+        consumption based on operation success.
+
+        **Cost Aggregation**: Consecutive calls with the same throttle and retry
+        configuration automatically aggregate costs for efficiency.
 
         :param connection: The HTTP connection to throttle.
         :param context: Additional throttle context. Can contain any relevant information needed
             to uniquely identify the connection for throttling purposes.
-        :param apply_on_error: Whether to apply throttles even when an exception occurs.
-            - `False` (default): Don't apply throttles on any exception
-            - `True`: Apply throttles on all exceptions
-            - `tuple[Exception, ...]`: Apply throttles only for these exception types
-        :param apply_on_exit: Whether to auto-apply on successful context exit.
-            Set to `False` for nested batches that should only apply with parent.
+        :param apply_on_error: Whether to consume quota even when an exception occurs.
+            - `False` (default): Don't consume on any exception
+            - `True`: Consume on all exceptions
+            - `tuple[Exception, ...]`: Consume only for these exception types
+        :param apply_on_exit: Whether to auto-consume on successful context exit.
+            Set to `False` for nested contexts that should only consume with parent.
         :param lock: Controls locking to prevent race conditions.
             - `None` (default): Use this throttle's UID as the lock key
             - `True`: Same as None (use this throttle's UID as lock key)
@@ -612,51 +615,52 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             - `str`: Use the provided string as the lock key
 
             When enabled, the lock is acquired on context entry and released on exit,
-            ensuring the entire batch is atomic. Keep operations fast.
+            ensuring the entire quota context is atomic. Keep operations fast.
         :param lock_config: Configuration for lock acquisition (ttl, blocking, blocking_timeout).
             See `LockConfig` TypedDict for options.
-        :param parent: Parent batch for nested batches.
-            Child applies are deferred to parent's apply.
-        :return: A `ThrottleBatch` context manager bound to this throttle.
+        :param parent: Parent quota context for nested contexts.
+            Child consumption is deferred to parent's consumption.
+        :return: A `QuotaContext` context manager bound to this throttle.
 
-        Example (using owner throttle):
+        Example (using owner throttle with cost aggregation):
 
         ```python
-        async with throttle.batch(conn) as batch:
+        async with throttle.quota(conn) as quota:
             # Lock is acquired here using throttle.uid as key
 
             # Uses the owner throttle (no throttle argument needed)
-            await batch(cost=2)          # Queue with cost=2
-            await batch()                # Queue with default cost
+            await quota(cost=2)          # Entry 1: cost=2
+            await quota(cost=3)          # Aggregated into Entry 1: cost=5
+            await quota()                # Aggregated into Entry 1: cost=6
 
             # Can still use other throttles
-            await batch(other_throttle, cost=1)
+            await quota(other_throttle, cost=1)  # Entry 2: different throttle
 
-            if not await batch.check():
+            if not await quota.check():
                 raise InsufficientQuotaError()
 
             result = await expensive_operation()  # Keep this fast!
 
-        # On successful exit: throttles applied, then lock released
-        # On exception: throttles NOT applied (unless apply_on_error=True)
+        # On successful exit: quota consumed, then lock released
+        # On exception: quota NOT consumed (unless apply_on_error=True)
         ```
 
         Example with custom lock key and config:
 
         ```python
-        async with throttle.batch(
+        async with throttle.quota(
             conn,
             lock="user:123:api_calls",
             lock_config={"ttl": 30, "blocking_timeout": 5}
-        ) as batch:
-            await batch(cost=2)
+        ) as quota:
+            await quota(cost=2)
             await process()
         ```
 
-        Nested batches:
+        Nested contexts:
 
         ```python
-        async with throttle.batch(conn) as parent:
+        async with throttle.quota(conn) as parent:
             # Lock acquired by parent
             await parent(cost=2)
 
@@ -665,12 +669,12 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 await child(cost=1)
             # Child merges into parent's queue
 
-        # Lock released after all throttles applied
+        # Lock released after all quota consumed
         ```
         """
-        from traffik.batch import ThrottleBatch
+        from traffik.quotas import QuotaContext
 
-        return ThrottleBatch(
+        return QuotaContext(
             connection=connection,
             context=context,
             owner=self,

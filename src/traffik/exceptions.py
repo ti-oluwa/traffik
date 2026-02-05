@@ -58,20 +58,20 @@ class LockTimeoutError(BackendError, TimeoutError):
     pass
 
 
-class BatchError(TraffikException):
-    """Base exception for batch-related errors."""
+class QuotaError(TraffikException):
+    """Base exception for quota context errors."""
 
     pass
 
 
-class BatchAppliedError(BatchError):
-    """Raised when attempting to modify an already applied batch."""
+class QuotaAppliedError(QuotaError):
+    """Raised when attempting to modify an already consumed quota context."""
 
     pass
 
 
-class BatchDiscardedError(BatchError):
-    """Raised when attempting to modify a discarded batch."""
+class QuotaCancelledError(QuotaError):
+    """Raised when attempting to modify a cancelled quota context."""
 
     pass
 

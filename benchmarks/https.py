@@ -185,7 +185,7 @@ def create_traffik_app(
     )
 
     @app.get("/test")
-    @throttled(throttle)
+    # @throttled(throttle)
     async def test_endpoint(request: Request):
         await throttle(request)
         return {"status": "ok"}

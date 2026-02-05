@@ -77,6 +77,24 @@ class ExceptionInfo(TypedDict):
 class Throttle(typing.Generic[HTTPConnectionT]):
     """Base connection throttle class"""
 
+    __slots__ = (
+        "uid",
+        "rate",
+        "identifier",
+        "backend",
+        "handle_throttled",
+        "strategy",
+        "cost",
+        "min_wait_period",
+        "headers",
+        "cache_ids",
+        "on_error",
+        "uses_fixed_backend",
+        "_uses_rate_func",
+        "_uses_cost_func",
+        "_error_callback",
+    )
+
     def __init__(
         self,
         uid: str,
@@ -637,7 +655,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             await quota(other_throttle, cost=1)  # Entry 2: different throttle
 
             if not await quota.check():
-                raise InsufficientQuotaError()
+                raise HTTPException(429, "Rate limit exceeded")
 
             result = await expensive_operation()  # Keep this fast!
 
@@ -701,6 +719,8 @@ def is_throttled(connection: HTTPConnection) -> bool:
 
 class HTTPThrottle(Throttle[Request]):
     """HTTP connection throttle"""
+
+    __slots__ = ()
 
     def get_scoped_key(
         self,
@@ -779,6 +799,8 @@ async def websocket_throttled(
 
 class WebSocketThrottle(Throttle[WebSocket]):
     """WebSocket connection throttle"""
+
+    __slots__ = ()
 
     def __init__(
         self,

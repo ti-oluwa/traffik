@@ -59,7 +59,7 @@ async def test_throttle_with_dynamic_backend(inmemory_backend: InMemoryBackend) 
         # Check that the throttle uses the backend from the inner context
         async with InMemoryBackend(persistent=True)(
             close_on_exit=False
-        ) as inner_backend:
+        ):
             await throttle(dummy_request)
             # Check that the throttle backend is still left unset
             assert throttle.backend is None

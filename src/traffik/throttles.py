@@ -43,6 +43,7 @@ __all__ = [
 
 THROTTLED_STATE_KEY = "__traffik_throttled_state__"
 CONNECTION_IDS_STATE_KEY = "__traffik_connection_ids__"
+DEFAULT_SCOPE = "default"
 
 ThrottleStrategy = typing.Callable[
     [Stringable, Rate, ThrottleBackend[typing.Any, HTTPConnection], int],  # type: ignore[misc]
@@ -441,8 +442,12 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         :return: The throttled HTTP connection.
         """
+        # Setup default context values
+        context = dict(context or {})
+        context.setdefault("scope", DEFAULT_SCOPE)
+
         rate = (
-            await self.rate(connection, context) if self._uses_rate_func else self.rate  # type: ignore
+            await self.rate(connection, context) if self._uses_rate_func else self.rate  # type: ignore[operator]
         )
         if rate.unlimited:  # type: ignore[union-attr]
             return connection  # No throttling applied
@@ -488,10 +493,13 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         )
         if wait_ms:
             handle_throttled = self.handle_throttled or backend.handle_throttled
+            if "headers" in context and self.headers:
+                context["headers"].update(self.headers)
+            else:
+                context["headers"] = self.headers
+
             # Mark connection as throttled
             setattr(connection.state, THROTTLED_STATE_KEY, True)
-            context = dict(context or {})
-            context.setdefault("headers", self.headers)
             await handle_throttled(connection, wait_ms, self, context)  # type: ignore[arg-type]
             return connection
 
@@ -516,6 +524,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :return: A `StrategyStat` object containing the current throttling strategy statistics,
             or None if the connection is not being throttled or the throttle strategy does not support stats
         """
+        # Setup default context values
+        context = dict(context or {})
+        context.setdefault("scope", DEFAULT_SCOPE)
         # We check if the strategy has a `get_stat` method. This is to ensure backward compatibility
         # with the defined `ThrottleStrategy` type which does not include `get_stat`.
         if not hasattr(self.strategy, "get_stat"):
@@ -566,16 +577,19 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             raise HTTPException(429, "Rate limit would be exceeded")
         ```
         """
+        # Setup default context values
+        context = dict(context or {})
+        context.setdefault("scope", DEFAULT_SCOPE)
         stat = await self.stat(connection, context)
         if stat is None:
-            return True  # Can't determine, assume OK (optimistic)
+            return True  # Can't determine, assume available (optimistic)
 
         # Resolve cost
         check_cost: int
         if cost is not None:
             check_cost = cost
         elif self._uses_cost_func:
-            check_cost = await self.cost(connection, context)  # type: ignore[misc]
+            check_cost = await self.cost(connection, context)  # type: ignore[operator]
         else:
             check_cost = self.cost  # type: ignore[assignment]
 
@@ -692,6 +706,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """
         from traffik.quotas import QuotaContext
 
+        # Setup default context values
+        context = dict(context or {})
+        context.setdefault("scope", DEFAULT_SCOPE)
         return QuotaContext(
             connection=connection,
             context=context,
@@ -729,7 +746,7 @@ class HTTPThrottle(Throttle[Request]):
     ) -> str:
         method = connection.scope["method"].upper()
         path = connection.scope["path"]
-        scope = context.get("scope", "default") if context else "default"
+        scope = context["scope"] if context else DEFAULT_SCOPE
         return f"http:{method}:{path}:{scope}"
 
     # Redefine signatures so that they can resolved byt FastAPI dependency injection systems
@@ -847,7 +864,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> str:
         path = connection.scope["path"]
-        scope = context.get("scope", "default") if context else "default"
+        scope = context["scope"] if context else DEFAULT_SCOPE
         return f"ws:{path}:{scope}"
 
     async def __call__(

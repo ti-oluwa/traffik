@@ -9,6 +9,7 @@ import typing
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
 
+from starlette.datastructures import State
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
 from typing_extensions import Self
@@ -33,15 +34,18 @@ from traffik.utils import (
     get_remote_address,
 )
 
+ANONYMOUS_IDENTIFIER = "__anonymous__"
+"""Default identifier for anonymous connections."""
+
 
 async def default_identifier(connection: HTTPConnection) -> typing.Any:
     """
     Default connection identifier using the remote address.
 
     :param connection: The HTTP connection
-    :return: The remote address or "__anonymous__" if not available
+    :return: The remote address or `ANONYMOUS_IDENTIFIER` if not available
     """
-    return get_remote_address(connection) or "__anonymous__"
+    return get_remote_address(connection) or ANONYMOUS_IDENTIFIER
 
 
 async def connection_throttled(
@@ -110,7 +114,7 @@ def _raises_error(
                 if isinstance(exc, BackendError):
                     raise
                 raise BackendError(
-                    f"Error occurred in backend operation. {exc}"
+                    f"Error occurred in backend operation. {exc}", cause=exc
                 ) from exc
 
         wrapper = async_wrapper
@@ -125,7 +129,7 @@ def _raises_error(
                 if isinstance(exc, BackendError):
                     raise
                 raise BackendError(
-                    f"Error occurred in backend operation. {exc}"
+                    f"Error occurred in backend operation. {exc}", cause=exc
                 ) from exc
 
         wrapper = sync_wrapper
@@ -513,7 +517,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         Create a throttle context for the backend.
 
         **Warning!!!**: Avoid nesting a non-persistent context inside a persistent context from the
-        same backend. This could lead to unexpected behaviour and data losss due to nested non-persistence.
+        same backend. This could lead to unexpected behaviour and data loss due to nested non-persistence.
 
         :param app: The ASGI application to assign the backend to.
         :param persistent: Whether to keep the backend state across application restarts.
@@ -529,7 +533,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         if app is not None:
             # Ensure app.state exists
-            app.state = getattr(app, "state", {})  # type: ignore
+            app.state = getattr(app, "state", State())  # type: ignore
             setattr(app.state, BACKEND_STATE_KEY, self)  # type: ignore
 
         parent_backend = get_throttle_backend(app)

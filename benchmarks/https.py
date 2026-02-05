@@ -23,7 +23,6 @@ from starlette.testclient import TestClient
 from traffik import HTTPThrottle, get_remote_address
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.redis import RedisBackend
-from traffik.decorators import throttled
 from traffik.strategies.custom import GCRAStrategy
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.strategies.leaky_bucket import (

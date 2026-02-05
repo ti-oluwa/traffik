@@ -106,13 +106,15 @@ Returns an awaitable response.
 """
 
 RateFunc = typing.Callable[
-    [HTTPConnectionT, typing.Mapping[str, typing.Any]], typing.Awaitable[Rate]
+    [HTTPConnectionT, typing.Optional[typing.Mapping[str, typing.Any]]],
+    typing.Awaitable[Rate],
 ]
-"""Type definition for rate functions."""
+"""Type definition for a rate function."""
 CostFunc = typing.Callable[
-    [HTTPConnectionT, typing.Mapping[str, typing.Any]], typing.Awaitable[int]
+    [HTTPConnectionT, typing.Optional[typing.Mapping[str, typing.Any]]],
+    typing.Awaitable[int],
 ]
-"""Type definition for cost functions."""
+"""Type definition for a cost function."""
 
 RateType = typing.Union[Rate, RateFunc[HTTPConnectionT], str]
 """Type definition for rate specifications."""
@@ -147,7 +149,7 @@ RetryOn = typing.Union[
     ],
 ]
 """
-Type for retry decision logic.
+Type definition for retry decision logic.
 
 Can be either:
 - A single exception type to retry on
@@ -159,7 +161,7 @@ ApplyOnError = typing.Union[
     bool, typing.Type[BaseException], typing.Tuple[typing.Type[BaseException], ...]
 ]
 """
-Type for applying throttles on error.
+Type definition for applying throttles on error.
 
 Can be either:
 - `False`: Don't apply on any exception
@@ -198,6 +200,7 @@ class StrategyStat(typing.Generic[MapT]):
     """Additional metadata related to the strategy."""
 
 
+@typing.runtime_checkable
 class AsyncLock(typing.Protocol):
     """Protocol for asynchronous lock objects."""
 

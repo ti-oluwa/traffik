@@ -174,9 +174,9 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         # Determine retry_on type for fast checks during retries
         if retry_on is None:
             self._retry_type: typing.Optional[str] = None
-        elif isinstance(retry_on, tuple) and all(inspect.isclass(t) for t in retry_on):
+        elif isinstance(retry_on, tuple) and all(isinstance(t, type) for t in retry_on):
             self._retry_type = "exception_type"
-        elif isinstance(retry_on, type) and inspect.isclass(retry_on):
+        elif isinstance(retry_on, type):
             self._retry_type = "exception_type"
         elif callable(retry_on) and inspect.iscoroutinefunction(retry_on):
             self._retry_type = "coroutine"
@@ -196,7 +196,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
 
         throttle = self.throttle
         if throttle._uses_cost_func:
-            return await throttle.cost(connection, context)  # type: ignore[call-arg]
+            return await throttle.cost(connection, context)  # type: ignore[operator]
 
         return throttle.cost  # type: ignore[return-value]
 
@@ -427,7 +427,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         traceback: typing.Optional[TracebackType],
     ) -> typing.Optional[bool]:
         if not self._entered or not self.active:
-            return
+            return None
 
         exit_exc: typing.Optional[BaseException] = None
         try:
@@ -445,10 +445,10 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
             if should_apply:
                 if self.is_nested:
-                    self._merge_into_parent(mark_as_applied=True)
+                    self._merge_into_parent(mark_as_consumed=True)
                 else:
                     await self.apply()
-            return
+            return None
 
         except BaseException as exc:
             # Store exception to raise after lock release
@@ -463,11 +463,11 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         if exit_exc is not None:
             raise exit_exc
 
-    def _merge_into_parent(self, mark_as_applied: bool = True) -> None:
+    def _merge_into_parent(self, mark_as_consumed: bool = True) -> None:
         """
         Merge this batch's queue into the parent's queue.
 
-        :param mark_as_applied: Whether to mark this batch as applied once merged.
+        :param mark_as_consumed: Whether to mark this batch as applied once merged.
         """
         if self.parent is None:
             return
@@ -475,7 +475,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         parent = self.parent
         parent._queue.extend(self._queue)
         parent._queued_cost += self._queued_cost
-        self._consumed = mark_as_applied
+        self._consumed = mark_as_consumed
 
         # Clean up parent reference to prevent memory leaks
         if self in parent._children:
@@ -635,6 +635,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         self,
         throttle: typing.Optional[Throttle[HTTPConnectionT]] = None,
         cost: typing.Optional[int] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> bool:
         """
         **Best-effort** check if there's sufficient quota to proceed.
@@ -653,13 +654,18 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         :param throttle: Specific throttle to check. If None and context is bound,
             checks the owner throttle. If None and unbound, checks all queued entries.
         :param cost: Override cost to check against.
+        :param context: Override context for the check.
         :return: True if sufficient quota is available to proceed, False otherwise.
             If the throttle's state cannot be determined, returns True.
         """
+        merged_context = dict(self.default_context or {})
+        if context:
+            merged_context.update(context)
+
         _throttle = throttle if throttle is not None else self.owner
         if _throttle is not None:
             # Check specific throttle (either provided or owner)
-            stat = await _throttle.stat(self.connection, self.default_context)
+            stat = await _throttle.stat(self.connection, merged_context)
             if stat is None:
                 return True  # Can't determine, assume OK
 
@@ -668,7 +674,12 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
         # No specific throttle so check all queued throttles
         for entry in self._queue:
-            stat = await entry.throttle.stat(self.connection, entry.context)
+            # `entry.context` should already be merged with `self.default_context` when the entry was created,
+            merged_context = dict(entry.context or {})
+            if context:
+                merged_context.update(context)
+
+            stat = await entry.throttle.stat(self.connection, merged_context)
             if stat is None:
                 continue
 
@@ -730,7 +741,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         # First, merge all children that haven't been applied
         for child in self._children:
             if not child._consumed:
-                child._merge_into_parent(mark_as_applied=True)
+                child._merge_into_parent(mark_as_consumed=True)
 
         # Apply all queued throttles
         for entry in self._queue:
@@ -795,8 +806,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             await self._exit_stack.aclose()
             self._exit_stack = None
 
-    # Backwards compatibility alias
-    discard = cancel
+    discard = cancel  # alias
 
     async def _should_retry(
         self,
@@ -828,8 +838,8 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             context=entry.context,
         )
         if entry._retry_type == "coroutine":
-            return await entry.retry_on(exc_info)  # type: ignore[call-arg,arg-type]
-        return entry.retry_on(exc_info)  # type: ignore[call-arg,arg-type]
+            return await entry.retry_on(exc_info)  # type: ignore[misc,operator,arg-type]
+        return entry.retry_on(exc_info)  # type: ignore[misc,operator,arg-type,return-value]
 
     async def _hit(self, entry: _QuotaEntry[HTTPConnectionT]) -> None:
         """Consume a queued quota entry with retry logic."""

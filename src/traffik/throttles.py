@@ -87,7 +87,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         "strategy",
         "cost",
         "min_wait_period",
-        "headers",
+        "_default_context",
         "cache_ids",
         "on_error",
         "uses_fixed_backend",
@@ -116,6 +116,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 ThrottleErrorHandler[HTTPConnectionT, ExceptionInfo],
             ]
         ] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         cache_ids: bool = True,
     ) -> None:
         """
@@ -154,8 +155,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :param cost: The cost/weight of each request. This allows for different requests
             to have different impacts on the throttling state. For example, a request that performs a
             resource-intensive operation might have a higher cost than a simple read request.
-        :param dynamic_backend: If True, resolves backend from context on each request
-            instead of caching. Designed for multi-tenant applications where the backend
+        :param dynamic_backend: If True, resolves backend from the application/request/local context
+            on each request instead of caching it. Designed for multi-tenant applications where the backend
             is determined at runtime from request data (JWT, headers, etc.).
 
             **Use cases:**
@@ -164,7 +165,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             - Testing: Nested context managers with different backends
 
             **Requirements:**
-            - Backend must be set via context manager in middleware **before** throttle is called
+            - Backend must be set via lifespan or context manager in middleware **before** throttle is called
             - Cannot be combined with explicit `backend` parameter
 
             **Trade-offs:**
@@ -177,6 +178,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :param min_wait_period: The minimum allowable wait period (in milliseconds) for a throttled connection.
         :param headers: Optional headers to include in throttling responses. A use case can
             be to include additional throttle/throttling information in the response headers.
+            This will be merged with any headers provided in `context`.
         :param on_error: Strategy for handling errors during throttling.
             Can be one of the following:
             - "allow": Allow the request to proceed without throttling.
@@ -187,6 +189,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 function executes quickly to avoid additional latency.
 
             If not provided, defaults to behavior defined by the backend or "throttle".
+        :param context: Optional default context to use for all throttle calls. This can include any relevant information needed
+            for context-aware throttling strategies. The context provided here will be merged with any context
+            provided during individual throttle calls, with the call-specific context taking precedence in case of conflicts.
         :param cache_ids: Whether to cache connection IDs on the connection state.
             Defaults to True. Disable only for advanced use cases where connection IDs
             may change frequently during the connection's lifetime.
@@ -212,7 +217,21 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self.uses_fixed_backend = not dynamic_backend
         self.strategy = strategy or default_strategy
         self.min_wait_period = min_wait_period
-        self.headers = dict(headers or {})
+
+        # Ensure that we copy the context to avoid potential mutation issues from outside after initialization
+        # Never modify `_default_context` after initialization. It's unsafe.
+        self._default_context = dict(context or {})
+        # Set 'scope' in default context if not already set.
+        self._default_context.setdefault("scope", DEFAULT_SCOPE)
+        if "headers" not in self._default_context:
+            self._default_context["headers"] = dict(headers or {})
+        else:
+            # Merge headers into context if headers are provided both in `headers` and `context`
+            self._default_context["headers"] = {
+                **self._default_context["headers"],
+                **(headers or {}),
+            }
+
         self.cache_ids = cache_ids
 
         # Only set backend for non-dynamic backend throttles
@@ -256,6 +275,21 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 f"Invalid `on_error` value: {on_error_!r}. "
                 "Must be 'allow', 'throttle', 'raise', or a callable."
             )
+
+    @property
+    def is_dynamic(self) -> bool:
+        """Returns True if the throttle uses a dynamic backend, False otherwise."""
+        return not self.uses_fixed_backend
+
+    @property
+    def headers(self) -> typing.Mapping[str, str]:
+        """
+        Returns the default headers used by the throttle for throttling responses.
+
+        These headers can be overridden or extended by providing a 'headers' key
+        in the context during throttle calls.
+        """
+        return self._default_context.get("headers", {})
 
     def get_backend(
         self, connection: typing.Optional[HTTPConnectionT] = None
@@ -370,11 +404,11 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         exc: Exception,
         cost: int,
         rate: Rate,
-        context: typing.Optional[typing.Mapping[str, typing.Any]],
         backend: ThrottleBackend[typing.Any, HTTPConnectionT],
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> WaitPeriod:
         """
-        Handle errors during throttling based on the configured strategy.
+        Handle errors during throttling based on the configured error-handling strategy.
 
         :param connection: The HTTP connection being throttled.
         :param exc: The exception that occurred during throttling.
@@ -424,6 +458,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
     async def __call__(
         self,
         connection: HTTPConnectionT,
+        *,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> HTTPConnectionT:
@@ -442,36 +477,47 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         :return: The throttled HTTP connection.
         """
-        # Setup default context values
-        context = dict(context or {})
-        context.setdefault("scope", DEFAULT_SCOPE)
+        # We have to try as much as possible to avoid copying the context in downstream calls.
+        # So that mutations to the context in those calls reflect back here. That's the whole point
+        # of having a context in the first place. Hence we only copy it once here. Although, there
+        # may be some edge cases where downstream mutations should not affect this (global) context.
+        # Then in that case its justifiable.
+        if context:
+            merged_context = self._default_context.copy()
+            merged_context.update(context)
+        else:
+            merged_context = self._default_context
 
         rate = (
-            await self.rate(connection, context) if self._uses_rate_func else self.rate  # type: ignore[operator]
+            await self.rate(connection, merged_context)  # type: ignore[operator]
+            if self._uses_rate_func
+            else self.rate
         )
         if rate.unlimited:  # type: ignore[union-attr]
-            return connection  # No throttling applied
+            return connection  # No throttling needed
 
-        cost_ = (  # type: ignore
+        actual_cost = (  # type: ignore
             cost
             if cost
             else (
-                await self.cost(connection, context)  # type: ignore
+                await self.cost(connection, merged_context)  # type: ignore[operator]
                 if self._uses_cost_func
                 else self.cost
             )
         )
-        if cost_ <= 0:  # type: ignore
+        if actual_cost <= 0:  # type: ignore[operator]
             raise ValueError("cost must be a positive integer")
 
         backend = self.get_backend(connection)
-        connection_id = await self.get_connection_id(connection, backend, context)
+        connection_id = await self.get_connection_id(
+            connection, backend, merged_context
+        )
         if connection_id is EXEMPTED:
             return connection  # Exempted from throttling
 
-        key = self.get_namespaced_key(connection, connection_id, context)
+        key = self.get_namespaced_key(connection, connection_id, merged_context)
         try:
-            wait_ms = await self.strategy(key, rate, backend, cost_)  # type: ignore
+            wait_ms = await self.strategy(key, rate, backend, actual_cost)  # type: ignore[arg-type]
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -482,10 +528,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             wait_ms = await self._handle_error(
                 connection,
                 exc=exc,
-                cost=cost_,  # type: ignore
+                cost=actual_cost,  # type: ignore
                 rate=rate,  # type: ignore
-                context=context,
                 backend=backend,
+                context=merged_context,
             )
 
         wait_ms = (
@@ -495,7 +541,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             handle_throttled = self.handle_throttled or backend.handle_throttled
             # Mark connection as throttled
             setattr(connection.state, THROTTLED_STATE_KEY, True)
-            await handle_throttled(connection, wait_ms, self, context or {})  # type: ignore[arg-type]
+            await handle_throttled(connection, wait_ms, self, merged_context)  # type: ignore[arg-type]
             return connection
 
         # Mark connection as not throttled
@@ -519,9 +565,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :return: A `StrategyStat` object containing the current throttling strategy statistics,
             or None if the connection is not being throttled or the throttle strategy does not support stats
         """
-        # Setup default context values
-        context = dict(context or {})
-        context.setdefault("scope", DEFAULT_SCOPE)
         # We check if the strategy has a `get_stat` method. This is to ensure backward compatibility
         # with the defined `ThrottleStrategy` type which does not include `get_stat`.
         if not hasattr(self.strategy, "get_stat"):
@@ -532,7 +575,12 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         if (connection_id := await identifier(connection)) is EXEMPTED:
             return None
 
-        key = self.get_namespaced_key(connection, connection_id, context)
+        if context:
+            merged_context = self._default_context.copy()
+            merged_context.update(context)
+        else:
+            merged_context = self._default_context
+        key = self.get_namespaced_key(connection, connection_id, merged_context)
         stat = await self.strategy.get_stat(key, self.rate, backend)  # type: ignore[attr-defined, arg-type]
         return stat
 
@@ -572,9 +620,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             raise HTTPException(429, "Rate limit would be exceeded")
         ```
         """
-        # Setup default context values
-        context = dict(context or {})
-        context.setdefault("scope", DEFAULT_SCOPE)
         stat = await self.stat(connection, context)
         if stat is None:
             return True  # Can't determine, assume available (optimistic)
@@ -584,7 +629,12 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         if cost is not None:
             check_cost = cost
         elif self._uses_cost_func:
-            check_cost = await self.cost(connection, context)  # type: ignore[operator]
+            if context:
+                merged_context = self._default_context.copy()
+                merged_context.update(context)
+            else:
+                merged_context = self._default_context
+            check_cost = await self.cost(connection, merged_context)  # type: ignore[operator]
         else:
             check_cost = self.cost  # type: ignore[assignment]
 
@@ -698,16 +748,18 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         # Lock released after all quota consumed
         ```
-        
+
         """
         from traffik.quotas import QuotaContext
 
-        # Setup default context values
-        context = dict(context or {})
-        context.setdefault("scope", DEFAULT_SCOPE)
+        if context:
+            merged_context = self._default_context.copy()
+            merged_context.update(context)
+        else:
+            merged_context = self._default_context
         return QuotaContext(
             connection=connection,
-            context=context,
+            context=merged_context,
             owner=self,
             apply_on_error=apply_on_error,
             apply_on_exit=apply_on_exit,
@@ -745,10 +797,11 @@ class HTTPThrottle(Throttle[Request]):
         scope = context["scope"] if context else DEFAULT_SCOPE
         return f"http:{method}:{path}:{scope}"
 
-    # Redefine signatures so that they can resolved by the FastAPI dependency injection systems
+    # Redefine signatures with concrete types so that they can resolved by the FastAPI dependency injection systems
     async def __call__(
         self,
         connection: Request,
+        *,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> Request:
@@ -835,6 +888,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
                 ThrottleErrorHandler[WebSocket, ExceptionInfo],
             ]
         ] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         cache_ids: bool = True,
     ) -> None:
         if handle_throttled is None:
@@ -851,6 +905,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
             min_wait_period=min_wait_period,
             headers=headers,
             on_error=on_error,
+            context=context,
             cache_ids=cache_ids,
         )
 
@@ -866,6 +921,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
     async def __call__(
         self,
         connection: WebSocket,
+        *,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> WebSocket:

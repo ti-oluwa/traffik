@@ -156,7 +156,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         self,
         throttle: Throttle[HTTPConnectionT],
         cost: typing.Optional[int] = None,
-        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        context: typing.Optional[typing.Dict[str, typing.Any]] = None,
         retry: int = 0,
         retry_on: typing.Optional[RetryOn] = None,
         backoff: typing.Optional[BackoffStrategy] = None,
@@ -270,7 +270,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
     ```python
 
     # Before entering the quota context, you may want to check if the
-    # Expected quota usage is available. This is a best-effort check.
+    # expected quota usage is available. This is a best-effort check.
     if not await throttle.check(conn, cost=5):
         raise ConnectionThrottled()
 
@@ -292,7 +292,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
     __slots__ = (
         "connection",
-        "default_context",
+        "_default_context",
         "owner",
         "apply_on_error",
         "apply_on_exit",
@@ -351,7 +351,8 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         :param parent: Parent quota context for nesting.
         """
         self.connection = connection
-        self.default_context = context
+        # Never modify `_default_context` after initialization. It's unsafe.
+        self._default_context = dict(context or {})
         self.owner = owner
         self.apply_on_error = apply_on_error
         self.apply_on_exit = apply_on_exit
@@ -560,6 +561,84 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
     # Aliases for `__call__(...)` method
     consume = __call__
 
+    def _can_aggregate(
+        self,
+        last_entry: _QuotaEntry[HTTPConnectionT],
+        throttle: Throttle[HTTPConnectionT],
+        cost: typing.Optional[int],
+        context: typing.Optional[typing.Mapping[str, typing.Any]],
+        retry: int,
+        retry_on: typing.Optional[RetryOn],
+        backoff: BackoffStrategy,
+        base_delay: float,
+    ) -> bool:
+        """
+        Determine if a new quota entry can be aggregated with the last entry in the queue.
+
+        Aggregation is a cost optimization that combines consecutive calls with identical
+        configuration into a single entry with summed costs. This reduces queue size and
+        improves performance.
+
+        Rules for aggregation:
+        1. Both entries must use the SAME throttle instance (identity check)
+        2. Both entries must have the SAME context (exact dict equality)
+        3. Both entries must have FIXED costs (no cost functions)
+        4. All retry configuration must match exactly:
+           - retry count
+           - retry_on condition (identity check for callables)
+           - backoff strategy (identity check)
+           - base_delay value
+
+        :param last_entry: The last entry currently in the queue.
+        :param throttle: The throttle for the new entry.
+        :param cost: The cost for the new entry (must be fixed, not None).
+        :param context: The context for the new entry.
+        :param retry: Number of retry attempts for the new entry.
+        :param retry_on: Retry condition for the new entry.
+        :param backoff: Backoff strategy for the new entry.
+        :param base_delay: Base delay for the new entry.
+        :return: True if aggregation is possible, False otherwise.
+        """
+        # Rule 1: Must be the exact same throttle instance
+        # Using `is` instead of `==` ensures we're checking identity, not equality
+        if last_entry.throttle is not throttle:
+            return False
+
+        # Rule 2: Must have identical context dictionaries
+        # Note: This checks exact equality - {"a": 1} != {"a": 1, "b": None}
+        if last_entry.context != context:
+            return False
+
+        # Rule 3: Both must have fixed costs (no cost functions)
+        # We can only aggregate fixed costs, not dynamic costs
+        if last_entry.cost is None or cost is None:
+            return False
+
+        # Rule 4a: Retry count must match
+        if last_entry.retry != retry:
+            return False
+
+        # Rule 4b: Retry condition must match
+        # For callables, we use identity check (`is`) because:
+        # - Different lambda instances are never equal even with same code
+        # - We want to ensure the exact same retry logic applies
+        if last_entry.retry_on is not retry_on:
+            # Special case: both None is OK
+            if not (last_entry.retry_on is None and retry_on is None):
+                return False
+
+        # Rule 4c: Backoff strategy must match
+        # Using identity check because backoff objects may not implement __eq__
+        if last_entry.backoff is not backoff:
+            return False
+
+        # Rule 4d: Base delay must match exactly
+        if last_entry.base_delay != base_delay:
+            return False
+
+        # If all rules passed, then aggregation is safe
+        return True
+
     def _enqueue(
         self,
         throttle: typing.Optional[Throttle[HTTPConnectionT]] = None,
@@ -599,36 +678,34 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 "create the context via `QuotaContext(owner=...)` or `throttle.quota(...)` to bind it to a throttle."
             )
 
-        merged_context = dict(self.default_context or {})
         if context:
+            merged_context = self._default_context.copy()
             merged_context.update(context)
+        else:
+            merged_context = self._default_context
 
-        # Check if we can aggregate with the last entry (as a cost optimization)
-        # We can aggregate if:
-        # - Queue is not empty
-        # - Same throttle
-        # - Same context
-        # - Same retry configuration (retry, retry_on, backoff, base_delay)
+        # Normalize context to None if empty for consistent aggregation checks
+        normalized_context = merged_context if merged_context else None
+        # Resolve backoff to actual instance (needed for aggregation checks since backoff
+        # can be a callable or a strategy instance)
+        backoff_to_use = backoff or DEFAULT_BACKOFF
+
         can_aggregate = False
         if self._queue:
             last_entry = self._queue[-1]
-            backoff_to_use = backoff or DEFAULT_BACKOFF
-
-            # Compare all relevant attributes
-            if (
-                last_entry.throttle is resolved_throttle
-                and last_entry.context == (merged_context if merged_context else None)
-                and last_entry.retry == retry
-                and last_entry.retry_on == retry_on
-                and last_entry.backoff == backoff_to_use
-                and last_entry.base_delay == base_delay
-                and last_entry.cost is not None  # Can only aggregate fixed costs
-                and cost is not None  # New entry must also have fixed cost
-            ):
-                can_aggregate = True
+            can_aggregate = self._can_aggregate(
+                last_entry=last_entry,
+                throttle=resolved_throttle,
+                cost=cost,
+                context=normalized_context,
+                retry=retry,
+                retry_on=retry_on,
+                backoff=backoff_to_use,
+                base_delay=base_delay,
+            )
 
         if can_aggregate:
-            # Aggregate: just add to the existing entry's cost
+            # Add cost to existing entry
             last_entry = self._queue[-1]
             last_entry.cost += cost  # type: ignore[operator]
             last_entry.resolved_cost += cost  # type: ignore[operator]
@@ -638,10 +715,10 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             entry = _QuotaEntry[HTTPConnectionT](
                 throttle=resolved_throttle,
                 cost=cost,
-                context=merged_context if merged_context else None,
+                context=normalized_context,
                 retry=retry,
                 retry_on=retry_on,
-                backoff=backoff or DEFAULT_BACKOFF,
+                backoff=backoff_to_use,
                 base_delay=base_delay,
             )
             self._queue.append(entry)
@@ -676,13 +753,14 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         :return: True if sufficient quota is available to proceed, False otherwise.
             If the throttle's state cannot be determined, returns True.
         """
-        merged_context = dict(self.default_context or {})
-        if context:
-            merged_context.update(context)
-
         _throttle = throttle if throttle is not None else self.owner
         if _throttle is not None:
-            # Check specific throttle (either provided or owner)
+            if context:
+                merged_context = self._default_context.copy()
+                merged_context.update(context)
+            else:
+                merged_context = self._default_context
+
             stat = await _throttle.stat(self.connection, merged_context)
             if stat is None:
                 return True  # Can't determine, assume OK
@@ -692,10 +770,13 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
         # No specific throttle so check all queued throttles
         for entry in self._queue:
-            # `entry.context` should already be merged with `self.default_context` when the entry was created,
-            merged_context = dict(entry.context or {})
-            if context:
+            # `entry.context` should already contain `self._default_context`
+            # since it was merged at enqueue time.
+            if entry.context and context:
+                merged_context = entry.context.copy()
                 merged_context.update(context)
+            else:
+                merged_context = self._default_context
 
             stat = await entry.throttle.stat(self.connection, merged_context)
             if stat is None:
@@ -724,13 +805,12 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 "create the context via `throttle.quota()` to bind it to a throttle."
             )
 
-        merged_context = dict(self.default_context or {})
         if context:
+            merged_context = self._default_context.copy()
             merged_context.update(context)
-
-        stat = await _throttle.stat(
-            self.connection, merged_context if merged_context else None
-        )
+        else:
+            merged_context = self._default_context
+        stat = await _throttle.stat(self.connection, merged_context)
         return stat
 
     async def apply(self) -> None:
@@ -847,7 +927,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         if entry._retry_type == "exception_type":
             return isinstance(exc, entry.retry_on)  # type: ignore[arg-type]
 
-        # Retry type is a callable - use precomputed resolved_cost
+        # Retry type is a callable here. Use precomputed `resolved_cost`
         exc_info = dict(
             connection=self.connection,
             exception=exc,
@@ -863,7 +943,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         """Consume a queued quota entry with retry logic."""
         attempt = 0
         max_attempts = entry.max_attempts
-        # Resolve the actual cost now (in case cost function is used)
+        # Resolve the actual cost now (in case a cost function is used)
         actual_cost = await entry.resolve_cost(self.connection, entry.context)
         entry.resolved_cost = actual_cost  # Update resolved cost for retry logic
         # Update the cost attribute with the resolved cost, so we don't have to resolve it again
@@ -905,13 +985,13 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         lock: typing.Union[bool, str, None] = None,
         lock_config: typing.Optional[LockConfig] = None,
         reentrant_lock: bool = True,
-    ) -> "QuotaContext[HTTPConnectionT]":
+    ) -> Self:
         """
         Create a nested child quota context.
 
         Child contexts merge their queued quota entries into the parent
         when they exit successfully. The parent consumes all quota entries
-        (including children's) when it applies.
+        (including children's) when it applies or exits successfully.
 
         :param context: Override default context for the child.
         :param apply_on_error: Override error handling (inherits from parent if None).
@@ -925,6 +1005,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             **Pitfalls of nested quota context locks:**
 
             1. **Deadlock Risk**: If you use the same lock key as the parent,
+                and the owner's (throttle) backend return a non re-entrant lock,
                 the child will deadlock waiting for a lock the parent holds.
                 An error is raised if this is detected.
 
@@ -966,10 +1047,6 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 await child(throttle_b, cost=2)
         ```
         """
-        merged_context = dict(self.default_context or {})
-        if context:
-            merged_context.update(context)
-
         child_lock_key = _resolve_lock_key(lock, self.owner)
         # Raise error about potential deadlock if child uses same lock as parent
         if (
@@ -984,9 +1061,15 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 f"set lock=None to operate under the parent's lock context.",
             )
 
+        if context:
+            merged_context = self._default_context.copy()
+            merged_context.update(context)
+        else:
+            merged_context = self._default_context
+
         return self.__class__(
             connection=self.connection,
-            context=merged_context if merged_context else None,
+            context=merged_context,
             owner=self.owner,  # Inherit owner from parent
             apply_on_error=(
                 apply_on_error if apply_on_error is not None else self.apply_on_error

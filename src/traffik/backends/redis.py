@@ -271,8 +271,8 @@ class _AsyncRedLock:
 
     Uses the `redlock` algorithm for distributed locking via the `pottery.AIORedlock` API.
 
-    This is useful when utilizing reds cluster or multiple Redis instances and is mostlikely
-    overkill for single Redis instance deployments. There will be serious performance overhead
+    This is useful when utilizing redis clusters or multiple Redis instances and is most likely
+    overkill for single Redis instance deployments. There will be noticeable performance overhead
     when compared to `_AsyncRedisLock` due to the multiple Redis connections and network roundtrips
     involved in acquiring and releasing the lock.
     """
@@ -527,6 +527,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             - "redis": Uses a simple Redis-based lock suitable for single Redis instances.
             - "redlock": Uses the Redlock algorithm for distributed locking, suitable for
               Redis clusters or multiple Redis instances.
+        :param kwargs: Additional keyword arguments passed to the base `ThrottleBackend`.
         """
         if isinstance(connection, str):
             # Create a redis connection factory with the provided URL

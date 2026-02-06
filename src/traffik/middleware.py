@@ -67,7 +67,14 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
     ```
     """
 
-    __slots__ = ("throttle", "path", "methods", "predicate")
+    __slots__ = (
+        "throttle",
+        "path",
+        "methods",
+        "predicate",
+        "_default_context",
+        "cost",
+    )
 
     def __init__(
         self,
@@ -76,6 +83,8 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         methods: typing.Optional[typing.Iterable[str]] = None,
         hook: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
         predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
+        cost: typing.Optional[int] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> None:
         """
         Initialize the middleware throttle.
@@ -97,6 +106,9 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             This is useful for more complex conditions that cannot be expressed with just path and methods.
             It is run after checking the path and methods, so it should be used for more expensive checks.
         :param hook: Deprecated alias for `predicate`. Use `predicate` instead.
+        :param context: An optional mapping of context to pass to the throttle.
+            This is merged with the default context provided at initialization,
+            with the provided context taking precedence.
         """
         if hook is not None:
             warnings.warn(
@@ -107,10 +119,12 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             )
         if predicate is not None and hook is not None:
             raise ConfigurationError(
-                "Cannot specify both `predicate` and `hook`. Use only `predicate`."
+                "Cannot specify both `predicate` and `hook`. Only use `predicate`."
             )
 
+        self._default_context = dict(context or {})
         self.throttle = throttle
+        self.cost = cost
 
         self.path: typing.Optional[re.Pattern[str]]
         if isinstance(path, str):
@@ -131,11 +145,21 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             )
         self.predicate = predicate or hook
 
-    async def __call__(self, connection: HTTPConnectionT) -> HTTPConnectionT:
+    async def __call__(
+        self,
+        connection: HTTPConnectionT,
+        *,
+        cost: typing.Optional[int] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+    ) -> HTTPConnectionT:
         """
         Checks if the throttle applies to the connection and applies it if so.
 
         :param connection: The HTTP connection to check.
+        :param cost: An optional cost to pass to the throttle. If not provided, the throttle's default cost is used.
+        :param context: An optional mapping of context to pass to the throttle.
+            This is merged with the default context provided at initialization,
+            with the provided context taking precedence.
         :return: The connection, possibly modified by the throttle. If throttling criteria
             are not met, returns the original connection unchanged. If throttled, may return
             a modified connection or raise a throttling exception.
@@ -150,7 +174,14 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         if self.predicate is not None and not await self.predicate(connection):
             return connection
 
-        return await self.throttle(connection)
+        if context:
+            merged_context = self._default_context.copy()
+            merged_context.update(context)
+        else:
+            merged_context = self._default_context
+        return await self.throttle(
+            connection, cost=cost or self.cost, context=merged_context
+        )
 
 
 class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
@@ -188,7 +219,13 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
 
     """
 
-    __slots__ = ("app", "middleware_throttles", "backend", "get_exception_handler")
+    __slots__ = (
+        "app",
+        "middleware_throttles",
+        "backend",
+        "get_exception_handler",
+        "context",
+    )
 
     def __init__(
         self,
@@ -200,6 +237,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
                 [Exception], typing.Optional[ExceptionHandler[HTTPConnectionT]]
             ]
         ] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> None:
         """
         Initialize the middleware with the application and throttles.
@@ -208,11 +246,15 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
         :param middleware_throttles: A sequence of `MiddlewareThrottle` instances to apply.
         :param backend: An optional throttle backend to use.
         :param exception_handler_getter: An optional callable that takes an exception and returns an ASGI exception handler.
+        :param context: An optional mapping of context to pass to the throttles.
+            This is merged with any context provided by individual throttles, with the
+            throttle-specific context taking precedence.
         """
         self.app = app
         self.middleware_throttles = middleware_throttles
         self.backend = backend or get_throttle_backend(app)
         self.get_exception_handler = exception_handler_getter
+        self.context = context
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """
@@ -239,9 +281,10 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
         # It must also be persistent to ensure throttles can maintain
         # state across multiple connections.
         async with backend(close_on_exit=False, persistent=True):
+            context = self.context
             for throttle in self.middleware_throttles:
                 try:
-                    connection = await throttle(connection)  # type: ignore[arg-type]
+                    connection = await throttle(connection, context=context)  # type: ignore[arg-type]
                 except Exception as exc:
                     # This approach allows custom throttles to raise custom exceptions
                     # that will be handled if they register an exception handler with

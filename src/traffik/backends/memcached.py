@@ -27,7 +27,7 @@ from traffik.utils import fence_token_generator, time
 def _on_error_return(
     func: typing.Callable[P, typing.Awaitable[R]],
     return_value: typing.Optional[T] = None,
-    hook: typing.Optional[typing.Callable[[Exception], bool]] = None,
+    predicate: typing.Optional[typing.Callable[[Exception], bool]] = None,
 ) -> typing.Callable[P, typing.Awaitable[typing.Union[R, T, None]]]:
     """
     Decorator to catch `aiomcache.ClientException` and return a specified value.
@@ -35,9 +35,12 @@ def _on_error_return(
 
     :param func: Async function to wrap.
     :param return_value: Value to return on exception (default None).
-    :param hook: Optional callable to process the exception.
-        The hook should return True to suppress re-raising the exception and thus return `return_value`,
-        e.g. `hook(exc) -> bool`. Else, the exception is re-raised.
+    :param predicate: Optional callable to check if the exception should be suppressed.
+    It takes the exception as input and returns a boolean.
+        If provided, the exception is only suppressed and `return_value` is returned if `predicate(exc)`
+        returns True. Otherwise, the exception is re-raised. This allows for more fine-grained control
+        over which exceptions to suppress, such as only suppressing certain error codes or messages.
+        e.g. `predicate(exc) -> bool`. Else, the exception is re-raised.
     :param log: Whether to log the exception (default False).
     """
 
@@ -46,7 +49,7 @@ def _on_error_return(
         try:
             return await func(*args, **kwargs)
         except ClientException as exc:
-            if hook and not hook(exc):
+            if predicate and not predicate(exc):
                 raise
             return return_value
 
@@ -57,7 +60,7 @@ def _wrap_methods_with_on_error_return(
     obj: typing.Any,
     methods: typing.Iterable[str],
     return_value: typing.Optional[T] = None,
-    hook: typing.Optional[typing.Callable[[Exception], bool]] = None,
+    predicate: typing.Optional[typing.Callable[[Exception], bool]] = None,
 ) -> None:
     """
     Wrap specified methods of the object with `_on_error_return` decorator.
@@ -65,7 +68,8 @@ def _wrap_methods_with_on_error_return(
     :param obj: Object whose methods to wrap.
     :param methods: Iterable of method names to wrap.
     :param return_value: Value to return on exception (default None).
-    :param hook: Optional callable to process the exception.
+    :param predicate: Optional callable to check if the exception should be suppressed.
+        See `_on_error_return` for details.
     """
     for method_name in methods:
         if hasattr(obj, method_name):
@@ -73,7 +77,7 @@ def _wrap_methods_with_on_error_return(
             wrapped_method = _on_error_return(
                 original_method,
                 return_value=return_value,
-                hook=hook,
+                predicate=predicate,
             )
             setattr(obj, method_name, wrapped_method)
 
@@ -307,6 +311,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         self.pool_minsize = pool_minsize
         self.connection_args = connection_args
         self.track_keys = track_keys
+        self._tracking_key = f"{namespace}:__tracked_keys__"
         super().__init__(
             None,
             namespace=namespace,
@@ -320,10 +325,6 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             **kwargs,
         )
 
-    def _get_tracking_key(self) -> str:
-        """Get the key used to track all keys in this namespace."""
-        return f"{self.namespace}:__tracked_keys__"
-
     async def _track_key(self, key: str) -> None:
         """Best-effort add key to tracking set."""
         if self.connection is None:
@@ -335,10 +336,10 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 " Ensure keys do not contain this sequence.\n"
             )
             sys.stderr.flush()
-            # No use tracking this key as it will break the tracking mechanism
+            # There's no use tracking this key as it will break the tracking mechanism
             return
 
-        tracking_key = self._get_tracking_key()
+        tracking_key = self._tracking_key
         try:
             tracked = await self.connection.get(tracking_key.encode())
             if tracked is None:
@@ -366,7 +367,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         if self.connection is None:
             return
 
-        tracking_key = self._get_tracking_key()
+        tracking_key = self._tracking_key
         try:
             tracked = await self.connection.get(tracking_key.encode())
             if tracked is None:
@@ -403,7 +404,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             _wrap_methods_with_on_error_return(
                 self.connection,
                 methods=["incr", "decr"],
-                hook=lambda exc: b"NOT_FOUND" in str(exc).encode(),
+                predicate=lambda exc: b"NOT_FOUND" in str(exc).encode(),
                 return_value=None,
             )
 
@@ -718,7 +719,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 "Connection error! Ensure backend is initialized."
             )
 
-        tracking_key = self._get_tracking_key()
+        tracking_key = self._tracking_key
         tracked = await self.connection.get(tracking_key.encode())
         if tracked is None:
             return

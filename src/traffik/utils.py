@@ -1,4 +1,4 @@
-"""`traffik` utilities."""
+"""Traffik utilities."""
 
 import asyncio
 import base64

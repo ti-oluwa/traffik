@@ -303,7 +303,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
                         if is_async_callable(handler):
                             response = await handler(connection, exc)  # type: ignore
                         else:
-                            response = await run_in_threadpool(handler, connection, exc)
+                            response = await run_in_threadpool(handler, connection, exc)  # type: ignore[arg-type]
 
                         if response is not None:
                             await response(scope, receive, send)  # type: ignore[call-arg]

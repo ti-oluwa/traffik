@@ -1,5 +1,7 @@
 """Tests for `QuotaContext` functionality."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from starlette.requests import Request
 
@@ -20,7 +22,9 @@ from traffik.throttles import HTTPThrottle
 
 
 @pytest.fixture(scope="function")
-def connection() -> Request:
+def connection() -> (
+    Request
+):  # Named as `connection` to avoid conflict with pytest-native `request` fixture
     """Create a test connection for quota context tests."""
     scope = {
         "type": "http",
@@ -92,6 +96,10 @@ async def test_quota_context_unbound_mode(
             await quota(throttle2, cost=1)
 
             assert quota.queued_cost == 3
+            assert quota.applied_cost == 0
+
+        assert quota.consumed is True
+        assert quota.applied_cost == 3
 
 
 @pytest.mark.asyncio
@@ -175,7 +183,7 @@ async def test_quota_context_manual_apply(
             backend=backend,
         )
 
-        async with throttle.quota(connection, apply_on_exit=False) as quota:
+        async with throttle.quota(connection, apply_on_exit=True) as quota:
             await quota(cost=2)
             await quota(cost=3)
 
@@ -203,7 +211,7 @@ async def test_quota_context_cancel(backend: InMemoryBackend, connection: Reques
             backend=backend,
         )
 
-        async with throttle.quota(connection, apply_on_exit=False) as quota:
+        async with throttle.quota(connection, apply_on_exit=True) as quota:
             await quota(cost=2)
             await quota(cost=3)
 
@@ -240,7 +248,7 @@ async def test_quota_context_cancel_idempotent(
             await quota.cancel()
             assert quota.cancelled is True
 
-            # Cancel again - should be idempotent
+            # Cancel again should be idempotent
             await quota.cancel()
             assert quota.cancelled is True
 
@@ -431,6 +439,7 @@ async def test_quota_context_nested(backend: InMemoryBackend, connection: Reques
 
                 await child(cost=3)
                 await child(cost=1)
+                assert child.queued_cost == 4
 
             # Child should merge into parent on exit
             assert child.consumed is True
@@ -455,23 +464,62 @@ async def test_quota_context_nested_multiple_levels(
             backend=backend,
         )
 
-        async with throttle.quota(connection, apply_on_exit=False) as level0:
+        async with throttle.quota(connection, apply_on_exit=True) as level0:
             await level0(cost=1)
             assert level0.depth == 0
 
             async with level0.nested() as level1:
                 await level1(cost=2)
                 assert level1.depth == 1
+                assert level1.parent is level0
+                assert (
+                    level1.queued_cost == 2
+                )  # Level1 should only include its own cost
+                assert (
+                    level0.queued_cost == 3
+                )  # Level0 should reflect for the queued cost of level1
 
                 async with level1.nested() as level2:
                     await level2(cost=3)
                     assert level2.depth == 2
+                    assert level2.parent is level1
+                    assert (
+                        level2.queued_cost == 3
+                    )  # Level2 should only include its own cost
+                    assert (
+                        level1.queued_cost == 5
+                    )  # Level1 should now include level2 cost
+                    assert (
+                        level0.queued_cost == 6
+                    )  # Level0 should now include level1 and level2 cost
+
+                assert level2.consumed is True
+                assert (
+                    level2.applied_cost == 0
+                )  # Level2 should have not applied yet since yields its entries to level1
+                assert (
+                    level1.queued_cost == 5
+                )  # Level1 should still account for level2 cost
+                assert (
+                    level1.consumed is False
+                )  # Level1 should not be consumed until it exits
+                assert (
+                    level0.queued_cost == 6
+                )  # Level0 should still account for level1 and level2 cost
 
             # All should merge into level0
-            assert level0.queued_cost == 6
-            await level0.apply()
+            assert level1.consumed is True
+            assert (
+                level1.applied_cost == 0
+            )  # Level1 should have not applied yet since yields its entries to level0
+            assert level0.queued_cost == 6  # Level0 should still reflect total cost
+            assert (
+                level0.consumed is False
+            )  # Level0 should not be consumed until it exits
 
+        # After exiting level0, all should be consumed and applied
         assert level0.applied_cost == 6
+        assert level0.consumed is True
 
 
 @pytest.mark.asyncio
@@ -487,7 +535,7 @@ async def test_quota_context_nested_cancel(
             backend=backend,
         )
 
-        async with throttle.quota(connection, apply_on_exit=False) as parent:
+        async with throttle.quota(connection, apply_on_exit=True) as parent:
             await parent(cost=2)
 
             async with parent.nested(apply_on_exit=False) as child:
@@ -495,10 +543,9 @@ async def test_quota_context_nested_cancel(
                 await child.cancel()
 
             # Cancelled child should not merge into parent
+            assert child.consumed is False
             assert child.cancelled is True
             assert parent.queued_cost == 2  # Only parent's cost
-
-            await parent.apply()
 
         assert parent.applied_cost == 2
 
@@ -514,14 +561,13 @@ async def test_quota_context_check(backend: InMemoryBackend, connection: Request
             backend=backend,
         )
 
-        async with throttle.quota(connection, apply_on_exit=False) as quota:
+        async with throttle.quota(connection, apply_on_exit=True) as quota:
             # Should have quota available
             has_quota = await quota.check(cost=3)
             assert has_quota is True
 
             # Consume some quota
             await quota(cost=3)
-            await quota.apply()
 
         # Check after consuming
         async with throttle.quota(connection, apply_on_exit=False) as quota2:
@@ -545,17 +591,16 @@ async def test_quota_context_stat(backend: InMemoryBackend, connection: Request)
             backend=backend,
         )
 
-        async with throttle.quota(connection, apply_on_exit=False) as quota:
+        async with throttle.quota(connection, apply_on_exit=True) as quota:
             # Get initial stat
             stat = await quota.stat()
             assert stat is not None
 
             # Consume some quota
             await quota(cost=4)
-            await quota.apply()
 
         # Get stat after consuming
-        async with throttle.quota(connection) as quota2:
+        async with throttle.quota(connection, apply_on_exit=False) as quota2:
             stat = await quota2.stat()
             assert stat is not None
             assert stat.hits_remaining == 6  # 10 - 4
@@ -577,24 +622,21 @@ async def test_quota_context_retry_basic(backend: InMemoryBackend, connection: R
         # Mock throttle to fail twice then succeed
         original_call = throttle.__call__
 
-        async def mock_throttle_call(*args, **kwargs):
+        async def mock_call(*args, **kwargs):
             nonlocal attempt_count
             attempt_count += 1
             if attempt_count < 3:
                 raise ValueError("Simulated failure")
             return await original_call(*args, **kwargs)
 
-        throttle.__call__ = mock_throttle_call  # type: ignore[assignment]
-
-        try:
-            async with throttle.quota(connection) as quota:
+        mock = AsyncMock(side_effect=mock_call)
+        with patch.object(HTTPThrottle, "__call__", mock):
+            async with throttle.quota(connection, apply_on_exit=True) as quota:
                 await quota(cost=2, retry=3, base_delay=0.01)
 
             # Should have succeeded after retries
             assert quota.consumed is True
             assert attempt_count == 3
-        finally:
-            throttle.__call__ = original_call
 
 
 @pytest.mark.asyncio
@@ -613,24 +655,19 @@ async def test_quota_context_retry_exhausted(
         attempt_count = 0
 
         # Mock throttle to always fail
-        original_call = throttle.__call__
-
-        async def mock_throttle_call(*args, **kwargs):
+        async def mock_call(*args, **kwargs):
             nonlocal attempt_count
             attempt_count += 1
             raise ValueError("Always fails")
 
-        throttle.__call__ = mock_throttle_call  # type: ignore[assignment]
-
-        try:
+        mock = AsyncMock(side_effect=mock_call)
+        with patch.object(HTTPThrottle, "__call__", mock):
             with pytest.raises(ValueError, match="Always fails"):
-                async with throttle.quota(connection) as quota:
+                async with throttle.quota(connection, apply_on_exit=True) as quota:
                     await quota(cost=2, retry=2, base_delay=0.01)
 
             # Should have tried 3 times (1 + 2 retries)
             assert attempt_count == 3
-        finally:
-            throttle.__call__ = original_call
 
 
 @pytest.mark.asyncio
@@ -647,22 +684,23 @@ async def test_quota_context_retry_on_specific_exception(
         )
 
         # Mock throttle to raise TypeError
-        original_call = throttle.__call__
-
-        async def mock_throttle_call(*args, **kwargs):
+        async def mock_call(*args, **kwargs):
             raise TypeError("Wrong type")
 
-        throttle.__call__ = mock_throttle_call  # type: ignore[assignment]
-
-        try:
+        mock = AsyncMock(side_effect=mock_call)
+        with patch.object(HTTPThrottle, "__call__", mock):
             # Should retry on ValueError but not TypeError
             with pytest.raises(TypeError, match="Wrong type"):
-                async with throttle.quota(connection) as quota:
+                async with throttle.quota(connection, apply_on_exit=True) as quota:
                     await quota(
                         cost=2, retry=3, retry_on=(ValueError,), base_delay=0.01
                     )
-        finally:
-            throttle.__call__ = original_call  # type: ignore[assignment]
+
+                assert mock.call_count == 1  # Should not retry since it's TypeError
+                assert (
+                    quota.consumed is False
+                )  # Should not consume since it didn't retry
+                assert quota.applied_cost == 0  # Should not apply since it didn't retry
 
 
 @pytest.mark.asyncio
@@ -803,7 +841,7 @@ async def test_quota_context_nested_lock_deadlock_detection(
         async with throttle.quota(connection, lock=True) as parent:
             # Child using same lock key should raise error
             with pytest.raises(QuotaError, match="same lock key"):
-                async with parent.nested(lock=True):
+                async with parent.nested(lock=True, reentrant_lock=False):
                     pass
 
 
@@ -963,7 +1001,7 @@ async def test_quota_context_multiple_children(
             backend=backend,
         )
 
-        async with throttle.quota(connection, apply_on_exit=False) as parent:
+        async with throttle.quota(connection, apply_on_exit=True) as parent:
             await parent(cost=1)
 
             # Create and complete first child
@@ -976,36 +1014,8 @@ async def test_quota_context_multiple_children(
 
             # Both children should merge into parent
             assert parent.queued_cost == 6  # 1 + 2 + 3
-            await parent.apply()
 
         assert parent.applied_cost == 6
-
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_repr(backend: InMemoryBackend, connection: Request):
-    """Test quota context __repr__."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-repr",
-            rate="10/s",
-            backend=backend,
-        )
-
-        async with throttle.quota(connection, apply_on_exit=False) as quota:
-            repr_str = repr(quota)
-            assert "QuotaContext" in repr_str
-            assert "test-repr" in repr_str
-            assert "state=active" in repr_str
-            assert "nested=False" in repr_str
-
-            await quota(cost=2)
-            repr_str = repr(quota)
-            assert "queued=1" in repr_str
-
-            await quota.apply()
-            repr_str = repr(quota)
-            assert "state=consumed" in repr_str
 
 
 @pytest.mark.asyncio

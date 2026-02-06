@@ -289,7 +289,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         These headers can be overridden or extended by providing a 'headers' key
         in the context during throttle calls.
         """
-        return self._default_context.get("headers", {})
+        return self._default_context["headers"]  # type: ignore[return-value]
 
     def get_backend(
         self, connection: typing.Optional[HTTPConnectionT] = None
@@ -477,6 +477,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         :return: The throttled HTTP connection.
         """
+        if cost == 0:
+            return connection  # No cost, no throttling needed
+
         # We have to try as much as possible to avoid copying the context in downstream calls.
         # So that mutations to the context in those calls reflect back here. That's the whole point
         # of having a context in the first place. Hence we only copy it once here. Although, there
@@ -505,8 +508,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 else self.cost
             )
         )
-        if actual_cost <= 0:  # type: ignore[operator]
-            raise ValueError("cost must be a positive integer")
+        if actual_cost < 0:  # type: ignore[operator]
+            raise ValueError("cost cannot be negative")
+        elif actual_cost == 0:
+            return connection  # No cost, no throttling needed
 
         backend = self.get_backend(connection)
         connection_id = await self.get_connection_id(

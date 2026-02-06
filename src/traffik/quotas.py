@@ -671,8 +671,11 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 "Cannot queue quota entries on a consumed quota context"
             )
 
-        resolved_throttle = throttle if throttle is not None else self.owner
-        if resolved_throttle is None:
+        if cost == 0:
+            return self  # No cost, no need to enqueue
+
+        _throttle = throttle if throttle is not None else self.owner
+        if _throttle is None:
             raise ValueError(
                 "No throttle specified. Either provide a throttle argument or "
                 "create the context via `QuotaContext(owner=...)` or `throttle.quota(...)` to bind it to a throttle."
@@ -695,7 +698,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             last_entry = self._queue[-1]
             can_aggregate = self._can_aggregate(
                 last_entry=last_entry,
-                throttle=resolved_throttle,
+                throttle=_throttle,
                 cost=cost,
                 context=normalized_context,
                 retry=retry,
@@ -713,7 +716,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         else:
             # Create new entry
             entry = _QuotaEntry[HTTPConnectionT](
-                throttle=resolved_throttle,
+                throttle=_throttle,
                 cost=cost,
                 context=normalized_context,
                 retry=retry,

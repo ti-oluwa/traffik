@@ -8,7 +8,7 @@
 - **Bug Fixes**:
   - Small code fixes and optimizations.
 
-## Version 1.0.2 (2026-02-06)
+## Version 1.0.2 (2026-02-08)
 
 - **Enhancements**:
   - Throttles, middleware throttles can now accept a default `context` on initialization, which will be merged with any context provided during throttle checks and applications. This allows for more flexible and reusable throttle configurations, as common context values can be set at initialization and overridden or extended as needed during individual checks and applications.
@@ -20,6 +20,8 @@
   - Added new module `quotas` which provides a context for deferring and aggregating throttle checks and application, allowing for more flexible and efficient quota management. This features is still in early stages and may receive significant changes in future releases.
   - Added `throttled(...)` decorator support for Starlette routes.
   - Better corruption recovery in throttling strategies to prevent issues with corrupted state in backends, and ensure continued operation even in the face of backend issues.
+  - `ThrottleMiddleware` now supports websocket connections, allowing for throttling of WebSocket routes in addition to regular HTTP routes.
+  - `traffik.decorators.throttled(...)` now supports WebSocket routes in addition to regular request/HTTP routes.
 
 - **Bug Fixes**:
   - Minor bug fixes and code cleanups.

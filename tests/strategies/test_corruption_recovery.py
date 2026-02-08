@@ -4,6 +4,8 @@ Verifies that all strategies handle corrupted/garbage data gracefully
 by resetting to safe defaults rather than crashing.
 """
 
+import asyncio
+
 import pytest
 
 from traffik.backends.inmemory import InMemoryBackend
@@ -258,8 +260,6 @@ class TestSlidingWindowCounterCorruptionRecovery:
 
             # Corrupt the previous window key
             # We need to figure out the window ID from the current time
-            import asyncio
-
             now = asyncio.get_event_loop().time() * 1000
             window_duration_ms = rate.expire
             current_window_id = int(now // window_duration_ms)

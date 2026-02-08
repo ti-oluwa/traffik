@@ -5,17 +5,19 @@ from httpx import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
+from starlette.testclient import TestClient
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.throttles import HTTPThrottle, throttled
+from traffik.throttles import HTTPThrottle, WebSocketThrottle, throttled
 
 
 @pytest.mark.asyncio
 @pytest.mark.throttle
 async def test_throttled_single_throttle(inmemory_backend: InMemoryBackend) -> None:
-    """Test @throttled with a single throttle on an async route."""
+    """Test `@throttled` with a single throttle on an async route."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
             "test-decorator-single",
@@ -49,7 +51,7 @@ async def test_throttled_single_throttle(inmemory_backend: InMemoryBackend) -> N
 async def test_throttled_multiple_throttles(
     inmemory_backend: InMemoryBackend,
 ) -> None:
-    """Test @throttled with multiple throttles applied sequentially."""
+    """Test `@throttled` with multiple throttles applied sequentially."""
     async with inmemory_backend(close_on_exit=True):
         burst_throttle = HTTPThrottle(
             "test-decorator-burst",
@@ -270,3 +272,74 @@ async def test_throttled_retry_after_header(
             response = await client.get("/")
             assert response.status_code == 429
             assert response.headers.get("Retry-After") is not None
+
+
+@pytest.mark.throttle
+def test_throttled_websocket_single_throttle(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """Test `@throttled` with a WebSocketThrottle on a WebSocket route."""
+    throttle = WebSocketThrottle(
+        "test-ws-decorator",
+        rate="2/5s",
+        identifier=default_client_identifier,
+    )
+
+    @throttled(throttle)
+    async def ws_endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json({"message": "connected"})
+        await websocket.close()
+
+    routes = [WebSocketRoute("/ws", ws_endpoint)]
+    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+
+    with TestClient(app, base_url="http://test") as client:
+        # First 2 connections should succeed
+        for _ in range(2):
+            with client.websocket_connect("/ws") as websocket:
+                data = websocket.receive_json()
+                assert data == {"message": "connected"}
+
+        # 3rd connection should be throttled
+        with pytest.raises((WebSocketDisconnect, Exception)):
+            with client.websocket_connect("/ws") as websocket:
+                websocket.receive_json()
+
+
+@pytest.mark.throttle
+def test_throttled_websocket_multiple_throttles(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """Test `@throttled` with multiple `WebSocketThrottles` applied sequentially."""
+    burst = WebSocketThrottle(
+        "test-ws-burst",
+        rate="2/5s",
+        identifier=default_client_identifier,
+    )
+    sustained = WebSocketThrottle(
+        "test-ws-sustained",
+        rate="5/60s",
+        identifier=default_client_identifier,
+    )
+
+    @throttled(burst, sustained)
+    async def ws_endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json({"message": "ok"})
+        await websocket.close()
+
+    routes = [WebSocketRoute("/ws", ws_endpoint)]
+    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+
+    with TestClient(app, base_url="http://test") as client:
+        # First 2 connections pass (burst limit)
+        for _ in range(2):
+            with client.websocket_connect("/ws") as websocket:
+                data = websocket.receive_json()
+                assert data == {"message": "ok"}
+
+        # 3rd connection blocked by burst throttle
+        with pytest.raises((WebSocketDisconnect, Exception)):
+            with client.websocket_connect("/ws") as websocket:
+                websocket.receive_json()

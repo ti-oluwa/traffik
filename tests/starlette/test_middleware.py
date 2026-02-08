@@ -2,21 +2,27 @@
 
 import asyncio
 import re
+import typing
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse, StreamingResponse
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from tests.conftest import BackendGen
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
+from traffik.middleware import (
+    MiddlewareThrottle,
+    ThrottleMiddleware,
+    _prepare_middleware_throttles,
+)
 from traffik.rates import Rate
-from traffik.throttles import HTTPThrottle
+from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
 @pytest.mark.asyncio
@@ -722,8 +728,6 @@ def test_middleware_websocket_passthrough(inmemory_backend: InMemoryBackend) -> 
     async def http_endpoint(request: Request) -> JSONResponse:
         return JSONResponse({"type": "http"})
 
-    from starlette.routing import WebSocketRoute
-
     routes = [
         Route("/http", http_endpoint, methods=["GET"]),
         WebSocketRoute("/ws", websocket_endpoint),
@@ -1186,3 +1190,292 @@ async def test_middleware_streaming_exception_during_stream(
         # but the streaming itself will fail
         with pytest.raises(ValueError, match="Streaming error"):
             await client.get("/stream")
+
+
+@pytest.mark.middleware
+def test_middleware_websocket_throttle(inmemory_backend: InMemoryBackend) -> None:
+    """Test that `ThrottleMiddleware` throttles WebSocket connections with `WebSocketThrottle`."""
+
+    ws_throttle = WebSocketThrottle(
+        uid="ws-middleware-throttle",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+    middleware_throttle = MiddlewareThrottle(throttle=ws_throttle, path="/ws")
+
+    async def websocket_endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json({"message": "connected"})
+        await websocket.close()
+
+    routes = [WebSocketRoute("/ws", websocket_endpoint)]
+    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[middleware_throttle],
+        backend=inmemory_backend,
+    )
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # First 2 connections should succeed
+        for _ in range(2):
+            with client.websocket_connect("/ws") as websocket:
+                data = websocket.receive_json()
+                assert data == {"message": "connected"}
+
+        # 3rd connection should be throttled (rejected before accept)
+        with pytest.raises((WebSocketDisconnect, Exception)):
+            with client.websocket_connect("/ws") as websocket:
+                websocket.receive_json()
+
+
+@pytest.mark.middleware
+def test_middleware_mixed_http_and_websocket_throttles(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """Test `ThrottleMiddleware` with both HTTP and WebSocket throttles simultaneously."""
+
+    http_throttle = HTTPThrottle(
+        uid="mixed-http",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+    ws_throttle = WebSocketThrottle(
+        uid="mixed-ws",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+
+    async def http_endpoint(request: Request) -> JSONResponse:
+        return JSONResponse({"type": "http"})
+
+    async def websocket_endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json({"type": "websocket"})
+        await websocket.close()
+
+    routes = [
+        Route("/http", http_endpoint, methods=["GET"]),
+        WebSocketRoute("/ws", websocket_endpoint),
+    ]
+
+    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[
+            MiddlewareThrottle(throttle=http_throttle),
+            MiddlewareThrottle(throttle=ws_throttle),
+        ],
+        backend=inmemory_backend,
+    )
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # HTTP throttle works independently
+        assert client.get("/http").status_code == 200
+        assert client.get("/http").status_code == 200
+        assert client.get("/http").status_code == 429
+
+        # WebSocket throttle works independently (not affected by HTTP throttle)
+        with client.websocket_connect("/ws") as websocket:
+            data = websocket.receive_json()
+            assert data == {"type": "websocket"}
+
+        with client.websocket_connect("/ws") as websocket:
+            data = websocket.receive_json()
+            assert data == {"type": "websocket"}
+
+        # 3rd WebSocket connection should be throttled
+        with pytest.raises((WebSocketDisconnect, Exception)):
+            with client.websocket_connect("/ws") as websocket:
+                websocket.receive_json()
+
+
+# --- Sort functionality tests for _prepare_middleware_throttles ---
+
+
+def _make_http_throttle(
+    uid: str, cost: typing.Optional[int] = None
+) -> MiddlewareThrottle:
+    """Helper to create an HTTP MiddlewareThrottle with a given cost."""
+    return MiddlewareThrottle(
+        throttle=HTTPThrottle(
+            uid=uid, rate="10/s", identifier=default_client_identifier
+        ),
+        cost=cost,
+    )
+
+
+def _make_ws_throttle(
+    uid: str, cost: typing.Optional[int] = None
+) -> MiddlewareThrottle:
+    """Helper to create a WebSocket MiddlewareThrottle with a given cost."""
+    return MiddlewareThrottle(
+        throttle=WebSocketThrottle(
+            uid=uid, rate="10/s", identifier=default_client_identifier
+        ),
+        cost=cost,
+    )
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_cheap_first() -> None:
+    """Test that 'cheap_first' sorts throttles by ascending cost."""
+    t_cheap = _make_http_throttle("cheap", cost=1)
+    t_mid = _make_http_throttle("mid", cost=5)
+    t_expensive = _make_http_throttle("expensive", cost=10)
+
+    result = _prepare_middleware_throttles(
+        [t_expensive, t_cheap, t_mid], sort="cheap_first"
+    )
+    assert result["http"] == [t_cheap, t_mid, t_expensive]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_cheap_last() -> None:
+    """Test that 'cheap_last' sorts throttles by descending cost."""
+    t_cheap = _make_http_throttle("cheap", cost=1)
+    t_mid = _make_http_throttle("mid", cost=5)
+    t_expensive = _make_http_throttle("expensive", cost=10)
+
+    result = _prepare_middleware_throttles(
+        [t_cheap, t_mid, t_expensive], sort="cheap_last"
+    )
+    assert result["http"] == [t_expensive, t_mid, t_cheap]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_no_sort() -> None:
+    """Test that False/None preserves the original insertion order."""
+    t1 = _make_http_throttle("first", cost=10)
+    t2 = _make_http_throttle("second", cost=1)
+    t3 = _make_http_throttle("third", cost=5)
+
+    for sort_val in (False, None):
+        result = _prepare_middleware_throttles([t1, t2, t3], sort=sort_val)
+        assert result["http"] == [t1, t2, t3]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_custom_callable() -> None:
+    """Test that a custom callable is used as the sort key."""
+    t1 = _make_http_throttle("alpha", cost=5)
+    t2 = _make_http_throttle("beta", cost=1)
+    t3 = _make_http_throttle("gamma", cost=10)
+
+    # Sort by throttle uid alphabetically
+    result = _prepare_middleware_throttles([t3, t1, t2], sort=lambda t: t.throttle.uid)
+    assert result["http"] == [t1, t2, t3]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_none_cost_sorted_last() -> None:
+    """Test that throttles without a cost (None) are sorted last with 'cheap_first'."""
+    t_cheap = _make_http_throttle("cheap", cost=1)
+    t_no_cost = _make_http_throttle("no-cost", cost=None)
+    t_expensive = _make_http_throttle("expensive", cost=100)
+
+    result = _prepare_middleware_throttles(
+        [t_no_cost, t_expensive, t_cheap], sort="cheap_first"
+    )
+    assert result["http"] == [t_cheap, t_expensive, t_no_cost]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_none_cost_sorted_first_with_cheap_last() -> None:
+    """Test that throttles without a cost (None) are sorted first with 'cheap_last'."""
+    t_cheap = _make_http_throttle("cheap", cost=1)
+    t_no_cost = _make_http_throttle("no-cost", cost=None)
+    t_expensive = _make_http_throttle("expensive", cost=100)
+
+    result = _prepare_middleware_throttles(
+        [t_cheap, t_expensive, t_no_cost], sort="cheap_last"
+    )
+    # -inf is the most negative, so None cost (treated as -inf) comes first
+    assert result["http"][0] is t_no_cost
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_invalid_sort() -> None:
+    """Test that an invalid sort value raises ValueError."""
+    t = _make_http_throttle("test", cost=1)
+    with pytest.raises(ValueError, match="Invalid value for `sort`"):
+        _prepare_middleware_throttles([t], sort="invalid")  # type: ignore[arg-type]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_categorization() -> None:
+    """Test that throttles are categorized into 'http' and 'websocket' buckets."""
+    t_http1 = _make_http_throttle("http1", cost=1)
+    t_http2 = _make_http_throttle("http2", cost=2)
+    t_ws1 = _make_ws_throttle("ws1", cost=1)
+    t_ws2 = _make_ws_throttle("ws2", cost=2)
+
+    result = _prepare_middleware_throttles(
+        [t_ws2, t_http2, t_ws1, t_http1], sort="cheap_first"
+    )
+    assert result["http"] == [t_http1, t_http2]
+    assert result["websocket"] == [t_ws1, t_ws2]
+
+
+@pytest.mark.middleware
+def test_middleware_sort_parameter_integration(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """Test that the sort parameter on ThrottleMiddleware is applied correctly."""
+    t_expensive = MiddlewareThrottle(
+        throttle=HTTPThrottle(
+            uid="expensive", rate="10/s", identifier=default_client_identifier
+        ),
+        cost=10,
+    )
+    t_cheap = MiddlewareThrottle(
+        throttle=HTTPThrottle(
+            uid="cheap", rate="10/s", identifier=default_client_identifier
+        ),
+        cost=1,
+    )
+
+    async def endpoint(request: Request) -> JSONResponse:
+        return JSONResponse({"ok": True})
+
+    routes = [Route("/test", endpoint, methods=["GET"])]
+
+    def _find_throttle_middleware(
+        app: Starlette,
+    ) -> typing.Optional[ThrottleMiddleware]:
+        """Walk the middleware stack to find the ThrottleMiddleware instance."""
+        layer = app.middleware_stack
+        while layer is not None and not isinstance(layer, ThrottleMiddleware):
+            layer = getattr(layer, "app", None)
+        return layer  # type: ignore[return-value]
+
+    # cheap_first: cheap should come before expensive
+    app1 = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+    app1.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[t_expensive, t_cheap],
+        backend=inmemory_backend,
+        sort="cheap_first",
+    )
+    # Build the middleware stack by making a request via TestClient
+    with TestClient(app1) as client:
+        client.get("/test")
+    middleware1 = _find_throttle_middleware(app1)
+    assert middleware1 is not None
+    assert middleware1.middleware_throttles["http"] == [t_cheap, t_expensive]
+
+    # cheap_last: expensive should come before cheap
+    app2 = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+    app2.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[t_cheap, t_expensive],
+        backend=inmemory_backend,
+        sort="cheap_last",
+    )
+    with TestClient(app2) as client:
+        client.get("/test")
+    middleware2 = _find_throttle_middleware(app2)
+    assert middleware2 is not None
+    assert middleware2.middleware_throttles["http"] == [t_expensive, t_cheap]

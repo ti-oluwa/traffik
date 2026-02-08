@@ -1,5 +1,7 @@
 """Tests for msgpack serialization in strategies."""
 
+import asyncio
+
 import pytest
 
 from traffik.backends.inmemory import InMemoryBackend
@@ -269,8 +271,6 @@ async def test_state_survives_strategy_recreation(backend: InMemoryBackend):
 async def test_concurrent_serialization_safety(backend: InMemoryBackend):
     """Test concurrent access doesn't corrupt serialized data."""
     async with backend(close_on_exit=True):
-        import asyncio
-
         strategy = SlidingWindowLogStrategy()
         rate = Rate.parse("100/s")
         key = "user:concurrent"

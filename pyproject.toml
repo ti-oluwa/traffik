@@ -1,7 +1,7 @@
 [project]
 name = "traffik"
-version = "1.0.1"
-description = "Distributed rate limiting for Starlette and FastAPI applications."
+version = "1.0.2"
+description = "Asynchronous distributed rate limiting for FastAPI/Starlette applications."
 readme = "README.md"
 authors = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
@@ -17,7 +17,7 @@ keywords = [
     "websocket", "async", "asyncio", "middleware",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",

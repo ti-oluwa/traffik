@@ -195,7 +195,7 @@ def create_traffik_app(
 
     # Apply middleware with path matching
     app.add_middleware(
-        ThrottleMiddleware[Request],  # type: ignore[arg-type]
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[
             MiddlewareThrottle(
                 throttle=throttle,

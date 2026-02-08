@@ -9,6 +9,8 @@ from traffik.rates import Rate
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.types import LockConfig
 from traffik.utils import (
+    DEFAUL_BLOCKING_SETTING_ENV_VAR,
+    DEFAULT_BLOCKING_TIMEOUT_ENV_VAR,
     get_lock_blocking,
     get_lock_blocking_timeout,
     set_lock_blocking,
@@ -171,11 +173,6 @@ class TestConfigurationIntegration:
 
     def test_environment_variable_names(self):
         """Test correct environment variable names are used."""
-        from traffik.utils import (
-            DEFAUL_BLOCKING_SETTING_ENV_VAR,
-            DEFAULT_BLOCKING_TIMEOUT_ENV_VAR,
-        )
-
         assert DEFAUL_BLOCKING_SETTING_ENV_VAR == "TRAFFIK_DEFAULT_BLOCKING"
         assert DEFAULT_BLOCKING_TIMEOUT_ENV_VAR == "TRAFFIK_DEFAULT_BLOCKING_TIMEOUT"
 

@@ -7,6 +7,8 @@ import typing
 from typing import Annotated
 
 from fastapi.params import Depends
+from starlette.requests import Request as StarletteRequest
+from starlette.websockets import WebSocket as StarletteWebSocket
 
 from traffik.throttles import Throttle
 from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S
@@ -190,16 +192,40 @@ def throttled(
         raise ValueError("At least one throttle must be provided.")
 
     if len(throttles) > 1:
+        connection_type = throttles[0].connection_type
+        if not all(t.connection_type == connection_type for t in throttles):
+            raise ValueError("All throttles must have the same connection type.")
 
         async def throttle(connection: HTTPConnectionT) -> HTTPConnectionT:
             nonlocal throttles
-            for t in throttles:
-                await t(connection)
+            for throttle in throttles:
+                await throttle(connection)
             return connection
-    else:
-        throttle = throttles[0]  # type: ignore[assignment]
 
-    # Just to make the type checker happy
+        # Update the the signature of the throttle function to match the connection type of the throttles
+        throttle.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+            parameters=[
+                inspect.Parameter(
+                    name="connection",
+                    kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    annotation=connection_type,
+                )
+            ],
+            return_annotation=connection_type,
+        )
+
+        # Make the type checker happy
+        _throttle = typing.cast(Throttle[HTTPConnectionT], throttle)
+    else:
+        _throttle = throttles[0]  # type: ignore[assignment]
+        connection_type = _throttle.connection_type
+
+    if not issubclass(connection_type, (StarletteRequest, StarletteWebSocket)):
+        raise ValueError(
+            "Throttles must be designed for HTTP connections (`Request` or `WebSocket`)."
+        )
+
+    # Make the type checker happy
     decorator = typing.cast(
         typing.Callable[
             [
@@ -210,7 +236,7 @@ def throttled(
         ],
         _apply_throttle,
     )
-    dependency = typing.cast(Dependency[Q, HTTPConnectionT], throttle)
+    dependency = typing.cast(Dependency[Q, HTTPConnectionT], _throttle)
     decorator_dependency = _DecoratorDepends[P, R, Q, HTTPConnectionT](
         dependency_decorator=decorator,
         dependency=dependency,

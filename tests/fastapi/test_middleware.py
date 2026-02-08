@@ -9,13 +9,14 @@ from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse, StreamingResponse
+from starlette.websockets import WebSocketDisconnect
 
 from tests.conftest import BackendGen
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
 from traffik.rates import Rate
-from traffik.throttles import HTTPThrottle
+from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
 @pytest.mark.asyncio
@@ -1171,3 +1172,100 @@ async def test_middleware_streaming_exception_during_stream(
         # but the streaming itself will fail
         with pytest.raises(ValueError, match="Streaming error"):
             await client.get("/stream")
+
+
+@pytest.mark.middleware
+@pytest.mark.fastapi
+def test_middleware_websocket_throttle(inmemory_backend: InMemoryBackend) -> None:
+    """Test that `ThrottleMiddleware` throttles WebSocket connections with `WebSocketThrottle`."""
+    ws_throttle = WebSocketThrottle(
+        uid="ws-middleware-throttle",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+    middleware_throttle = MiddlewareThrottle(throttle=ws_throttle, path="/ws")
+
+    app = FastAPI(lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[middleware_throttle],
+        backend=inmemory_backend,
+    )
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json({"message": "connected"})
+        await websocket.close()
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # First 2 connections should succeed
+        for _ in range(2):
+            with client.websocket_connect("/ws") as websocket:
+                data = websocket.receive_json()
+                assert data == {"message": "connected"}
+
+        # 3rd connection should be throttled (rejected before accept)
+        with pytest.raises((WebSocketDisconnect, Exception)):
+            with client.websocket_connect("/ws") as websocket:
+                websocket.receive_json()
+
+
+@pytest.mark.middleware
+@pytest.mark.fastapi
+def test_middleware_mixed_http_and_websocket_throttles(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """Test `ThrottleMiddleware` with both HTTP and WebSocket throttles simultaneously."""
+    http_throttle = HTTPThrottle(
+        uid="mixed-http",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+    ws_throttle = WebSocketThrottle(
+        uid="mixed-ws",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+
+    app = FastAPI(lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[
+            MiddlewareThrottle(throttle=http_throttle),
+            MiddlewareThrottle(throttle=ws_throttle),
+        ],
+        backend=inmemory_backend,
+    )
+
+    @app.get("/http")
+    async def http_endpoint():
+        return {"type": "http"}
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json({"type": "websocket"})
+        await websocket.close()
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # HTTP throttle works independently
+        assert client.get("/http").status_code == 200
+        assert client.get("/http").status_code == 200
+        assert client.get("/http").status_code == 429
+
+        # WebSocket throttle works independently (not affected by HTTP throttle)
+        with client.websocket_connect("/ws") as websocket:
+            data = websocket.receive_json()
+            assert data == {"type": "websocket"}
+
+        with client.websocket_connect("/ws") as websocket:
+            data = websocket.receive_json()
+            assert data == {"type": "websocket"}
+
+        # 3rd WebSocket connection should be throttled
+        with pytest.raises((WebSocketDisconnect, Exception)):
+            with client.websocket_connect("/ws") as websocket:
+                websocket.receive_json()

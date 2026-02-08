@@ -366,9 +366,7 @@ def test_throttle_dependency_not_in_openapi_schema(
     # not any throttle-internal parameters
     request_body = post_op.get("requestBody", {})
     body_schema = (
-        request_body.get("content", {})
-        .get("application/json", {})
-        .get("schema", {})
+        request_body.get("content", {}).get("application/json", {}).get("schema", {})
     )
 
     # If throttle params leaked, the body schema would have "properties"

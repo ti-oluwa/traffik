@@ -6,8 +6,9 @@ import inspect
 import typing
 from typing import Annotated
 
-from fastapi import Request
 from fastapi.params import Depends
+from starlette.requests import Request as StarletteRequest
+from starlette.websockets import WebSocket as StarletteWebSocket
 
 from traffik.throttles import Throttle
 from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S
@@ -69,8 +70,8 @@ def _apply_throttle(
     :param throttle: The throttle to apply to the route.
     :return: The wrapper that enforces the throttle on the route.
     """
-    # * This approach is necessary because FastAPI does not support dependencies
-    # * that are not in the signature of the route function.
+    # This approach is necessary because FastAPI does not support dependencies
+    # that are not in the signature of the route function.
 
     # Use unique (throttle) dependency parameter name to avoid conflicts
     # with other dependencies that may be applied to the route, or in the case
@@ -138,50 +139,51 @@ def route_wrapper(
 
 @typing.overload
 def throttled(
-    *throttles: Throttle[Request],
-) -> _DecoratorDepends[typing.Any, typing.Any, typing.Any, Request]: ...  # type: ignore[misc]
+    *throttles: Throttle[HTTPConnectionT],
+) -> _DecoratorDepends[typing.Any, typing.Any, typing.Any, HTTPConnectionT]: ...  # type: ignore[misc]
 
 
 @typing.overload
 def throttled(
-    *throttles: Throttle[Request],
+    *throttles: Throttle[HTTPConnectionT],
     route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
 ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]: ...
 
 
 def throttled(
-    *throttles: Throttle[Request],
+    *throttles: Throttle[HTTPConnectionT],
     route: typing.Optional[
         typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]
     ] = None,
 ) -> typing.Union[
-    _DecoratorDepends[P, R, Q, Request],
+    _DecoratorDepends[P, R, Q, HTTPConnectionT],
     typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
 ]:
     """
-    Throttles connections to decorated route using the provided HTTP throttle(s).
+    Throttles connections to decorated route using the provided throttle(s).
+
+    **Note! This decorator is designed for FastAPI routes as it depends on FastAPI's dependency injection system to enforce the throttle(s).**
 
     :param throttles: A single throttle or a sequence of throttles to apply to the route.
     :param route: The route to be throttled. If not provided, returns a decorator that can be used to apply throttling to routes.
     :return: A decorator that applies throttling to the route, or the wrapped route if `route` is provided.
 
     Example:
+
     ```python
     import fastapi
-    from traffik import throttled, HTTPThrottle
+
+    from traffik import HTTPThrottle
+    from traffik.decorators import throttled  # FastAPI-specific throttled decorator
 
     sustained_throttle = HTTPThrottle(uid="sustained", rate="100/min")
     burst_throttle = HTTPThrottle(uid="burst", rate="20/sec")
 
-    router = fastapi.APIRouter(dependencies=[sustained_throttle])
-
-    @router.get("/throttled1")
-    async def throttled_route1():
-        return {"message": "Limited route 1"}
+    router = fastapi.APIRouter()
 
     @router.get("/throttled2")
-    @throttled(burst_throttle)
-    async def throttled_route2():
+    @throttled(burst_throttle, sustained_throttle)
+    async def route():
         return {"message": "Limited route 2"}
 
     ```
@@ -190,28 +192,52 @@ def throttled(
         raise ValueError("At least one throttle must be provided.")
 
     if len(throttles) > 1:
+        connection_type = throttles[0].connection_type
+        if not all(t.connection_type == connection_type for t in throttles):
+            raise ValueError("All throttles must have the same connection type.")
 
-        async def throttle(connection: Request) -> Request:
+        async def throttle(connection: HTTPConnectionT) -> HTTPConnectionT:
             nonlocal throttles
-            for t in throttles:
-                await t(connection)
+            for throttle in throttles:
+                await throttle(connection)
             return connection
-    else:
-        throttle = throttles[0]  # type: ignore[assignment]
 
-    # Just to make the type checker happy
+        # Update the the signature of the throttle function to match the connection type of the throttles
+        throttle.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+            parameters=[
+                inspect.Parameter(
+                    name="connection",
+                    kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    annotation=connection_type,
+                )
+            ],
+            return_annotation=connection_type,
+        )
+
+        # Make the type checker happy
+        _throttle = typing.cast(Throttle[HTTPConnectionT], throttle)
+    else:
+        _throttle = throttles[0]  # type: ignore[assignment]
+        connection_type = _throttle.connection_type
+
+    if not issubclass(connection_type, (StarletteRequest, StarletteWebSocket)):
+        raise ValueError(
+            "Throttles must be designed for HTTP connections (`Request` or `WebSocket`)."
+        )
+
+    # Make the type checker happy
     decorator = typing.cast(
         typing.Callable[
             [
                 typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
-                Dependency[Q, Request],
+                Dependency[Q, HTTPConnectionT],
             ],
             typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
         ],
         _apply_throttle,
     )
-    dependency = typing.cast(Dependency[Q, Request], throttle)
-    decorator_dependency = _DecoratorDepends[P, R, Q, Request](
+    dependency = typing.cast(Dependency[Q, HTTPConnectionT], _throttle)
+    decorator_dependency = _DecoratorDepends[P, R, Q, HTTPConnectionT](
         dependency_decorator=decorator,
         dependency=dependency,
     )

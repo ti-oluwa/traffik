@@ -11,7 +11,9 @@ from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
+    "LeakyBucket",
     "LeakyBucketStrategy",
+    "LeakyBucketWithQueue",
     "LeakyBucketWithQueueStrategy",
     "LeakyBucketStatMetadata",
     "LeakyBucketWithQueueStatMetadata",
@@ -249,7 +251,7 @@ class LeakyBucketStrategy:
         else:
             wait_ms = 0.0
 
-        return StrategyStat[LeakyBucketStatMetadata](
+        return StrategyStat(
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
@@ -491,7 +493,7 @@ class LeakyBucketWithQueueStrategy:
         else:
             wait_ms = 0.0
 
-        return StrategyStat[LeakyBucketWithQueueStatMetadata](
+        return StrategyStat(
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
@@ -505,3 +507,7 @@ class LeakyBucketWithQueueStrategy:
                 last_leak_ms=last_leak_time,
             ),
         )
+
+
+LeakyBucket = LeakyBucketStrategy  # Alias for convenience
+LeakyBucketWithQueue = LeakyBucketWithQueueStrategy  # Alias for convenience

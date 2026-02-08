@@ -6,3 +6,4 @@
 **/.*cache/
 .python-version
 profiling/
+.claude

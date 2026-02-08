@@ -1,5 +1,7 @@
 """Tests for msgpack serialization in strategies."""
 
+import asyncio
+
 import pytest
 
 from traffik.backends.inmemory import InMemoryBackend
@@ -26,7 +28,7 @@ class TestSerializationRoundtrip:
         for data in test_cases:
             serialized = dump_data(data)
             assert isinstance(serialized, str), "dump_data should return string"
-            
+
             deserialized = load_data(serialized)
             assert deserialized == data, f"Roundtrip failed for {data}"
 
@@ -72,9 +74,7 @@ class TestStrategyStateSerialization:
     """Test strategy state persistence with msgpack."""
 
     @pytest.mark.anyio
-    async def test_sliding_window_log_state_persistence(
-        self, backend: InMemoryBackend
-    ):
+    async def test_sliding_window_log_state_persistence(self, backend: InMemoryBackend):
         """Test SlidingWindowLog stores and retrieves state correctly."""
         async with backend(close_on_exit=True):
             strategy = SlidingWindowLogStrategy()
@@ -88,20 +88,20 @@ class TestStrategyStateSerialization:
             # Get the stored data
             log_key = f"{backend.get_key(key)}:slidinglog"
             stored = await backend.get(log_key)
-            
+
             assert stored is not None, "State should be stored"
-            
+
             # Verify it can be deserialized
             log = load_data(stored)
             assert isinstance(log, list), "Log should be a list"
             assert len(log) == 3, "Should have 3 entries"
-            
+
             # Verify structure: [[timestamp, cost], ...]
             for entry in log:
                 assert isinstance(entry, list), "Each entry should be a list"
                 assert len(entry) == 2, "Each entry should have [timestamp, cost]"
                 assert isinstance(entry[0], (int, float)), "Timestamp should be numeric"
-            assert isinstance(entry[1], (int, float)), "Cost should be numeric"
+            assert isinstance(entry[1], (int, float)), "Cost should be numeric"  # type: ignore
             strategy = TokenBucketStrategy(burst_size=100)
             rate = Rate.parse("10/s")
             key = "user:bucket"
@@ -113,19 +113,19 @@ class TestStrategyStateSerialization:
             full_key = backend.get_key(key)
             state_key = f"{full_key}:tokenbucket"
             stored = await backend.get(state_key)
-            
+
             assert stored is not None, "State should be stored"
-            
+
             # Verify deserialization
             state = load_data(stored)
             assert isinstance(state, dict), "State should be a dict"
             assert "tokens" in state, "Should have tokens field"
             assert "last_refill" in state, "Should have last_refill field"
-            
+
             # Verify types
             assert isinstance(state["tokens"], (int, float))
             assert isinstance(state["last_refill"], (int, float))
-            
+
             # Verify values make sense
             assert 0 <= state["tokens"] <= 100, "Tokens should be in valid range"
             assert state["last_refill"] > 0, "Last refill should be positive timestamp"
@@ -145,15 +145,15 @@ class TestStrategyStateSerialization:
             full_key = backend.get_key(key)
             state_key = f"{full_key}:leakybucket:state"
             stored = await backend.get(state_key)
-            
+
             assert stored is not None, "State should be stored"
-            
+
             # Verify deserialization
             state = load_data(stored)
             assert isinstance(state, dict)
             assert "level" in state
             assert "last_leak" in state
-            
+
             assert isinstance(state["level"], (int, float))
             assert isinstance(state["last_leak"], (int, float))
             assert state["level"] >= 0
@@ -174,9 +174,9 @@ class TestStrategyStateSerialization:
             full_key = backend.get_key(key)
             tat_key = f"{full_key}:gcra:tat"
             tat_str = await backend.get(tat_key)
-            
+
             assert tat_str is not None, "TAT should be stored"
-            
+
             # GCRA stores as simple string, not msgpack
             tat = float(tat_str)
             assert tat > 0, "TAT should be positive"
@@ -186,8 +186,7 @@ class TestStrategyStateSerialization:
         """Test QuotaWithRollover persistence."""
         async with backend(close_on_exit=True):
             strategy = QuotaWithRolloverStrategy(
-                rollover_percentage=0.5,
-                max_rollover=50
+                rollover_percentage=0.5, max_rollover=50
             )
             rate = Rate.parse("100/minute")
             key = "user:quota"
@@ -206,7 +205,7 @@ class TestSerializationErrorHandling:
 
     def test_load_invalid_data(self):
         """Test loading invalid base85/msgpack data."""
-        
+
         with pytest.raises((MsgPackDecodeError, ValueError)):
             load_data("=====")  # Valid base85 but invalid msgpack
 
@@ -272,8 +271,6 @@ async def test_state_survives_strategy_recreation(backend: InMemoryBackend):
 async def test_concurrent_serialization_safety(backend: InMemoryBackend):
     """Test concurrent access doesn't corrupt serialized data."""
     async with backend(close_on_exit=True):
-        import asyncio
-        
         strategy = SlidingWindowLogStrategy()
         rate = Rate.parse("100/s")
         key = "user:concurrent"
@@ -286,7 +283,7 @@ async def test_concurrent_serialization_safety(backend: InMemoryBackend):
         full_key = backend.get_key(key)
         log_key = f"{full_key}:slidinglog"
         stored = await backend.get(log_key)
-        
+
         if stored:  # May not exist if all throttled
             log = load_data(stored)
             assert isinstance(log, list)

@@ -57,9 +57,7 @@ async def test_throttle_with_dynamic_backend(inmemory_backend: InMemoryBackend) 
         assert throttle.backend is None
 
         # Check that the throttle uses the backend from the inner context
-        async with InMemoryBackend(persistent=True)(
-            close_on_exit=False
-        ) as inner_backend:
+        async with InMemoryBackend(persistent=True)(close_on_exit=False):
             await throttle(dummy_request)
             # Check that the throttle backend is still left unset
             assert throttle.backend is None
@@ -184,7 +182,7 @@ def test_throttle_with_dynamic_backend_and_middleware(
         return JSONResponse({"data": "response"})
 
     routes = [Route("/api/data", data_endpoint, methods=["GET"])]
-    middleware = [Middleware(TenantMiddleware)]
+    middleware = [Middleware(TenantMiddleware)]  # type: ignore
     # Create app with lifespan and middleware
     app = Starlette(
         routes=routes, middleware=middleware, lifespan=inmemory_backend.lifespan

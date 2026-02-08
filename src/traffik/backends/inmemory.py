@@ -1,7 +1,7 @@
 """
 In-memory implementation of a throttle backend using an `OrderedDict` for storage.
 
-NOTE: This is not suitable for multi-process or distributed setups.
+Note! This is not suitable for multi-process or distributed setups.
 """
 
 import asyncio
@@ -101,9 +101,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     """
     In-memory throttle backend.
 
-    Uses shards improve concurrent access.
+    Uses shards (and hence lock striping) to improve concurrent access.
 
-    Warning: Only use for testing or single-process applications.
+    Warning: Only use for development or single-process applications.
     Does not work across multiple processes/servers.
     """
 
@@ -260,7 +260,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         if name not in self._named_locks:
             async with self._named_locks_lock:
-                self._named_locks[name] = _AsyncInMemoryLock()
+                lock = _AsyncInMemoryLock()
+                self._named_locks[name] = lock
+                return lock
         return self._named_locks[name]
 
     async def get(

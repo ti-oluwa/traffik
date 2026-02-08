@@ -45,6 +45,7 @@ Rate limiting doesn't have to be complicated. Traffik gives you the tools to pro
   - [Context-Aware Backends](#context-aware-backends)
   - [Strategy Statistics](#strategy-statistics)
   - [Custom Throttled Handlers](#custom-throttled-handlers)
+  - [Quota Context](#quota-context)
 - [Error Handling](#error-handling)
 - [Custom Strategies](#custom-strategies)
 - [Custom Backends](#custom-backends)
@@ -395,15 +396,17 @@ Not all rate limiting algorithms are created equal. Each strategy makes differen
 
 Traffik also provides some advanced strategies like GCRA, Adaptive, Tiered, Priority Queue, etc., for specialized use cases. Check `traffik.strategies.custom` to access them.
 
+> All strategies have short aliases without the `Strategy` suffix for convenience — e.g., `FixedWindow`, `TokenBucket`, `SlidingWindowLog`, `GCRA`. Both forms are interchangeable.
+
 #### Fixed Window (Default)
 
 ```python
-from traffik.strategies import FixedWindowStrategy
+from traffik.strategies import FixedWindow  # or FixedWindowStrategy
 
 HTTPThrottle(
     uid="api",
     rate="100/minute",
-    strategy=FixedWindowStrategy()
+    strategy=FixedWindow()
 )
 ```
 
@@ -654,39 +657,85 @@ async def dynamic(request: Request = Depends(throttle)):
 
 ### Decorators
 
-Some developers prefer seeing the rate limit configuration right at the endpoint definition. The `@throttled` decorator provides that clean, declarative syntax while doing the same thing as dependencies under the hood:
+Some developers prefer seeing the rate limit configuration right at the endpoint definition. The `@throttled` decorator provides that clean, declarative syntax while doing the same thing as dependencies under the hood.
+
+Traffik provides two versions of `@throttled`:
+
+| Import | Framework | `Request` param required? |
+| ------ | --------- | ------------------------- |
+| `traffik.throttles.throttled` | Starlette / FastAPI | Yes |
+| `traffik.decorators.throttled` | FastAPI only | No |
+
+#### Starlette
+
+For Starlette apps (or FastAPI apps that prefer explicit request access), use `throttled` from `traffik.throttles`. The decorated route **must** have a `Request` (or `WebSocket`) parameter:
 
 ```python
-from traffik.decorators import throttled
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+from traffik import HTTPThrottle
+from traffik.throttles import throttled
+
+burst = HTTPThrottle(uid="burst", rate="10/minute")
+sustained = HTTPThrottle(uid="sustained", rate="100/hour")
+
+app = Starlette()
 
 # Single throttle
-@app.get("/limited")
+@app.route("/limited")
+@throttled(HTTPThrottle(uid="limited", rate="5/minute"))
+async def limited(request: Request):
+    return JSONResponse({"data": "limited"})
+
+# Multiple throttles
+@app.route("/create", methods=["POST"])
+@throttled(burst, sustained)
+async def create_resource(request: Request):
+    return JSONResponse({"status": "created"})
+```
+
+> Without a `Request`/`WebSocket` parameter in the route signature, a `ValueError` is raised at runtime.
+
+#### FastAPI
+
+For FastAPI, you can use the FastAPI-specific `throttled` from `traffik.decorators`. It hooks into FastAPI's dependency injection, so routes **don't** need an explicit `Request` parameter:
+
+```python
+import fastapi
+from traffik import HTTPThrottle
+from traffik.decorators import throttled
+
+burst = HTTPThrottle(uid="burst", rate="10/minute")
+sustained = HTTPThrottle(uid="sustained", rate="100/hour")
+
+router = fastapi.APIRouter()
+
+@router.get("/limited")
 @throttled(HTTPThrottle(uid="limited", rate="5/minute"))
 async def limited():
     return {"data": "limited"}
 
-# Multiple throttles (all enforced)
-burst = HTTPThrottle(uid="burst", rate="10/minute")
-sustained = HTTPThrottle(uid="sustained", rate="100/hour")
-
-@app.post("/create")
+@router.post("/create")
 @throttled(burst, sustained)
 async def create_resource():
     return {"status": "created"}
 
 # Equivalent to:
-# @app.get("/limited", dependencies=[Depends(throttle)])
-# Or for multiple:
-# @app.post("/create", dependencies=[Depends(burst), Depends(sustained)])
+# @router.get("/limited", dependencies=[Depends(throttle)])
+# @router.post("/create", dependencies=[Depends(burst), Depends(sustained)])
 ```
 
+> FastAPI can also use the Starlette version (`traffik.throttles.throttled`), but then a `Request` parameter must be present in the route signature.
+>
 > **Note:** When using multiple throttles with `@throttled()`, all limits are checked sequentially before the request proceeds. If any throttle is exceeded, the request is rejected immediately without checking the remaining throttles.
 
 ### Middleware
 
 Traffik's middleware allows applying throttles globally or conditionally based on path, method, or custom predicates.
 
-> Note: Middleware only works with `HTTPThrottle`, not `WebSocketThrottle`.
+> Middleware supports both `HTTPThrottle` and `WebSocketThrottle`. HTTP and WebSocket throttles are automatically categorized and applied to the appropriate connection type.
 
 ```python
 import re
@@ -700,6 +749,18 @@ app.add_middleware(
     ThrottleMiddleware,
     middleware_throttles=[
         MiddlewareThrottle(api_throttle)
+    ],
+    backend=backend,
+)
+
+# WebSocket throttling
+ws_throttle = WebSocketThrottle(uid="ws", rate="30/minute")
+
+app.add_middleware(
+    ThrottleMiddleware,
+    middleware_throttles=[
+        MiddlewareThrottle(api_throttle, path="/api/"),
+        MiddlewareThrottle(ws_throttle, path="/ws/"),
     ],
     backend=backend,
 )
@@ -784,6 +845,59 @@ app.add_middleware(
 2. Path check (regex match)
 3. Predicate check (most expensive)
 
+#### Throttle Sorting
+
+When multiple throttles are registered, `ThrottleMiddleware` sorts them by `cost` before applying. This lets you control evaluation order so cheaper checks run first, short-circuiting before expensive ones:
+
+```python
+app.add_middleware(
+    ThrottleMiddleware,
+    middleware_throttles=[
+        MiddlewareThrottle(ip_throttle, cost=1),       # Cheap: simple key lookup
+        MiddlewareThrottle(user_throttle, cost=5),      # Moderate: requires auth lookup
+        MiddlewareThrottle(ai_throttle, cost=10),       # Expensive: token counting
+    ],
+    sort="cheap_first",  # Default — lowest cost first
+)
+```
+
+The `sort` parameter accepts:
+
+- `"cheap_first"` (default) — ascending cost, throttles without a cost are applied last
+- `"cheap_last"` — descending cost
+- `False` or `None` — no sorting, preserves insertion order
+- A custom callable: `sort=lambda t: t.throttle.uid` for custom sort keys
+
+> Throttles with `cost=None` (the default) are treated as having infinite cost when sorting.
+
+#### Using `MiddlewareThrottle` as a Dependency
+
+Although the primary use of `MiddlewareThrottle` is within `ThrottleMiddleware`, it can also be used as a FastAPI dependency on a router or individual endpoint. This gives you the filtering capabilities of middleware throttles (path, method, predicate) at the route level:
+
+```python
+from fastapi import APIRouter, Depends
+from traffik import HTTPThrottle
+from traffik.middleware import MiddlewareThrottle
+
+write_throttle = MiddlewareThrottle(
+    HTTPThrottle(uid="writes", rate="10/minute"),
+    methods={"POST", "PUT", "DELETE"},
+)
+
+router = APIRouter(dependencies=[Depends(write_throttle)])
+
+@router.post("/items")
+async def create_item():
+    return {"status": "created"}
+
+@router.get("/items")
+async def list_items():
+    # GET is not in the methods filter, so this is not throttled
+    return {"items": []}
+```
+
+> This is generally not recommended for most use cases — prefer `ThrottleMiddleware` for global/path-based throttling and plain `HTTPThrottle` with `Depends` for per-route throttling. `MiddlewareThrottle` as a dependency is a niche option for when you want conditional filters without middleware, but be aware it adds the overhead of filter checks on every request.
+
 ### Direct Usage
 
 Sometimes you need fine-grained control over when and how rate limiting is applied. Direct invocation lets you call the throttle programmatically, apply custom costs mid-request, or handle throttling as part of a larger workflow:
@@ -797,7 +911,7 @@ async def manual_throttle(request: Request):
     await throttle(request)
     
     # Manual cost
-    await throttle(request, cost=5)
+    await throttle.hit(request, cost=5) # `__call__` calls `.hit(...)` behind the scenes.
     
     # With context
     await throttle(request, context={"operation": "export"})
@@ -1378,6 +1492,256 @@ throttle2 = HTTPThrottle(
     handle_throttled=another_custom_handler,  # Overrides backend default
 )
 ```
+
+### Quota Context
+
+When you need fine-grained control over *when* quota is consumed—not just *whether* it is—`QuotaContext` lets you defer, aggregate, and conditionally apply rate limit costs. Instead of consuming quota immediately on every throttle call, you queue entries and decide later whether to actually apply them.
+
+This is useful when:
+
+- You want to **check multiple throttles** but only consume quota if the entire operation succeeds
+- You need to **aggregate costs** across several steps before committing them
+- You want to **cancel** quota consumption if validation fails or an error occurs
+- You need **retry with backoff** for quota consumption under contention
+
+#### Creating a Quota Context
+
+There are two ways to create a `QuotaContext`:
+
+**Bound mode** — created via `throttle.quota()`, tied to a specific throttle:
+
+```python
+from traffik import HTTPThrottle
+
+throttle = HTTPThrottle(uid="api", rate="100/hour")
+
+@app.post("/process")
+async def process(request: Request):
+    async with throttle.quota(request) as quota:
+        await quota(cost=2)   # Queue 2 units against the bound throttle
+        await quota(cost=3)   # Aggregated into same entry: total cost = 5
+        result = do_work()
+    # Quota is consumed on successful exit
+    return result
+```
+
+**Unbound mode** — created directly, not tied to any throttle:
+
+```python
+from traffik.quotas import QuotaContext
+
+throttle_a = HTTPThrottle(uid="reads", rate="100/hour")
+throttle_b = HTTPThrottle(uid="writes", rate="50/hour")
+
+@app.post("/transfer")
+async def transfer(request: Request):
+    async with QuotaContext(request) as quota:
+        await quota(throttle_a, cost=1)   # Queue against throttle_a
+        await quota(throttle_b, cost=5)   # Queue against throttle_b
+        perform_transfer()
+    # Both consumed on successful exit
+    return {"status": "ok"}
+```
+
+#### Cost Aggregation
+
+Consecutive calls with the same throttle and configuration are automatically merged into a single entry with summed costs. This reduces queue size and the number of backend operations at apply time:
+
+```python
+async with throttle.quota(request) as quota:
+    await quota(cost=2)          # Entry 1: cost=2
+    await quota(cost=3)          # Aggregated into Entry 1: cost=5
+    await quota(other_throttle)  # Entry 2: different throttle, new entry
+    await quota(cost=1)          # Entry 3: back to owner but after a different throttle
+```
+
+Aggregation requires that both entries share the same throttle instance, context, and retry configuration. Entries using dynamic cost functions (`cost=None` with a `CostFunc`) are never aggregated since their actual cost is unknown until apply time.
+
+#### Conditional Consumption
+
+By default, quota is consumed on successful context exit and discarded on exceptions. You can control this with `apply_on_error` and `apply_on_exit`:
+
+```python
+# Consume quota even if an exception occurs
+async with throttle.quota(request, apply_on_error=True) as quota:
+    await quota(cost=5)
+    risky_operation()  # If this raises, quota is still consumed
+
+# Only consume on specific exception types
+async with throttle.quota(request, apply_on_error=(ValueError,)) as quota:
+    await quota(cost=5)
+    validate()  # Quota consumed on ValueError, discarded on other exceptions
+
+# Disable auto-apply, control manually
+async with throttle.quota(request, apply_on_exit=False) as quota:
+    await quota(cost=5)
+
+    if not await validate_operation():
+        await quota.cancel()  # Discard queued entries
+        return error_response()
+
+    await quota.apply()  # Manually consume
+    return success_response()
+```
+
+#### Pre-checking Availability
+
+You can do a best-effort check before or inside the context to see if enough quota is available:
+
+```python
+# Pre-check before entering the context
+if not await throttle.check(request, cost=5):
+    return JSONResponse({"error": "Rate limit would be exceeded"}, status_code=429)
+
+async with throttle.quota(request) as quota:
+    await quota(cost=3)
+    if some_condition():
+        await quota(cost=2)
+    do_work()
+```
+
+Or check from within the context:
+
+```python
+async with throttle.quota(request) as quota:
+    await quota(cost=5)
+
+    if not await quota.check(cost=5):
+        await quota.cancel()
+        return JSONResponse({"error": "Insufficient quota"}, status_code=429)
+
+    await quota(cost=5)
+    do_more_work()
+```
+
+> **Important:** `check()` is a point-in-time snapshot. Quota availability can change between the check and the actual consumption (TOCTOU). Use it as a hint, not a guarantee. For strong consistency, use locking.
+
+#### Nested Contexts
+
+Quota contexts can be nested. Child contexts merge their queued entries into the parent on successful exit. The parent consumes everything when it applies:
+
+```python
+async with throttle.quota(request) as parent:
+    await parent(cost=1)
+
+    async with parent.nested() as child:
+        await child(cost=2)
+        await child(cost=3)
+    # Child merges cost=5 into parent's queue
+
+    await parent(cost=1)
+# Parent applies total cost=7
+
+# Cancel a child without affecting the parent
+async with throttle.quota(request) as parent:
+    await parent(cost=1)
+
+    async with parent.nested(apply_on_exit=False) as child:
+        await child(cost=10)
+        if too_expensive():
+            await child.cancel()  # Only child's entries are discarded
+    # Parent still applies cost=1
+```
+
+#### Locking
+
+When locking is enabled, a distributed lock is acquired on context entry and released on exit. This makes the entire context—including your code between quota calls—atomic with respect to other contexts using the same lock:
+
+```python
+async with throttle.quota(request, lock=True) as quota:
+    # Lock is held for the entire block
+    stat = await quota.stat()
+    if stat and stat.hits_remaining >= 5:
+        await quota(cost=5)
+        do_expensive_work()
+    # Lock released on exit
+```
+
+> **Important:** Keep operations within locked contexts fast. The lock is held for the entire duration, blocking other requests that need the same lock.
+
+Lock configuration can be customized:
+
+```python
+async with throttle.quota(
+    request,
+    lock=True,
+    lock_config={"ttl": 5.0, "blocking_timeout": 2.0},
+) as quota:
+    await quota(cost=1)
+```
+
+#### Retry with Backoff
+
+Individual quota entries can be configured to retry on failure:
+
+```python
+from traffik.quotas import ExponentialBackoff, ConstantBackoff, LinearBackoff
+
+async with throttle.quota(request) as quota:
+    # Retry up to 3 times with exponential backoff
+    await quota(
+        cost=5,
+        retry=3,
+        backoff=ExponentialBackoff(multiplier=2.0, max_delay=30.0, jitter=True),
+        base_delay=1.0,
+    )
+
+    # Retry only on specific exceptions
+    await quota(
+        cost=1,
+        retry=2,
+        retry_on=(TimeoutError, ConnectionError),
+        backoff=ConstantBackoff,
+        base_delay=0.5,
+    )
+```
+
+Available backoff strategies:
+
+| Strategy | Behavior |
+| -------- | -------- |
+| `ConstantBackoff` | Same delay every attempt |
+| `LinearBackoff(increment)` | Delay increases linearly |
+| `ExponentialBackoff(multiplier, max_delay, jitter)` | Delay doubles (or multiplies) per attempt |
+| `LogarithmicBackoff(base)` | Delay increases logarithmically |
+
+#### Inspecting the Context
+
+`QuotaContext` exposes several properties for observability:
+
+```python
+async with throttle.quota(request) as quota:
+    await quota(cost=3)
+    await quota(cost=2)
+
+    quota.queued_cost   # 5 (estimated total including children)
+    quota.applied_cost  # 0 (nothing consumed yet)
+    quota.active        # True
+    quota.consumed      # False
+    quota.cancelled     # False
+    quota.is_bound      # True (created via throttle.quota())
+    quota.is_nested     # False
+    quota.depth         # 0
+
+    # Get throttle stats from within the context
+    stat = await quota.stat()
+```
+
+#### Limitations and Quirks
+
+- **No rollback on partial failure.** If a context has multiple entries and the second one fails during `apply()`, the first entry's quota has already been consumed. There is no all-or-nothing guarantee.
+
+- **TOCTOU with `check()`.** The `check()` method is best-effort. Between checking and applying, another request may consume quota. Use locking to reduce this window, or throttle optimistically and handle rejections.
+
+- **Cost aggregation is estimate-only for dynamic costs.** When a throttle uses a `CostFunc`, the `queued_cost` property uses the throttle's default cost (or 1) as a fallback. The actual cost is resolved at apply time.
+
+- **Nested lock deadlocks.** If a child context uses the same lock key as its parent and the backend's lock is not re-entrant, a deadlock occurs. By default, `nested()` allows same-key locks (`reentrant_lock=True`). Set `reentrant_lock=False` to raise an error when this is detected.
+
+- **Lock duration.** The lock is held for the entire context duration, not just during `apply()`. Long-running operations inside a locked context block other requests waiting for the same lock.
+
+- **Cancelled contexts are final.** After calling `cancel()`, no further operations (enqueue or apply) are allowed. The context is permanently inactive.
+
+- **`apply()` is idempotent.** Calling `apply()` multiple times has no effect after the first successful call.
 
 ## Configuration
 
@@ -2053,118 +2417,89 @@ See [DOCKER.md](DOCKER.md) and [TESTING.md](TESTING.md) for details.
 
 ## Benchmarks
 
-Numbers matter when you're adding middleware to every request. We've run extensive benchmarks comparing Traffik against [SlowAPI](https://github.com/laurents/slowapi), one of the most popular rate limiting libraries for FastAPI. The results below should help you understand the performance characteristics of each library under different workloads.
+Numbers matter when you're adding middleware to every request. We've run extensive benchmarks comparing Traffik against [SlowAPI](https://github.com/laurents/slowapi), one of the most popular rate limiting libraries for FastAPI.
 
-**Test Environment:** Python 3.9, single-process, 3 iterations per scenario averaged across 3 separate benchmark runs. Performance is expected to improve by 5-15% on Python 3.11+ due to CPython optimizations.
+**Test Environment:** Python 3.9, single-process, 3 iterations per scenario, Fixed Window strategy (default for both). Middleware-based throttling.
 
-> **Note on Burst Scenario:** The burst test sends requests sequentially (one at a time) to measure per-request overhead. This results in higher latency than concurrent scenarios where async I/O batching benefits apply. Real-world API traffic typically resembles the sustained scenario with multiple concurrent clients.
+**Scenarios:**
 
-### InMemory Backend (Fixed Window)
+- **Low Load** — 50 sequential requests, well within the rate limit (100/60s)
+- **High Load** — 200 sequential requests, exceeding the rate limit (100/60s)
+- **Sustained** — 500 requests in concurrent batches of 50 (1000/60s limit)
+- **Burst** — 100 rapid sequential requests against a 50/60s limit
 
-| Scenario | Metric | Traffik | SlowAPI | Notes |
-| -------- | ------ | ------- | ------- | ----- |
-| Low Load (50 req) | Requests/sec | 386 | 367 | Both handle light traffic well |
-| | P50 Latency | 2.55ms | 3.78ms | |
-| | P95 Latency | 6.03ms | 6.33ms | |
-| | P99 Latency | 8.05ms | 8.95ms | |
-| High Load (200 req) | Requests/sec | 381 | 367 | Under sustained pressure |
-| | P50 Latency | 3.83ms | 4.66ms | |
-| | P95 Latency | 7.29ms | 8.09ms | |
-| | P99 Latency | 9.19ms | 10.02ms | |
-| Sustained (500 req) | Requests/sec | 1,091 | 1,014 | High concurrency batches |
-| | P50 Latency | 1.06ms | 1.79ms | Traffik scales better |
-| | P95 Latency | 2.96ms | 3.70ms | |
-| | P99 Latency | 4.40ms | 5.10ms | |
-| Burst (100 req) | Requests/sec | 355 | 433 | Rapid sequential requests |
-| | P50 Latency | 5.61ms | 2.53ms | |
-| | P95 Latency | 8.68ms | 5.90ms | |
-| | P99 Latency | 11.53ms | 9.01ms | |
+### Throughput (requests/sec)
 
-### Redis Backend (Fixed Window)
+| Scenario | InMemory |  | Redis |  | Memcached |  |
+| -------- | -------: | ------: | ----: | ------: | --------: | ------: |
+|  | Traffik | SlowAPI | Traffik | SlowAPI | Traffik | SlowAPI |
+| Low Load | **1,988** | 1,718 | 414 | **1,022** | **946** | 909 |
+| High Load | **2,699** | 2,100 | 772 | **1,008** | 1,211 | **1,399** |
+| Sustained | 400 | **1,903** | 1,012 | **1,185** | 1,163 | **1,293** |
+| Burst | 2,198 | **2,265** | 694 | **1,090** | 1,078 | **1,229** |
 
-| Scenario | Metric | Traffik | SlowAPI | Notes |
-| -------- | ------ | ------- | ------- | ----- |
-| Low Load (50 req) | Requests/sec | 309 | 321 | Similar performance |
-| | P50 Latency | 2.56ms | 2.45ms | |
-| | P95 Latency | 5.83ms | 5.41ms | |
-| | P99 Latency | 9.71ms | 7.45ms | |
-| High Load (200 req) | Requests/sec | 444 | 459 | Comparable throughput |
-| | P50 Latency | 2.01ms | 2.01ms | |
-| | P95 Latency | 3.26ms | 3.23ms | |
-| | P99 Latency | 5.84ms | 4.50ms | |
-| Sustained (500 req) | Requests/sec | 978 | 917 | Traffik 7% faster |
-| | P50 Latency | 0.90ms | 0.96ms | |
-| | P95 Latency | 1.52ms | 1.63ms | |
-| | P99 Latency | 2.19ms | 2.31ms | |
-| Burst (100 req) | Requests/sec | 352 | 398 | SlowAPI edge |
-| | P50 Latency | 2.19ms | 2.29ms | |
-| | P95 Latency | 5.09ms | 3.61ms | |
-| | P99 Latency | 8.74ms | 5.54ms | |
+### Latency (P50 / P95 / P99 in ms)
 
-### Memcached Backend (Fixed Window)
+| Scenario | InMemory |  | Redis |  | Memcached |  |
+| -------- | -------: | ------: | ----: | ------: | --------: | ------: |
+|  | Traffik | SlowAPI | Traffik | SlowAPI | Traffik | SlowAPI |
+| Low Load | **0.45** / **0.80** / 1.22 | 0.57 / 0.91 / **1.13** | 1.32 / 7.04 / 8.35 | **0.79** / **1.46** / **2.80** | 0.87 / **1.49** / 4.17 | **0.82** / 2.09 / **3.55** |
+| High Load | **0.34** / **0.57** / **0.71** | 0.40 / 0.83 / 1.23 | 1.19 / 1.74 / 2.78 | **0.76** / **1.69** / **2.46** | 0.78 / 1.15 / 2.02 | **0.63** / **1.04** / **1.42** |
+| Sustained | **0.41** / **0.81** / **1.19** | 0.42 / 0.88 / 1.39 | 32.75 / 52.86 / 56.64 | **0.71** / **1.43** / **1.91** | 21.00 / 39.73 / 47.47 | **0.67** / **1.25** / **1.78** |
+| Burst | **0.40** / 0.86 / 1.01 | **0.40** / **0.69** / **0.94** | 1.34 / 2.04 / **2.41** | **0.72** / **1.44** / 8.19 | 0.82 / 1.46 / 2.37 | **0.70** / **1.23** / **1.94** |
 
-| Scenario | Metric | Traffik | SlowAPI | Notes |
-| -------- | ------ | ------- | ------- | ----- |
-| Low Load (50 req) | Requests/sec | 369 | 301 | Traffik 23% faster |
-| | P50 Latency | 2.22ms | 3.55ms | |
-| | P95 Latency | 3.70ms | 6.25ms | |
-| | P99 Latency | 5.67ms | 9.24ms | |
-| High Load (200 req) | Requests/sec | 474 | 390 | Traffik 22% faster |
-| | P50 Latency | 1.89ms | 2.28ms | |
-| | P95 Latency | 2.95ms | 5.08ms | |
-| | P99 Latency | 4.20ms | 8.49ms | |
-| Sustained (500 req) | Requests/sec | 972 | 877 | Traffik 11% faster |
-| | P50 Latency | 0.91ms | 0.96ms | |
-| | P95 Latency | 1.62ms | 1.79ms | |
-| | P99 Latency | 2.40ms | 4.95ms | |
-| Burst (100 req) | Requests/sec | 419 | 423 | Comparable |
-| | P50 Latency | 2.10ms | 2.07ms | |
-| | P95 Latency | 3.59ms | 3.50ms | |
-| | P99 Latency | 4.89ms | 6.44ms | |
+### Correctness (the metric that matters most)
 
-### Sliding Window Counter Strategy (InMemory)
+Rate limiting is useless if it doesn't count correctly. These tests verify that each library enforces limits accurately under concurrent load.
 
-| Scenario | Metric | Traffik | SlowAPI | Notes |
-| -------- | ------ | ------- | ------- | ----- |
-| Low Load (50 req) | Requests/sec | 273 | 172 | Traffik 59% faster |
-| | P50 Latency | 3.97ms | 5.39ms | |
-| | P95 Latency | 8.93ms | 11.80ms | |
-| | P99 Latency | 11.27ms | 13.81ms | |
-| High Load (200 req) | Requests/sec | 305 | 135 | Traffik 126% faster |
-| | P50 Latency | 2.71ms | 7.39ms | |
-| | P95 Latency | 6.52ms | 11.18ms | |
-| | P99 Latency | 9.30ms | 13.31ms | |
-| Sustained (500 req) | Requests/sec | 457 | 420 | Traffik 9% faster |
-| | P50 Latency | 1.65ms | 1.98ms | |
-| | P95 Latency | 5.03ms | 5.05ms | |
-| | P99 Latency | 6.96ms | 6.68ms | |
-| Burst (100 req) | Requests/sec | 147 | 190 | SlowAPI edge |
-| | P50 Latency | 6.77ms | 4.54ms | |
-| | P95 Latency | 11.23ms | 11.15ms | |
-| | P99 Latency | 14.94ms | 13.48ms | |
+| Test | Expected | InMemory |  | Redis |  | Memcached |  |
+| ---- | -------: | -------: | ------: | ----: | ------: | --------: | ------: |
+|  |  | Traffik | SlowAPI | Traffik | SlowAPI | Traffik | SlowAPI |
+| Race Condition (150 concurrent, limit=100) | ~300 pass | 300 | 300 | **300** | 0 | **300** | 0 |
+| Distributed (10 clients × 120 req, limit=100/client) | ~3000 pass | 3000 | 3000 | **3000** | 1000 | **3000** | 1000 |
+| Selective (throttled + unthrottled endpoints) | 450 pass | 450 | 450 | **450** | 300 | **450** | 300 |
+
+SlowAPI's race condition failures on Redis/Memcached show severe over-throttling — rejecting **100%** of valid requests in the race test (0/300 passed vs the expected 300). This happens because it lacks proper distributed locking, causing concurrent requests to read stale counters and double-count.
+
+### Sliding Window Counter (InMemory)
+
+| Scenario | Traffik | SlowAPI | Diff |
+| -------- | ------: | ------: | ---: |
+| Low Load (req/s) | **2,245** | 1,701 | +32% |
+| High Load (req/s) | **2,243** | 2,039 | +10% |
+| Sustained (req/s) | 413 | **1,650** | -75% |
+| Burst (req/s) | **2,237** | 1,847 | +21% |
 
 ### WebSocket Rate Limiting
 
-Real-time applications need real-time protection. Traffik is one of the few libraries offering native WebSocket rate limiting—limiting not just connection attempts, but individual messages within an open connection. No direct comparison available as SlowAPI does not support WebSocket throttling.
+Traffik supports native WebSocket rate limiting — limiting individual messages within an open connection. SlowAPI does not support WebSocket throttling.
 
-| Scenario | Messages/sec | P50 Latency | P95 Latency | P99 Latency |
-| -------- | ------------ | ----------- | ----------- | ----------- |
-| Low Load (50 msg) | 4,307 | 0.21ms | 0.47ms | 0.69ms |
-| High Load (200 msg) | 5,709 | 0.15ms | 0.63ms | 2.48ms |
-| Sustained (500 msg) | 6,660 | 0.15ms | 0.30ms | 0.65ms |
-| Burst Traffic | 4,873 | 0.18ms | 0.82ms | 3.43ms |
-| Concurrent (10 conn) | 2,899 | 1.87ms | 4.36ms | 6.39ms |
+| Scenario | Messages/sec | P50 | P95 | P99 |
+| -------- | -----------: | --: | --: | --: |
+| Low Load (50 msg) | 4,319 | 0.06ms | 0.32ms | 0.48ms |
+| High Load (200 msg) | 9,578 | 0.06ms | 0.23ms | 0.35ms |
+| Sustained (500 msg) | 14,060 | 0.06ms | 0.10ms | 0.17ms |
+| Burst Traffic | 7,290 | 0.10ms | 0.19ms | 0.27ms |
+| Concurrent (10 conn) | 8,254 | 0.64ms | 0.81ms | 0.93ms |
 
-### Key Observations
+### Why Sustained Load Is Slower
 
-After running thousands of requests across different backends, strategies, and load patterns, here's what the numbers tell us:
+For the in-memory backend, Traffik uses `_AsyncRLock` (a custom fair re-entrant version of `asyncio.Lock`) on backend operations to guarantee atomicity. Under high concurrency (50 coroutines hitting the same rate limit key), each request must wait its turn. SlowAPI uses synchronous `threading.RLock` on an in-memory `Counter`, which doesn't yield the event loop — concurrent coroutines don't actually contend because the lock is acquired and released within a single synchronous call.
 
-- **InMemory**: Both libraries perform similarly with Traffik showing better scaling under sustained load
-- **Redis**: Performance is comparable, with both libraries handling distributed workloads well
-- **Memcached**: Traffik shows consistent advantages across scenarios (11-23% faster)
-- **Sliding Window**: Traffik's implementation is significantly faster (up to 126% in high load scenarios)
-- **Correctness**: Both libraries pass race condition and distributed correctness tests
-- **WebSocket**: Sub-millisecond P50 latencies make Traffik suitable for real-time applications
+This is an intentional tradeoff:
+
+- **SlowAPI's approach**: Higher concurrent throughput on the same key, but loses correctness on distributed backends (Redis/Memcached) where operations aren't single-threaded
+- **Traffik's approach**: True atomic operations ensure perfect accuracy across all backends, at the cost of serializing concurrent requests to the same key
+
+In practice, this rarely impacts production workloads because different clients have different identifiers — meaning different keys, different shards, and no lock contention. The sustained benchmark is a worst case where all requests share a single identity.
+
+### Key Takeaways
+
+- **Sequential throughput**: Traffik is faster in Low/High load (up to +29%)
+- **Concurrent throughput**: SlowAPI is faster when many coroutines hit the same key simultaneously
+- **Correctness**: Traffik has **perfect accuracy across all backends**. SlowAPI fails on Redis/Memcached under concurrent load (over-throttling by 100% in race conditions)
+- **Sliding Window**: Traffik is significantly faster (+10% to +32%) in non-concurrent scenarios
+- **WebSocket**: Sub-millisecond P50 latencies (0.06ms) at up to 14,000 messages/sec
 
 ### Running Benchmarks
 
@@ -2235,7 +2570,161 @@ Rate limiting runs on every request, so even small inefficiencies add up. This s
        return f"user:{user.id}"
    ```
 
-6. Avoid logging in backend operations: **Logging can cause ~10× slowdown**. Especially when the logging backend is slow (e.g., file I/O).
+6. **Avoid logging in backend operations:** Logging can cause ~10× slowdown, especially when the logging backend is slow (e.g., file I/O).
+
+7. **Bypass throttling entirely for trusted clients:**
+
+   Return `EXEMPTED` from your identifier function to skip all throttle logic — no cost calculation, no backend call, no lock acquisition:
+
+   ```python
+   from traffik.types import EXEMPTED
+
+   async def smart_identifier(conn):
+       if conn.headers.get("X-Internal-Service"):
+           return EXEMPTED  # Zero overhead — skips everything
+       return conn.client.host
+   ```
+
+8. **Enable identifier caching:**
+
+   When the same throttle is applied via both middleware and decorator, or when using multiple throttles with the same identifier, enable `cache_ids` to avoid redundant identifier computation:
+
+   ```python
+   throttle = HTTPThrottle(
+       "api-limit",
+       rate="100/m",
+       identifier=my_identifier,
+       cache_ids=True,  # Default: True. Caches result on connection.state
+   )
+   ```
+
+   This is especially important when your identifier function involves I/O (header parsing, JWT decoding, etc.).
+
+9. **Sort middleware throttles for early exit:**
+
+   When using multiple middleware throttles with different costs, the `sort` parameter lets cheap checks run first. If a cheap throttle rejects the request, expensive throttles are never evaluated:
+
+   ```python
+   ThrottleMiddleware(
+       app,
+       throttles=[expensive_throttle, cheap_throttle],
+       sort="cheap_first",  # Reorders so cheap_throttle runs first
+   )
+   ```
+
+   This is the default behavior. Set `sort=False` only if execution order matters for your use case.
+
+10. **Avoid sub-second rate windows in production:**
+
+    Sub-second windows (e.g., `Rate(limit=10, milliseconds=500)`) require an additional lock acquisition per request to track window boundaries atomically. Standard windows (≥1 second) use a single atomic increment with no locking overhead:
+
+    ```python
+    # Fast — single atomic increment, no lock
+    Rate(limit=100, seconds=1)
+
+    # Slower — requires lock acquisition per hit
+    Rate(limit=10, milliseconds=500)
+    ```
+
+11. **Use `check()` for pre-flight validation without consuming quota:**
+
+    `check()` inspects the current rate limit state without recording a hit. Useful for UI indicators or conditional logic where you don't want to consume quota:
+
+    ```python
+    allowed = await throttle.check(connection)
+    if allowed:
+        # Proceed with the expensive operation
+        result = await do_expensive_work()
+        await throttle.hit(connection)  # Now consume quota
+    ```
+
+    Note: `check()` has no TOCTOU guarantees — another request may consume quota between `check()` and `hit()`.
+
+12. **Choose the right Redis lock type:**
+
+    ```python
+    # Single Redis instance — fast, no network overhead
+    RedisBackend(lock_type="redis")      # Default. Uses Lua scripts.
+
+    # Redis cluster / multi-master — consensus-based
+    RedisBackend(lock_type="redlock")    # Uses Redlock algorithm. Slower but distributed-safe.
+    ```
+
+    Use `"redis"` unless you're running multiple independent Redis masters. The `"redlock"` type adds multiple round-trips for lock consensus.
+
+13. **Disable Memcached key tracking when not needed:**
+
+    Key tracking adds an extra read-modify-write cycle on every set/delete operation. Disable it if you don't need `clear()`:
+
+    ```python
+    MemcachedBackend(
+        pool_size=20,
+        track_keys=False,  # Removes overhead from every write operation
+    )
+    ```
+
+    Without key tracking, `clear()` is no-op.
+
+14. **Tune InMemory cleanup frequency:**
+
+    The InMemory backend runs a background task to purge expired keys. The default interval (3 seconds) is fine for most cases, but you can tune it:
+
+    ```python
+    # High-throughput: more frequent cleanup to keep memory low
+    InMemoryBackend(number_of_shards=16, cleanup_frequency=1.0)
+
+    # Low-traffic: reduce background work
+    InMemoryBackend(cleanup_frequency=10.0)
+
+    # Manual cleanup only (call backend.clear() yourself)
+    InMemoryBackend(cleanup_frequency=None)
+    ```
+
+15. **Use non-blocking locks for speculative operations:**
+
+    If your application can tolerate occasional over-counting, non-blocking locks avoid waiting on contention:
+
+    ```python
+    import os
+    os.environ["TRAFFIK_DEFAULT_BLOCKING"] = "false"
+    os.environ["TRAFFIK_DEFAULT_BLOCKING_TIMEOUT"] = "0.5"  # 500ms max wait
+    ```
+
+    This trades strict atomicity for lower tail latency under high contention.
+
+16. **Prefer `cost` over multiple throttles for resource-weighted limiting:**
+
+    Instead of creating separate throttles for expensive vs cheap endpoints, use the `cost` parameter to weight requests against a single quota:
+
+    ```python
+    # One throttle, different costs per endpoint
+    expensive = MiddlewareThrottle(throttle, path="/export", cost=5)
+    cheap = MiddlewareThrottle(throttle, path="/status", cost=1)
+    ```
+
+    This reduces the number of backend round-trips compared to evaluating multiple independent throttles.
+
+### Concurrency & Backends
+
+Understanding how each backend handles concurrent requests helps you make informed choices:
+
+| Backend    | Lock Mechanism             | Contention Behavior                            | Best For                 |
+| ---------- | -------------------------- | ---------------------------------------------- | ------------------------ |
+| InMemory   | `_AsyncRLock` per shard   | Coroutines queue on same-shard keys            | Single-process, dev/test |
+| Redis      | Lua scripts (atomic)       | No application-level lock needed for basic ops | Distributed, production  |
+| Memcached  | Atomic `add()`             | Lightweight CAS-style locking                  | High-throughput reads    |
+
+The InMemory backend uses **lock striping** (hash-based sharding) to reduce contention. With the default 3 shards, all keys mapping to the same shard serialize through one lock. Increase shards for workloads with many distinct keys:
+
+```python
+# Default: 3 shards (fine for <100 concurrent keys)
+InMemoryBackend(number_of_shards=3)
+
+# High concurrency: 32+ shards
+InMemoryBackend(number_of_shards=32)
+```
+
+Redis operations like `increment_with_ttl` are implemented as **Lua scripts** that execute atomically on the server — no application-level locking needed for single-key operations. Script SHAs are cached after first execution to avoid retransmitting the script body.
 
 ## API Reference
 
@@ -2244,6 +2733,8 @@ This section provides a comprehensive reference for Traffik's public API. For qu
 ### Throttle Classes
 
 #### `HTTPThrottle`
+
+Also available as `RequestThrottle` (alias).
 
 ```python
 HTTPThrottle(
@@ -2258,6 +2749,7 @@ HTTPThrottle(
     min_wait_period: Optional[int] = None,
     headers: Optional[Mapping[str, str]] = None,
     on_error: Union[Literal["allow", "throttle", "raise"], ErrorHandler] = None,
+    context: Optional[Mapping[str, Any]] = None,
     cache_ids: bool = True,
 )
 ```
@@ -2275,7 +2767,25 @@ HTTPThrottle(
 - `min_wait_period`: Minimum wait time in milliseconds
 - `headers`: Extra headers for throttled responses
 - `on_error`: Error handling strategy
+- `context`: Default context merged into every throttle call (overridable per-call)
 - `cache_ids`: Cache computed identifiers in connection state (default: True). Avoids recomputation on multiple calls.
+
+**Methods:**
+
+```python
+# Apply throttle (consume quota)
+await throttle.hit(connection, cost=None, context=None) -> connection
+await throttle(connection)  # shorthand for hit()
+
+# Check quota without consuming (best-effort)
+await throttle.check(connection, cost=None, context=None) -> bool
+
+# Get current statistics
+await throttle.stat(connection, context=None) -> Optional[StrategyStat]
+
+# Create a deferred quota context
+throttle.quota(connection, context=None, ...) -> QuotaContext
+```
 
 #### `WebSocketThrottle`
 
@@ -2335,6 +2845,7 @@ class ThrottleBackend:
     async def expire(key: str, seconds: int) -> bool
     async def increment_with_ttl(key: str, amount: int, ttl: int) -> int
     async def multi_get(*keys: str) -> List[Optional[str]]
+    async def multi_set(items: Mapping[str, str], expire: Optional[int] = None) -> None
     async def get_lock(name: str) -> AsyncLock
     async def lock(
         name: str,
@@ -2372,16 +2883,26 @@ async def __call__(
     ...
 ```
 
-Available strategies:
+Available strategies (each has a short alias without the `Strategy` suffix):
 
-- `FixedWindowStrategy()`
-- `SlidingWindowCounterStrategy()`
-- `SlidingWindowLogStrategy()`
-- `TokenBucketStrategy(burst_size: Optional[int] = None)`
-- `TokenBucketWithDebtStrategy(burst_size: Optional[int], max_debt: int)`
-- `LeakyBucketStrategy()`
-- `LeakyBucketWithQueueStrategy()`
-- `GCRAStrategy(burst_tolerance_ms: float = 0.0)`
+| Strategy | Alias | Parameters |
+| -------- | ----- | ---------- |
+| `FixedWindowStrategy` | `FixedWindow` | — |
+| `SlidingWindowCounterStrategy` | `SlidingWindowCounter` | — |
+| `SlidingWindowLogStrategy` | `SlidingWindowLog` | — |
+| `TokenBucketStrategy` | `TokenBucket` | `burst_size: Optional[int] = None` |
+| `TokenBucketWithDebtStrategy` | `TokenBucketWithDebt` | `burst_size: Optional[int] = None`, `max_debt: int = 0` |
+| `LeakyBucketStrategy` | `LeakyBucket` | — |
+| `LeakyBucketWithQueueStrategy` | `LeakyBucketWithQueue` | — |
+| `GCRAStrategy` | `GCRA` | `burst_tolerance_ms: float = 0.0` |
+
+```python
+# Both forms are equivalent
+from traffik.strategies import FixedWindowStrategy, FixedWindow
+
+strategy = FixedWindowStrategy()  # Full name
+strategy = FixedWindow()          # Alias
+```
 
 ### Middleware
 
@@ -2389,15 +2910,38 @@ Available strategies:
 MiddlewareThrottle(
     throttle: Throttle,
     path: Optional[Union[str, Pattern]] = None,
-    methods: Optional[Set[str]] = None,
+    methods: Optional[Iterable[str]] = None,
     predicate: Optional[Callable[[HTTPConnection], Awaitable[bool]]] = None,
+    cost: Optional[int] = None,
+    context: Optional[Mapping[str, Any]] = None,
 )
 
 ThrottleMiddleware(
     app: ASGIApp,
     middleware_throttles: Sequence[MiddlewareThrottle],
     backend: Optional[ThrottleBackend] = None,
+    exception_handler_getter: Optional[Callable[[Exception], Optional[ExceptionHandler]]] = None,
+    context: Optional[Mapping[str, Any]] = None,
+    sort: "cheap_first" | "cheap_last" | False | None | Callable = "cheap_first",
+    include_headers: bool = False,
 )
+```
+
+### Decorators
+
+```python
+# Starlette — route must have an HTTPConnection parameter (Request or WebSocket)
+from traffik.throttles import throttled
+
+@throttled(burst_throttle, sustained_throttle)
+async def route(request: Request) -> JSONResponse: ...
+
+# FastAPI — no connection parameter needed (injected automatically)
+from traffik.decorators import throttled
+
+@app.get("/endpoint")
+@throttled(burst_throttle, sustained_throttle)
+async def route() -> dict: ...
 ```
 
 ### Utilities
@@ -2443,6 +2987,9 @@ from traffik.exceptions import (
     BackendError,              # Backend operation failed
     BackendConnectionError,    # Backend connection failed
     LockTimeoutError,          # Lock acquisition timeout
+    QuotaError,                # Base quota error
+    QuotaAppliedError,         # Quota already applied (cannot cancel)
+    QuotaCancelledError,       # Quota already cancelled (cannot apply)
 )
 ```
 

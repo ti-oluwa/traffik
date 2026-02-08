@@ -5,6 +5,7 @@ Advanced Rate Limiting Strategies for Special Use Cases
 import heapq
 import time as pytime
 import typing
+from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum
 
@@ -16,6 +17,15 @@ from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
+    "TieredRate",
+    "AdaptiveThrottle",
+    "PriorityQueue",
+    "QuotaWithRollover",
+    "TimeOfDay",
+    "CostBasedTokenBucket",
+    "GCRA",
+    "DistributedFairness",
+    "GeographicDistribution",
     "TieredRateStrategy",
     "AdaptiveThrottleStrategy",
     "PriorityQueueStrategy",
@@ -388,17 +398,15 @@ class TieredRateStrategy:
             object.__setattr__(self, "marker", self.marker + ":")
 
     def _get_tier(self, key: str) -> str:
-        """Extract tier from key format: 'tier:{tier}:...'"""
+        """Extract tier from key format: '...:tier:{tier}:...'"""
         marker = self.marker
-        if marker not in key:
+        idx = key.find(marker)
+        if idx == -1:
             return self.default_tier
 
-        parts = key.split(marker)
-        if len(parts) < 2:
-            return self.default_tier
-
-        tier_part = parts[1]
-        tier = tier_part.split(":")[0]
+        start = idx + len(marker)
+        end = key.find(":", start)
+        tier = key[start:end] if end != -1 else key[start:]
         return tier or self.default_tier
 
     async def __call__(
@@ -428,7 +436,6 @@ class TieredRateStrategy:
             time_in_window = now % window_duration_ms
             wait_ms = window_duration_ms - time_in_window
             return max(wait_ms, 0.0)
-
         return 0.0
 
     async def get_stat(
@@ -750,17 +757,20 @@ class PriorityQueueStrategy:
             object.__setattr__(self, "marker", self.marker + ":")
 
     def _get_priority(self, key: str) -> Priority:
-        """Extract priority from key format: 'priority:{level}:...'"""
-        if "priority:" in key:
-            parts = key.split("priority:")
-            if len(parts) >= 2:
-                level_part = parts[1]
-                try:
-                    level = int(level_part.split(":")[0])
-                    return Priority(level)
-                except (ValueError, IndexError):
-                    return self.default_priority
-        return self.default_priority
+        """Extract priority from key format: '...:priority:{level}:...'"""
+        marker = self.marker
+        idx = key.find(marker)
+        if idx == -1:
+            return self.default_priority
+
+        start = idx + len(marker)
+        end = key.find(":", start)
+        level_str = key[start:end] if end != -1 else key[start:]
+
+        try:
+            return Priority(int(level_str))
+        except (ValueError, KeyError):
+            return self.default_priority
 
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
@@ -785,20 +795,27 @@ class PriorityQueueStrategy:
             else:
                 queue = []
 
-            # Remove expired entries
+            # Filter expired, sum higher priority cost, find oldest high-priority timestamp in one pass
             cutoff = now - rate.expire
-            queue = [[ts, pri, c] for ts, pri, c in queue if ts > cutoff]
+            filtered_queue = []
+            higher_priority_cost = 0
+            oldest_high_priority_ts = float("inf")
 
-            # Calculate total cost of higher/equal priority requests
-            higher_priority_cost = sum(c for _, pri, c in queue if pri >= priority)
+            for ts, pri, c in queue:
+                if ts > cutoff:
+                    filtered_queue.append([ts, pri, c])
+                    if pri >= priority:
+                        higher_priority_cost += c
+                        if ts < oldest_high_priority_ts:
+                            oldest_high_priority_ts = ts
+
+            queue = filtered_queue
 
             # Check if we can accept this request
             if higher_priority_cost + cost > rate.limit:
                 # Calculate wait time based on oldest high-priority request
-                high_priority_entries = [ts for ts, pri, _ in queue if pri >= priority]
-                if high_priority_entries:
-                    oldest = min(high_priority_entries)
-                    wait_ms = rate.expire - (now - oldest)
+                if oldest_high_priority_ts != float("inf"):
+                    wait_ms = rate.expire - (now - oldest_high_priority_ts)
                     return max(wait_ms, 0.0)
                 return rate.expire  # Shouldn't reach here
 
@@ -854,21 +871,28 @@ class PriorityQueueStrategy:
         else:
             queue = []
 
-        # Remove expired entries
+        # Filter expired, sum costs, find oldest high-priority timestamp in one pass
         cutoff = now - rate.expire
-        queue = [[ts, pri, c] for ts, pri, c in queue if ts > cutoff]
+        filtered_queue = []
+        higher_priority_cost = 0
+        total_cost = 0
+        oldest_high_priority_ts = float("inf")
 
-        # Calculate total cost of higher/equal priority requests
-        higher_priority_cost = sum(c for _, pri, c in queue if pri >= priority)
-        total_cost = sum(c for _, _, c in queue)
+        for ts, pri, c in queue:
+            if ts > cutoff:
+                filtered_queue.append([ts, pri, c])
+                total_cost += c
+                if pri >= priority:
+                    higher_priority_cost += c
+                    if ts < oldest_high_priority_ts:
+                        oldest_high_priority_ts = ts
 
+        queue = filtered_queue
         hits_remaining = max(rate.limit - higher_priority_cost, 0.0)
 
         if higher_priority_cost >= rate.limit:
-            high_priority_entries = [ts for ts, pri, _ in queue if pri >= priority]
-            if high_priority_entries:
-                oldest = min(high_priority_entries)
-                wait_ms = rate.expire - (now - oldest)
+            if oldest_high_priority_ts != float("inf"):
+                wait_ms = rate.expire - (now - oldest_high_priority_ts)
                 wait_ms = max(wait_ms, 0.0)
             else:
                 wait_ms = rate.expire
@@ -959,12 +983,11 @@ class QuotaWithRolloverStrategy:
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
 
         async with await backend.lock(f"lock:{used_key}", **self.lock_config):
-            # Get current usage
-            used_str = await backend.get(used_key)
+            # Get current usage and rollover
+            used_str, rollover_str = await backend.multi_get(used_key, rollover_key)
             used = int(used_str) if used_str else 0
 
-            # Get or calculate rollover for this period
-            rollover_str = await backend.get(rollover_key)
+            # Use or calculate rollover for this period
             if rollover_str:
                 rollover = int(rollover_str)
             else:
@@ -1304,10 +1327,10 @@ class CostBasedTokenBucketStrategy:
         state_key = f"{full_key}:costbucket:state"
         history_key = f"{full_key}:costbucket:history"
         ttl_seconds = max(int((refill_period_ms * 2) // 1000), 1)
-
+        cost_window = self.cost_window
         async with await backend.lock(f"lock:{state_key}", **self.lock_config):
-            # Get bucket state
-            state_json = await backend.get(state_key)
+            # Get bucket state and cost history
+            state_json, history_json = await backend.multi_get(state_key, history_key)
             if state_json:
                 try:
                     state = load_data(state_json)
@@ -1320,21 +1343,19 @@ class CostBasedTokenBucketStrategy:
                 tokens = float(capacity)
                 last_refill = now
 
-            # Get cost history
-            history_json = await backend.get(history_key)
             if history_json:
                 try:
-                    history = load_data(history_json)
+                    history = deque(load_data(history_json), maxlen=cost_window)
                 except MsgPackDecodeError:
-                    history = []
+                    history = deque(maxlen=cost_window)
             else:
-                history = []
+                history = deque(maxlen=cost_window)
 
             # Calculate average cost
             if history:
                 avg_cost = sum(history) / len(history)
                 # Adjust refill rate based on average cost
-                # Higher average cost = slower refill
+                # Higher average cost means a slower refill
                 cost_multiplier = max(self.min_refill_rate, 1.0 / avg_cost)
                 effective_refill_rate = base_refill_rate * cost_multiplier
             else:
@@ -1349,16 +1370,18 @@ class CostBasedTokenBucketStrategy:
             if tokens >= cost:
                 # Consume tokens
                 tokens -= cost
-
-                # Update history
+                # Update history. The deque auto-trims to maxlen
                 history.append(cost)
-                if len(history) > self.cost_window:
-                    history = history[-self.cost_window :]
 
-                # Save state
+                # Save state and history
                 new_state = {"tokens": tokens, "last_refill": now}
-                await backend.set(state_key, dump_data(new_state), expire=ttl_seconds)
-                await backend.set(history_key, dump_data(history), expire=ttl_seconds)
+                await backend.multi_set(
+                    {
+                        state_key: dump_data(new_state),
+                        history_key: dump_data(list(history)),
+                    },
+                    expire=ttl_seconds,
+                )
                 return 0.0
 
             # Calculate wait time for required tokens
@@ -1530,7 +1553,10 @@ class GCRAStrategy:
         async with await backend.lock(f"lock:{tat_key}", **self.lock_config):
             # Get current TAT
             tat_str = await backend.get(tat_key)
-            tat = float(tat_str) if tat_str else now
+            try:
+                tat = float(tat_str) if tat_str else now
+            except (ValueError, TypeError):
+                tat = now
 
             # Calculate new TAT
             new_tat = max(tat, now) + (emission_interval * cost)
@@ -1571,7 +1597,10 @@ class GCRAStrategy:
         tat_key = f"{full_key}:gcra:tat"
 
         tat_str = await backend.get(tat_key)
-        tat = float(tat_str) if tat_str else now
+        try:
+            tat = float(tat_str) if tat_str else now
+        except (ValueError, TypeError):
+            tat = now
 
         # Check if request would be conformant
         if now >= (tat - self.burst_tolerance_ms):
@@ -1725,15 +1754,12 @@ class DistributedFairnessStrategy:
             total_weight = sum(data["weight"] for data in instances.values())
             fair_share = int((rate.limit * self.instance_weight) / total_weight)
 
-            # Get current usage and deficit
-            usage_str = await backend.get(usage_key)
+            # Get current usage, deficit, and global usage
+            usage_str, deficit_str, global_usage_str = await backend.multi_get(
+                usage_key, deficit_key, global_usage_key
+            )
             usage = int(usage_str) if usage_str else 0
-
-            deficit_str = await backend.get(deficit_key)
             deficit = int(deficit_str) if deficit_str else 0
-
-            # Check global limit as well
-            global_usage_str = await backend.get(global_usage_key)
             global_usage = int(global_usage_str) if global_usage_str else 0
 
             # Deficit round-robin
@@ -1928,17 +1954,15 @@ class GeographicDistributionStrategy:
             object.__setattr__(self, "marker", self.marker + ":")
 
     def _get_region(self, key: str) -> str:
-        """Extract region from key format: 'region:{region}:...'"""
+        """Extract region from key format: '...:region:{region}:...'"""
         marker = self.marker
-        if marker not in key:
+        idx = key.find(marker)
+        if idx == -1:
             return self.default_region
 
-        parts = key.split(marker)
-        if len(parts) < 2:
-            return self.default_region
-
-        region_part = parts[1]
-        region = region_part.split(":")[0]
+        start = idx + len(marker)
+        end = key.find(":", start)
+        region = key[start:end] if end != -1 else key[start:]
         return region or self.default_region
 
     async def __call__(
@@ -2066,3 +2090,14 @@ class GeographicDistributionStrategy:
                 window_start_ms=window_start_ms,
             ),
         )
+
+
+TieredRate = TieredRateStrategy
+AdaptiveThrottle = AdaptiveThrottleStrategy
+TimeOfDay = TimeOfDayStrategy
+PriorityQueue = PriorityQueueStrategy
+QuotaWithRollover = QuotaWithRolloverStrategy
+CostBasedTokenBucket = CostBasedTokenBucketStrategy
+GCRA = GCRAStrategy
+DistributedFairness = DistributedFairnessStrategy
+GeographicDistribution = GeographicDistributionStrategy

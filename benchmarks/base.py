@@ -1,4 +1,3 @@
-
 from starlette.requests import HTTPConnection
 
 from traffik import get_remote_address
@@ -15,7 +14,7 @@ async def custom_identifier(connection: HTTPConnection) -> str:
     client_ip = get_remote_address(connection)
     if not client_ip:
         return "anonymous"
-    return f"ip:{client_ip}:{connection.scope['path']}"
+    return f"ip:{client_ip}"
 
 
 class BenchmarkMemcachedBackend(MemcachedBackend):
@@ -34,4 +33,3 @@ class BenchmarkMemcachedBackend(MemcachedBackend):
             await self.connection.flush_all()
             return
         await super().clear()
-

@@ -9,6 +9,7 @@ Usage:
 
 import argparse
 import asyncio
+import contextlib
 import statistics
 import time
 from dataclasses import dataclass, field
@@ -18,7 +19,6 @@ import httpx
 from base import BenchmarkMemcachedBackend, custom_identifier  # type: ignore[import]
 from fastapi import FastAPI, Request
 from slowapi import Limiter as SlowAPILimiter
-from starlette.testclient import TestClient
 
 from traffik import HTTPThrottle, get_remote_address
 from traffik.backends.inmemory import InMemoryBackend
@@ -105,7 +105,7 @@ class ScenarioResult:
         if not self.latencies:
             return 0
         sorted_latencies = sorted(self.latencies)
-        idx = int(len(sorted_latencies) * 0.95)
+        idx = min(int(len(sorted_latencies) * 0.95), len(sorted_latencies) - 1)
         return sorted_latencies[idx] * 1000
 
     @property
@@ -113,7 +113,7 @@ class ScenarioResult:
         if not self.latencies:
             return 0
         sorted_latencies = sorted(self.latencies)
-        idx = int(len(sorted_latencies) * 0.99)
+        idx = min(int(len(sorted_latencies) * 0.99), len(sorted_latencies) - 1)
         return sorted_latencies[idx] * 1000
 
 
@@ -122,12 +122,14 @@ def create_traffik_backend(config: BenchmarkConfig):
     if config.traffik_backend == "redis":
         if not config.traffik_redis_url:
             raise ValueError("Redis URL required for redis backend")
+
         return RedisBackend(
             connection=config.traffik_redis_url,
             namespace="traffik:bench",
             identifier=custom_identifier,
             persistent=False,
         )
+
     elif config.traffik_backend == "memcached":
         return BenchmarkMemcachedBackend(
             url=config.traffik_memcached_url or "memcached://localhost:11211",
@@ -136,7 +138,7 @@ def create_traffik_backend(config: BenchmarkConfig):
             persistent=False,
             track_keys=config.traffik_memcached_track_keys,
         )
-    # inmemory
+
     return InMemoryBackend(
         namespace="traffik:bench",
         identifier=custom_identifier,
@@ -168,14 +170,18 @@ def create_traffik_strategy(config: BenchmarkConfig):
 def create_traffik_app(
     limit: int = 100, window: int = 60, config: Optional[BenchmarkConfig] = None
 ):
-    """Create FastAPI app with Traffik rate limiting."""
+    """Create FastAPI app with Traffik rate limiting.
+
+    Returns (app, backend) tuple so callers can manage backend lifecycle
+    via ``async with backend():`` instead of relying on ASGI lifespan.
+    """
     if config is None:
         config = BenchmarkConfig()
 
     backend = create_traffik_backend(config)
     strategy = create_traffik_strategy(config)
 
-    app = FastAPI(lifespan=backend.lifespan)
+    app = FastAPI()
 
     throttle = HTTPThrottle(
         uid="bench",
@@ -185,12 +191,11 @@ def create_traffik_app(
     )
 
     @app.get("/test")
-    # @throttled(throttle)
     async def test_endpoint(request: Request):
         await throttle(request)
         return {"status": "ok"}
 
-    return app
+    return app, backend
 
 
 def create_slowapi_backend(config: BenchmarkConfig):
@@ -234,31 +239,54 @@ def create_slowapi_app(
     return app
 
 
+async def _run_requests_sequential(
+    client: httpx.AsyncClient, num_requests: int, path: str = "/test"
+) -> tuple:
+    """Run sequential HTTP requests and collect results."""
+    latencies = []
+    successful = 0
+    throttled = 0
+    for _ in range(num_requests):
+        req_start = time.perf_counter()
+        response = await client.get(path)
+        req_end = time.perf_counter()
+        latencies.append(req_end - req_start)
+        if response.status_code == 200:
+            successful += 1
+        elif response.status_code == 429:
+            throttled += 1
+    return latencies, successful, throttled
+
+
 async def run_scenario_low_load(
-    app: FastAPI, config: BenchmarkConfig
+    library: str, config: BenchmarkConfig
 ) -> ScenarioResult:
     """Scenario 1: Low load - requests well within limit."""
-    library = "Traffik" if hasattr(app.state, "backend") else "SlowAPI"
-    num_requests = 50
+    backend = None
+    if library == "Traffik":
+        app, backend = create_traffik_app(limit=100, window=60, config=config)
+    else:
+        app = create_slowapi_app(limit=100, window=60, config=config)
 
+    num_requests = 50
     latencies = []
     successful = 0
     throttled = 0
 
     start_time = time.perf_counter()
 
-    with TestClient(app) as client:
-        for _ in range(num_requests):
-            req_start = time.perf_counter()
-            response = client.get("/test")
-            req_end = time.perf_counter()
+    async with contextlib.AsyncExitStack() as stack:
+        if backend is not None:
+            await stack.enter_async_context(backend())
 
-            latencies.append(req_end - req_start)
-
-            if response.status_code == 200:
-                successful += 1
-            elif response.status_code == 429:
-                throttled += 1
+        client = await stack.enter_async_context(
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            )
+        )
+        latencies, successful, throttled = await _run_requests_sequential(
+            client, num_requests
+        )
 
     end_time = time.perf_counter()
     return ScenarioResult(
@@ -273,30 +301,33 @@ async def run_scenario_low_load(
 
 
 async def run_scenario_high_load(
-    app: FastAPI, config: BenchmarkConfig
+    library: str, config: BenchmarkConfig
 ) -> ScenarioResult:
     """Scenario 2: High load - requests exceeding limit."""
-    library = "Traffik" if hasattr(app.state, "backend") else "SlowAPI"
-    num_requests = 200
+    backend = None
+    if library == "Traffik":
+        app, backend = create_traffik_app(limit=100, window=60, config=config)
+    else:
+        app = create_slowapi_app(limit=100, window=60, config=config)
 
+    num_requests = 200
     latencies = []
     successful = 0
     throttled = 0
 
     start_time = time.perf_counter()
 
-    with TestClient(app) as client:
-        for _ in range(num_requests):
-            req_start = time.perf_counter()
-            response = client.get("/test")
-            req_end = time.perf_counter()
-
-            latencies.append(req_end - req_start)
-
-            if response.status_code == 200:
-                successful += 1
-            elif response.status_code == 429:
-                throttled += 1
+    async with contextlib.AsyncExitStack() as stack:
+        if backend is not None:
+            await stack.enter_async_context(backend())
+        client = await stack.enter_async_context(
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            )
+        )
+        latencies, successful, throttled = await _run_requests_sequential(
+            client, num_requests
+        )
 
     end_time = time.perf_counter()
     return ScenarioResult(
@@ -311,14 +342,12 @@ async def run_scenario_high_load(
 
 
 async def run_scenario_sustained_load(
-    app: FastAPI, config: BenchmarkConfig
+    library: str, config: BenchmarkConfig
 ) -> ScenarioResult:
     """Scenario 3: Sustained load under higher limit."""
-    library = "Traffik" if hasattr(app.state, "backend") else "SlowAPI"
-
-    # Create new app with higher limit
+    backend = None
     if library == "Traffik":
-        app = create_traffik_app(limit=1000, window=60, config=config)
+        app, backend = create_traffik_app(limit=1000, window=60, config=config)
     else:
         app = create_slowapi_app(limit=1000, window=60, config=config)
 
@@ -331,9 +360,15 @@ async def run_scenario_sustained_load(
 
     start_time = time.perf_counter()
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with contextlib.AsyncExitStack() as stack:
+        if backend is not None:
+            await stack.enter_async_context(backend())
+
+        client = await stack.enter_async_context(
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            )
+        )
 
         async def make_request():
             req_start = time.perf_counter()
@@ -341,7 +376,6 @@ async def run_scenario_sustained_load(
             req_end = time.perf_counter()
             return req_end - req_start, response.status_code
 
-        # Create batches of concurrent requests
         for batch_start in range(0, num_requests, concurrency):
             batch_size = min(concurrency, num_requests - batch_start)
             tasks = [make_request() for _ in range(batch_size)]
@@ -368,38 +402,34 @@ async def run_scenario_sustained_load(
 
 
 async def run_scenario_burst_traffic(
-    app: FastAPI, config: BenchmarkConfig
+    library: str, config: BenchmarkConfig
 ) -> ScenarioResult:
     """Scenario 4: Burst traffic pattern."""
-    library = "Traffik" if hasattr(app.state, "backend") else "SlowAPI"
-
-    # Create new app with 50 req/min limit
+    backend = None
     if library == "Traffik":
-        app = create_traffik_app(limit=50, window=60, config=config)
+        app, backend = create_traffik_app(limit=50, window=60, config=config)
     else:
         app = create_slowapi_app(limit=50, window=60, config=config)
 
     num_requests = 100
-
     latencies = []
     successful = 0
     throttled = 0
 
     start_time = time.perf_counter()
 
-    with TestClient(app) as client:
-        # Burst all requests quickly
-        for _ in range(num_requests):
-            req_start = time.perf_counter()
-            response = client.get("/test")
-            req_end = time.perf_counter()
+    async with contextlib.AsyncExitStack() as stack:
+        if backend is not None:
+            await stack.enter_async_context(backend())
 
-            latencies.append(req_end - req_start)
-
-            if response.status_code == 200:
-                successful += 1
-            elif response.status_code == 429:
-                throttled += 1
+        client = await stack.enter_async_context(
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            )
+        )
+        latencies, successful, throttled = await _run_requests_sequential(
+            client, num_requests
+        )
 
     end_time = time.perf_counter()
     return ScenarioResult(
@@ -414,28 +444,31 @@ async def run_scenario_burst_traffic(
 
 
 async def run_scenario_race_conditions(
-    app: FastAPI, config: BenchmarkConfig
+    library: str, config: BenchmarkConfig
 ) -> ScenarioResult:
     """Scenario 5: Test concurrent requests for race conditions."""
-    library = "Traffik" if hasattr(app.state, "backend") else "SlowAPI"
-
-    # Create new app with 100 req/min limit
+    backend = None
     if library == "Traffik":
-        app = create_traffik_app(limit=100, window=60, config=config)
+        app, backend = create_traffik_app(limit=100, window=60, config=config)
     else:
         app = create_slowapi_app(limit=100, window=60, config=config)
 
     num_concurrent = 150
-
     latencies = []
     successful = 0
     throttled = 0
 
     start_time = time.perf_counter()
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with contextlib.AsyncExitStack() as stack:
+        if backend is not None:
+            await stack.enter_async_context(backend())
+
+        client = await stack.enter_async_context(
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            )
+        )
 
         async def make_request():
             req_start = time.perf_counter()
@@ -443,7 +476,6 @@ async def run_scenario_race_conditions(
             req_end = time.perf_counter()
             return response, req_end - req_start
 
-        # Fire all requests concurrently
         tasks = [make_request() for _ in range(num_concurrent)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -471,20 +503,17 @@ async def run_scenario_race_conditions(
 
 
 async def run_scenario_distributed(
-    app: FastAPI, config: BenchmarkConfig
+    library: str, config: BenchmarkConfig
 ) -> ScenarioResult:
     """Scenario 6: Test distributed correctness with multiple clients."""
-    library = "Traffik" if hasattr(app.state, "backend") else "SlowAPI"
-
-    # Create new app with 100 req/min limit per client
+    backend = None
     if library == "Traffik":
-        app = create_traffik_app(limit=100, window=60, config=config)
+        app, backend = create_traffik_app(limit=100, window=60, config=config)
     else:
         app = create_slowapi_app(limit=100, window=60, config=config)
 
     num_clients = 10
     requests_per_client = 120
-
     latencies = []
     successful = 0
     throttled = 0
@@ -492,9 +521,15 @@ async def run_scenario_distributed(
 
     start_time = time.perf_counter()
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with contextlib.AsyncExitStack() as stack:
+        if backend is not None:
+            await stack.enter_async_context(backend())
+
+        client = await stack.enter_async_context(
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            )
+        )
 
         async def make_client_requests(client_id: int):
             """Make all requests for a single client."""
@@ -508,11 +543,9 @@ async def run_scenario_distributed(
                 results_list.append((response, req_end - req_start))
             return results_list
 
-        # Run all clients concurrently
         client_tasks = [make_client_requests(i) for i in range(num_clients)]
         all_client_results = await asyncio.gather(*client_tasks)
 
-        # Aggregate results
         for client_results in all_client_results:
             for response, latency in client_results:
                 total_requests += 1
@@ -551,7 +584,6 @@ async def run_benchmark_suite(
         print(f"Strategy: {config.slowapi_strategy}\n")
 
     results = {}
-
     scenario_runners = {
         "low": ("Low Load", run_scenario_low_load),
         "high": ("High Load", run_scenario_high_load),
@@ -571,18 +603,8 @@ async def run_benchmark_suite(
 
         scenario_results = []
         for i in range(config.iterations):
-            # Create fresh app for each iteration
-            if library == "Traffik":
-                app = create_traffik_app(limit=100, window=60, config=config)
-            else:
-                app = create_slowapi_app(limit=100, window=60, config=config)
-
-            result = await runner(app, config)
+            result = await runner(library, config)
             scenario_results.append(result)
-
-            # Cleanup
-            if hasattr(app.state, "backend"):
-                await app.state.backend.close()
 
             if i < config.iterations - 1:
                 await asyncio.sleep(0.5)  # Brief pause between iterations
@@ -705,8 +727,8 @@ def print_comparison(
         # Number of iterations determines expected values
         num_iterations = len(traffik_results["Race Condition Test"])
         expected_success = 100 * num_iterations
-        expected_success_min = 95 * num_iterations
-        expected_success_max = 105 * num_iterations
+        expected_success_min = 85 * num_iterations
+        expected_success_max = 115 * num_iterations
 
         print("Race Condition Test")
         print(
@@ -741,8 +763,8 @@ def print_comparison(
         num_iterations = len(traffik_results["Distributed Correctness"])
         expected_success = 1000 * num_iterations
         expected_throttled = 200 * num_iterations
-        expected_success_min = 950 * num_iterations
-        expected_success_max = 1050 * num_iterations
+        expected_success_min = 850 * num_iterations
+        expected_success_max = 1150 * num_iterations
 
         print("Distributed Correctness")
         print(

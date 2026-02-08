@@ -143,10 +143,15 @@ class FixedWindowStrategy:
             stored_window_start = await backend.get(window_start_key)
 
             # Check if we're in a new window
-            if (
-                stored_window_start is None
-                or int(stored_window_start) != current_window_start
-            ):
+            try:
+                in_current_window = (
+                    stored_window_start is not None
+                    and int(stored_window_start) == current_window_start
+                )
+            except (ValueError, TypeError):
+                in_current_window = False
+
+            if not in_current_window:
                 # If we are in a new window, reset counter and store new window start
                 await backend.multi_set(
                     {
@@ -209,10 +214,14 @@ class FixedWindowStrategy:
             )
 
             # Check if we're in a new window or no data exists
-            if (
-                stored_window_start is None
-                or int(stored_window_start) != current_window_start
-            ):
+            try:
+                in_current_window = (
+                    stored_window_start is not None
+                    and int(stored_window_start) == current_window_start
+                )
+            except (ValueError, TypeError):
+                in_current_window = False
+            if not in_current_window:
                 # If we are in a new window or no data set counter as 0
                 counter = 0
             else:

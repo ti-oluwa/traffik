@@ -156,7 +156,7 @@ class SlidingWindowLogStrategy:
             if old_log_json and old_log_json != "":
                 try:
                     entries: typing.List[typing.List[float]] = load_data(old_log_json)
-                except MsgPackDecodeError:
+                except (MsgPackDecodeError, ValueError, TypeError):
                     entries = []
             else:
                 entries = []
@@ -166,13 +166,18 @@ class SlidingWindowLogStrategy:
             current_cost_sum = 0.0
             oldest_timestamp = float("inf")
 
-            for ts, c in entries:
-                ts_f, c_f = float(ts), float(c)
-                if ts_f > window_start:
-                    valid_entries.append([ts_f, c_f])
-                    current_cost_sum += c_f
-                    if ts_f < oldest_timestamp:
-                        oldest_timestamp = ts_f
+            try:
+                for ts, c in entries:
+                    ts_f, c_f = float(ts), float(c)
+                    if ts_f > window_start:
+                        valid_entries.append([ts_f, c_f])
+                        current_cost_sum += c_f
+                        if ts_f < oldest_timestamp:
+                            oldest_timestamp = ts_f
+            except (ValueError, TypeError):
+                valid_entries = []
+                current_cost_sum = 0.0
+                oldest_timestamp = float("inf")
 
             # If adding this request's cost would exceed limit, reject it
             if current_cost_sum + cost > rate.limit:
@@ -217,7 +222,7 @@ class SlidingWindowLogStrategy:
         if old_log_json and old_log_json != "":
             try:
                 entries: typing.List[typing.List[float]] = load_data(old_log_json)
-            except MsgPackDecodeError:
+            except (MsgPackDecodeError, ValueError, TypeError):
                 entries = []
         else:
             entries = []
@@ -227,13 +232,18 @@ class SlidingWindowLogStrategy:
         current_cost_sum = 0.0
         oldest_timestamp: typing.Optional[float] = None
 
-        for ts, c in entries:
-            ts_f, c_f = float(ts), float(c)
-            if ts_f > window_start:
-                valid_entries.append([ts_f, c_f])
-                current_cost_sum += c_f
-                if oldest_timestamp is None or ts_f < oldest_timestamp:
-                    oldest_timestamp = ts_f
+        try:
+            for ts, c in entries:
+                ts_f, c_f = float(ts), float(c)
+                if ts_f > window_start:
+                    valid_entries.append([ts_f, c_f])
+                    current_cost_sum += c_f
+                    if oldest_timestamp is None or ts_f < oldest_timestamp:
+                        oldest_timestamp = ts_f
+        except (ValueError, TypeError):
+            valid_entries = []
+            current_cost_sum = 0.0
+            oldest_timestamp = None
 
         # Calculate remaining capacity
         hits_remaining = max(rate.limit - current_cost_sum, 0.0)

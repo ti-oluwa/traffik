@@ -1,6 +1,8 @@
 """Throttles for Starlette `HTTPConnection` types."""
 
 import asyncio
+import functools
+import inspect
 import math
 import sys
 import typing
@@ -25,6 +27,8 @@ from traffik.types import (
     CostType,
     HTTPConnectionT,
     LockConfig,
+    P,
+    R,
     RateType,
     StrategyStat,
     Stringable,
@@ -39,6 +43,7 @@ __all__ = [
     "is_throttled",
     "ExceptionInfo",
     "websocket_throttled",
+    "throttled",
 ]
 
 THROTTLED_STATE_KEY = "__traffik_throttled_state__"
@@ -94,6 +99,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         "_uses_rate_func",
         "_uses_cost_func",
         "_error_callback",
+        "__signature__",
     )
 
     def __init__(
@@ -276,6 +282,24 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 "Must be 'allow', 'throttle', 'raise', or a callable."
             )
 
+        # Set a clean `__signature__` for FastAPI's dependency injection.
+        # `__call__` uses *args/**kwargs to support direct calls like
+        # `throttle(request, cost=5)`, but FastAPI would interpret those
+        # as required query parameters. By setting `__signature__` to only
+        # expose `connection`, FastAPI injects the request correctly.
+        call_signature = inspect.signature(self.__call__)
+        self.__signature__ = call_signature.replace(
+            parameters=[
+                param
+                for param in call_signature.parameters.values()
+                if param.kind
+                not in (
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                )
+            ]
+        )
+
     @property
     def is_dynamic(self) -> bool:
         """Returns True if the throttle uses a dynamic backend, False otherwise."""
@@ -455,7 +479,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         # `on_error` is "raise"
         raise exc
 
-    async def __call__(
+    async def hit(
         self,
         connection: HTTPConnectionT,
         *,
@@ -553,8 +577,22 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         setattr(connection.state, THROTTLED_STATE_KEY, False)
         return connection
 
-    hit = __call__  # Useful for explicitly recording a hit
-    """Alias for the `__call__` method to record a throttle hit."""
+    async def __call__(
+        self, connection: HTTPConnectionT, *args: typing.Any, **kwargs: typing.Any
+    ) -> HTTPConnectionT:
+        """
+        Alias for `hit(...)` to allow the throttle instance to be called directly.
+
+        Most especially, this enables the throttle to be used as a dependency in FastAPI routes,
+        without it showing up in the OpenAPI Schema or route signature, and interferring with how FastAPI
+        parses the request body or query parameters.
+
+        :param connection: The HTTP connection to throttle.
+        :param args: Positional arguments to pass to `hit(...)`.
+        :param kwargs: Keyword arguments to pass to `hit(...)`.
+        :return: The throttled HTTP connection.
+        """
+        return await self.hit(connection, *args, **kwargs)
 
     async def stat(
         self,
@@ -802,15 +840,21 @@ class HTTPThrottle(Throttle[Request]):
         scope = context["scope"] if context else DEFAULT_SCOPE
         return f"http:{method}:{path}:{scope}"
 
-    # Redefine signatures with concrete types so that they can resolved by the FastAPI dependency injection systems
-    async def __call__(
+    # Redefine signatures with concrete types so that they can
+    # resolved by the FastAPI dependency injection systems
+    async def hit(
         self,
         connection: Request,
         *,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> Request:
-        return await super().__call__(connection, cost=cost, context=context)
+        return await super().hit(connection, cost=cost, context=context)
+
+    async def __call__(
+        self, connection: Request, *args: typing.Any, **kwargs: typing.Any
+    ) -> Request:
+        return await super().__call__(connection, *args, **kwargs)
 
     async def stat(
         self,
@@ -923,7 +967,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
         scope = context["scope"] if context else DEFAULT_SCOPE
         return f"ws:{path}:{scope}"
 
-    async def __call__(
+    async def hit(
         self,
         connection: WebSocket,
         *,
@@ -931,20 +975,25 @@ class WebSocketThrottle(Throttle[WebSocket]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> WebSocket:
         """
-        Calls the throttle for a `WebSocket` connection.
+        Throttle the `WebSocket` connection based on the limit and time period.
 
         :param connection: The `WebSocket` connection to throttle.
         :param cost: The cost/weight of this connection/message (overrides default cost if provided).
         :param context: Additional throttle context. The context can include any relevant information
             needed to uniquely identify the connection for throttling purposes.
 
-            **Keys to be set in the context:**
-            - "scope": A string to differentiate throttling for different contexts within the same `WebSocket` connection.
-            - "extras": A dictionary of extra data to include in the throttling message sent to the client.
+        **Keys that can be set in the context:**
+        - `"scope"`: A string to differentiate throttling for different contexts within the same `WebSocket` connection.
+        - `"extras"`: A dictionary of extra data to include in the throttling message sent to the client.
 
         :return: The throttled `WebSocket` connection.
         """
-        return await super().__call__(connection, cost=cost, context=context)
+        return await super().hit(connection, cost=cost, context=context)
+
+    async def __call__(
+        self, connection: WebSocket, *args: typing.Any, **kwargs: typing.Any
+    ) -> WebSocket:
+        return await super().__call__(connection, *args, **kwargs)
 
     async def stat(
         self,
@@ -960,3 +1009,135 @@ class WebSocketThrottle(Throttle[WebSocket]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> bool:
         return await super().check(connection, cost=cost, context=context)
+
+
+@typing.overload
+def throttled(
+    *throttles: Throttle[HTTPConnectionT],
+) -> typing.Callable[
+    [typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]],
+    typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
+]: ...
+
+
+@typing.overload
+def throttled(
+    *throttles: Throttle[HTTPConnectionT],
+    route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
+) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]: ...
+
+
+def throttled(
+    *throttles: Throttle[HTTPConnectionT],
+    route: typing.Optional[
+        typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]
+    ] = None,
+) -> typing.Union[
+    typing.Callable[
+        [typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]],
+        typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
+    ],
+    typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
+]:
+    """
+    Throttles connections to decorated route using the provided throttle(s).
+
+    **Note! The decorated route must have an `HTTPConnection` (e.g., `Request`, `WebSocket`) parameter for the throttle(s) to work.**
+    For FastAPI routes, use `traffik.decorators.throttled` to bypass this constraint.
+
+    :param throttles: A single throttle or a sequence of throttles to apply to the route.
+    :param route: The route to be throttled. If not provided, returns a decorator that can be used to apply throttling to routes.
+    :return: A decorator that applies throttling to the route, or the wrapped route if `route` is provided.
+
+    Example:
+
+    ```python
+    from starlette import Starlette
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+
+    from traffik import throttled, HTTPThrottle
+
+    sustained_throttle = HTTPThrottle(uid="sustained", rate="100/min")
+    burst_throttle = HTTPThrottle(uid="burst", rate="20/sec")
+
+    app = Starlette()
+
+    @app.route("/throttled")
+    @throttled(burst_throttle, sustained_throttle)
+    async def route(request: Request):
+        return JSONResponse({"message": "Limited route 1"})
+
+    ```
+    """
+    if len(throttles) == 0:
+        raise ValueError("At least one throttle must be provided.")
+
+    if len(throttles) > 1:
+
+        async def throttle(connection: HTTPConnectionT) -> HTTPConnectionT:
+            nonlocal throttles
+            for t in throttles:
+                await t(connection)
+            return connection
+    else:
+        throttle = throttles[0]  # type: ignore[assignment]
+
+    def _decorator(
+        route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
+    ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
+        if asyncio.iscoroutinefunction(route):
+            route = typing.cast(typing.Callable[P, typing.Awaitable[R]], route)
+
+            @functools.wraps(route)
+            async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                connection = None
+                for arg in args:
+                    if isinstance(arg, HTTPConnection):
+                        connection = arg
+                        break
+                if connection is None:
+                    for kwarg in kwargs.values():
+                        if isinstance(kwarg, HTTPConnection):
+                            connection = kwarg
+                            break
+
+                if connection is None:
+                    raise ValueError(
+                        "No HTTP connection found in route parameters for throttling."
+                    )
+
+                await throttle(connection)  # type: ignore[arg-type]
+                return await route(*args, **kwargs)  # type: ignore[misc]
+
+            return async_wrapper
+
+        route = typing.cast(typing.Callable[P, R], route)
+
+        @functools.wraps(route)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            connection = None
+            for arg in args:
+                if isinstance(arg, HTTPConnection):
+                    connection = arg
+                    break
+            if connection is None:
+                for kwarg in kwargs.values():
+                    if isinstance(kwarg, HTTPConnection):
+                        connection = kwarg
+                        break
+
+            if connection is None:
+                raise ValueError(
+                    "No HTTP connection found in route parameters for throttling."
+                )
+
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(throttle(connection))  # type: ignore
+            return route(*args, **kwargs)
+
+        return wrapper
+
+    if route is not None:
+        return _decorator(route)
+    return _decorator

@@ -106,12 +106,12 @@ Returns an awaitable response.
 """
 
 RateFunc = typing.Callable[
-    [HTTPConnectionT, typing.Optional[typing.Mapping[str, typing.Any]]],
+    [HTTPConnectionT, typing.Optional[typing.Dict[str, typing.Any]]],
     typing.Awaitable[Rate],
 ]
 """Type definition for a rate function."""
 CostFunc = typing.Callable[
-    [HTTPConnectionT, typing.Optional[typing.Mapping[str, typing.Any]]],
+    [HTTPConnectionT, typing.Optional[typing.Dict[str, typing.Any]]],
     typing.Awaitable[int],
 ]
 """Type definition for a cost function."""

@@ -7,6 +7,7 @@ import pytest
 from fastapi import Depends, FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient, Response
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException
 from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocket
@@ -16,6 +17,7 @@ from tests.conftest import BackendGen
 from tests.utils import default_client_identifier, unlimited_identifier
 from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
+from traffik.decorators import throttled
 from traffik.rates import Rate
 from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 
@@ -36,7 +38,7 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
     with pytest.raises(ValueError):
         Throttle("test-init-1", rate="-1/s")
 
-    async def _throttle_handler(connection: HTTPConnection, wait_ms: float) -> None:
+    async def _throttle_handler(connection: HTTPConnection, *args, **kwargs) -> None:
         # do nothing, just a placeholder for testing
         return
 
@@ -48,7 +50,7 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
             handle_throttled=_throttle_handler,
         )
         time_in_ms = 10 + (50 * 1000) + (2 * 60 * 1000) + (1 * 3600 * 1000)
-        assert throttle.rate.expire == time_in_ms
+        assert throttle.rate.expire == time_in_ms  # type: ignore[union-attr]
         assert throttle.backend is inmemory_backend
         assert throttle.identifier is inmemory_backend.identifier
         # Test that provided throttle handler is used
@@ -327,3 +329,155 @@ async def test_websocket_throttle(backends: BackendGen) -> None:
                     else:
                         assert result[0] == "success"
                         assert result[1] == 200
+
+
+class ItemModel(BaseModel):
+    name: str
+    price: float
+
+
+@pytest.mark.throttle
+@pytest.mark.fastapi
+def test_throttle_dependency_not_in_openapi_schema(
+    lifespan_app: FastAPI,
+) -> None:
+    """
+    Regression test: Using a throttle as a dependency (via Depends) should not
+    leak its internal parameters (cost, context, etc.) into the OpenAPI schema.
+    """
+    throttle = HTTPThrottle(
+        "test-openapi-schema",
+        rate="10/s",
+        identifier=default_client_identifier,
+    )
+
+    @lifespan_app.post(
+        "/items",
+        dependencies=[Depends(throttle)],
+        status_code=201,
+    )
+    async def create_item(item: ItemModel) -> typing.Dict[str, typing.Any]:
+        return {"name": item.name, "price": item.price}
+
+    schema = lifespan_app.openapi()
+    post_op = schema["paths"]["/items"]["post"]
+
+    # The request body schema should only reference ItemModel,
+    # not any throttle-internal parameters
+    request_body = post_op.get("requestBody", {})
+    body_schema = (
+        request_body.get("content", {})
+        .get("application/json", {})
+        .get("schema", {})
+    )
+
+    # If throttle params leaked, the body schema would have "properties"
+    # with "cost", "context", etc., or the ItemModel would be nested under
+    # an embed key. The schema should reference ItemModel directly.
+    assert "cost" not in body_schema.get("properties", {}), (
+        "Throttle 'cost' param leaked into OpenAPI schema"
+    )
+    assert "context" not in body_schema.get("properties", {}), (
+        "Throttle 'context' param leaked into OpenAPI schema"
+    )
+
+    # The operation's parameters list should not contain throttle params either
+    params = post_op.get("parameters", [])
+    param_names = {p["name"] for p in params}
+    assert "cost" not in param_names, (
+        "Throttle 'cost' appeared as a query/path parameter"
+    )
+    assert "context" not in param_names, (
+        "Throttle 'context' appeared as a query/path parameter"
+    )
+
+
+@pytest.mark.throttle
+@pytest.mark.fastapi
+def test_throttle_dependency_does_not_force_body_embed(
+    lifespan_app: FastAPI,
+) -> None:
+    """
+    Regression test: A throttle used as a dependency should not force
+    Body(embed=True) on a Pydantic model parameter.
+
+    Previously, when the throttle's __call__ had explicit `cost` and `context`
+    kwargs, FastAPI would interpret them as additional body fields, forcing the
+    single Pydantic body param to be nested under its name key (embed behavior).
+
+    With the fix, sending `{"name": "Widget", "price": 9.99}` directly as the
+    request body should work — no need to wrap it as `{"item": {...}}`.
+    """
+    throttle = HTTPThrottle(
+        "test-body-embed",
+        rate="100/s",
+        identifier=default_client_identifier,
+    )
+
+    @lifespan_app.post(
+        "/create",
+        dependencies=[Depends(throttle)],
+        status_code=201,
+    )
+    async def create_item(item: ItemModel) -> typing.Dict[str, typing.Any]:
+        return {"name": item.name, "price": item.price}
+
+    base_url = "http://test"
+    with TestClient(lifespan_app, base_url=base_url) as client:
+        # Send the body directly as the model — NOT embedded under "item" key
+        response = client.post("/create", json={"name": "Widget", "price": 9.99})
+        assert response.status_code == 201, (
+            f"Expected 201, got {response.status_code}. "
+            f"Body parsing may have been affected by throttle dependency. "
+            f"Response: {response.json()}"
+        )
+        assert response.json() == {"name": "Widget", "price": 9.99}
+
+
+@pytest.mark.throttle
+@pytest.mark.fastapi
+def test_throttle_decorator_does_not_force_body_embed(
+    lifespan_app: FastAPI,
+) -> None:
+    """
+    Regression test: Same as above but using the @throttled() decorator
+    instead of Depends(throttle).
+    """
+    throttle = HTTPThrottle(
+        "test-decorator-body-embed",
+        rate="100/s",
+        identifier=default_client_identifier,
+    )
+
+    @lifespan_app.post("/create-decorated", status_code=201)
+    @throttled(throttle)
+    async def create_item(item: ItemModel) -> typing.Dict[str, typing.Any]:
+        return {"name": item.name, "price": item.price}
+
+    base_url = "http://test"
+    with TestClient(lifespan_app, base_url=base_url) as client:
+        response = client.post(
+            "/create-decorated", json={"name": "Gadget", "price": 19.99}
+        )
+        assert response.status_code == 201, (
+            f"Expected 201, got {response.status_code}. "
+            f"Body parsing may have been affected by @throttled decorator. "
+            f"Response: {response.json()}"
+        )
+        assert response.json() == {"name": "Gadget", "price": 19.99}
+
+        # Also verify the schema is clean
+        schema = lifespan_app.openapi()
+        post_op = schema["paths"]["/create-decorated"]["post"]
+        body_schema = (
+            post_op.get("requestBody", {})
+            .get("content", {})
+            .get("application/json", {})
+            .get("schema", {})
+        )
+        assert "cost" not in body_schema.get("properties", {}), (
+            "Throttle 'cost' param leaked into OpenAPI schema via @throttled"
+        )
+        assert "context" not in body_schema.get("properties", {}), (
+            "Throttle 'context' param leaked into OpenAPI schema via @throttled"
+        )

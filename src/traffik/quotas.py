@@ -92,7 +92,7 @@ class ExponentialBackoff:
         if self.max_delay is not None:
             delay = min(delay, self.max_delay)
         if self.jitter:
-            delay = delay * (0.5 + random.random())
+            delay = delay * (0.5 + random.random())  # nosec
         return delay
 
 
@@ -197,7 +197,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
     async def resolve_cost(
         self,
         connection: HTTPConnectionT,
-        context: typing.Optional[typing.Mapping[str, typing.Any]],
+        context: typing.Optional[typing.Dict[str, typing.Any]],
     ) -> int:
         """Resolve the actual cost of the throttle, calling cost function if needed."""
         if self.cost is not None:
@@ -208,15 +208,6 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
             return await throttle.cost(connection, context)  # type: ignore[operator]
 
         return throttle.cost  # type: ignore[return-value]
-
-    def __hash__(self) -> int:
-        # Hash based on throttle UID and context for potential aggregation
-        return hash(
-            (
-                self.throttle.uid,
-                frozenset(self.context.items()) if self.context else None,
-            )
-        )
 
 
 class QuotaContext(typing.Generic[HTTPConnectionT]):

@@ -1553,7 +1553,10 @@ class GCRAStrategy:
         async with await backend.lock(f"lock:{tat_key}", **self.lock_config):
             # Get current TAT
             tat_str = await backend.get(tat_key)
-            tat = float(tat_str) if tat_str else now
+            try:
+                tat = float(tat_str) if tat_str else now
+            except (ValueError, TypeError):
+                tat = now
 
             # Calculate new TAT
             new_tat = max(tat, now) + (emission_interval * cost)
@@ -1594,7 +1597,10 @@ class GCRAStrategy:
         tat_key = f"{full_key}:gcra:tat"
 
         tat_str = await backend.get(tat_key)
-        tat = float(tat_str) if tat_str else now
+        try:
+            tat = float(tat_str) if tat_str else now
+        except (ValueError, TypeError):
+            tat = now
 
         # Check if request would be conformant
         if now >= (tat - self.burst_tolerance_ms):

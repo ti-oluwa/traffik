@@ -1,5 +1,6 @@
 """Throttle and ASGI middleware for throttling HTTP connections."""
 
+import inspect
 import re
 import typing
 import warnings
@@ -54,6 +55,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         path="/api/",
         methods={"GET", "POST"},
         predicate=is_premium_user,
+        context={"scope": "premium_api"}
     )
 
     # Use the middleware throttle in your application
@@ -74,6 +76,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         "predicate",
         "_default_context",
         "cost",
+        "__signature__",
     )
 
     def __init__(
@@ -145,7 +148,22 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             )
         self.predicate = predicate or hook
 
-    async def __call__(
+        # Set a clean `__signature__` so FastAPI's dependency injection only
+        # sees `connection` and doesn't treat *args/**kwargs as query params.
+        call_signature = inspect.signature(self.__call__)
+        self.__signature__ = call_signature.replace(
+            parameters=[
+                param
+                for param in call_signature.parameters.values()
+                if param.kind
+                not in (
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                )
+            ]
+        )
+
+    async def hit(
         self,
         connection: HTTPConnectionT,
         *,
@@ -182,6 +200,23 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         return await self.throttle(
             connection, cost=cost or self.cost, context=merged_context
         )
+
+    async def __call__(
+        self, connection: HTTPConnectionT, *args: typing.Any, **kwargs: typing.Any
+    ) -> HTTPConnectionT:
+        """
+        Apply the throttle to the connection if criteria are met.
+
+        This is a wrapper around the `hit` method that allows the throttle to be used
+        as a callable in the middleware.
+
+        :param connection: The HTTP connection to check and possibly throttle.
+        :return: The connection, possibly modified by the throttle. If throttling criteria
+            are not met, returns the original connection unchanged. If throttled, may return
+            a modified connection or raise a throttling exception.
+        :raises: `HTTPException` if the connection exceeds rate limits.
+        """
+        return await self.hit(connection, *args, **kwargs)
 
 
 class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
@@ -284,7 +319,7 @@ class ThrottleMiddleware(typing.Generic[HTTPConnectionT]):
             context = self.context
             for throttle in self.middleware_throttles:
                 try:
-                    connection = await throttle(connection, context=context)  # type: ignore[arg-type]
+                    connection = await throttle.hit(connection, context=context)  # type: ignore[arg-type]
                 except Exception as exc:
                     # This approach allows custom throttles to raise custom exceptions
                     # that will be handled if they register an exception handler with

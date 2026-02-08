@@ -45,6 +45,7 @@ Rate limiting doesn't have to be complicated. Traffik gives you the tools to pro
   - [Context-Aware Backends](#context-aware-backends)
   - [Strategy Statistics](#strategy-statistics)
   - [Custom Throttled Handlers](#custom-throttled-handlers)
+  - [Quota Context](#quota-context)
 - [Error Handling](#error-handling)
 - [Custom Strategies](#custom-strategies)
 - [Custom Backends](#custom-backends)
@@ -654,32 +655,78 @@ async def dynamic(request: Request = Depends(throttle)):
 
 ### Decorators
 
-Some developers prefer seeing the rate limit configuration right at the endpoint definition. The `@throttled` decorator provides that clean, declarative syntax while doing the same thing as dependencies under the hood:
+Some developers prefer seeing the rate limit configuration right at the endpoint definition. The `@throttled` decorator provides that clean, declarative syntax while doing the same thing as dependencies under the hood.
+
+Traffik provides two versions of `@throttled`:
+
+| Import | Framework | `Request` param required? |
+| ------ | --------- | ------------------------- |
+| `traffik.throttles.throttled` | Starlette / FastAPI | Yes |
+| `traffik.decorators.throttled` | FastAPI only | No |
+
+#### Starlette
+
+For Starlette apps (or FastAPI apps that prefer explicit request access), use `throttled` from `traffik.throttles`. The decorated route **must** have a `Request` (or `WebSocket`) parameter:
 
 ```python
-from traffik.decorators import throttled
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+from traffik import HTTPThrottle
+from traffik.throttles import throttled
+
+burst = HTTPThrottle(uid="burst", rate="10/minute")
+sustained = HTTPThrottle(uid="sustained", rate="100/hour")
+
+app = Starlette()
 
 # Single throttle
-@app.get("/limited")
+@app.route("/limited")
+@throttled(HTTPThrottle(uid="limited", rate="5/minute"))
+async def limited(request: Request):
+    return JSONResponse({"data": "limited"})
+
+# Multiple throttles
+@app.route("/create", methods=["POST"])
+@throttled(burst, sustained)
+async def create_resource(request: Request):
+    return JSONResponse({"status": "created"})
+```
+
+> Without a `Request`/`WebSocket` parameter in the route signature, a `ValueError` is raised at runtime.
+
+#### FastAPI
+
+For FastAPI, you can use the FastAPI-specific `throttled` from `traffik.decorators`. It hooks into FastAPI's dependency injection, so routes **don't** need an explicit `Request` parameter:
+
+```python
+import fastapi
+from traffik import HTTPThrottle
+from traffik.decorators import throttled
+
+burst = HTTPThrottle(uid="burst", rate="10/minute")
+sustained = HTTPThrottle(uid="sustained", rate="100/hour")
+
+router = fastapi.APIRouter()
+
+@router.get("/limited")
 @throttled(HTTPThrottle(uid="limited", rate="5/minute"))
 async def limited():
     return {"data": "limited"}
 
-# Multiple throttles (all enforced)
-burst = HTTPThrottle(uid="burst", rate="10/minute")
-sustained = HTTPThrottle(uid="sustained", rate="100/hour")
-
-@app.post("/create")
+@router.post("/create")
 @throttled(burst, sustained)
 async def create_resource():
     return {"status": "created"}
 
 # Equivalent to:
-# @app.get("/limited", dependencies=[Depends(throttle)])
-# Or for multiple:
-# @app.post("/create", dependencies=[Depends(burst), Depends(sustained)])
+# @router.get("/limited", dependencies=[Depends(throttle)])
+# @router.post("/create", dependencies=[Depends(burst), Depends(sustained)])
 ```
 
+> FastAPI can also use the Starlette version (`traffik.throttles.throttled`), but then a `Request` parameter must be present in the route signature.
+>
 > **Note:** When using multiple throttles with `@throttled()`, all limits are checked sequentially before the request proceeds. If any throttle is exceeded, the request is rejected immediately without checking the remaining throttles.
 
 ### Middleware
@@ -783,6 +830,34 @@ app.add_middleware(
 1. Method check (fastest)
 2. Path check (regex match)
 3. Predicate check (most expensive)
+
+#### Using `MiddlewareThrottle` as a Dependency
+
+Although the primary use of `MiddlewareThrottle` is within `ThrottleMiddleware`, it can also be used as a FastAPI dependency on a router or individual endpoint. This gives you the filtering capabilities of middleware throttles (path, method, predicate) at the route level:
+
+```python
+from fastapi import APIRouter, Depends
+from traffik import HTTPThrottle
+from traffik.middleware import MiddlewareThrottle
+
+write_throttle = MiddlewareThrottle(
+    HTTPThrottle(uid="writes", rate="10/minute"),
+    methods={"POST", "PUT", "DELETE"},
+)
+
+router = APIRouter(dependencies=[Depends(write_throttle)])
+
+@router.post("/items")
+async def create_item():
+    return {"status": "created"}
+
+@router.get("/items")
+async def list_items():
+    # GET is not in the methods filter, so this is not throttled
+    return {"items": []}
+```
+
+> This is generally not recommended for most use cases — prefer `ThrottleMiddleware` for global/path-based throttling and plain `HTTPThrottle` with `Depends` for per-route throttling. `MiddlewareThrottle` as a dependency is a niche option for when you want conditional filters without middleware, but be aware it adds the overhead of filter checks on every request.
 
 ### Direct Usage
 
@@ -1378,6 +1453,256 @@ throttle2 = HTTPThrottle(
     handle_throttled=another_custom_handler,  # Overrides backend default
 )
 ```
+
+### Quota Context
+
+When you need fine-grained control over *when* quota is consumed—not just *whether* it is—`QuotaContext` lets you defer, aggregate, and conditionally apply rate limit costs. Instead of consuming quota immediately on every throttle call, you queue entries and decide later whether to actually apply them.
+
+This is useful when:
+
+- You want to **check multiple throttles** but only consume quota if the entire operation succeeds
+- You need to **aggregate costs** across several steps before committing them
+- You want to **cancel** quota consumption if validation fails or an error occurs
+- You need **retry with backoff** for quota consumption under contention
+
+#### Creating a Quota Context
+
+There are two ways to create a `QuotaContext`:
+
+**Bound mode** — created via `throttle.quota()`, tied to a specific throttle:
+
+```python
+from traffik import HTTPThrottle
+
+throttle = HTTPThrottle(uid="api", rate="100/hour")
+
+@app.post("/process")
+async def process(request: Request):
+    async with throttle.quota(request) as quota:
+        await quota(cost=2)   # Queue 2 units against the bound throttle
+        await quota(cost=3)   # Aggregated into same entry: total cost = 5
+        result = do_work()
+    # Quota is consumed on successful exit
+    return result
+```
+
+**Unbound mode** — created directly, not tied to any throttle:
+
+```python
+from traffik.quotas import QuotaContext
+
+throttle_a = HTTPThrottle(uid="reads", rate="100/hour")
+throttle_b = HTTPThrottle(uid="writes", rate="50/hour")
+
+@app.post("/transfer")
+async def transfer(request: Request):
+    async with QuotaContext(request) as quota:
+        await quota(throttle_a, cost=1)   # Queue against throttle_a
+        await quota(throttle_b, cost=5)   # Queue against throttle_b
+        perform_transfer()
+    # Both consumed on successful exit
+    return {"status": "ok"}
+```
+
+#### Cost Aggregation
+
+Consecutive calls with the same throttle and configuration are automatically merged into a single entry with summed costs. This reduces queue size and the number of backend operations at apply time:
+
+```python
+async with throttle.quota(request) as quota:
+    await quota(cost=2)          # Entry 1: cost=2
+    await quota(cost=3)          # Aggregated into Entry 1: cost=5
+    await quota(other_throttle)  # Entry 2: different throttle, new entry
+    await quota(cost=1)          # Entry 3: back to owner but after a different throttle
+```
+
+Aggregation requires that both entries share the same throttle instance, context, and retry configuration. Entries using dynamic cost functions (`cost=None` with a `CostFunc`) are never aggregated since their actual cost is unknown until apply time.
+
+#### Conditional Consumption
+
+By default, quota is consumed on successful context exit and discarded on exceptions. You can control this with `apply_on_error` and `apply_on_exit`:
+
+```python
+# Consume quota even if an exception occurs
+async with throttle.quota(request, apply_on_error=True) as quota:
+    await quota(cost=5)
+    risky_operation()  # If this raises, quota is still consumed
+
+# Only consume on specific exception types
+async with throttle.quota(request, apply_on_error=(ValueError,)) as quota:
+    await quota(cost=5)
+    validate()  # Quota consumed on ValueError, discarded on other exceptions
+
+# Disable auto-apply, control manually
+async with throttle.quota(request, apply_on_exit=False) as quota:
+    await quota(cost=5)
+
+    if not await validate_operation():
+        await quota.cancel()  # Discard queued entries
+        return error_response()
+
+    await quota.apply()  # Manually consume
+    return success_response()
+```
+
+#### Pre-checking Availability
+
+You can do a best-effort check before or inside the context to see if enough quota is available:
+
+```python
+# Pre-check before entering the context
+if not await throttle.check(request, cost=5):
+    return JSONResponse({"error": "Rate limit would be exceeded"}, status_code=429)
+
+async with throttle.quota(request) as quota:
+    await quota(cost=3)
+    if some_condition():
+        await quota(cost=2)
+    do_work()
+```
+
+Or check from within the context:
+
+```python
+async with throttle.quota(request) as quota:
+    await quota(cost=5)
+
+    if not await quota.check(cost=5):
+        await quota.cancel()
+        return JSONResponse({"error": "Insufficient quota"}, status_code=429)
+
+    await quota(cost=5)
+    do_more_work()
+```
+
+> **Important:** `check()` is a point-in-time snapshot. Quota availability can change between the check and the actual consumption (TOCTOU). Use it as a hint, not a guarantee. For strong consistency, use locking.
+
+#### Nested Contexts
+
+Quota contexts can be nested. Child contexts merge their queued entries into the parent on successful exit. The parent consumes everything when it applies:
+
+```python
+async with throttle.quota(request) as parent:
+    await parent(cost=1)
+
+    async with parent.nested() as child:
+        await child(cost=2)
+        await child(cost=3)
+    # Child merges cost=5 into parent's queue
+
+    await parent(cost=1)
+# Parent applies total cost=7
+
+# Cancel a child without affecting the parent
+async with throttle.quota(request) as parent:
+    await parent(cost=1)
+
+    async with parent.nested(apply_on_exit=False) as child:
+        await child(cost=10)
+        if too_expensive():
+            await child.cancel()  # Only child's entries are discarded
+    # Parent still applies cost=1
+```
+
+#### Locking
+
+When locking is enabled, a distributed lock is acquired on context entry and released on exit. This makes the entire context—including your code between quota calls—atomic with respect to other contexts using the same lock:
+
+```python
+async with throttle.quota(request, lock=True) as quota:
+    # Lock is held for the entire block
+    stat = await quota.stat()
+    if stat and stat.hits_remaining >= 5:
+        await quota(cost=5)
+        do_expensive_work()
+    # Lock released on exit
+```
+
+> **Important:** Keep operations within locked contexts fast. The lock is held for the entire duration, blocking other requests that need the same lock.
+
+Lock configuration can be customized:
+
+```python
+async with throttle.quota(
+    request,
+    lock=True,
+    lock_config={"ttl": 5.0, "blocking_timeout": 2.0},
+) as quota:
+    await quota(cost=1)
+```
+
+#### Retry with Backoff
+
+Individual quota entries can be configured to retry on failure:
+
+```python
+from traffik.quotas import ExponentialBackoff, ConstantBackoff, LinearBackoff
+
+async with throttle.quota(request) as quota:
+    # Retry up to 3 times with exponential backoff
+    await quota(
+        cost=5,
+        retry=3,
+        backoff=ExponentialBackoff(multiplier=2.0, max_delay=30.0, jitter=True),
+        base_delay=1.0,
+    )
+
+    # Retry only on specific exceptions
+    await quota(
+        cost=1,
+        retry=2,
+        retry_on=(TimeoutError, ConnectionError),
+        backoff=ConstantBackoff,
+        base_delay=0.5,
+    )
+```
+
+Available backoff strategies:
+
+| Strategy | Behavior |
+| -------- | -------- |
+| `ConstantBackoff` | Same delay every attempt |
+| `LinearBackoff(increment)` | Delay increases linearly |
+| `ExponentialBackoff(multiplier, max_delay, jitter)` | Delay doubles (or multiplies) per attempt |
+| `LogarithmicBackoff(base)` | Delay increases logarithmically |
+
+#### Inspecting the Context
+
+`QuotaContext` exposes several properties for observability:
+
+```python
+async with throttle.quota(request) as quota:
+    await quota(cost=3)
+    await quota(cost=2)
+
+    quota.queued_cost   # 5 (estimated total including children)
+    quota.applied_cost  # 0 (nothing consumed yet)
+    quota.active        # True
+    quota.consumed      # False
+    quota.cancelled     # False
+    quota.is_bound      # True (created via throttle.quota())
+    quota.is_nested     # False
+    quota.depth         # 0
+
+    # Get throttle stats from within the context
+    stat = await quota.stat()
+```
+
+#### Limitations and Quirks
+
+- **No rollback on partial failure.** If a context has multiple entries and the second one fails during `apply()`, the first entry's quota has already been consumed. There is no all-or-nothing guarantee.
+
+- **TOCTOU with `check()`.** The `check()` method is best-effort. Between checking and applying, another request may consume quota. Use locking to reduce this window, or throttle optimistically and handle rejections.
+
+- **Cost aggregation is estimate-only for dynamic costs.** When a throttle uses a `CostFunc`, the `queued_cost` property uses the throttle's default cost (or 1) as a fallback. The actual cost is resolved at apply time.
+
+- **Nested lock deadlocks.** If a child context uses the same lock key as its parent and the backend's lock is not re-entrant, a deadlock occurs. By default, `nested()` allows same-key locks (`reentrant_lock=True`). Set `reentrant_lock=False` to raise an error when this is detected.
+
+- **Lock duration.** The lock is held for the entire context duration, not just during `apply()`. Long-running operations inside a locked context block other requests waiting for the same lock.
+
+- **Cancelled contexts are final.** After calling `cancel()`, no further operations (enqueue or apply) are allowed. The context is permanently inactive.
+
+- **`apply()` is idempotent.** Calling `apply()` multiple times has no effect after the first successful call.
 
 ## Configuration
 

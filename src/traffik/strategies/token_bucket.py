@@ -191,7 +191,7 @@ class TokenBucketStrategy:
                     )
                     tokens = float(bucket_state.get("tokens", capacity))
                     last_refill = float(bucket_state.get("last_refill", now))
-                except (MsgPackDecodeError, ValueError, KeyError):
+                except (MsgPackDecodeError, ValueError, KeyError, AttributeError):
                     # If state is corrupted, reinitialize bucket at full capacity
                     tokens = float(capacity)
                     last_refill = now
@@ -256,7 +256,7 @@ class TokenBucketStrategy:
                 bucket_state: typing.Dict[str, typing.Any] = load_data(old_state_json)
                 tokens = float(bucket_state.get("tokens", capacity))
                 last_refill = float(bucket_state.get("last_refill", now))
-            except (MsgPackDecodeError, ValueError, KeyError):
+            except (MsgPackDecodeError, ValueError, KeyError, AttributeError):
                 # If state is corrupted, assume bucket is at full capacity
                 tokens = float(capacity)
                 last_refill = now
@@ -421,7 +421,7 @@ class TokenBucketWithDebtStrategy:
                     bucket_state = load_data(old_state_json)
                     tokens = float(bucket_state.get("tokens", capacity))
                     last_refill = float(bucket_state.get("last_refill", now))
-                except (MsgPackDecodeError, ValueError, KeyError):
+                except (MsgPackDecodeError, ValueError, KeyError, AttributeError):
                     # If state is corrupted, reinitialize bucket at full capacity
                     tokens = float(capacity)
                     last_refill = now
@@ -486,7 +486,7 @@ class TokenBucketWithDebtStrategy:
                 bucket_state = load_data(old_state_json)
                 tokens = float(bucket_state.get("tokens", capacity))
                 last_refill = float(bucket_state.get("last_refill", now))
-            except (MsgPackDecodeError, ValueError, KeyError):
+            except (MsgPackDecodeError, ValueError, KeyError, AttributeError):
                 # If state is corrupted, assume bucket is at full capacity
                 tokens = float(capacity)
                 last_refill = now

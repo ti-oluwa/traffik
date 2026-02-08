@@ -382,7 +382,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             ):
                 self._connection_type = connection_type  # type: ignore[assignment]
                 return self._connection_type
-        except Exception:
+        except Exception:  # nosec
             pass
 
         # Fallback to `HTTPConnection`

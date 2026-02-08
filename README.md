@@ -2706,7 +2706,7 @@ Rate limiting runs on every request, so even small inefficiencies add up. This s
 
 ### Concurrency & Backends
 
-Understanding how each backend handles concurrent requests helps you make informed choices:
+Understanding how each backend handles concurrent requests helps you make informed choices. Let's take a look:
 
 | Backend    | Lock Mechanism             | Contention Behavior                            | Best For                 |
 | ---------- | -------------------------- | ---------------------------------------------- | ------------------------ |
@@ -3011,7 +3011,7 @@ on_error="raise"      # Re-raise exceptions
 
 ## Contributing
 
-Want to help make Traffik better? We'd love to have you! Whether it's fixing bugs, adding features, improving documentation, or just reporting issues, every contribution matters. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+Want to help make Traffik better? Whether it's fixing bugs, adding features, improving documentation, or just reporting issues, every contribution matters. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
 ## License
 

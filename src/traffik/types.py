@@ -53,7 +53,7 @@ WaitPeriod: TypeAlias = float
 Matchable: TypeAlias = typing.Union[str, typing.Pattern[str]]
 """A type alias for a matchable path, which can be a string or a compiled regex pattern."""
 ExceptionHandler: TypeAlias = typing.Callable[
-    [HTTPConnection, Exception], typing.Union[Response, typing.Awaitable[Response]]
+    [HTTPConnectionT, Exception], typing.Union[Response, typing.Awaitable[Response]]
 ]
 
 AwaitableCallable = typing.Callable[..., typing.Awaitable[T]]
@@ -106,18 +106,69 @@ Returns an awaitable response.
 """
 
 RateFunc = typing.Callable[
-    [HTTPConnectionT, typing.Mapping[str, typing.Any]], typing.Awaitable[Rate]
+    [HTTPConnectionT, typing.Optional[typing.Dict[str, typing.Any]]],
+    typing.Awaitable[Rate],
 ]
-"""Type definition for rate functions."""
+"""Type definition for a rate function."""
 CostFunc = typing.Callable[
-    [HTTPConnectionT, typing.Mapping[str, typing.Any]], typing.Awaitable[int]
+    [HTTPConnectionT, typing.Optional[typing.Dict[str, typing.Any]]],
+    typing.Awaitable[int],
 ]
-"""Type definition for cost functions."""
+"""Type definition for a cost function."""
 
 RateType = typing.Union[Rate, RateFunc[HTTPConnectionT], str]
 """Type definition for rate specifications."""
 CostType = typing.Union[int, CostFunc[HTTPConnectionT]]
 """Type definition for cost specifications."""
+
+
+BackoffStrategy = typing.Callable[[int, float], float]
+"""
+A callable that implements a backoff strategy.
+
+Takes the current attempt number and base delay, and returns the delay in seconds before the next retry.
+"""
+
+
+class _TransactionExceptionInfo(TypedDict):
+    """Information about an exception that occurred during throttling transaction."""
+
+    connection: HTTPConnection
+    exception: BaseException
+    attempt: int
+    cost: int
+    context: typing.Optional[typing.Mapping[str, typing.Any]]
+
+
+RetryOn = typing.Union[
+    typing.Type[BaseException],
+    typing.Tuple[typing.Type[BaseException], ...],
+    typing.Callable[
+        [_TransactionExceptionInfo],
+        typing.Union[bool, typing.Awaitable[bool]],
+    ],
+]
+"""
+Type definition for retry decision logic.
+
+Can be either:
+- A single exception type to retry on
+- A tuple of exception types to retry on
+- A callable that takes (connection, exception, cost, context, attempt) and returns bool
+"""
+
+ApplyOnError = typing.Union[
+    bool, typing.Type[BaseException], typing.Tuple[typing.Type[BaseException], ...]
+]
+"""
+Type definition for applying throttles on error.
+
+Can be either:
+- `False`: Don't apply on any exception
+- `True`: Apply on all exceptions
+- A single exception type to apply on
+- A tuple of exception types to apply on
+"""
 
 
 class Dependency(typing.Protocol, typing.Generic[P, Rco]):
@@ -149,6 +200,7 @@ class StrategyStat(typing.Generic[MapT]):
     """Additional metadata related to the strategy."""
 
 
+@typing.runtime_checkable
 class AsyncLock(typing.Protocol):
     """Protocol for asynchronous lock objects."""
 

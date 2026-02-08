@@ -8,13 +8,15 @@ from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import HTTPConnection, Request
+from starlette.responses import JSONResponse, StreamingResponse
+from starlette.websockets import WebSocketDisconnect
 
 from tests.conftest import BackendGen
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
 from traffik.rates import Rate
-from traffik.throttles import HTTPThrottle
+from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
 @pytest.mark.asyncio
@@ -275,7 +277,7 @@ def test_middleware_basic_functionality(inmemory_backend: InMemoryBackend) -> No
 
     app = FastAPI(lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -330,7 +332,7 @@ def test_middleware_multiple_throttles(inmemory_backend: InMemoryBackend) -> Non
 
     app = FastAPI(lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=middleware_throttles,
         backend=inmemory_backend,
     )
@@ -380,7 +382,7 @@ def test_middleware_method_specificity(inmemory_backend: InMemoryBackend) -> Non
 
     app = FastAPI(lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -435,7 +437,7 @@ def test_middleware_with_predicate(inmemory_backend: InMemoryBackend) -> None:
 
     app = FastAPI(lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -473,7 +475,7 @@ def test_middleware_no_backend_specified(inmemory_backend: InMemoryBackend) -> N
 
     # Don't specify backend - should use the one from lifespan
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         # backend=None (implicit)
     )
@@ -508,7 +510,7 @@ async def test_middleware_multiple_backends(backends: BackendGen) -> None:
         async with backend(close_on_exit=True):
             app = FastAPI()
             app.add_middleware(
-                ThrottleMiddleware,
+                ThrottleMiddleware,  # type: ignore[arg-type]
                 middleware_throttles=[middleware_throttle],
                 backend=backend,
             )
@@ -559,7 +561,7 @@ async def test_middleware_concurrent_requests(
     async with inmemory_backend(close_on_exit=True):
         app = FastAPI()
         app.add_middleware(
-            ThrottleMiddleware,
+            ThrottleMiddleware,  # type: ignore[arg-type]
             middleware_throttles=[middleware_throttle],
             backend=inmemory_backend,
         )
@@ -610,7 +612,7 @@ def test_middleware_exemption_with_predicate(inmemory_backend: InMemoryBackend) 
 
     app = FastAPI(lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -650,7 +652,7 @@ def test_middleware_case_insensitive_methods(inmemory_backend: InMemoryBackend) 
 
     app = FastAPI(lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -701,7 +703,7 @@ def test_middleware_websocket_passthrough(inmemory_backend: InMemoryBackend) -> 
 
     app = FastAPI(lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -739,7 +741,7 @@ def test_middleware_with_no_throttles(inmemory_backend: InMemoryBackend) -> None
     """Test `ThrottleMiddleware` with empty `middleware_throttles` list."""
     app = FastAPI(lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[],  # Empty list
         backend=inmemory_backend,
     )
@@ -783,7 +785,7 @@ def test_middleware_multiple_overlapping_patterns(
 
     app = FastAPI(lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=middleware_throttles,
         backend=inmemory_backend,
     )
@@ -973,3 +975,297 @@ async def test_middleware_case_sensitive_regex(
             # Verify middleware processes request without error
             result = await middleware_throttle(request)
             assert result is request
+
+
+@pytest.mark.middleware
+@pytest.mark.fastapi
+@pytest.mark.asyncio
+async def test_middleware_with_streaming_responses(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """
+    Test that ThrottleMiddleware does not interfere with streaming responses.
+
+    Streaming responses send data in chunks over time. The throttle should:
+    1. Check rate limits before streaming begins
+    2. Allow streaming to proceed normally if request is not throttled
+    3. Prevent streaming entirely if request is throttled (return 429 immediately)
+    """
+    throttle = HTTPThrottle(
+        uid="streaming-test",
+        rate="2/s",
+        identifier=default_client_identifier,
+    )
+    middleware_throttle = MiddlewareThrottle(
+        throttle=throttle,
+        path="/api/stream",
+        methods={"GET"},
+    )
+
+    async def stream_generator():
+        """Generator that yields chunks of data."""
+        for i in range(5):
+            yield f"chunk-{i}\n".encode()
+            await asyncio.sleep(0.01)  # Simulate slow streaming
+
+    app = FastAPI(lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[middleware_throttle],
+        backend=inmemory_backend,
+    )
+
+    @app.get("/api/stream")
+    async def stream_endpoint():
+        return StreamingResponse(
+            stream_generator(),
+            media_type="text/plain",
+            headers={"X-Custom-Header": "streaming"},
+        )
+
+    @app.get("/api/regular")
+    async def regular_endpoint():
+        return JSONResponse({"data": "regular"})
+
+    base_url = "http://testserver"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=base_url
+    ) as client:
+        # First request: Should stream successfully
+        response1 = await client.get("/api/stream")
+        assert response1.status_code == 200
+        assert response1.headers["X-Custom-Header"] == "streaming"
+
+        # Verify all chunks are received
+        content1 = response1.text
+        for i in range(5):
+            assert f"chunk-{i}" in content1
+
+        # Second request: Should also stream successfully (within rate limit)
+        response2 = await client.get("/api/stream")
+        assert response2.status_code == 200
+        content2 = response2.text
+        for i in range(5):
+            assert f"chunk-{i}" in content2
+
+        # Third request: Should be throttled BEFORE streaming starts
+        response3 = await client.get("/api/stream")
+        assert response3.status_code == 429
+        assert "Retry-After" in response3.headers
+
+        # Verify throttled response is plain text, not streaming chunks
+        assert "Too many requests" in response3.text
+        assert (
+            "chunk-" not in response3.text
+        )  # No streaming chunks in throttled response
+
+        # Non-throttled endpoint should work normally
+        response4 = await client.get("/api/regular")
+        assert response4.status_code == 200
+        assert response4.json() == {"data": "regular"}
+
+
+@pytest.mark.middleware
+@pytest.mark.fastapi
+@pytest.mark.asyncio
+async def test_middleware_streaming_with_large_chunks(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """
+    Test streaming responses with larger data chunks to ensure throttling
+    doesn't interfere with data integrity.
+    """
+    throttle = HTTPThrottle(
+        uid="large-stream-test",
+        rate="10/m",
+        identifier=default_client_identifier,
+    )
+    middleware_throttle = MiddlewareThrottle(
+        throttle=throttle,
+        path="/api/download",
+    )
+
+    async def large_stream_generator():
+        """Simulate downloading a large file in chunks."""
+        chunk_size = 1024  # 1KB chunks
+        for chunk_num in range(10):
+            # Generate predictable data for verification
+            chunk_header = f"CHUNK{chunk_num:04d}".encode()
+            padding = b"X" * (chunk_size - len(chunk_header))
+            yield chunk_header + padding
+            await asyncio.sleep(0.001)
+
+    app = FastAPI(lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[middleware_throttle],
+        backend=inmemory_backend,
+    )
+
+    @app.get("/api/download")
+    async def download_endpoint():
+        return StreamingResponse(
+            large_stream_generator(),
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": "attachment; filename=data.bin"},
+        )
+
+    base_url = "http://testserver"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=base_url
+    ) as client:
+        # First request should complete streaming successfully
+        response = await client.get("/api/download")
+        assert response.status_code == 200
+        assert "Content-Disposition" in response.headers
+
+        content = response.content
+        # Verify we got all 10 chunks (10KB total)
+        assert len(content) == 10 * 1024
+
+        # Verify chunk headers are intact
+        for chunk_num in range(10):
+            header = f"CHUNK{chunk_num:04d}".encode()
+            assert header in content
+
+
+@pytest.mark.middleware
+@pytest.mark.fastapi
+@pytest.mark.asyncio
+async def test_middleware_streaming_exception_during_stream(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """
+    Test that throttling is checked before streaming, so exceptions during
+    streaming are not related to throttling logic.
+    """
+    throttle = HTTPThrottle(
+        uid="stream-exception-test",
+        rate="5/m",
+        identifier=default_client_identifier,
+    )
+    middleware_throttle = MiddlewareThrottle(throttle=throttle)
+
+    async def failing_stream_generator():
+        """Generator that fails partway through."""
+        yield b"chunk-1\n"
+        yield b"chunk-2\n"
+        # Simulate an error during streaming
+        raise ValueError("Streaming error")
+
+    app = FastAPI(lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[middleware_throttle],
+        backend=inmemory_backend,
+    )
+
+    @app.get("/stream")
+    async def failing_stream_endpoint():
+        return StreamingResponse(failing_stream_generator(), media_type="text/plain")
+
+    base_url = "http://testserver"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=base_url
+    ) as client:
+        # The throttle middleware should allow the request through,
+        # but the streaming itself will fail
+        with pytest.raises(ValueError, match="Streaming error"):
+            await client.get("/stream")
+
+
+@pytest.mark.middleware
+@pytest.mark.fastapi
+def test_middleware_websocket_throttle(inmemory_backend: InMemoryBackend) -> None:
+    """Test that `ThrottleMiddleware` throttles WebSocket connections with `WebSocketThrottle`."""
+    ws_throttle = WebSocketThrottle(
+        uid="ws-middleware-throttle",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+    middleware_throttle = MiddlewareThrottle(throttle=ws_throttle, path="/ws")
+
+    app = FastAPI(lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[middleware_throttle],
+        backend=inmemory_backend,
+    )
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json({"message": "connected"})
+        await websocket.close()
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # First 2 connections should succeed
+        for _ in range(2):
+            with client.websocket_connect("/ws") as websocket:
+                data = websocket.receive_json()
+                assert data == {"message": "connected"}
+
+        # 3rd connection should be throttled (rejected before accept)
+        with pytest.raises((WebSocketDisconnect, Exception)):
+            with client.websocket_connect("/ws") as websocket:
+                websocket.receive_json()
+
+
+@pytest.mark.middleware
+@pytest.mark.fastapi
+def test_middleware_mixed_http_and_websocket_throttles(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """Test `ThrottleMiddleware` with both HTTP and WebSocket throttles simultaneously."""
+    http_throttle = HTTPThrottle(
+        uid="mixed-http",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+    ws_throttle = WebSocketThrottle(
+        uid="mixed-ws",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+
+    app = FastAPI(lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[
+            MiddlewareThrottle(throttle=http_throttle),
+            MiddlewareThrottle(throttle=ws_throttle),
+        ],
+        backend=inmemory_backend,
+    )
+
+    @app.get("/http")
+    async def http_endpoint():
+        return {"type": "http"}
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json({"type": "websocket"})
+        await websocket.close()
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # HTTP throttle works independently
+        assert client.get("/http").status_code == 200
+        assert client.get("/http").status_code == 200
+        assert client.get("/http").status_code == 429
+
+        # WebSocket throttle works independently (not affected by HTTP throttle)
+        with client.websocket_connect("/ws") as websocket:
+            data = websocket.receive_json()
+            assert data == {"type": "websocket"}
+
+        with client.websocket_connect("/ws") as websocket:
+            data = websocket.receive_json()
+            assert data == {"type": "websocket"}
+
+        # 3rd WebSocket connection should be throttled
+        with pytest.raises((WebSocketDisconnect, Exception)):
+            with client.websocket_connect("/ws") as websocket:
+                websocket.receive_json()

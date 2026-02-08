@@ -58,6 +58,24 @@ class LockTimeoutError(BackendError, TimeoutError):
     pass
 
 
+class QuotaError(TraffikException):
+    """Base exception for quota context errors."""
+
+    pass
+
+
+class QuotaAppliedError(QuotaError):
+    """Raised when attempting to modify an already consumed quota context."""
+
+    pass
+
+
+class QuotaCancelledError(QuotaError):
+    """Raised when attempting to modify a cancelled quota context."""
+
+    pass
+
+
 class ConnectionThrottled(HTTPException, TraffikException):
     """
     `HTTPException` raised when a connection is throttled.

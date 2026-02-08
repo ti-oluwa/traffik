@@ -2,21 +2,27 @@
 
 import asyncio
 import re
+import typing
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.requests import HTTPConnection, Request
-from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.responses import JSONResponse, StreamingResponse
+from starlette.routing import Route, WebSocketRoute
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from tests.conftest import BackendGen
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
+from traffik.middleware import (
+    MiddlewareThrottle,
+    ThrottleMiddleware,
+    _prepare_middleware_throttles,
+)
 from traffik.rates import Rate
-from traffik.throttles import HTTPThrottle
+from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
 @pytest.mark.asyncio
@@ -39,7 +45,9 @@ async def test_throttle_initialization() -> None:
     # Methods are stored in both upper and lower case for fast matching
     assert middleware_throttle.methods is not None
     assert "get" in middleware_throttle.methods or "GET" in middleware_throttle.methods
-    assert "post" in middleware_throttle.methods or "POST" in middleware_throttle.methods
+    assert (
+        "post" in middleware_throttle.methods or "POST" in middleware_throttle.methods
+    )
     assert middleware_throttle.predicate is None
 
     # Test with regex path
@@ -51,7 +59,10 @@ async def test_throttle_initialization() -> None:
     )
     assert middleware_throttle_regex.path is regex_pattern
     assert middleware_throttle_regex.methods is not None
-    assert "get" in middleware_throttle_regex.methods or "GET" in middleware_throttle_regex.methods
+    assert (
+        "get" in middleware_throttle_regex.methods
+        or "GET" in middleware_throttle_regex.methods
+    )
 
     # Test with no path/methods (applies to all)
     middleware_throttle_all = MiddlewareThrottle(throttle=throttle)
@@ -65,9 +76,6 @@ async def test_throttle_initialization() -> None:
 async def test_throttle_method_filtering(inmemory_backend: InMemoryBackend) -> None:
     """Test that `MiddlewareThrottle` correctly filters by HTTP method."""
     async with inmemory_backend(close_on_exit=True):
-        
-        
-
         throttle = HTTPThrottle(
             uid="method-filter-test",
             rate="1/min",
@@ -279,7 +287,7 @@ def test_middleware_basic_functionality(inmemory_backend: InMemoryBackend) -> No
 
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -340,7 +348,7 @@ def test_middleware_with_multiple_throttles(inmemory_backend: InMemoryBackend) -
 
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=middleware_throttles,
         backend=inmemory_backend,
     )
@@ -392,7 +400,7 @@ def test_middleware_method_specificity(inmemory_backend: InMemoryBackend) -> Non
 
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -441,7 +449,7 @@ def test_middleware_with_hook(inmemory_backend: InMemoryBackend) -> None:
 
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -483,7 +491,7 @@ def test_middleware_with_no_backend_specified(
 
     # Don't specify backend, should use the one from lifespan
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         # backend=None (implicit)
     )
@@ -525,7 +533,7 @@ async def test_middleware_multiple_backends(backends: BackendGen) -> None:
 
             app = Starlette(routes=routes)
             app.add_middleware(
-                ThrottleMiddleware,
+                ThrottleMiddleware,  # type: ignore[arg-type]
                 middleware_throttles=[middleware_throttle],
                 backend=backend,
             )
@@ -573,7 +581,7 @@ async def test_middleware_concurrency(inmemory_backend: InMemoryBackend) -> None
 
         app = Starlette(routes=routes)
         app.add_middleware(
-            ThrottleMiddleware,
+            ThrottleMiddleware,  # type: ignore[arg-type]
             middleware_throttles=[middleware_throttle],
             backend=inmemory_backend,
         )
@@ -624,7 +632,7 @@ def test_middleware_exemption_with_hook(inmemory_backend: InMemoryBackend) -> No
 
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -680,7 +688,7 @@ def test_middleware_methods_filter_is_case_insensitive(
 
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -720,8 +728,6 @@ def test_middleware_websocket_passthrough(inmemory_backend: InMemoryBackend) -> 
     async def http_endpoint(request: Request) -> JSONResponse:
         return JSONResponse({"type": "http"})
 
-    from starlette.routing import WebSocketRoute
-
     routes = [
         Route("/http", http_endpoint, methods=["GET"]),
         WebSocketRoute("/ws", websocket_endpoint),
@@ -729,7 +735,7 @@ def test_middleware_websocket_passthrough(inmemory_backend: InMemoryBackend) -> 
 
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[middleware_throttle],
         backend=inmemory_backend,
     )
@@ -762,7 +768,7 @@ def test_middleware_with_no_throttles(inmemory_backend: InMemoryBackend) -> None
 
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=[],  # Empty list
         backend=inmemory_backend,
     )
@@ -812,7 +818,7 @@ def test_middleware_with_multiple_overlapping_patterns(
 
     app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
     app.add_middleware(
-        ThrottleMiddleware,
+        ThrottleMiddleware,  # type: ignore[arg-type]
         middleware_throttles=middleware_throttles,
         backend=inmemory_backend,
     )
@@ -842,7 +848,9 @@ def test_middleware_with_multiple_overlapping_patterns(
 
 @pytest.mark.asyncio
 @pytest.mark.middleware
-async def test_middleware_complex_regex_patterns(inmemory_backend: InMemoryBackend) -> None:
+async def test_middleware_complex_regex_patterns(
+    inmemory_backend: InMemoryBackend,
+) -> None:
     """Test middleware with complex regex patterns including groups, alternation, and anchors."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
@@ -865,7 +873,10 @@ async def test_middleware_complex_regex_patterns(inmemory_backend: InMemoryBacke
             ("/api/users/550e8400-e29b-41d4-a716-446655440000", True),  # Valid UUID
             ("/api/products/123e4567-e89b-12d3-a456-426614174000", True),  # Valid UUID
             ("/api/users/123", False),  # Not a UUID
-            ("/api/orders/550e8400-e29b-41d4-a716-446655440000", False),  # Wrong resource
+            (
+                "/api/orders/550e8400-e29b-41d4-a716-446655440000",
+                False,
+            ),  # Wrong resource
             ("/api/users/not-a-uuid", False),  # Invalid UUID format
         ]
 
@@ -879,7 +890,9 @@ async def test_middleware_complex_regex_patterns(inmemory_backend: InMemoryBacke
 
 @pytest.mark.asyncio
 @pytest.mark.middleware
-async def test_middleware_string_auto_compile_to_regex(inmemory_backend: InMemoryBackend) -> None:
+async def test_middleware_string_auto_compile_to_regex(
+    inmemory_backend: InMemoryBackend,
+) -> None:
     """Test that string paths are automatically compiled to regex patterns."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
@@ -951,7 +964,9 @@ async def test_middleware_regex_with_query_params_ignored(
 
 @pytest.mark.asyncio
 @pytest.mark.middleware
-async def test_middleware_case_sensitive_regex(inmemory_backend: InMemoryBackend) -> None:
+async def test_middleware_case_sensitive_regex(
+    inmemory_backend: InMemoryBackend,
+) -> None:
     """Test that regex patterns are case-sensitive by default."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
@@ -978,3 +993,489 @@ async def test_middleware_case_sensitive_regex(inmemory_backend: InMemoryBackend
 
             result = await middleware_throttle(request)
             assert result is request
+
+
+@pytest.mark.middleware
+@pytest.mark.asyncio
+async def test_middleware_with_streaming_responses(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """
+    Test that ThrottleMiddleware does not interfere with streaming responses.
+
+    Streaming responses send data in chunks over time. The throttle should:
+    1. Check rate limits before streaming begins
+    2. Allow streaming to proceed normally if request is not throttled
+    3. Prevent streaming entirely if request is throttled (return 429 immediately)
+    """
+    throttle = HTTPThrottle(
+        uid="streaming-test",
+        rate="2/s",
+        identifier=default_client_identifier,
+    )
+    middleware_throttle = MiddlewareThrottle(
+        throttle=throttle,
+        path="/api/stream",
+        methods={"GET"},
+    )
+
+    async def stream_generator():
+        """Generator that yields chunks of data."""
+        for i in range(5):
+            yield f"chunk-{i}\n".encode()
+            await asyncio.sleep(0.01)  # Simulate slow streaming
+
+    async def stream_endpoint(request: Request) -> StreamingResponse:
+        return StreamingResponse(
+            stream_generator(),
+            media_type="text/plain",
+            headers={"X-Custom-Header": "streaming"},
+        )
+
+    async def regular_endpoint(request: Request) -> JSONResponse:
+        return JSONResponse({"data": "regular"})
+
+    routes = [
+        Route("/api/stream", stream_endpoint, methods=["GET"]),
+        Route("/api/regular", regular_endpoint, methods=["GET"]),
+    ]
+
+    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[middleware_throttle],
+        backend=inmemory_backend,
+    )
+
+    base_url = "http://testserver"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=base_url
+    ) as client:
+        # First request: Should stream successfully
+        response1 = await client.get("/api/stream")
+        assert response1.status_code == 200
+        assert response1.headers["X-Custom-Header"] == "streaming"
+
+        # Verify all chunks are received
+        content1 = response1.text
+        for i in range(5):
+            assert f"chunk-{i}" in content1
+
+        # Second request: Should also stream successfully (within rate limit)
+        response2 = await client.get("/api/stream")
+        assert response2.status_code == 200
+        content2 = response2.text
+        for i in range(5):
+            assert f"chunk-{i}" in content2
+
+        # Third request: Should be throttled BEFORE streaming starts
+        response3 = await client.get("/api/stream")
+        assert response3.status_code == 429
+        assert "Retry-After" in response3.headers
+
+        # Verify throttled response is plain text, not streaming chunks
+        assert "Too many requests" in response3.text
+        assert (
+            "chunk-" not in response3.text
+        )  # No streaming chunks in throttled response
+
+        # Non-throttled endpoint should work normally
+        response4 = await client.get("/api/regular")
+        assert response4.status_code == 200
+        assert response4.json() == {"data": "regular"}
+
+
+@pytest.mark.middleware
+@pytest.mark.asyncio
+async def test_middleware_streaming_with_large_chunks(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """
+    Test streaming responses with larger data chunks to ensure throttling
+    doesn't interfere with data integrity.
+    """
+    throttle = HTTPThrottle(
+        uid="large-stream-test",
+        rate="10/m",
+        identifier=default_client_identifier,
+    )
+    middleware_throttle = MiddlewareThrottle(
+        throttle=throttle,
+        path="/api/download",
+    )
+
+    async def large_stream_generator():
+        """Simulate downloading a large file in chunks."""
+        chunk_size = 1024  # 1KB chunks
+        for chunk_num in range(10):
+            # Generate predictable data for verification
+            chunk_header = f"CHUNK{chunk_num:04d}".encode()
+            padding = b"X" * (chunk_size - len(chunk_header))
+            yield chunk_header + padding
+            await asyncio.sleep(0.001)
+
+    async def download_endpoint(request: Request) -> StreamingResponse:
+        return StreamingResponse(
+            large_stream_generator(),
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": "attachment; filename=data.bin"},
+        )
+
+    routes = [Route("/api/download", download_endpoint)]
+    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]  # type: ignore[arg-type]
+        middleware_throttles=[middleware_throttle],
+        backend=inmemory_backend,
+    )
+
+    base_url = "http://testserver"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=base_url
+    ) as client:
+        # First request should complete streaming successfully
+        response = await client.get("/api/download")
+        assert response.status_code == 200
+        assert "Content-Disposition" in response.headers
+
+        content = response.content
+        # Verify we got all 10 chunks (10KB total)
+        assert len(content) == 10 * 1024
+
+        # Verify chunk headers are intact
+        for chunk_num in range(10):
+            header = f"CHUNK{chunk_num:04d}".encode()
+            assert header in content
+
+
+@pytest.mark.middleware
+@pytest.mark.asyncio
+async def test_middleware_streaming_exception_during_stream(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """
+    Test that throttling is checked before streaming, so exceptions during
+    streaming are not related to throttling logic.
+    """
+    throttle = HTTPThrottle(
+        uid="stream-exception-test",
+        rate="5/m",
+        identifier=default_client_identifier,
+    )
+    middleware_throttle = MiddlewareThrottle(throttle=throttle)
+
+    async def failing_stream_generator():
+        """Generator that fails partway through."""
+        yield b"chunk-1\n"
+        yield b"chunk-2\n"
+        # Simulate an error during streaming
+        raise ValueError("Streaming error")
+
+    async def failing_stream_endpoint(request: Request) -> StreamingResponse:
+        return StreamingResponse(failing_stream_generator(), media_type="text/plain")
+
+    routes = [Route("/stream", failing_stream_endpoint)]
+    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[middleware_throttle],
+        backend=inmemory_backend,
+    )
+
+    base_url = "http://testserver"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=base_url
+    ) as client:
+        # The throttle middleware should allow the request through,
+        # but the streaming itself will fail
+        with pytest.raises(ValueError, match="Streaming error"):
+            await client.get("/stream")
+
+
+@pytest.mark.middleware
+def test_middleware_websocket_throttle(inmemory_backend: InMemoryBackend) -> None:
+    """Test that `ThrottleMiddleware` throttles WebSocket connections with `WebSocketThrottle`."""
+
+    ws_throttle = WebSocketThrottle(
+        uid="ws-middleware-throttle",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+    middleware_throttle = MiddlewareThrottle(throttle=ws_throttle, path="/ws")
+
+    async def websocket_endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json({"message": "connected"})
+        await websocket.close()
+
+    routes = [WebSocketRoute("/ws", websocket_endpoint)]
+    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[middleware_throttle],
+        backend=inmemory_backend,
+    )
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # First 2 connections should succeed
+        for _ in range(2):
+            with client.websocket_connect("/ws") as websocket:
+                data = websocket.receive_json()
+                assert data == {"message": "connected"}
+
+        # 3rd connection should be throttled (rejected before accept)
+        with pytest.raises((WebSocketDisconnect, Exception)):
+            with client.websocket_connect("/ws") as websocket:
+                websocket.receive_json()
+
+
+@pytest.mark.middleware
+def test_middleware_mixed_http_and_websocket_throttles(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """Test `ThrottleMiddleware` with both HTTP and WebSocket throttles simultaneously."""
+
+    http_throttle = HTTPThrottle(
+        uid="mixed-http",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+    ws_throttle = WebSocketThrottle(
+        uid="mixed-ws",
+        rate=Rate.parse("2/5s"),
+        identifier=default_client_identifier,
+    )
+
+    async def http_endpoint(request: Request) -> JSONResponse:
+        return JSONResponse({"type": "http"})
+
+    async def websocket_endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json({"type": "websocket"})
+        await websocket.close()
+
+    routes = [
+        Route("/http", http_endpoint, methods=["GET"]),
+        WebSocketRoute("/ws", websocket_endpoint),
+    ]
+
+    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+    app.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[
+            MiddlewareThrottle(throttle=http_throttle),
+            MiddlewareThrottle(throttle=ws_throttle),
+        ],
+        backend=inmemory_backend,
+    )
+
+    base_url = "http://0.0.0.0"
+    with TestClient(app, base_url=base_url) as client:
+        # HTTP throttle works independently
+        assert client.get("/http").status_code == 200
+        assert client.get("/http").status_code == 200
+        assert client.get("/http").status_code == 429
+
+        # WebSocket throttle works independently (not affected by HTTP throttle)
+        with client.websocket_connect("/ws") as websocket:
+            data = websocket.receive_json()
+            assert data == {"type": "websocket"}
+
+        with client.websocket_connect("/ws") as websocket:
+            data = websocket.receive_json()
+            assert data == {"type": "websocket"}
+
+        # 3rd WebSocket connection should be throttled
+        with pytest.raises((WebSocketDisconnect, Exception)):
+            with client.websocket_connect("/ws") as websocket:
+                websocket.receive_json()
+
+
+# --- Sort functionality tests for _prepare_middleware_throttles ---
+
+
+def _make_http_throttle(
+    uid: str, cost: typing.Optional[int] = None
+) -> MiddlewareThrottle:
+    """Helper to create an HTTP MiddlewareThrottle with a given cost."""
+    return MiddlewareThrottle(
+        throttle=HTTPThrottle(
+            uid=uid, rate="10/s", identifier=default_client_identifier
+        ),
+        cost=cost,
+    )
+
+
+def _make_ws_throttle(
+    uid: str, cost: typing.Optional[int] = None
+) -> MiddlewareThrottle:
+    """Helper to create a WebSocket MiddlewareThrottle with a given cost."""
+    return MiddlewareThrottle(
+        throttle=WebSocketThrottle(
+            uid=uid, rate="10/s", identifier=default_client_identifier
+        ),
+        cost=cost,
+    )
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_cheap_first() -> None:
+    """Test that 'cheap_first' sorts throttles by ascending cost."""
+    t_cheap = _make_http_throttle("cheap", cost=1)
+    t_mid = _make_http_throttle("mid", cost=5)
+    t_expensive = _make_http_throttle("expensive", cost=10)
+
+    result = _prepare_middleware_throttles(
+        [t_expensive, t_cheap, t_mid], sort="cheap_first"
+    )
+    assert result["http"] == [t_cheap, t_mid, t_expensive]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_cheap_last() -> None:
+    """Test that 'cheap_last' sorts throttles by descending cost."""
+    t_cheap = _make_http_throttle("cheap", cost=1)
+    t_mid = _make_http_throttle("mid", cost=5)
+    t_expensive = _make_http_throttle("expensive", cost=10)
+
+    result = _prepare_middleware_throttles(
+        [t_cheap, t_mid, t_expensive], sort="cheap_last"
+    )
+    assert result["http"] == [t_expensive, t_mid, t_cheap]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_no_sort() -> None:
+    """Test that False/None preserves the original insertion order."""
+    t1 = _make_http_throttle("first", cost=10)
+    t2 = _make_http_throttle("second", cost=1)
+    t3 = _make_http_throttle("third", cost=5)
+
+    for sort_val in (False, None):
+        result = _prepare_middleware_throttles([t1, t2, t3], sort=sort_val)
+        assert result["http"] == [t1, t2, t3]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_custom_callable() -> None:
+    """Test that a custom callable is used as the sort key."""
+    t1 = _make_http_throttle("alpha", cost=5)
+    t2 = _make_http_throttle("beta", cost=1)
+    t3 = _make_http_throttle("gamma", cost=10)
+
+    # Sort by throttle uid alphabetically
+    result = _prepare_middleware_throttles([t3, t1, t2], sort=lambda t: t.throttle.uid)
+    assert result["http"] == [t1, t2, t3]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_none_cost_sorted_last() -> None:
+    """Test that throttles without a cost (None) are sorted last with 'cheap_first'."""
+    t_cheap = _make_http_throttle("cheap", cost=1)
+    t_no_cost = _make_http_throttle("no-cost", cost=None)
+    t_expensive = _make_http_throttle("expensive", cost=100)
+
+    result = _prepare_middleware_throttles(
+        [t_no_cost, t_expensive, t_cheap], sort="cheap_first"
+    )
+    assert result["http"] == [t_cheap, t_expensive, t_no_cost]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_none_cost_sorted_first_with_cheap_last() -> None:
+    """Test that throttles without a cost (None) are sorted first with 'cheap_last'."""
+    t_cheap = _make_http_throttle("cheap", cost=1)
+    t_no_cost = _make_http_throttle("no-cost", cost=None)
+    t_expensive = _make_http_throttle("expensive", cost=100)
+
+    result = _prepare_middleware_throttles(
+        [t_cheap, t_expensive, t_no_cost], sort="cheap_last"
+    )
+    # -inf is the most negative, so None cost (treated as -inf) comes first
+    assert result["http"][0] is t_no_cost
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_invalid_sort() -> None:
+    """Test that an invalid sort value raises ValueError."""
+    t = _make_http_throttle("test", cost=1)
+    with pytest.raises(ValueError, match="Invalid value for `sort`"):
+        _prepare_middleware_throttles([t], sort="invalid")  # type: ignore[arg-type]
+
+
+@pytest.mark.middleware
+def test_prepare_middleware_throttles_categorization() -> None:
+    """Test that throttles are categorized into 'http' and 'websocket' buckets."""
+    t_http1 = _make_http_throttle("http1", cost=1)
+    t_http2 = _make_http_throttle("http2", cost=2)
+    t_ws1 = _make_ws_throttle("ws1", cost=1)
+    t_ws2 = _make_ws_throttle("ws2", cost=2)
+
+    result = _prepare_middleware_throttles(
+        [t_ws2, t_http2, t_ws1, t_http1], sort="cheap_first"
+    )
+    assert result["http"] == [t_http1, t_http2]
+    assert result["websocket"] == [t_ws1, t_ws2]
+
+
+@pytest.mark.middleware
+def test_middleware_sort_parameter_integration(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    """Test that the sort parameter on ThrottleMiddleware is applied correctly."""
+    t_expensive = MiddlewareThrottle(
+        throttle=HTTPThrottle(
+            uid="expensive", rate="10/s", identifier=default_client_identifier
+        ),
+        cost=10,
+    )
+    t_cheap = MiddlewareThrottle(
+        throttle=HTTPThrottle(
+            uid="cheap", rate="10/s", identifier=default_client_identifier
+        ),
+        cost=1,
+    )
+
+    async def endpoint(request: Request) -> JSONResponse:
+        return JSONResponse({"ok": True})
+
+    routes = [Route("/test", endpoint, methods=["GET"])]
+
+    def _find_throttle_middleware(
+        app: Starlette,
+    ) -> typing.Optional[ThrottleMiddleware]:
+        """Walk the middleware stack to find the ThrottleMiddleware instance."""
+        layer = app.middleware_stack
+        while layer is not None and not isinstance(layer, ThrottleMiddleware):
+            layer = getattr(layer, "app", None)
+        return layer  # type: ignore[return-value]
+
+    # cheap_first: cheap should come before expensive
+    app1 = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+    app1.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[t_expensive, t_cheap],
+        backend=inmemory_backend,
+        sort="cheap_first",
+    )
+    # Build the middleware stack by making a request via TestClient
+    with TestClient(app1) as client:
+        client.get("/test")
+    middleware1 = _find_throttle_middleware(app1)
+    assert middleware1 is not None
+    assert middleware1.middleware_throttles["http"] == [t_cheap, t_expensive]
+
+    # cheap_last: expensive should come before cheap
+    app2 = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+    app2.add_middleware(
+        ThrottleMiddleware,  # type: ignore[arg-type]
+        middleware_throttles=[t_cheap, t_expensive],
+        backend=inmemory_backend,
+        sort="cheap_last",
+    )
+    with TestClient(app2) as client:
+        client.get("/test")
+    middleware2 = _find_throttle_middleware(app2)
+    assert middleware2 is not None
+    assert middleware2.middleware_throttles["http"] == [t_expensive, t_cheap]

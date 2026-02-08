@@ -81,7 +81,7 @@ class ScenarioResult:
         if not self.latencies:
             return 0
         sorted_latencies = sorted(self.latencies)
-        idx = int(len(sorted_latencies) * 0.95)
+        idx = min(int(len(sorted_latencies) * 0.95), len(sorted_latencies) - 1)
         return sorted_latencies[idx] * 1000
 
     @property
@@ -89,7 +89,7 @@ class ScenarioResult:
         if not self.latencies:
             return 0
         sorted_latencies = sorted(self.latencies)
-        idx = int(len(sorted_latencies) * 0.99)
+        idx = min(int(len(sorted_latencies) * 0.99), len(sorted_latencies) - 1)
         return sorted_latencies[idx] * 1000
 
 
@@ -109,12 +109,14 @@ def create_backend(config: BenchmarkConfig):
     if config.backend == "redis":
         if not config.redis_url:
             raise ValueError("Redis URL required for redis backend")
+
         return RedisBackend(
             connection=config.redis_url,
             namespace="bench",
             identifier=custom_identifier,
             persistent=False,
         )
+
     elif config.backend == "memcached":
         return BenchmarkMemcachedBackend(
             url=config.memcached_url or "memcached://localhost:11211",
@@ -123,10 +125,12 @@ def create_backend(config: BenchmarkConfig):
             persistent=False,
             track_keys=config.memcached_track_keys,
         )
+
     return InMemoryBackend(
         namespace="bench",
         identifier=custom_identifier,
         persistent=False,
+        number_of_shards=5,
     )
 
 
@@ -174,12 +178,11 @@ def create_app(
     return app
 
 
-async def run_scenario_low_load(
-    app: FastAPI, config: BenchmarkConfig
-) -> ScenarioResult:
+async def run_scenario_low_load(config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 1: Low load - messages well within limit."""
-    num_messages = 50
+    app = create_app(limit=100, window=60, config=config)
 
+    num_messages = 50
     latencies = []
     successful = 0
     throttled = 0
@@ -220,12 +223,11 @@ async def run_scenario_low_load(
     )
 
 
-async def run_scenario_high_load(
-    app: FastAPI, config: BenchmarkConfig
-) -> ScenarioResult:
+async def run_scenario_high_load(config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 2: High load - messages exceeding limit."""
-    num_messages = 200
+    app = create_app(limit=100, window=60, config=config)
 
+    num_messages = 200
     latencies = []
     successful = 0
     throttled = 0
@@ -267,13 +269,11 @@ async def run_scenario_high_load(
     )
 
 
-async def run_scenario_sustained_load(
-    app: FastAPI, config: BenchmarkConfig
-) -> ScenarioResult:
+async def run_scenario_sustained_load(config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 3: Sustained load under higher limit."""
     app = create_app(limit=1000, window=60, config=config)
-    num_messages = 500
 
+    num_messages = 500
     latencies = []
     successful = 0
     throttled = 0
@@ -315,13 +315,11 @@ async def run_scenario_sustained_load(
     )
 
 
-async def run_scenario_burst_traffic(
-    app: FastAPI, config: BenchmarkConfig
-) -> ScenarioResult:
+async def run_scenario_burst_traffic(config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 4: Burst traffic pattern."""
     app = create_app(limit=50, window=60, config=config)
-    num_messages = 100
 
+    num_messages = 100
     latencies = []
     successful = 0
     throttled = 0
@@ -364,13 +362,13 @@ async def run_scenario_burst_traffic(
 
 
 async def run_scenario_concurrent_connections(
-    app: FastAPI, config: BenchmarkConfig
+    config: BenchmarkConfig,
 ) -> ScenarioResult:
     """Scenario 5: Multiple concurrent WebSocket connections."""
     app = create_app(limit=100, window=60, config=config)
+
     num_connections = 10
     messages_per_connection = 15
-
     latencies = []
     successful = 0
     throttled = 0
@@ -460,9 +458,7 @@ async def run_benchmark_suite(
 
         scenario_results = []
         for i in range(config.iterations):
-            app = create_app(limit=100, window=60, config=config)
-
-            result = await runner(app, config)
+            result = await runner(config)
             scenario_results.append(result)
 
             if i < config.iterations - 1:

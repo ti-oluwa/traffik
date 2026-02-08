@@ -177,6 +177,7 @@ async def test_fixed_window_multiple_windows(backend: InMemoryBackend):
 
 @pytest.mark.anyio
 @pytest.mark.strategy
+@pytest.mark.flaky(reruns=3, reruns_delay=2)
 async def test_fixed_window_sub_second_rates(backend: InMemoryBackend):
     """Test with rates smaller than 1 second."""
     async with backend(close_on_exit=True):

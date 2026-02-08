@@ -2,32 +2,10 @@
 **Traffik** - Asynchronous Distributed Rate Limiting for Starlette and FastAPI Applications.
 """
 
-from .backends.base import (
-    ThrottleBackend as ThrottleBackend,
-)
-from .backends.base import (
-    connection_throttled as connection_throttled,
-)
-from .backends.base import (
-    default_identifier as default_identifier,
-)
-from .backends.base import (
-    get_throttle_backend as get_throttle_backend,
-)
-from .backends.inmemory import InMemoryBackend as InMemoryBackend
+from .backends.base import *  # noqa
+from .backends.inmemory import *  # noqa
 from .rates import Rate  # noqa
-from .throttles import (
-    HTTPThrottle as HTTPThrottle,
-)
-from .throttles import (
-    Throttle as Throttle,
-)
-from .throttles import (
-    WebSocketThrottle as WebSocketThrottle,
-)
-from .throttles import (
-    is_throttled as is_throttled,
-)
+from .throttles import *  # noqa
 from .types import *  # noqa
 from .utils import (  # noqa
     get_lock_blocking,
@@ -39,7 +17,7 @@ from .utils import (  # noqa
     set_lock_ttl,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.0.2"
 
 
 # NOTE: All operations by traffik must be fast, efficient and non-blocking.

@@ -334,11 +334,13 @@ async def test_multi_set(backends: BackendGen) -> None:
             key3 = backend.get_key("key3")
 
             # Set multiple keys
-            await backend.multi_set({
-                key1: "value1",
-                key2: "value2",
-                key3: "value3",
-            })
+            await backend.multi_set(
+                {
+                    key1: "value1",
+                    key2: "value2",
+                    key3: "value3",
+                }
+            )
 
             # Verify all keys were set
             assert await backend.get(key1) == "value1"
@@ -356,10 +358,13 @@ async def test_multi_set_with_expire(backends: BackendGen) -> None:
             key2 = backend.get_key("expkey2")
 
             # Set multiple keys with 1 second expiration
-            await backend.multi_set({
-                key1: "expvalue1",
-                key2: "expvalue2",
-            }, expire=1)
+            await backend.multi_set(
+                {
+                    key1: "expvalue1",
+                    key2: "expvalue2",
+                },
+                expire=1,
+            )
 
             # Values should exist immediately
             assert await backend.get(key1) == "expvalue1"
@@ -397,10 +402,12 @@ async def test_multi_set_overwrite(backends: BackendGen) -> None:
             await backend.set(key2, "old2")
 
             # Overwrite with multi_set
-            await backend.multi_set({
-                key1: "new1",
-                key2: "new2",
-            })
+            await backend.multi_set(
+                {
+                    key1: "new1",
+                    key2: "new2",
+                }
+            )
 
             # Verify overwritten
             assert await backend.get(key1) == "new1"
@@ -418,11 +425,13 @@ async def test_multi_set_and_multi_get_roundtrip(backends: BackendGen) -> None:
             key3 = backend.get_key("rtkey3")
 
             # Set using multi_set
-            await backend.multi_set({
-                key1: "rtvalue1",
-                key2: "rtvalue2",
-                key3: "rtvalue3",
-            })
+            await backend.multi_set(
+                {
+                    key1: "rtvalue1",
+                    key2: "rtvalue2",
+                    key3: "rtvalue3",
+                }
+            )
 
             # Get using multi_get
             values = await backend.multi_get(key1, key2, key3)

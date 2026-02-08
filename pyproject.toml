@@ -1,7 +1,7 @@
 [project]
 name = "traffik"
-version = "1.0.0"
-description = "Distributed rate limiting for Starlette and FastAPI applications."
+version = "1.0.2"
+description = "Asynchronous distributed rate limiting for FastAPI/Starlette applications."
 readme = "README.md"
 authors = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
@@ -17,7 +17,7 @@ keywords = [
     "websocket", "async", "asyncio", "middleware",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -110,6 +110,7 @@ markers = [
     "decorator: tests that test decorator functionality",
     "concurrent: tests that test concurrent/parallel behavior",
     "middleware: tests that test middleware functionality",
+    "quota: tests that test `QuotaContext` functionality",
     "multithreaded: test that test multithreading functionality",
 ]
 

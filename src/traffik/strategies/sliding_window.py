@@ -11,6 +11,8 @@ from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
+    "SlidingWindowLog",
+    "SlidingWindowCounter",
     "SlidingWindowLogStrategy",
     "SlidingWindowCounterStrategy",
     "SlidingWindowLogStatMetadata",
@@ -154,21 +156,32 @@ class SlidingWindowLogStrategy:
             if old_log_json and old_log_json != "":
                 try:
                     entries: typing.List[typing.List[float]] = load_data(old_log_json)
-                except MsgPackDecodeError:
+                except (MsgPackDecodeError, ValueError, TypeError):
                     entries = []
             else:
                 entries = []
 
-            # Filter entries to only include those within the current window and sum their costs
-            valid_entries = [
-                [float(ts), float(c)] for ts, c in entries if ts > window_start
-            ]
-            current_cost_sum = sum(c for _, c in valid_entries)
+            # Filter entries, sum costs, and find oldest timestamp in one pass for efficiency
+            valid_entries = []
+            current_cost_sum = 0.0
+            oldest_timestamp = float("inf")
+
+            try:
+                for ts, c in entries:
+                    ts_f, c_f = float(ts), float(c)
+                    if ts_f > window_start:
+                        valid_entries.append([ts_f, c_f])
+                        current_cost_sum += c_f
+                        if ts_f < oldest_timestamp:
+                            oldest_timestamp = ts_f
+            except (ValueError, TypeError):
+                valid_entries = []
+                current_cost_sum = 0.0
+                oldest_timestamp = float("inf")
 
             # If adding this request's cost would exceed limit, reject it
             if current_cost_sum + cost > rate.limit:
-                # Find the oldest entry to calculate wait time
-                oldest_timestamp = min(ts for ts, _ in valid_entries)
+                # Use the oldest entry to calculate wait time
                 wait_ms = (oldest_timestamp + window_duration_ms) - now
                 await backend.set(log_key, dump_data(valid_entries), expire=ttl_seconds)
                 return wait_ms
@@ -209,30 +222,38 @@ class SlidingWindowLogStrategy:
         if old_log_json and old_log_json != "":
             try:
                 entries: typing.List[typing.List[float]] = load_data(old_log_json)
-            except MsgPackDecodeError:
+            except (MsgPackDecodeError, ValueError, TypeError):
                 entries = []
         else:
             entries = []
 
-        # Filter entries to only include those within the current window and sum their costs
-        valid_entries = [
-            [float(ts), float(c)] for ts, c in entries if ts > window_start
-        ]
-        current_cost_sum = sum(c for _, c in valid_entries)
+        # Single pass: filter entries, sum costs, and find oldest timestamp
+        valid_entries = []
+        current_cost_sum = 0.0
+        oldest_timestamp: typing.Optional[float] = None
+
+        try:
+            for ts, c in entries:
+                ts_f, c_f = float(ts), float(c)
+                if ts_f > window_start:
+                    valid_entries.append([ts_f, c_f])
+                    current_cost_sum += c_f
+                    if oldest_timestamp is None or ts_f < oldest_timestamp:
+                        oldest_timestamp = ts_f
+        except (ValueError, TypeError):
+            valid_entries = []
+            current_cost_sum = 0.0
+            oldest_timestamp = None
 
         # Calculate remaining capacity
         hits_remaining = max(rate.limit - current_cost_sum, 0.0)
 
         # If over limit, calculate wait time
-        oldest_timestamp = None
-        if current_cost_sum > rate.limit:
-            oldest_timestamp = min(ts for ts, _ in valid_entries)
+        if current_cost_sum > rate.limit and oldest_timestamp is not None:
             wait_ms = (oldest_timestamp + window_duration_ms) - now
             wait_ms = max(wait_ms, 0.0)
         else:
             wait_ms = 0.0
-            if valid_entries:
-                oldest_timestamp = min(ts for ts, _ in valid_entries)
 
         return StrategyStat(
             key=key,
@@ -452,3 +473,7 @@ class SlidingWindowCounterStrategy:
                 weighted_count=weighted_count,
             ),
         )
+
+
+SlidingWindowLog = SlidingWindowLogStrategy  # Alias for convenience
+SlidingWindowCounter = SlidingWindowCounterStrategy  # Alias for convenience

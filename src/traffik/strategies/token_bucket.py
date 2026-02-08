@@ -11,6 +11,8 @@ from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
+    "TokenBucket",
+    "TokenBucketWithDebt",
     "TokenBucketStrategy",
     "TokenBucketWithDebtStrategy",
     "TokenBucketStatMetadata",
@@ -189,7 +191,7 @@ class TokenBucketStrategy:
                     )
                     tokens = float(bucket_state.get("tokens", capacity))
                     last_refill = float(bucket_state.get("last_refill", now))
-                except (MsgPackDecodeError, ValueError, KeyError):
+                except (MsgPackDecodeError, ValueError, KeyError, AttributeError):
                     # If state is corrupted, reinitialize bucket at full capacity
                     tokens = float(capacity)
                     last_refill = now
@@ -254,7 +256,7 @@ class TokenBucketStrategy:
                 bucket_state: typing.Dict[str, typing.Any] = load_data(old_state_json)
                 tokens = float(bucket_state.get("tokens", capacity))
                 last_refill = float(bucket_state.get("last_refill", now))
-            except (MsgPackDecodeError, ValueError, KeyError):
+            except (MsgPackDecodeError, ValueError, KeyError, AttributeError):
                 # If state is corrupted, assume bucket is at full capacity
                 tokens = float(capacity)
                 last_refill = now
@@ -419,7 +421,7 @@ class TokenBucketWithDebtStrategy:
                     bucket_state = load_data(old_state_json)
                     tokens = float(bucket_state.get("tokens", capacity))
                     last_refill = float(bucket_state.get("last_refill", now))
-                except (MsgPackDecodeError, ValueError, KeyError):
+                except (MsgPackDecodeError, ValueError, KeyError, AttributeError):
                     # If state is corrupted, reinitialize bucket at full capacity
                     tokens = float(capacity)
                     last_refill = now
@@ -484,7 +486,7 @@ class TokenBucketWithDebtStrategy:
                 bucket_state = load_data(old_state_json)
                 tokens = float(bucket_state.get("tokens", capacity))
                 last_refill = float(bucket_state.get("last_refill", now))
-            except (MsgPackDecodeError, ValueError, KeyError):
+            except (MsgPackDecodeError, ValueError, KeyError, AttributeError):
                 # If state is corrupted, assume bucket is at full capacity
                 tokens = float(capacity)
                 last_refill = now
@@ -508,7 +510,7 @@ class TokenBucketWithDebtStrategy:
         else:
             wait_ms = 0.0
 
-        return StrategyStat[TokenBucketWithDebtStatMetadata](
+        return StrategyStat(
             key=key,
             rate=rate,
             hits_remaining=hits_remaining,
@@ -523,3 +525,7 @@ class TokenBucketWithDebtStrategy:
                 last_refill_ms=last_refill,
             ),
         )
+
+
+TokenBucket = TokenBucketStrategy  # Alias for convenience
+TokenBucketWithDebt = TokenBucketWithDebtStrategy  # Alias for convenience

@@ -156,10 +156,16 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     - expire(key, seconds): Set expiration on existing key
     - reset(): Clear all throttling data
 
+    Optionally, backends can also override the following methods for better performance:
+
+    - increment_with_ttl(key, amount, ttl): Atomically increment and set TTL if key is new
+    - multi_get(*keys): Atomically get multiple keys in one operation
+    - multi_set(items, expire): Atomically set multiple keys in one operation
+
     The `get()`, `set()`, and `delete()` methods need explicit locking when utilized in racy conditions.
     Hence, locks should not be implemented implicitly in these methods.
 
-    NOTE: All backend operation must be done as fast and efficient as possible and should not block the event loop.
+    Note! All backend operation must be done as fast and efficient as possible and should not block the event loop.
     Operations like logging should not be done on critical paths to prevent deadlocks or performance issues.
     Logging degrades performance significantly and should be avoided in backend operations.
     """

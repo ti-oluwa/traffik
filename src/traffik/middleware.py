@@ -158,18 +158,26 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
 
         # Set a clean `__signature__` so FastAPI's dependency injection only
         # sees `connection` and doesn't treat *args/**kwargs as query params.
-        call_signature = inspect.signature(self.__call__)
-        self.__signature__ = call_signature.replace(
-            parameters=[
-                param
-                for param in call_signature.parameters.values()
-                if param.kind
-                not in (
-                    inspect.Parameter.VAR_POSITIONAL,
-                    inspect.Parameter.VAR_KEYWORD,
-                )
-            ]
-        )
+
+        # The middleware throttle' signature should basically mirror the throttle's signature.
+        # If the throttle has a custom signature, use it. Else,
+        # create a signature that only includes the `connection` parameter frm the `hit` method,
+        # and excludes *args and **kwargs.
+        if throttle_signature := getattr(throttle, "__signature__", None) is not None:
+            self.__signature__ = throttle_signature
+        else:
+            signature = inspect.signature(self.hit)
+            self.__signature__ = signature.replace(
+                parameters=[
+                    param
+                    for param in signature.parameters.values()
+                    if param.kind
+                    not in (
+                        inspect.Parameter.VAR_POSITIONAL,
+                        inspect.Parameter.VAR_KEYWORD,
+                    )
+                ]
+            )
 
     async def hit(
         self,
@@ -237,6 +245,7 @@ _SortThrottles = typing.Union[
 
 def _prepare_middleware_throttles(
     middleware_throttles: typing.Sequence[MiddlewareThrottle[HTTPConnectionT]],
+    *,
     sort: _SortThrottles = "cheap_first",
 ) -> typing.Mapping[
     typing.Literal["http", "websocket"],

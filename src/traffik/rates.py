@@ -88,7 +88,11 @@ class Rate:
         object.__setattr__(self, "rpd", rpd)
 
     def __eq__(self, other: object, /) -> bool:
-        return isinstance(other, Rate) and self.rps == other.rps
+        return (
+            isinstance(other, Rate)
+            and self.limit == other.limit
+            and self.expire == other.expire
+        )
 
     @classmethod
     def parse(cls, rate: str) -> "Rate":

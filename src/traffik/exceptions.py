@@ -18,7 +18,7 @@ class TraffikException(Exception):
     pass
 
 
-class ConfigurationError(TraffikException):
+class ConfigurationError(TraffikException, ValueError):
     """Exception raised when the throttle configuration is invalid."""
 
     pass

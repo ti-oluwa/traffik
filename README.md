@@ -1099,7 +1099,7 @@ api_throttle = HTTPThrottle(uid="api", rate="1000/h", backend=shared_redis)
 
 Need to know how close a user is to their rate limit? Want to show remaining quota in your API responses or build rate limit dashboards? Traffik provides detailed strategy statistics through the `throttle.stat()` method.
 
-#### Using `throttle.stat()` Directly
+#### Using `throttle.stat()`
 
 The `stat()` method returns a `StrategyStat` object containing the current rate limit state without consuming any quota:
 
@@ -1124,32 +1124,6 @@ async def get_usage(request: Request):
     }
 ```
 
-#### Dependency Injection with `Depends(throttle.stat)`
-
-For cleaner code, you can inject statistics as a FastAPI dependency:
-
-```python
-from fastapi import FastAPI, Request, Depends
-from traffik import HTTPThrottle
-from traffik.types import StrategyStat
-
-throttle = HTTPThrottle(uid="api", rate="100/hour", backend=backend)
-
-@app.get("/data", dependencies=[Depends(throttle)])
-async def get_data(
-    request: Request,
-    stat: StrategyStat = Depends(throttle.stat),  # Injected via Depends
-):
-    # stat contains the current throttle state
-    return {
-        "data": "your response",
-        "rate_limit": {
-            "remaining": stat.hits_remaining,
-            "limit": stat.rate.limit,
-        }
-    }
-```
-
 #### Typed Metadata for Strategy-Specific Information
 
 Each strategy provides typed metadata with strategy-specific details. Import the corresponding `TypedDict` for full type safety:
@@ -1171,11 +1145,9 @@ throttle = HTTPThrottle(
 )
 
 @app.get("/status", dependencies=[Depends(throttle)])
-async def get_status(
-    request: Request,
-    stat: StrategyStat[TokenBucketStatMetadata] = Depends(throttle.stat),
-):
-    if stat and stat.metadata:
+async def get_status(request: Request):  
+    stat: StrategyStat[TokenBucketStatMetadata] = throttle.stat(request)
+    if stat is not None and stat.metadata:
         return {
             "tokens": stat.metadata["tokens"],
             "capacity": stat.metadata["capacity"],
@@ -1204,6 +1176,7 @@ async def get_status(
 A common pattern is to include rate limit information in response headers:
 
 ```python
+import math
 from fastapi import FastAPI, Request, Response, Depends
 from traffik import HTTPThrottle
 from traffik.types import StrategyStat
@@ -1211,17 +1184,13 @@ from traffik.types import StrategyStat
 throttle = HTTPThrottle(uid="api", rate="100/hour", backend=backend)
 
 @app.get("/data", dependencies=[Depends(throttle)])
-async def get_data(
-    request: Request,
-    response: Response,
-    stat: StrategyStat = Depends(throttle.stat),
-):
+async def get_data(request: Request, response: Response):
+    stat = throttle.stat(request, context={"scope": "<some_scope>"})
     # Add standard rate limit headers
-    if stat:
+    if stat is not None:
         response.headers["X-RateLimit-Limit"] = str(stat.rate.limit)
         response.headers["X-RateLimit-Remaining"] = str(int(stat.hits_remaining))
-        response.headers["X-RateLimit-Reset"] = str(int(stat.rate.expire / 1000))
-**
+        response.headers["X-RateLimit-Reset"] = str(math.ceil(stat.wait_ms / 1000))
     return {"data": "value"}
 ```
 
@@ -1241,12 +1210,11 @@ rate_limit_remaining = Gauge(
 )
 
 @app.get("/api/resource", dependencies=[Depends(throttle)])
-async def get_resource(
-    request: Request,
-    stat: StrategyStat = Depends(throttle.stat),
-):
+async def get_resource(request: Request):
     user_id = get_user_id(request)
-    if stat:
+
+    stat = throttle.stat(request)
+    if stat is not None:
         rate_limit_remaining.labels(
             throttle_uid="api",
             user_id=user_id
@@ -2265,6 +2233,18 @@ class CustomBackend(ThrottleBackend[YourConnectionType, HTTPConnectionT]):
         Return values in same order as keys.
         """
         return [await self.get(key) for key in keys]
+
+    async def multi_set(
+        self,
+        items: typing.Mapping[str, str],
+        expire: typing.Optional[int] = None
+    ) -> None:
+        """
+        Set multiple keys atomically with optional TTL.
+        `items` is a dict of key-value pairs.
+        """
+        for key, value in items.items():
+            await self.set(key, value, expire=expire)
     
     async def get_lock(self, name: str) -> AsyncLock:
         """Get distributed lock."""
@@ -2290,6 +2270,7 @@ class CustomBackend(ThrottleBackend[YourConnectionType, HTTPConnectionT]):
 
 - `increment_with_ttl()` - Override for atomic operation
 - `multi_get()` - Override for batch retrieval
+- `multi_set()` - Override for batch setting
 - All operations must be non-blocking and fast
 
 ## Testing
@@ -2482,7 +2463,7 @@ Traffik supports native WebSocket rate limiting — limiting individual messages
 | Burst Traffic | 7,290 | 0.10ms | 0.19ms | 0.27ms |
 | Concurrent (10 conn) | 8,254 | 0.64ms | 0.81ms | 0.93ms |
 
-### Why Sustained Load Is Slower
+### Why Traffik Seems Slower When all Requests Hit the Same Key
 
 For the in-memory backend, Traffik uses `_AsyncRLock` (a custom fair re-entrant version of `asyncio.Lock`) on backend operations to guarantee atomicity. Under high concurrency (50 coroutines hitting the same rate limit key), each request must wait its turn. SlowAPI uses synchronous `threading.RLock` on an in-memory `Counter`, which doesn't yield the event loop — concurrent coroutines don't actually contend because the lock is acquired and released within a single synchronous call.
 

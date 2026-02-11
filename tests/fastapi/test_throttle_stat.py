@@ -3,7 +3,7 @@
 import asyncio
 
 import pytest
-from fastapi import Depends, FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
@@ -433,36 +433,3 @@ async def test_throttle_stat_fields(inmemory_backend: InMemoryBackend) -> None:
                 "hits_remaining should be numeric"
             )
             assert data["wait_ms_type"] in ["int", "float"], "wait_ms should be numeric"
-
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttle_stat_as_dependency(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test using throttle.stat() within a FastAPI dependency."""
-    async with inmemory_backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-stat-dependency",
-            rate="10/s",
-            identifier=default_client_identifier,  # type: ignore
-            strategy=FixedWindowStrategy(),
-        )
-        app = FastAPI()
-
-        @app.get("/api/dependency")
-        async def dependency_endpoint(stat=Depends(throttle.stat)):
-            return {
-                "hits_remaining": stat.hits_remaining if stat else None,
-                "wait_ms": stat.wait_ms if stat else None,
-            }
-
-        base_url = "http://test"
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url=base_url
-        ) as client:
-            response = await client.get("/api/dependency")
-            data = response.json()
-
-            assert data["hits_remaining"] == 10
-            assert data["wait_ms"] == 0.0

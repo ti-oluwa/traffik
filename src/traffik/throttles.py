@@ -296,7 +296,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             )
         else:
             self._use_response = use_response
-        
+
         # Only set backend for non-dynamic backend throttles
         if not dynamic_backend:
             resolved_backend = backend or get_throttle_backend()
@@ -360,7 +360,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         ] = None,
         stat: typing.Optional[StrategyStat[typing.Mapping]] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-    ) -> Headers[HTTPConnectionT]:
+    ) -> typing.Dict[str, str]:
         """
         Resolves the headers to include in throttling responses based on the provided connection, strategy statistics, and context.
 
@@ -369,13 +369,13 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             Headers provided here will take precedence over the throttle's default headers in case of conflicts.
         :param stat: Optional strategy statistics for the current request. This may be None if headers are being resolved outside of a throttling operation.
         :param context: An optional dictionary containing additional context for the throttle. This can include any relevant information needed to resolve dynamic headers.
-        :return: A `Headers` object containing the resolved headers (string only) to include in throttling responses.
+        :return: The resolved headers as either a dictionary of strings to include in throttling responses.
         """
         if not headers and not self._headers:
-            return Headers()
+            return {}
 
         if not headers and self._headers._is_static:
-            return self._headers.copy()
+            return self._headers._raw.copy()  # type: ignore[return-value]
 
         if not headers:
             merged_headers = self._headers.copy()
@@ -384,7 +384,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         if merged_headers._is_static:
             # All headers are static, so we can return them directly without resolution.
-            return merged_headers
+            return merged_headers._raw  # type: ignore[return-value]
 
         return await _resolve_headers(
             headers=merged_headers,
@@ -696,6 +696,11 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             - "scope": A string to differentiate throttling for different contexts within the same connection.
 
         :param response: Optional `Response` object for use in downstream throttling operations.
+        :param headers: Optional additional headers to resolve for this specific call, which will be merged with the throttle's default headers.
+            Headers provided here will take precedence over the throttle's default headers in case of conflicts.
+        :param include_headers: Whether to include headers in the response if throttling occurs. Defaults to True.
+            Set this to False if you want to handle headers yourself in a custom `handle_throttled` handler or
+            if you want to avoid the overhead of resolving and applying headers.
         :return: The throttled HTTP connection.
         """
         if cost == 0:
@@ -744,6 +749,21 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         key = self.get_namespaced_key(connection, connection_id, merged_context)
         try:
             wait_ms = await self.strategy(key, rate, backend, actual_cost)  # type: ignore[arg-type]
+
+            if (
+                include_headers
+                and response is not None
+                and (
+                    resolved_headers := await self.get_headers(
+                        connection,
+                        headers=headers,
+                        stat=None,
+                        context=merged_context,
+                    )
+                )
+            ):
+                response.headers.update(resolved_headers)
+
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -760,18 +780,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 context=merged_context,
                 response=response,
             )
-
-        if (
-            include_headers
-            and response is not None
-            and (
-                headers := await self.get_headers(
-                    connection, headers=headers, stat=None, context=merged_context
-                )
-            )
-        ):  
-            # Resolved headers should only contain strings
-            response.headers.update(headers._raw)  # type: ignore[arg-type]
 
         wait_ms = (
             max(wait_ms, self.min_wait_period) if self.min_wait_period else wait_ms
@@ -1518,15 +1526,16 @@ async def _resolve_headers(
     throttle: Throttle[HTTPConnectionT],
     stat: typing.Optional[StrategyStat] = None,
     context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-) -> Headers[HTTPConnectionT]:
+) -> typing.Dict[str, str]:
     """
     Resolve headers for a throttled response based on the provided header definitions and the throttle's current state.
 
     This function takes a mapping of header keys to either static string values or `Header` instances
-    that can dynamically resolve their values based on the throttle's state.
-    It retrieves the current throttling statistics for the connection and uses them to resolve any dynamic headers.
-    The resolved headers can then be returned either as a dictionary of strings or as a list of byte tuples,
-    depending on the `encode` parameter.
+    that dynamically resolves based on the throttle's state.
+    It retrieves the current throttling statistics for the connection if not provided, and uses them to resolve any dynamic headers.
+
+    NOTE! If the throttling statistics cannot be gotten and it is not explcitly provided, then `Header`
+    instances which need to be resolved are skipped.
 
     :param headers: A mapping of header keys to either static string values or `Header` instances.
     :param connection: The HTTP connection for which to resolve the headers.
@@ -1537,28 +1546,30 @@ async def _resolve_headers(
     :return: The resolved headers as either a dictionary of strings.
     """
     if not headers:
-        return Headers()
+        return {}
 
     stat = stat or await throttle.stat(connection, context)
+    _disable = Header.DISABLE
     if stat is not None:
-        resolved_headers = Headers()
+        out = {}
+        # Ensure to use an identity check (`is`) here.
+        # has header hash may collid and match `Header.DISABLE`
+        # If we use `==`. Which defeat the purpose of `Header.DISABLE`
+        # as a sentinel
         for key, value in headers.items():
-            if isinstance(value, str):
-                resolved_headers[key] = value
+            if value is _disable:
+                continue
+            elif isinstance(value, str):
+                out[key] = value
+            elif value._is_static:
+                out[key] = value._raw  # type: ignore[assignment]
+            elif not value.check(connection, stat, context):
+                continue
             else:
-                if value._is_static:
-                    resolved_headers[key] = value._raw  # type: ignore[assignment]
-
-                elif not value.check(connection, stat, context):
-                    continue
-
-                else:
-                    resolved_headers[key] = value.resolve(connection, stat, context)
-        return resolved_headers
+                out[key] = value.resolve(connection, stat, context)
+        return out
 
     # If stat is None, we cannot resolve dynamic headers, but we can still return static headers
-    return Headers(
-        {k: v for k, v in headers.items() if isinstance(v, str)},
-        _prepped=True,
-        _static=True,
-    )
+    return {
+        k: v for k, v in headers.items() if isinstance(v, str) and v is not _disable
+    }

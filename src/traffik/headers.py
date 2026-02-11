@@ -1,9 +1,10 @@
+"""Provides the `Header` and `Headers` classes for defining and managing headers in throttles."""
+
 import copy
 import math
 import typing
 from collections.abc import Mapping
 
-from starlette.requests import HTTPConnection
 from typing_extensions import Self
 
 from traffik.types import HTTPConnectionT, StrategyStat
@@ -80,15 +81,43 @@ class Header(typing.Generic[HTTPConnectionT]):
 
     headers = {
         # Static/raw header that is always included
-        "X-RateLimit-Remaining": Header.REMAINING.always,
-        "X-RateLimit-Limit": Header.LIMIT.always,
+        "X-RateLimit-Remaining": Header.REMAINING(when="always"),
+        "X-RateLimit-Limit": Header.LIMIT(when="always"),
 
         # This header is only included when the request is throttled (hits_remaining <= 0)
-        "X-RateLimit-Reset": Header.RESET_SECONDS.throttled,
+        "X-RateLimit-Reset": Header.RESET_SECONDS(when="throttled"),
 
         # Custom header that is included when hits remaining is less than 5
         "X-Custom-Header": Header(custom_header_resolver, when=custom_when_func),
     }
+    ```
+    """
+
+    # Use string sentinel so we don't have to do any magic to ensure type correctness,
+    # and to prevent it from affecting or interferring with the "static" state computation
+    # of the `Headers` instance it is used in.
+    DISABLE: str = ":___disabled___:"
+    """
+    Flag to disable a particular header key.
+
+    Example Usage:
+    ```python
+    from traffik import HTTPThrottle, Headers, Header
+
+    headers = {
+        "Header-1": Header("<some_value>"),
+        "Header-2": Header(lambda conn, stat, ctx: "<some_result>")
+    }
+    throttle = HTTPThrottle(..., headers=Headers(headers))
+
+    # Later on in some scope say we want to disable "Header-2" when throttling
+    # We can hit the throttle with updated headers like this.
+    throttle.hit(
+        connection, 
+        context={"scope": "<some_scope>"}, 
+        response=response,
+        headers={"Header-2": Header.DISABLE}, # Disables "Header-2" for this hit.
+    )
     ```
     """
 
@@ -107,6 +136,28 @@ class Header(typing.Generic[HTTPConnectionT]):
         /,
         when: HeaderWhen[HTTPConnectionT] = "throttled",
     ) -> None:
+        """
+        Initialize the header instance
+
+        :param v: Either a static string value or a resolver callable with
+            signature `(connection, stat, context) -> str` that produces the
+            header value at request time.
+
+        :param when: Determines when the header should be included. It may be
+            the literal strings ``"always"`` or ``"throttled"``, or a
+            callable predicate with the same signature as the resolver that
+            returns a boolean. When a predicate is provided, it is used to
+            decide inclusion instead of the built-in literals.
+
+        Notes:
+        - Use `Header.DISABLE` (the identity sentinel) to disable a header
+          for a specific request. Example:
+              headers = {"X-RateLimit-Reset": Header.DISABLE}
+          The resolver that processes headers must check identity (value is `Header.DISABLE`).
+        - The `Header` instance may be considered "static" by the `Headers` container
+          when a static value is provided; dynamic resolvers are skipped if
+          throttling stats are unavailable.
+        """
         if isinstance(v, str):
             self._raw = v
             self._resolver = None
@@ -124,11 +175,12 @@ class Header(typing.Generic[HTTPConnectionT]):
         """
         # Pre-compute the hash of the header here, since the header
         # is not expected to be mutated after initialization.
-        self._hash = (
-            hash(self._raw)
-            if self._is_static
-            else hash((self._raw, self._resolver, self._check, self._when))
-        )
+        if self._is_static:
+            self._hash = hash(self._raw)
+        elif self._check is not None:
+            self._hash = hash((id(self._resolver), id(self._check)))
+        else:
+            self._hash = hash((id(self._resolver), self._when))
 
     def check(
         self,
@@ -179,16 +231,16 @@ class Header(typing.Generic[HTTPConnectionT]):
         Example usage:
         ```python
         # Create a header that is always included
-        header = Header.REMAINING.when("always")
+        header = Header.REMAINING(when="always")
 
         # Create a header that is only included when throttled
-        header = Header.REMAINING.when("throttled")
+        header = Header.REMAINING(when="throttled")
 
         # Create a header with a custom condition
-        def custom_condition(connection, stat, context):
+        def hits_less_than_5(connection, stat, context):
             return stat.hits_remaining < 5
 
-        header = Header.REMAINING.when(custom_condition)
+        header = Header.REMAINING(when=hits_less_than_5)
         ```
         """
         value = typing.cast(HeaderValue[HTTPConnectionT], self._resolver or self._raw)
@@ -196,6 +248,9 @@ class Header(typing.Generic[HTTPConnectionT]):
 
     def __hash__(self) -> int:
         return self._hash
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self._raw!r})"
 
     @property
     def always(self) -> Self:
@@ -208,22 +263,22 @@ class Header(typing.Generic[HTTPConnectionT]):
         return self.when("throttled")
 
     @classmethod
-    def LIMIT(cls, when: HeaderWhen[HTTPConnectionT]) -> Self:
+    def LIMIT(cls, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the maximum number of hits allowed in the current period."""
         return cls(lambda _, stat, __: f"{stat.rate.limit}", when=when)
 
     @classmethod
-    def REMAINING(cls, when: HeaderWhen[HTTPConnectionT]) -> Self:
+    def REMAINING(cls, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the number of hits remaining in the current period."""
         return cls(lambda _, stat, __: f"{stat.hits_remaining}", when=when)
 
     @classmethod
-    def RESET_MILLISECONDS(cls, when: HeaderWhen[HTTPConnectionT]) -> Self:
+    def RESET_MILLISECONDS(cls, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the time to wait (in milliseconds) before the next allowed request."""
         return cls(lambda _, stat, __: f"{stat.wait_ms}", when=when)
 
     @classmethod
-    def RESET_SECONDS(cls, when: HeaderWhen[HTTPConnectionT]) -> Self:
+    def RESET_SECONDS(cls, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the time to wait (in seconds) before the next allowed request."""
         return cls(lambda _, stat, __: f"{math.ceil(stat.wait_ms / 1000)}", when=when)
 
@@ -251,7 +306,7 @@ def _prep_headers(
     return prepared_headers
 
 
-def _headers_is_static(headers: typing.Mapping[str, typing.Union[Header, str]]) -> bool:
+def _is_static(headers: typing.Mapping[str, typing.Union[Header, str]]) -> bool:
     """
     Checks if all headers are static, meaning they are all string values and hence, are always included in the response.
 
@@ -273,6 +328,28 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
     A mapping of header names to either static string values or `Header` instances.
 
     This is the recommended way to define and manage headers for throttles.
+
+    Example Usage:
+
+    ```python
+    from traffik.headers import Headers, Header
+
+    base = Headers({
+        "X-RateLimit-Limit": Header.LIMIT(when="always"),
+        "X-RateLimit-Remaining": Header.REMAINING(when="always"),
+    })
+
+    # Disable a header for a single hit by using the sentinel identity
+    overrides = {"X-RateLimit-Remaining": Header.DISABLE}
+
+    # Merge the resolver uses an identity check to interpret
+    # `Header.DISABLE` and will skip that header when resolving.
+    merged = base | overrides
+    ```
+
+    Note: `Header.DISABLE` is a module-level sentinel; disabling requires
+    passing that exact object (checked with ``is``). A plain string with
+    the same contents will not disable the header.
     """
 
     __slots__ = ("_raw", "_is_static")
@@ -303,14 +380,10 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
             self._raw = typing.cast(
                 typing.Dict[str, typing.Union[str, Header[HTTPConnectionT]]], raw
             )
-            self._is_static = (
-                _headers_is_static(self._raw) if _static is None else _static
-            )
+            self._is_static = _is_static(self._raw) if _static is None else _static
         else:
             self._raw = _prep_headers(raw)
-            self._is_static = (
-                _headers_is_static(self._raw) if _static is None else _static
-            )
+            self._is_static = _is_static(self._raw) if _static is None else _static
 
     def update(
         self, other: typing.Mapping[str, typing.Union[str, Header[HTTPConnectionT]]], /
@@ -331,17 +404,9 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
         self, key: str, value: typing.Union[str, Header[HTTPConnectionT]], /
     ) -> None:
         self._raw[key] = value
-
         # Update the static status of the headers after setting a new value.
-        # A header is considered still static if;
-        # - The new value is a string and the headers were previously static, or
-        # - The new value is a `Header` instance that is static and the headers were previously static.
-        # Else, the headers was not or is no longer static.
-        if isinstance(value, str) and self._is_static:
-            self._is_static = True
-        elif getattr(value, "_is_static", False) and self._is_static:
-            self._is_static = True
-        else:
+        # Once False, it stays False unless explicitly reset
+        if not (isinstance(value, str) or getattr(value, "_is_static", False)):
             self._is_static = False
 
     def __contains__(self, key: typing.Hashable, /) -> bool:
@@ -367,9 +432,9 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
             # If the other is already a Headers instance, we can skip the prep
             # step since it was prepped on initialization.
             new.update(raw)
-        else:
+        elif other:
             new.update(_prep_headers(other))
-        return self.__class__(new, _prepped=True, _static=_headers_is_static(new))
+        return self.__class__(new, _prepped=True, _static=_is_static(new))
 
     def __ior__(
         self, other: typing.Mapping[str, typing.Union[str, Header[HTTPConnectionT]]], /
@@ -397,6 +462,9 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
         return self.__class__(
             copy.deepcopy(self._raw, memo), _prepped=True, _static=self._is_static
         )
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self._raw!r})"
 
 
 DEFAULT_HEADERS_ALWAYS = Headers[typing.Any](

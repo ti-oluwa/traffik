@@ -14,6 +14,7 @@ from typing_extensions import TypeAlias
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import ConfigurationError, _build_exception_handler_getter
+from traffik.headers import Header
 from traffik.throttles import Throttle
 from traffik.types import ExceptionHandler, HTTPConnectionT, Matchable
 from traffik.utils import is_async_callable
@@ -187,6 +188,10 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         response: typing.Optional[Response] = None,
+        headers: typing.Optional[
+            typing.Mapping[str, typing.Union[Header[HTTPConnectionT], str]]
+        ] = None,
+        include_headers: bool = True,
     ) -> HTTPConnectionT:
         """
         Checks if the throttle applies to the connection and applies it if so.
@@ -197,6 +202,11 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             This is merged with the default context provided at initialization,
             with the provided context taking precedence.
         :param response: Optional `Response` object for use in downstream throttling operations.
+        :param headers: Optional additional headers to resolve for this specific call, which will be merged with the throttle's default headers.
+            Headers provided here will take precedence over the throttle's default headers in case of conflicts.
+        :param include_headers: Whether to include headers in the response if throttling occurs. Defaults to True.
+            Set this to False if you want to handle headers yourself in a custom `handle_throttled` handler or 
+            if you want to avoid the overhead of resolving and applying headers.
         :return: The connection, possibly modified by the throttle. If throttling criteria
             are not met, returns the original connection unchanged. If throttled, may return
             a modified connection or raise a throttling exception.
@@ -223,6 +233,8 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             cost=cost or self.cost,
             context=merged_context,
             response=response,
+            headers=headers,
+            include_headers=include_headers,
         )
 
     async def __call__(

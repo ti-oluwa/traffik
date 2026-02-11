@@ -947,7 +947,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             attempt += 1
             try:
                 # Hit the throttle
-                await entry.throttle(
+                await entry.throttle.hit(
                     self.connection,
                     cost=actual_cost,
                     context=entry.context,

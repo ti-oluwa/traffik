@@ -387,6 +387,13 @@ class TokenBucketWithDebtStrategy:
     """Maximum negative tokens allowed (overdraft limit). Set to 0 for standard behavior."""
     lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
 
+    def __post_init__(self) -> None:
+        if self.burst_size is not None and self.burst_size < 0:
+            raise ValueError("burst_size must be non-negative")
+
+        if self.max_debt < 0:
+            raise ValueError("max_debt must be non-negative")
+
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
     ) -> WaitPeriod:

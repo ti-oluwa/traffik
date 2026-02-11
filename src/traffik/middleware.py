@@ -7,13 +7,14 @@ import warnings
 
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
+from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 from typing_extensions import TypeAlias
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import ConfigurationError, _build_exception_handler_getter
-from traffik.throttles import Throttle, prepare_throttled_headers
+from traffik.throttles import Throttle
 from traffik.types import ExceptionHandler, HTTPConnectionT, Matchable
 from traffik.utils import is_async_callable
 
@@ -185,6 +186,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         *,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        response: typing.Optional[Response] = None,
     ) -> HTTPConnectionT:
         """
         Checks if the throttle applies to the connection and applies it if so.
@@ -194,6 +196,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         :param context: An optional mapping of context to pass to the throttle.
             This is merged with the default context provided at initialization,
             with the provided context taking precedence.
+        :param response: Optional `Response` object for use in downstream throttling operations.
         :return: The connection, possibly modified by the throttle. If throttling criteria
             are not met, returns the original connection unchanged. If throttled, may return
             a modified connection or raise a throttling exception.
@@ -216,7 +219,10 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         else:
             merged_context = self._default_context
         return await self.throttle.hit(
-            connection, cost=cost or self.cost, context=merged_context
+            connection,
+            cost=cost or self.cost,
+            context=merged_context,
+            response=response,
         )
 
     async def __call__(
@@ -347,7 +353,6 @@ class ThrottleMiddleware:
         "backend",
         "get_exception_handler",
         "context",
-        "include_headers",
     )
 
     def __init__(
@@ -362,7 +367,6 @@ class ThrottleMiddleware:
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         sort: _SortThrottles[HTTPConnection] = "cheap_first",
-        include_headers: bool = False,
     ) -> None:
         """
         Initialize the middleware with the application and throttles.
@@ -382,8 +386,6 @@ class ThrottleMiddleware:
             - False or None: No sorting is applied, and throttles are categorized in the order they are provided.
             - A custom callable that takes a `MiddlewareThrottle` and returns a value to sort by.
                 Ensure to return `float("inf")` for throttles without a specified cost if you want them to be sorted last.
-
-        :param include_headers: Whether to include throttling headers in the response when a connection is throttled.
         """
         self.app = app
         self.middleware_throttles = _prepare_middleware_throttles(
@@ -392,7 +394,6 @@ class ThrottleMiddleware:
         self.backend = backend or get_throttle_backend(app)
         self.get_exception_handler = exception_handler_getter
         self.context = context
-        self.include_headers = include_headers
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """
@@ -452,15 +453,6 @@ class ThrottleMiddleware:
                             response = await run_in_threadpool(handler, connection, exc)  # type: ignore[arg-type]
 
                         if response is not None:
-                            if self.include_headers:
-                                headers = await prepare_throttled_headers(
-                                    connection,
-                                    throttle=middleware_throttle.throttle,  # type: ignore
-                                    context=context,
-                                    encode=True,
-                                )
-                                scope["headers"].extend(headers)
-
                             await response(scope, receive, send)  # type: ignore[call-arg]
                             return
 

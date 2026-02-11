@@ -2463,7 +2463,7 @@ Traffik supports native WebSocket rate limiting — limiting individual messages
 | Burst Traffic | 7,290 | 0.10ms | 0.19ms | 0.27ms |
 | Concurrent (10 conn) | 8,254 | 0.64ms | 0.81ms | 0.93ms |
 
-### Why Sustained Load Is Slower
+### Why Traffik Seems Slower When all Requests Hit the Same Key
 
 For the in-memory backend, Traffik uses `_AsyncRLock` (a custom fair re-entrant version of `asyncio.Lock`) on backend operations to guarantee atomicity. Under high concurrency (50 coroutines hitting the same rate limit key), each request must wait its turn. SlowAPI uses synchronous `threading.RLock` on an in-memory `Counter`, which doesn't yield the event loop — concurrent coroutines don't actually contend because the lock is acquired and released within a single synchronous call.
 

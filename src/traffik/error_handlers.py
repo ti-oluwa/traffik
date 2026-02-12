@@ -10,7 +10,7 @@ from starlette.requests import HTTPConnection
 
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendError
-from traffik.throttles import ExceptionInfo
+from traffik.throttles import ThrottleExceptionInfo
 from traffik.types import HTTPConnectionT, WaitPeriod
 
 __all__ = [
@@ -24,7 +24,7 @@ __all__ = [
 def backend_fallback(
     backend: ThrottleBackend[typing.Any, HTTPConnectionT],
     fallback_on: typing.Tuple[typing.Type[BaseException], ...] = (BackendError,),
-) -> typing.Callable[[HTTPConnectionT, ExceptionInfo], typing.Awaitable[WaitPeriod]]:
+) -> typing.Callable[[HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]]:
     """
     Returns an error handler that switches to a fallback backend on specified errors.
 
@@ -65,7 +65,7 @@ def backend_fallback(
     """
 
     async def handler(
-        connection: HTTPConnectionT, exc_info: ExceptionInfo
+        connection: HTTPConnectionT, exc_info: ThrottleExceptionInfo
     ) -> WaitPeriod:
         exc = exc_info["exception"]
         if not isinstance(exc, fallback_on):
@@ -98,7 +98,7 @@ def retry(
     retry_delay: float = 0.1,
     backoff_multiplier: float = 2.0,
     retry_on: typing.Tuple[typing.Type[BaseException], ...] = (Exception,),
-) -> typing.Callable[[HTTPConnection, ExceptionInfo], typing.Awaitable[WaitPeriod]]:
+) -> typing.Callable[[HTTPConnection, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]]:
     """
     Returns an error handler that retries failed operations with backoff.
 
@@ -137,7 +137,7 @@ def retry(
     """
 
     async def handler(
-        connection: HTTPConnection, exc_info: ExceptionInfo
+        connection: HTTPConnection, exc_info: ThrottleExceptionInfo
     ) -> WaitPeriod:
         exc = exc_info["exception"]
         if not isinstance(exc, retry_on):
@@ -273,7 +273,7 @@ def failover(
     breaker: typing.Optional[CircuitBreaker] = None,
     max_retries: int = 2,
     retry_delay: float = 0.05,
-) -> typing.Callable[[HTTPConnectionT, ExceptionInfo], typing.Awaitable[WaitPeriod]]:
+) -> typing.Callable[[HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]]:
     """
     Returns a failover error handler with circuit breaker, retry, and fallback.
 
@@ -331,7 +331,7 @@ def failover(
     cb = breaker or CircuitBreaker()
 
     async def handler(
-        connection: HTTPConnectionT, exc_info: ExceptionInfo
+        connection: HTTPConnectionT, exc_info: ThrottleExceptionInfo
     ) -> WaitPeriod:
         throttle = exc_info["throttle"]
         rate = exc_info["rate"]

@@ -133,8 +133,8 @@ Takes the current attempt number and base delay, and returns the delay in second
 """
 
 
-class _TransactionExceptionInfo(TypedDict):
-    """Information about an exception that occurred during throttling transaction."""
+class _ExceptionInfo(TypedDict):
+    """Information about an exception that occurred during retried throttling operations."""
 
     connection: HTTPConnection
     exception: BaseException
@@ -147,7 +147,7 @@ RetryOn = typing.Union[
     typing.Type[BaseException],
     typing.Tuple[typing.Type[BaseException], ...],
     typing.Callable[
-        [_TransactionExceptionInfo],
+        [_ExceptionInfo],
         typing.Union[bool, typing.Awaitable[bool]],
     ],
 ]

@@ -45,7 +45,7 @@ __all__ = [
     "RequestThrottle",
     "WebSocketThrottle",
     "is_throttled",
-    "ExceptionInfo",
+    "ThrottleExceptionInfo",
     "websocket_throttled",
     "throttled",
 ]
@@ -65,7 +65,7 @@ Takes a key, a Rate object, the throttle backend, and cost, and returns the wait
 """
 
 
-class ExceptionInfo(TypedDict):
+class ThrottleExceptionInfo(TypedDict):
     """TypedDict for exception handler information."""
 
     exception: Exception
@@ -85,6 +85,8 @@ class ExceptionInfo(TypedDict):
     response: typing.Optional[Response]
     """The response object, if available, that can be used in error handling."""
 
+
+ExceptionInfo = ThrottleExceptionInfo  # Alias for backwards compatibility
 
 _conection_type_cache: typing.Dict[
     typing.Type["Throttle"], typing.Type[HTTPConnection]
@@ -144,7 +146,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         on_error: typing.Optional[
             typing.Union[
                 typing.Literal["allow", "throttle", "raise"],
-                ThrottleErrorHandler[HTTPConnectionT, ExceptionInfo],
+                ThrottleErrorHandler[HTTPConnectionT, ThrottleExceptionInfo],
             ]
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
@@ -322,7 +324,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             on_error_ = on_error  # type: ignore[assignment]
 
         self._error_callback: typing.Optional[
-            ThrottleErrorHandler[HTTPConnectionT, ExceptionInfo]
+            ThrottleErrorHandler[HTTPConnectionT, ThrottleExceptionInfo]
         ] = None
         if callable(on_error_):
             self._error_callback = on_error_
@@ -339,12 +341,11 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 "Must be 'allow', 'throttle', 'raise', or a callable."
             )
 
-        # self._connection_type: typing.Optional[typing.Type[HTTPConnection]] = None
         # Set a clean `__signature__` for FastAPI's dependency injection.
         # `__call__` uses *args/**kwargs to support direct calls like
         # `throttle(request, cost=5)`, but FastAPI would interpret those
         # as required query parameters. By setting `__signature__` to only
-        # expose `connection`, FastAPI injects the request correctly.
+        # expose `connection` (and `response`), FastAPI injects the request (and response) correctly.
         self.__signature__ = self._make_signature()
 
     @property
@@ -369,7 +370,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             Headers provided here will take precedence over the throttle's default headers in case of conflicts.
         :param stat: Optional strategy statistics for the current request. This may be None if headers are being resolved outside of a throttling operation.
         :param context: An optional dictionary containing additional context for the throttle. This can include any relevant information needed to resolve dynamic headers.
-        :return: The resolved headers as either a dictionary of strings to include in throttling responses.
+        :return: The resolved headers a dictionary of strings to include in throttling responses.
         """
         if not headers and not self._headers:
             return {}
@@ -421,10 +422,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         Resolution order:
         1. Check the connection type cache to see if we've already resolved
             the connection type for this throttle class before.
-        2. ``__orig_class__`` (set when instantiated as e.g. ``Throttle[Request](...)``)
-        3. Walk ``__orig_bases__`` through the MRO (for subclasses like ``HTTPThrottle``)
-        4. Inspect the ``hit`` method's ``connection`` parameter type hint
-        5. If all else fails, default to ``HTTPConnection``
+        2. `__orig_class__` (set when instantiated as e.g. `Throttle[Request](...)`)
+        3. Walk `__orig_bases__` through the MRO (for subclasses like `HTTPThrottle`)
+        4. Inspect the `hit` method's `connection` parameter type hint
+        5. If all else fails, default to `HTTPConnection`
         """
         if type(self) in _conection_type_cache:
             return _conection_type_cache[type(self)]  # type: ignore[return-value]
@@ -903,7 +904,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
     def set_error_handler(
         self,
-        handler: ThrottleErrorHandler[HTTPConnectionT, ExceptionInfo],
+        handler: ThrottleErrorHandler[HTTPConnectionT, ThrottleExceptionInfo],
     ) -> None:
         """
         Set a custom error handler for the throttle.
@@ -1147,7 +1148,7 @@ class HTTPThrottle(Throttle[Request]):
         on_error: typing.Optional[
             typing.Union[
                 typing.Literal["allow", "throttle", "raise"],
-                ThrottleErrorHandler[Request, ExceptionInfo],
+                ThrottleErrorHandler[Request, ThrottleExceptionInfo],
             ]
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
@@ -1348,7 +1349,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
         on_error: typing.Optional[
             typing.Union[
                 typing.Literal["allow", "throttle", "raise"],
-                ThrottleErrorHandler[WebSocket, ExceptionInfo],
+                ThrottleErrorHandler[WebSocket, ThrottleExceptionInfo],
             ]
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
@@ -1543,7 +1544,7 @@ async def _resolve_headers(
     :param stat: Optional pre-fetched throttling statistics to use for header resolution. If not provided, the function will fetch the stats from the throttle.
     :param context: Additional context to pass when retrieving the throttle statistics.
         This can include any relevant information needed to uniquely identify the connection for throttling purposes.
-    :return: The resolved headers as either a dictionary of strings.
+    :return: The resolved headers as a dictionary of strings.
     """
     if not headers:
         return {}
@@ -1552,11 +1553,11 @@ async def _resolve_headers(
     _disable = Header.DISABLE
     if stat is not None:
         out = {}
-        # Ensure to use an identity check (`is`) here.
-        # has header hash may collid and match `Header.DISABLE`
-        # If we use `==`. Which defeat the purpose of `Header.DISABLE`
-        # as a sentinel
         for key, value in headers.items():
+            # Ensure to use an identity check (`is`) here.
+            # has any header hash may collide and match `Header.DISABLE`
+            # If we use `==`. Which defeat the purpose of `Header.DISABLE`
+            # as a sentinel
             if value is _disable:
                 continue
             elif isinstance(value, str):

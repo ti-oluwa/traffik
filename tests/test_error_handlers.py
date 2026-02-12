@@ -11,7 +11,7 @@ from traffik.backends.inmemory import InMemoryBackend
 from traffik.error_handlers import CircuitBreaker, backend_fallback, failover, retry
 from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.rates import Rate
-from traffik.throttles import ExceptionInfo
+from traffik.throttles import ThrottleExceptionInfo
 
 
 def create_mock_connection():
@@ -155,7 +155,7 @@ class TestBackendFallback:
 
             # Create mock exc_info
             throttle = HTTPThrottle(uid="test", rate="10/s", backend=primary)
-            exc_info: ExceptionInfo = {  # type: ignore[typeddict-item]
+            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                 "exception": BackendConnectionError("Connection failed"),
                 "connection": create_mock_connection(),
                 "cost": 1,
@@ -180,7 +180,7 @@ class TestBackendFallback:
             )
 
             throttle = HTTPThrottle(uid="test", rate="10/s")
-            exc_info: ExceptionInfo = {  # type: ignore[typeddict-item]
+            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                 "exception": ValueError("Some other error"),
                 "connection": create_mock_connection(),
                 "cost": 1,
@@ -216,7 +216,7 @@ class TestRetryHandler:
 
             handler = retry(max_retries=3, retry_delay=0.01)
 
-            exc_info: ExceptionInfo = {  # type: ignore[typeddict-item]
+            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                 "exception": TimeoutError("Timeout"),
                 "connection": create_mock_connection(),
                 "cost": 1,
@@ -244,7 +244,7 @@ class TestRetryHandler:
 
             handler = retry(max_retries=2, retry_delay=0.01)
 
-            exc_info: ExceptionInfo = {  # type: ignore[typeddict-item]
+            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                 "exception": TimeoutError("Timeout"),
                 "connection": create_mock_connection(),
                 "cost": 1,
@@ -266,7 +266,7 @@ class TestRetryHandler:
         async with backend(close_on_exit=True):
             throttle = HTTPThrottle(uid="test", rate="10/s", backend=backend)
 
-            exc_info: ExceptionInfo = {  # type: ignore[typeddict-item]
+            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                 "exception": ValueError("Not a timeout"),
                 "connection": create_mock_connection(),
                 "cost": 1,
@@ -299,7 +299,7 @@ class TestFailover:
             )
 
             throttle = HTTPThrottle(uid="test", rate="10/s", backend=primary)
-            exc_info: ExceptionInfo = {  # type: ignore[typeddict-item]
+            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                 "exception": BackendError("Error"),
                 "connection": create_mock_connection(),
                 "cost": 1,
@@ -338,7 +338,7 @@ class TestFailover:
                     backend=fallback_backend, breaker=breaker_instance, max_retries=2
                 )
 
-                exc_info: ExceptionInfo = {  # type: ignore[typeddict-item]
+                exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                     "exception": BackendError("Error"),
                     "connection": create_mock_connection(),
                     "cost": 1,
@@ -378,7 +378,7 @@ class TestFailover:
                     backend=fallback_backend, breaker=breaker_instance, max_retries=1
                 )
 
-                exc_info: ExceptionInfo = {  # type: ignore[typeddict-item]
+                exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                     "exception": BackendError("Error"),
                     "connection": create_mock_connection(),
                     "cost": 1,

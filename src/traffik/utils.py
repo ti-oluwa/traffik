@@ -271,7 +271,7 @@ def time() -> float:
 
     Preferable to `time.time()` for duration calculations in async code.
     """
-    return asyncio.get_event_loop().time()
+    return asyncio.get_running_loop().time()
 
 
 class _FenceTokenGenerator:
@@ -438,7 +438,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
                 self._acquired = False
 
 
-class _AsyncRLock:
+class _AsyncFairRLock:
     """
     A fair reentrant lock for async programming. Fair means that it respects the order of acquisition.
 
@@ -522,6 +522,70 @@ class _AsyncRLock:
             )
 
         self._current_task_release()
+
+    async def __aenter__(self):
+        await self.acquire()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ) -> None:
+        self.release()
+
+
+class _AsyncRLock:
+    """
+    Unfair reentrant asyncio lock.
+
+    This lock is reentrant per `asyncio.Task` but not FIFO / not fair. It may lower locking overhead than fair lock
+    """
+
+    __slots__ = ("_lock", "_owner", "_count")
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._owner: typing.Optional[asyncio.Task] = None
+        self._count: int = 0
+
+    def is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool:
+        return self._owner is (task or asyncio.current_task())
+
+    def locked(self) -> bool:
+        return self._lock.locked()
+
+    async def acquire(self) -> bool:
+        current = asyncio.current_task()
+        if current is None:
+            raise RuntimeError("Must be called from within a task")
+
+        # Reentrant fast-path
+        if self._owner is current:
+            self._count += 1
+            return True
+
+        # Acquire underlying unfair lock
+        await self._lock.acquire()
+
+        # Become owner
+        self._owner = current
+        self._count = 1
+        return True
+
+    def release(self) -> None:
+        current = asyncio.current_task()
+        if current is None:
+            raise RuntimeError("Must be called from within a task")
+
+        if self._owner is not current:
+            raise RuntimeError("Cannot release a lock not owned by current task")
+
+        self._count -= 1
+        if self._count == 0:
+            self._owner = None
+            self._lock.release()
 
     async def __aenter__(self):
         await self.acquire()

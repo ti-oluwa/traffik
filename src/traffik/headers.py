@@ -1,4 +1,4 @@
-"""Provides the `Header` and `Headers` classes for defining and managing headers in throttles."""
+"""`Headers` API for defining and managing headers in throttles."""
 
 import copy
 import math

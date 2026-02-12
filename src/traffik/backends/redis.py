@@ -156,11 +156,12 @@ class _AsyncRedisLock:
         blocking_timeout: typing.Optional[float] = None,
     ) -> bool:
         locks = self._get_task_locks()
+        name = self._name
 
         # Re-entrant fast-path
-        if self._name in locks:
-            token, count = locks[self._name]
-            locks[self._name] = (token, count + 1)
+        if name in locks:
+            token, count = locks[name]
+            locks[name] = (token, count + 1)
             return True
 
         blocking_timeout = (
@@ -174,8 +175,8 @@ class _AsyncRedisLock:
                 token = await self._redis.evalsha(  # type: ignore
                     self._script_shas["acquire"],  # type: ignore[arg-type]
                     2,  # KEYS
-                    self._name,  # KEYS[1]
-                    f"{self._name}:fence",  # KEYS[2]
+                    name,  # KEYS[1]
+                    f"{name}:fence",  # KEYS[2]
                     str(self._ttl or 0),
                 )
             except aioredis.ResponseError as exc:
@@ -188,15 +189,15 @@ class _AsyncRedisLock:
                     token = await self._redis.evalsha(  # type: ignore
                         self._script_shas["acquire"],  # type: ignore[arg-type]
                         2,  # KEYS
-                        self._name,  # KEYS[1]
-                        f"{self._name}:fence",  # KEYS[2]
+                        name,  # KEYS[1]
+                        f"{name}:fence",  # KEYS[2]
                         str(self._ttl or 0),
                     )
                 else:
                     raise
 
             if token:
-                locks[self._name] = (token, 1)  # type: ignore[assignment]
+                locks[name] = (token, 1)  # type: ignore[assignment]
                 return True
 
             if not blocking:
@@ -218,15 +219,15 @@ class _AsyncRedisLock:
 
     async def release(self) -> None:
         locks = self._get_task_locks()
-        if self._name not in locks:
-            raise RuntimeError(
-                f"Cannot release lock '{self._name}'. Lock not owned by task."
-            )
+        name = self._name
 
-        token, count = locks[self._name]
+        if name not in locks:
+            raise RuntimeError(f"Cannot release lock '{name}'. Lock not owned by task.")
+
+        token, count = locks[name]
         # If reentrancy count > 1, just decrement
         if count > 1:
-            locks[self._name] = (token, count - 1)
+            locks[name] = (token, count - 1)
             return
 
         # If count == 1, fully release the lock
@@ -234,7 +235,7 @@ class _AsyncRedisLock:
             await self._redis.evalsha(  # type: ignore
                 self._script_shas["release"],  # type: ignore[arg-type]
                 1,  # num keys
-                self._name,  # KEYS[1]
+                name,  # KEYS[1]
                 str(token),  # ARGV[1]
             )
         except aioredis.ResponseError as exc:
@@ -247,13 +248,13 @@ class _AsyncRedisLock:
                 await self._redis.evalsha(  # type: ignore
                     self._script_shas["release"],  # type: ignore[arg-type]
                     1,  # num keys
-                    self._name,  # KEYS[1]
+                    name,  # KEYS[1]
                     str(token),  # ARGV[1]
                 )
             else:
                 raise
         finally:
-            del locks[self._name]
+            del locks[name]
 
     async def __aenter__(self):
         acquired = await self.acquire()
@@ -348,14 +349,15 @@ class _AsyncRedLock:
         task_locks = self._get_task_locks()
 
         # (Reentrancy) If current task already owns lock, just increment counter
-        if self._name in task_locks:
-            redlock, count = task_locks[self._name]
-            task_locks[self._name] = (redlock, count + 1)
+        name = self._name
+        if name in task_locks:
+            redlock, count = task_locks[name]
+            task_locks[name] = (redlock, count + 1)
             return True
 
         # Create new `AIORedlock` instance for this acquisition
         redlock = AIORedlock(
-            key=self._name,
+            key=name,
             masters={self._redis},
             auto_release_time=self._ttl,
         )
@@ -378,7 +380,7 @@ class _AsyncRedLock:
             )
             if acquired:
                 # Successfully acquired. Store lock object and count
-                task_locks[self._name] = (redlock, 1)
+                task_locks[name] = (redlock, 1)
                 return True
             return False
 
@@ -392,15 +394,16 @@ class _AsyncRedLock:
         will the underlying Redis lock actually be released.
         """
         task_locks = self._get_task_locks()
-        if self._name not in task_locks:
+        name = self._name
+        if name not in task_locks:
             raise RuntimeError(
-                f"Cannot release lock '{self._name}'. Lock not owned by current task"
+                f"Cannot release lock '{name}'. Lock not owned by current task"
             )
 
-        redlock, count = task_locks[self._name]
+        redlock, count = task_locks[name]
         if count > 1:
             # Decrement reentrancy counter
-            task_locks[self._name] = (redlock, count - 1)
+            task_locks[name] = (redlock, count - 1)
             return
 
         # Fully release the lock
@@ -411,12 +414,10 @@ class _AsyncRedLock:
         except Exception as exc:  # nosec
             # Lock might have expired or been released already
             # Log and ignore release errors to avoid deadlocks
-            sys.stderr.write(
-                f"Warning: Failed to release lock '{self._name}': {str(exc)}\n"
-            )
+            sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
             sys.stderr.flush()
         finally:
-            del task_locks[self._name]
+            del task_locks[name]
 
     async def __aenter__(self):
         acquired = await self.acquire()

@@ -93,11 +93,11 @@ def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
     return hashlib.md5(":".join(key_parts).encode()).hexdigest()  # nosec
 
 
-def _raises_error(
+def _reraise_as_backend_error(
     func: typing.Callable[P, R],
     target_exc_type: typing.Type[BaseException] = BaseException,
 ) -> typing.Callable[P, R]:
-    """Decorator"""
+    """Decorator to wrap functions to raise target execption types as `BackendError`"""
     if getattr(func, "_error_wrapped_", None):
         # Already wrapped
         return func
@@ -203,7 +203,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
                 setattr(
                     cls,
                     method_name,
-                    _raises_error(
+                    _reraise_as_backend_error(
                         func=method,
                         target_exc_type=cls.base_exception_type,
                     ),

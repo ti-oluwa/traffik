@@ -1862,12 +1862,12 @@ In production, things go wrong—Redis connections drop, Memcached runs out of m
 Custom error handlers receive rich context about what went wrong, letting you make intelligent decisions:
 
 ```python
-from traffik.throttles import ExceptionInfo
+from traffik.throttles import ThrottleExceptionInfo
 from traffik.types import WaitPeriod
 
 async def error_handler(
     connection: HTTPConnection,
-    exc_info: ExceptionInfo,  # Rich exception context
+    exc_info: ThrottleExceptionInfo,  # Rich exception context
 ) -> WaitPeriod:  # Return wait time in milliseconds
     """
     exc_info contains:
@@ -2029,13 +2029,13 @@ Record failure ──> Use fallback backend
 
 ```python
 import logging
-from traffik.throttles import ExceptionInfo
+from traffik.throttles import ThrottleExceptionInfo
 from traffik.types import WaitPeriod
 
 logger = logging.getLogger(__name__)
 
 async def handle_errors(
-    connection: HTTPConnection, exc_info: ExceptionInfo
+    connection: HTTPConnection, exc_info: ThrottleExceptionInfo
 ) -> WaitPeriod:
     exc = exc_info["exception"]
     backend_type = type(exc_info["backend"]).__name__
@@ -2465,14 +2465,14 @@ Traffik supports native WebSocket rate limiting — limiting individual messages
 
 ### Why Traffik Seems Slower When all Requests Hit the Same Key
 
-For the in-memory backend, Traffik uses `_AsyncRLock` (a custom fair re-entrant version of `asyncio.Lock`) on backend operations to guarantee atomicity. Under high concurrency (50 coroutines hitting the same rate limit key), each request must wait its turn. SlowAPI uses synchronous `threading.RLock` on an in-memory `Counter`, which doesn't yield the event loop — concurrent coroutines don't actually contend because the lock is acquired and released within a single synchronous call.
+For the in-memory backend, Traffik uses `_Async*RLock` (a custom fair/unfair re-entrant version of `asyncio.Lock`) on backend operations to guarantee atomicity. Under high concurrency (50 coroutines hitting the same rate limit key), each request must wait its turn. SlowAPI uses synchronous `threading.RLock` on an in-memory `Counter`, which doesn't yield the event loop and concurrent coroutines don't actually contend because the lock is acquired and released within a single synchronous call.
 
 This is an intentional tradeoff:
 
 - **SlowAPI's approach**: Higher concurrent throughput on the same key, but loses correctness on distributed backends (Redis/Memcached) where operations aren't single-threaded
 - **Traffik's approach**: True atomic operations ensure perfect accuracy across all backends, at the cost of serializing concurrent requests to the same key
 
-In practice, this rarely impacts production workloads because different clients have different identifiers — meaning different keys, different shards, and no lock contention. The sustained benchmark is a worst case where all requests share a single identity.
+In practice, this rarely impacts production workloads because different clients have different identifiers, meaning different keys, different shards, and no lock contention. The sustained benchmark is a worst case where all requests share a single identity.
 
 ### Key Takeaways
 

@@ -18,10 +18,11 @@ from .utils import (  # noqa
 )
 from .headers import *  # noqa
 
-__version__ = "1.0.2"
+
+__version__ = "1.0.3"
 
 
-# NOTE: All operations by traffik must be fast, efficient and non-blocking.
+# NOTE: All operations by `traffik` must be fast, efficient and non-blocking.
 # Hence, avoid or reduce the use of logging or any blocking IO in the main code paths, especially in backends, locks, strategies, and throttles.
 # Logging can be used in non-performance critical paths such as startup/shutdown but should be kept to a minimum.
 # One other detriment of using logging is that it may cause deadlocks if the logging backend uses the same resources as traffik.

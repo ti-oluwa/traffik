@@ -9,9 +9,10 @@ from datetime import datetime, timedelta
 from starlette.requests import HTTPConnection
 
 from traffik.backends.base import ThrottleBackend
+from traffik.backoff import DEFAULT_BACKOFF
 from traffik.exceptions import BackendError
 from traffik.throttles import ThrottleExceptionInfo
-from traffik.types import HTTPConnectionT, WaitPeriod
+from traffik.types import BackoffStrategy, HTTPConnectionT, WaitPeriod
 
 __all__ = [
     "backend_fallback",
@@ -24,7 +25,9 @@ __all__ = [
 def backend_fallback(
     backend: ThrottleBackend[typing.Any, HTTPConnectionT],
     fallback_on: typing.Tuple[typing.Type[BaseException], ...] = (BackendError,),
-) -> typing.Callable[[HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]]:
+) -> typing.Callable[
+    [HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]
+]:
     """
     Returns an error handler that switches to a fallback backend on specified errors.
 
@@ -96,9 +99,12 @@ def backend_fallback(
 def retry(
     max_retries: int = 3,
     retry_delay: float = 0.1,
-    backoff_multiplier: float = 2.0,
+    backoff_multiplier: typing.Optional[float] = None,
+    backoff: typing.Optional[BackoffStrategy] = None,
     retry_on: typing.Tuple[typing.Type[BaseException], ...] = (Exception,),
-) -> typing.Callable[[HTTPConnection, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]]:
+) -> typing.Callable[
+    [HTTPConnection, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]
+]:
     """
     Returns an error handler that retries failed operations with backoff.
 
@@ -132,6 +138,7 @@ def retry(
     :param max_retries: Maximum number of retry attempts
     :param retry_delay: Initial delay between retries (seconds)
     :param backoff_multiplier: Multiplier for exponential backoff
+    :param backoff: Backoff strategy for each retry. Defaults to exponential backoff.
     :param retry_on: Exception types that trigger retry
     :return: Error handler function
     """
@@ -157,11 +164,18 @@ def retry(
         delay = retry_delay
         last_exc: BaseException = exc
 
+        if backoff_multiplier is None and backoff is None:
+            backoff = DEFAULT_BACKOFF
+        uses_strategy = backoff is not None
+
         for attempt in range(max_retries):
             if attempt > 0:
-                await asyncio.sleep(delay)
-                delay *= backoff_multiplier
-
+                if uses_strategy:
+                    delay = backoff(attempt, retry_delay)  # type: ignore
+                    await asyncio.sleep(delay)
+                else:
+                    await asyncio.sleep(delay)
+                    delay *= backoff_multiplier  # type: ignore
             try:
                 return await throttle.strategy(key, rate, backend, cost)
             except asyncio.CancelledError:
@@ -273,7 +287,10 @@ def failover(
     breaker: typing.Optional[CircuitBreaker] = None,
     max_retries: int = 2,
     retry_delay: float = 0.05,
-) -> typing.Callable[[HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]]:
+    backoff: typing.Optional[BackoffStrategy] = None,
+) -> typing.Callable[
+    [HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]
+]:
     """
     Returns a failover error handler with circuit breaker, retry, and fallback.
 
@@ -326,9 +343,11 @@ def failover(
     :param breaker: CircuitBreaker instance (creates new one if None)
     :param max_retries: Number of retries before falling back
     :param retry_delay: Initial delay between retries (seconds)
+    :param backoff: Backoff strategy for each retry. Defaults to exponential backoff.
     :return: Error handler function
     """
     cb = breaker or CircuitBreaker()
+    backoff = backoff or DEFAULT_BACKOFF
 
     async def handler(
         connection: HTTPConnectionT, exc_info: ThrottleExceptionInfo
@@ -349,7 +368,6 @@ def failover(
         )
         key = throttle.get_namespaced_key(connection, connection_id, context=context)
 
-        delay = retry_delay
         for attempt in range(max_retries):
             try:
                 wait_ms = await throttle.strategy(key, rate, primary_backend, cost)
@@ -359,8 +377,8 @@ def failover(
                 raise
             except Exception:
                 if attempt < max_retries - 1:
+                    delay = backoff(attempt, retry_delay)
                     await asyncio.sleep(delay)
-                    delay *= 2  # Exponential backoff
                 continue
 
         # All retries failed: record failure and use fallback

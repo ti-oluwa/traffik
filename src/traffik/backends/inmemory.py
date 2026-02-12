@@ -8,6 +8,7 @@ import asyncio
 import typing
 from collections import OrderedDict
 
+from traffik._locks import _AsyncFairRLock, _AsyncRLock
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError
 from traffik.types import (
@@ -16,7 +17,7 @@ from traffik.types import (
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
-from traffik.utils import _AsyncFairRLock, _AsyncRLock, time
+from traffik.utils import time
 
 
 class _AsyncLock(typing.Protocol):

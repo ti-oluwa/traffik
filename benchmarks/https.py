@@ -194,7 +194,6 @@ def create_traffik_app(
         rate=f"{limit}/{window}s",
         backend=backend,  # type: ignore
         strategy=strategy,
-        # headers=DEFAULT_HEADERS_THROTTLED,
     )
 
     @app.get("/test", dependencies=[Depends(throttle)])

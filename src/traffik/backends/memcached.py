@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from aiomcache import Client as MemcachedClient
 from aiomcache import ClientException
 
+from traffik._locks import fence_token_generator
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.types import (
@@ -21,7 +22,7 @@ from traffik.types import (
     T,
     ThrottleErrorHandler,
 )
-from traffik.utils import fence_token_generator, time
+from traffik.utils import time
 
 
 def _on_error_return(

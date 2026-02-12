@@ -18,6 +18,11 @@ from traffik.backends.base import (
     connection_throttled,
     get_throttle_backend,
 )
+from traffik.config import (
+    CONNECTION_IDS_CONTEXT_KEY,
+    THROTTLE_DEFAULT_SCOPE,
+    THROTTLED_STATE_KEY,
+)
 from traffik.exceptions import ConfigurationError
 from traffik.headers import Header, Headers
 from traffik.rates import Rate
@@ -50,10 +55,6 @@ __all__ = [
     "throttled",
 ]
 
-THROTTLED_STATE_KEY = "__traffik_throttled_state__"
-CONNECTION_IDS_CONTEXT_KEY = "__traffik_connection_ids__"
-DEFAULT_SCOPE = "default"
-
 ThrottleStrategy = typing.Callable[
     [Stringable, Rate, ThrottleBackend[typing.Any, HTTPConnection], int],  # type: ignore[misc]
     typing.Awaitable[WaitPeriod],
@@ -82,8 +83,6 @@ class ThrottleExceptionInfo(TypedDict):
     """Additional context for the throttling operation."""
     throttle: "Throttle[HTTPConnection]"
     """The throttle instance used during the throttling operation."""
-    response: typing.Optional[Response]
-    """The response object, if available, that can be used in error handling."""
 
 
 ExceptionInfo = ThrottleExceptionInfo  # Alias for backwards compatibility
@@ -119,7 +118,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         "use_fixed_backend",
         "_headers",
         "_default_context",
-        "_use_response",
         "_uses_rate_func",
         "_uses_cost_func",
         "_error_callback",
@@ -151,7 +149,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         cache_ids: bool = True,
-        use_response: typing.Optional[bool] = None,
     ) -> None:
         """
         Initialize the throttle instance.
@@ -249,11 +246,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             Setting this to `True` is especially useful for long-lived connections
             like `WebSocket`s where the connection does not change after establishment,
             and caching avoids redundant/expensive identifier computations.
-
-        :param use_response: If True, this indicates that the throttle's should get the response object
-            when used as a dependency in FastAPI routes. Otherwise, response will be passed as None,
-            except provided explicitly. You cannot set `use_response=False` if you provide `headers`
-            since the throttle needs to apply headers to the response.
         """
         if not uid or not isinstance(uid, str):
             raise ValueError("uid is required and must be a non-empty string")
@@ -278,26 +270,13 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         # Never modify `_default_context` after initialization. It's unsafe.
         self._default_context = dict(context or {})
         # Set 'scope' in default context if not already set.
-        self._default_context.setdefault("scope", DEFAULT_SCOPE)
+        self._default_context.setdefault("scope", THROTTLE_DEFAULT_SCOPE)
 
         if headers is None:
             headers = Headers()
         elif not isinstance(headers, Headers):
             headers = Headers(headers)
         self._headers = typing.cast(Headers[HTTPConnectionT], headers)
-
-        if use_response is None:
-            # If user does not explicitly specify `use_response`,
-            # we set it to true if `headers` are provided since the throttle
-            # will need to update the response with the headers, otherwise false to
-            # avoid unnecessary overhead of passing the response object.
-            self._use_response = bool(self._headers)
-        elif not use_response and self._headers:
-            raise ConfigurationError(
-                "Cannot set `use_response=False` when `headers` are provided since headers need to be applied to the response."
-            )
-        else:
-            self._use_response = use_response
 
         # Only set backend for non-dynamic backend throttles
         if not dynamic_backend:
@@ -345,7 +324,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         # `__call__` uses *args/**kwargs to support direct calls like
         # `throttle(request, cost=5)`, but FastAPI would interpret those
         # as required query parameters. By setting `__signature__` to only
-        # expose `connection` (and `response`), FastAPI injects the request (and response) correctly.
+        # expose `connection`, FastAPI injects the request correctly.
         self.__signature__ = self._make_signature()
 
     @property
@@ -494,11 +473,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         it does not interfere with FastAPI's request parsing and OpenAPI schema generation.
         """
         return _make_throttle_signature(
-            self,
+            throttle=self,
             connection_param_name="connection",
             target_method="hit",
-            include_response=self._use_response,
-            response_param_name="response",
             return_annotation=None,
         )
 
@@ -617,7 +594,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         rate: Rate,
         backend: ThrottleBackend[typing.Any, HTTPConnectionT],
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-        response: typing.Optional[Response] = None,
     ) -> WaitPeriod:
         """
         Handle errors during throttling based on the configured error-handling strategy.
@@ -629,7 +605,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :param backend: The backend used during the throttling operation.
         :param throttle: The throttle instance.
         :param context: Additional context for the throttling operation.
-        :param response: The response object, if available, that can be used in error handling.
         :return: The wait period in milliseconds.
         """
         if self._error_callback:
@@ -641,7 +616,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 context=context,
                 backend=backend,
                 throttle=self,
-                response=response,
             )
             return await self._error_callback(connection, exc_info)  # type: ignore[arg-type]
         elif self.on_error == "allow":
@@ -659,7 +633,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                     context=context,
                     backend=backend,
                     throttle=self,
-                    response=response,
                 )
                 return await backend._error_callback(connection, exc_info)  # type: ignore[arg-type]
             elif backend.on_error == "allow":
@@ -677,11 +650,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         *,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-        response: typing.Optional[Response] = None,
         headers: typing.Optional[
             typing.Mapping[str, typing.Union[Header[HTTPConnectionT], str]]
         ] = None,
-        include_headers: bool = True,
+        inject_headers: bool = False,
     ) -> HTTPConnectionT:
         """
         Throttle the connection based on the limit and time period.
@@ -696,12 +668,12 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             **Keys to be set in the context:**
             - "scope": A string to differentiate throttling for different contexts within the same connection.
 
-        :param response: Optional `Response` object for use in downstream throttling operations.
         :param headers: Optional additional headers to resolve for this specific call, which will be merged with the throttle's default headers.
             Headers provided here will take precedence over the throttle's default headers in case of conflicts.
-        :param include_headers: Whether to include headers in the response if throttling occurs. Defaults to True.
-            Set this to False if you want to handle headers yourself in a custom `handle_throttled` handler or
-            if you want to avoid the overhead of resolving and applying headers.
+            This is valid only when `inject_headers=True`. Otherwise, it is ignored.
+        :param inject_headers: Whether to include/inject resolved headers in the context. Defaults to False.
+            Leave this as False if you want to handle headers yourself, or if you want to avoid the overhead
+            of resolving and injecting headers.
         :return: The throttled HTTP connection.
         """
         if cost == 0:
@@ -750,20 +722,15 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         key = self.get_namespaced_key(connection, connection_id, merged_context)
         try:
             wait_ms = await self.strategy(key, rate, backend, actual_cost)  # type: ignore[arg-type]
-
-            if (
-                include_headers
-                and response is not None
-                and (
-                    resolved_headers := await self.get_headers(
-                        connection,
-                        headers=headers,
-                        stat=None,
-                        context=merged_context,
-                    )
+            if inject_headers and (
+                resolved_headers := await self.get_headers(
+                    connection,
+                    headers=headers,
+                    stat=None,
+                    context=merged_context,
                 )
             ):
-                response.headers.update(resolved_headers)
+                merged_context["headers"] = resolved_headers
 
         except asyncio.CancelledError:
             raise
@@ -779,7 +746,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 rate=rate,  # type: ignore
                 backend=backend,
                 context=merged_context,
-                response=response,
             )
 
         wait_ms = (
@@ -1031,7 +997,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         )
 
     def __repr__(self) -> str:
-        return f"<{self.__class__.__name__} {self.uid!r} rate={self.rate!r} cost={self.cost!r}>"
+        return f"<{self.__class__.__name__} {self.uid!s} rate={self.rate!r} cost={self.cost!r}>"
 
 
 def _make_throttle_signature(
@@ -1153,7 +1119,6 @@ class HTTPThrottle(Throttle[Request]):
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         cache_ids: bool = True,
-        use_response: typing.Optional[bool] = None,
         use_method: bool = True,
     ) -> None:
         """
@@ -1247,9 +1212,6 @@ class HTTPThrottle(Throttle[Request]):
             like WebSockets where the connection does not change after establishment,
             and caching avoids redundant/expensive identifier computations.
 
-        :param use_response: If True, this indicates that the throttle's should get the response object
-            when used as a dependency in FastAPI routes. Otherwise, response will be passed as None, except provided explicitly.
-
         :param use_method: Whether to include the HTTP method in the scoped key for throttling.
             Defaults to True. If set to False, the throttle will ignore the HTTP method and only use the path for throttling.
             This can be useful if you want to apply the same throttling to all methods for a given path (e.g., GET, POST, etc.),
@@ -1269,7 +1231,6 @@ class HTTPThrottle(Throttle[Request]):
             on_error=on_error,
             context=context,
             cache_ids=cache_ids,
-            use_response=use_response,
         )
         self.use_method = use_method
 
@@ -1281,7 +1242,7 @@ class HTTPThrottle(Throttle[Request]):
         typ = connection.scope["type"]
         method = connection.scope["method"].upper() if self.use_method else ""
         path = connection.scope["path"]
-        scope = context["scope"] if context else DEFAULT_SCOPE
+        scope = context["scope"] if context else THROTTLE_DEFAULT_SCOPE
         return f"{typ}:{method}:{path}:{scope}"
 
 
@@ -1346,6 +1307,9 @@ class WebSocketThrottle(Throttle[WebSocket]):
         cost: CostType[WebSocket] = 1,
         dynamic_backend: bool = False,
         min_wait_period: typing.Optional[int] = None,
+        headers: typing.Optional[
+            typing.Mapping[str, typing.Union[Header[WebSocket], str]]
+        ] = None,
         on_error: typing.Optional[
             typing.Union[
                 typing.Literal["allow", "throttle", "raise"],
@@ -1367,15 +1331,10 @@ class WebSocketThrottle(Throttle[WebSocket]):
             cost=cost,
             dynamic_backend=dynamic_backend,
             min_wait_period=min_wait_period,
-            # Websocket's typically have no headers to include in throttling responses,
-            # and even if they do, they can't be sent in the same way as HTTP responses (hence why `use_response=False`),
-            # so we ignore any provided headers for WebSocket throttles to avoid confusion.
-            headers=None,
+            headers=headers,
             on_error=on_error,
             context=context,
             cache_ids=cache_ids,
-            # `WebSocket` endpoints don't use `Response` objects
-            use_response=False,
         )
 
     def get_scoped_key(
@@ -1385,7 +1344,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
     ) -> str:
         typ = connection.scope["type"]
         path = connection.scope["path"]
-        scope = context["scope"] if context else DEFAULT_SCOPE
+        scope = context["scope"] if context else THROTTLE_DEFAULT_SCOPE
         return f"{typ}:{path}:{scope}"
 
 

@@ -7,16 +7,17 @@ from .backends.inmemory import *  # noqa
 from .rates import Rate  # noqa
 from .throttles import *  # noqa
 from .types import *  # noqa
-from .utils import (  # noqa
+from .config import (  # noqa
     get_lock_blocking,
     get_lock_blocking_timeout,
     get_lock_ttl,
-    get_remote_address,
     set_lock_blocking,
     set_lock_blocking_timeout,
     set_lock_ttl,
 )
+from .utils import get_remote_address  # noqa
 from .headers import *  # noqa
+from .registry import *  # noqa
 
 
 __version__ = "1.0.3"

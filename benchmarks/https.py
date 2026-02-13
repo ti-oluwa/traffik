@@ -20,13 +20,7 @@ from base import BenchmarkMemcachedBackend, custom_identifier  # type: ignore[im
 from fastapi import Depends, FastAPI, Request
 from slowapi import Limiter as SlowAPILimiter
 
-from traffik import (
-    DEFAULT_HEADERS_ALWAYS,
-    DEFAULT_HEADERS_THROTTLED,
-    HTTPThrottle,
-
-    get_remote_address,
-)
+from traffik import HTTPThrottle, get_remote_address
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.redis import RedisBackend
 from traffik.strategies.custom import GCRAStrategy

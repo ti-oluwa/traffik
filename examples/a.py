@@ -27,7 +27,7 @@ v2_router:
 # MAIN ROUTER #
 ###############
 
-# We can implement the global limit in two ways
+# We can implement the global limit in three ways
 
 
 async def global_rate(
@@ -119,7 +119,7 @@ main_router = APIRouter(prefix="/api/v1", dependencies=[Depends(global_throttle)
 
 
 async def get_user_id(connection: Request) -> str:
-    return connection.state.user_id
+    return getattr(connection.state, "user_id", "__anon__")
 
 
 # 1. Use custom rate function
@@ -155,9 +155,7 @@ users_throttle = HTTPThrottle(
 )
 
 # Add `users_throttle` a dep for the router
-users_router = APIRouter(
-    prefix="/users", dependencies=[Depends(users_throttle)]
-)
+users_router = APIRouter(prefix="/users", dependencies=[Depends(users_throttle)])
 
 
 # --------------------#
@@ -203,14 +201,16 @@ orgs_router = APIRouter(prefix="/organizations", dependencies=[Depends(orgs_thro
 
 
 @orgs_router.post("/")
-async def create_organization(org_id: str): ...  # `orgs_router` throttle only applies
+async def create_organization(org_id: str):
+    pass  # `orgs_router` throttle only applies
 
 
 @orgs_router.get("/{org_id}")
 @throttled(
     HTTPThrottle("orgs:get", rate="100/min")
 )  # Hits `orgs_router` throttle + this
-async def get_organization(org_id: str): ...
+async def get_organization(org_id: str):
+    pass
 
 
 # We register the sub routers with the main router

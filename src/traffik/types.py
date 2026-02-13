@@ -132,6 +132,19 @@ A callable that implements a backoff strategy.
 Takes the current attempt number and base delay, and returns the delay in seconds before the next retry.
 """
 
+ThrottlePredicate: TypeAlias = typing.Union[
+    typing.Callable[[HTTPConnectionT], typing.Awaitable[bool]],
+    typing.Callable[
+        [HTTPConnectionT, typing.Optional[typing.Mapping[str, typing.Any]]],
+        typing.Awaitable[bool],
+    ],
+]
+"""
+A type alias for a callable that takes an HTTP connection (and an optional context) and returns a boolean.
+
+This is used as a predicate to determine if the throttle should apply.
+"""
+
 
 class _ExceptionInfo(TypedDict):
     """Information about an exception that occurred during retried throttling operations."""

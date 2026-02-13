@@ -1,31 +1,25 @@
 """Throttle and ASGI middleware for throttling HTTP connections."""
 
 import inspect
-import re
 import typing
-import warnings
 
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
-from typing_extensions import TypeAlias
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import ConfigurationError, _build_exception_handler_getter
 from traffik.headers import Header
+from traffik.registry import ThrottleRule
 from traffik.throttles import Throttle
-from traffik.types import ExceptionHandler, HTTPConnectionT, Matchable
+from traffik.types import (
+    ExceptionHandler,
+    HTTPConnectionT,
+    Matchable,
+    ThrottlePredicate,
+)
 from traffik.utils import is_async_callable
-
-ThrottlePredicate: TypeAlias = typing.Callable[
-    [HTTPConnectionT], typing.Awaitable[bool]
-]
-"""
-A type alias for a callable that takes an HTTP connection and returns a boolean.
-
-This is used as a predicate to determine if the throttle should apply.
-"""
 
 
 class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
@@ -38,7 +32,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
     checks the HTTP method (skipped for WebSocket), then the path, and finally the
     predicate if provided.
 
-    If the connection does not match the criteria, it is returned unchanged.
+    If the connection does not match the criteria, it is returned without consuming throttle quota.
 
     Usage:
     ```python
@@ -49,8 +43,11 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
     from traffik.backends.inmemory import InMemoryBackend
     from traffik.middleware import ThrottleMiddleware
 
-    # Use a custom hook to use throttle for only premium users.
-    async def is_premium_user(connection: HTTPConnection) -> bool:
+    # Use a predicate to apply throttle for only premium users.
+    async def is_premium_user(
+        connection: HTTPConnection, 
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None
+    ) -> bool:
         # Check if the user is a premium user
         return connection.headers.get("X-User-Tier") == "premium"
 
@@ -80,9 +77,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
 
     __slots__ = (
         "throttle",
-        "path",
-        "methods",
-        "predicate",
+        "rule",
         "_default_context",
         "cost",
         "__signature__",
@@ -93,7 +88,6 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         throttle: Throttle[HTTPConnectionT],
         path: typing.Optional[Matchable] = None,
         methods: typing.Optional[typing.Iterable[str]] = None,
-        hook: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
         predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
@@ -106,56 +100,26 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             If string, it's compiled as a regex pattern.
 
             Examples:
-
-                - "/api/" matches paths starting with "/api/"
-                - r"/api/\\d+" matches "/api/" followed by digits
-                - None applies to all paths.
+            - "/api/" matches paths starting with "/api/"
+            - r"/api/\\d+" matches "/api/" followed by digits
+            - None applies to all paths.
 
         :param methods: A set of HTTP methods (e.g., 'GET', 'POST') to apply the throttle to.
             If None, the throttle applies to all methods. Ignored for `WebSocket` connections.
         :param predicate: An optional callable that takes an HTTP connection and returns a boolean.
-            If provided, the throttle will only apply if this hook returns True for the connection.
+            If provided, the throttle will only apply if this returns True for the connection.
             This is useful for more complex conditions that cannot be expressed with just path and methods.
             It is run after checking the path and methods, so it should be used for more expensive checks.
-        :param hook: Deprecated alias for `predicate`. Use `predicate` instead.
         :param context: An optional mapping of context to pass to the throttle.
             This is merged with the default context provided at initialization,
             with the provided context taking precedence.
         """
-        if hook is not None:
-            warnings.warn(
-                "`hook` parameter is deprecated and will be removed in future versions. "
-                "Use `predicate` instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        if predicate is not None and hook is not None:
-            raise ConfigurationError(
-                "Cannot specify both `predicate` and `hook`. Only use `predicate`."
-            )
-
-        self._default_context = dict(context or {})
         self.throttle = throttle
         self.cost = cost
-
-        self.path: typing.Optional[re.Pattern[str]]
-        if isinstance(path, str):
-            self.path = re.compile(path)
-        else:
-            self.path = path
-
-        if methods is None:
-            self.methods = None
-        else:
-            # Store both lowercase and uppercase versions.
-            # Although HTTP scope methods are typically uppercase
-            self.methods = frozenset(
-                m
-                for method in methods
-                if isinstance(method, str)
-                for m in (method.lower(), method.upper())
-            )
-        self.predicate = predicate or hook
+        self.rule = ThrottleRule[HTTPConnectionT](
+            path=path, methods=methods, predicate=predicate
+        )
+        self._default_context = dict(context or {})
 
         # Set a clean `__signature__` so FastAPI's dependency injection only
         # sees `connection` and doesn't treat *args/**kwargs as query params.
@@ -164,7 +128,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         # If the throttle has a custom signature, use it. Else,
         # create a signature that only includes the `connection` parameter frm the `hit` method,
         # and excludes *args and **kwargs.
-        if throttle_signature := getattr(throttle, "__signature__", None) is not None:
+        if (throttle_signature := getattr(throttle, "__signature__", None)) is not None:
             self.__signature__ = throttle_signature
         else:
             signature = inspect.signature(self.hit)
@@ -199,7 +163,6 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         :param context: An optional mapping of context to pass to the throttle.
             This is merged with the default context provided at initialization,
             with the provided context taking precedence.
-        :param response: Optional `Response` object for use in downstream throttling operations.
         :param headers: Optional additional headers to resolve for this specific call, which will be merged with the throttle's default headers.
             Headers provided here will take precedence over the throttle's default headers in case of conflicts.
             This is valid only when `inject_headers=True`. Otherwise, it is ignored.
@@ -209,24 +172,28 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         :return: The connection, possibly modified by the throttle. If throttling criteria
             are not met, returns the original connection unchanged. If throttled, may return
             a modified connection or raise a throttling exception.
-        :raises: `HTTPException` if the connection exceeds rate limits.
         """
-        # Check methods first. Cheapest check is frozenset lookup.
-        # WebSocket connections don't have a "method" in scope, so skip if absent.
-        if self.methods is not None:
-            method = connection.scope.get("method")
-            if method is not None and method not in self.methods:
-                return connection
-        if self.path is not None and not self.path.match(connection.scope["path"]):
-            return connection
-        if self.predicate is not None and not await self.predicate(connection):
-            return connection
+        rule = self.rule
+        if rule._predicate_takes_context:
+            # If rule needs context, then pass merged context So merge context before
+            if context:
+                merged_context = self._default_context.copy()
+                merged_context.update(context)
+            else:
+                merged_context = self._default_context
 
-        if context:
-            merged_context = self._default_context.copy()
-            merged_context.update(context)
+            if not await rule.check(connection, context=merged_context):
+                return connection
         else:
-            merged_context = self._default_context
+            # If rule does not need the context, then merge after, if rule passes.
+            if not await rule.check(connection):
+                return connection
+
+            if context:
+                merged_context = self._default_context.copy()
+                merged_context.update(context)
+            else:
+                merged_context = self._default_context
         return await self.throttle.hit(
             connection,
             cost=cost or self.cost,

@@ -27,7 +27,12 @@ from traffik.config import (
 from traffik.exceptions import ConfigurationError
 from traffik.headers import Header, Headers
 from traffik.rates import Rate
-from traffik.registry import GLOBAL_REGISTRY, ThrottleRegistry, ThrottleRule
+from traffik.registry import (
+    GLOBAL_REGISTRY,
+    ThrottleRegistry,
+    ThrottleRule,
+    _prep_rules,
+)
 from traffik.strategies import DEFAULT_STRATEGY
 from traffik.types import (
     EXEMPTED,
@@ -261,6 +266,12 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         if not uid or not isinstance(uid, str):
             raise ValueError("uid is required and must be a non-empty string")
 
+        registry = registry or GLOBAL_REGISTRY
+        if registry.exist(uid):
+            raise ConfigurationError(
+                f"Throttle UID must be unique. Throttle with UID {uid!r} already exists."
+            )
+
         if dynamic_backend and backend is not None:
             raise ValueError(
                 "Cannot specify an explicit backend with `dynamic_backend=True`"
@@ -275,16 +286,16 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self.use_fixed_backend = not dynamic_backend
         self.strategy = strategy or DEFAULT_STRATEGY
         self.min_wait_period = min_wait_period
-        self.registry = registry or GLOBAL_REGISTRY
+        self.registry = registry
         self._rules: typing.Tuple[ThrottleRule[HTTPConnectionT], ...] = (
-            tuple(set(rules)) if rules else ()
+            _prep_rules(set(rules)) if rules else ()
         )
         self._rules_resolved = False
         self.cache_ids = cache_ids
-        self._id = self.registry.get_id(uid)
+        self.registry.register(uid)
         # Register a finalization weakref for when the throttle is garbage-collected
-        # so its ID can be released.
-        weakref.finalize(self, self.registry.release_id, uid)
+        # so its UID can be unregistered.
+        weakref.finalize(self, self.registry.unregister, uid)
 
         # Ensure that we copy the context to avoid potential mutation issues from outside after initialization
         # Never modify `_default_context` after initialization. It's unsafe.
@@ -409,7 +420,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         # so that when `connection_type` is accessed during `__init__`,
         # it returns the connection type they set without going through the resolution process.
         if getattr(self, "_connection_type", None) is not None:
-            return self._connection_type
+            return self._connection_type  # type: ignore[has-type]
 
         self._connection_type = self._resolve_connection_type()
         return self._connection_type
@@ -670,10 +681,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         *,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-        headers: typing.Optional[
-            typing.Mapping[str, typing.Union[Header[HTTPConnectionT], str]]
-        ] = None,
-        inject_headers: bool = False,
     ) -> HTTPConnectionT:
         """
         Throttle the connection based on the limit and time period.
@@ -688,22 +695,12 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             **Keys to be set in the context:**
             - "scope": A string to differentiate throttling for different contexts within the same connection.
 
-        :param headers: Optional additional headers to resolve for this specific call, which will be merged with the throttle's default headers.
-            Headers provided here will take precedence over the throttle's default headers in case of conflicts.
-            This is valid only when `inject_headers=True`. Otherwise, it is ignored.
-        :param inject_headers: Whether to include/inject resolved headers in the context. Defaults to False.
-            Leave this as False if you want to handle headers yourself, or if you want to avoid the overhead
-            of resolving and injecting headers.
         :return: The throttled HTTP connection.
         """
         if cost == 0:
             return connection  # No cost, no throttling needed
 
-        # We have to try as much as possible to avoid copying the context in downstream calls.
-        # So that mutations to the context in those calls reflect back here. That's the whole point
-        # of having a context in the first place. Hence we only copy it once here. Although, there
-        # may be some edge cases where downstream mutations should not affect this (global) context.
-        # Then in that case its justifiable.
+        # Mutation for context downstream is highly prohibited.
         if context:
             merged_context = self._default_context.copy()
             merged_context.update(context)
@@ -716,12 +713,13 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             registry_rules = self.registry.get_rules(self.uid)
             if registry_rules:
                 seen = set(rules)
-                rules = rules + tuple(r for r in registry_rules if r not in seen)
-                self._rules = rules
+                merged = rules + tuple(r for r in registry_rules if r not in seen)
+                # Re-sort since registry rules were added to the pre-sorted constructor rules
+                self._rules = rules = _prep_rules(merged)
             self._rules_resolved = True
 
-        # All rules must pass for the throttle to apply
         if rules:
+            # All rules must pass for the throttle to apply
             for rule in rules:
                 if not await rule.check(connection, context=merged_context):
                     return connection
@@ -758,16 +756,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         key = self.get_namespaced_key(connection, connection_id, merged_context)
         try:
             wait_ms = await self.strategy(key, rate, backend, actual_cost)  # type: ignore[arg-type]
-            if inject_headers and (
-                resolved_headers := await self.get_headers(
-                    connection,
-                    headers=headers,
-                    stat=None,
-                    context=merged_context,
-                )
-            ):
-                merged_context["headers"] = resolved_headers
-
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -861,11 +849,11 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         Useful for pre-checking before expensive operations.
 
         Note:
-            This should be used as a best-effort pre-check only. The actual
-            quota may change between this check and the eventual consumption
-            (classic Time-of-Check to Time-of-Use issue).
-            A way to avoid this is to ensure that the throttle is only used for one route/operation,
-            and no other. Or best, throttle optimistically and handle rejections gracefully.
+        This should be used as a best-effort pre-check only. The actual
+        quota may change between this check and the eventual consumption
+        (classic Time-of-Check to Time-of-Use issue).
+        A way to avoid this is to ensure that the throttle is only used for one route/operation,
+        and no other. Or best, throttle optimistically and handle rejections gracefully.
 
         :param connection: The HTTP connection to check.
         :param cost: Cost to check against. If None, uses the throttle's default cost.
@@ -1032,38 +1020,20 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             parent=parent,
         )
 
-    def register_upstream(self, upstream_uid: str) -> None:
-        """
-        Register an upstream (parent) throttle relationship.
-
-        :param upstream_uid: The UID of the upstream throttle.
-        :raises `ConfigurationError`: If the relationship would create a cycle.
-        """
-        self.registry.register_upstream(self.uid, upstream_uid)
-
-    def register_downstream(self, downstream_uid: str) -> None:
-        """
-        Register a downstream (child) throttle relationship.
-
-        :param downstream_uid: The UID of the downstream throttle.
-        :raises `ConfigurationError`: If the relationship would create a cycle.
-        """
-        self.registry.register_downstream(self.uid, downstream_uid)
-
-    def add_upstream_rules(
-        self, upstream_uid: str, /, *rules: ThrottleRule[HTTPConnectionT]
+    def add_rules(
+        self, target_uid: str, /, *rules: ThrottleRule[HTTPConnectionT]
     ) -> None:
         """
-        Add rules that gate an upstream throttle's application.
+        Add rules that gate another throttle's application.
 
-        Rules are checked conjunctively on the upstream throttle's `hit(...)` call.
-        If any rule returns `False`, the upstream throttle is skipped for that
-        connection. This lets a downstream throttle selectively bypass its
-        upstream for certain methods, paths, or custom predicates.
+        Rules are checked conjunctively on the target throttle's `hit(...)` call.
+        If any rule returns `False`, the target throttle is skipped for that
+        connection. This lets one throttle selectively bypass another for
+        certain methods, paths, or custom predicates.
 
-        :param upstream_uid: The UID of the upstream throttle to attach rules to.
+        :param target_uid: The UID of the throttle to attach rules to.
         :param rules: One or more `ThrottleRule` instances to add.
-        :raises `ConfigurationError`: If this throttle is not downstream of `upstream_uid`.
+        :raises `ConfigurationError`: If `target_uid` is not registered.
 
         Example Usage - Bypassing the global throttle for GET requests:
 
@@ -1077,12 +1047,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         # Write throttle: stricter 20 req/min for mutations only
         write_throttle = HTTPThrottle(uid="writes", rate="20/min")
 
-        # Establish the relationship: writes is downstream of global
-        global_throttle.register_downstream("writes")
-
-        # Make the global throttle only apply to write methods,
+        # Add a rule to the global throttle so it only applies to write methods,
         # effectively bypassing it for reads.
-        write_throttle.add_upstream_rules(
+        write_throttle.add_rules(
             "global",
             ThrottleRule(methods={"POST", "PUT", "PATCH", "DELETE"}),
         )
@@ -1098,7 +1065,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         #   - write_throttle.hit(...) also applies
         ```
         """
-        self.registry.add_upstream_rules(self.uid, upstream_uid, *rules)
+        self.registry.add_rules(target_uid, *rules)
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} {self.uid!s} rate={self.rate!r} cost={self.cost!r}>"

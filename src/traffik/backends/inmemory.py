@@ -271,12 +271,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         named_locks = self._named_locks
         if name in named_locks:
             return named_locks[name]
-        
+
         async with self._named_locks_lock:
             lock = _AsyncInMemoryLock(lock=self._lock_cls())
             named_locks[name] = lock
         return lock
-        
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any

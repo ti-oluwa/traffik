@@ -670,11 +670,11 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         This performs a non-consuming check of the throttle's current state.
 
         Note:
-            This should be used as a best-effort pre-check only. The actual
-            quota may change between this check and the eventual consumption
-            (classic Time-of-Check to Time-of-Use issue).
-            A way to avoid this is to ensure that the throttle checked/used is unique to this context,
-            or best, throttle optimistically and handle rejections gracefully.
+        This should be used as a best-effort pre-check only. The actual
+        quota may change between this check and the eventual consumption
+        (classic Time-of-Check to Time-of-Use issue).
+        A way to avoid this is to ensure that the throttle checked/used is unique to this context,
+        or best, throttle optimistically and handle rejections gracefully.
 
         :param throttle: Specific throttle to check. If None and context is bound,
             checks the owner throttle. If None and unbound, checks all queued entries.

@@ -201,7 +201,7 @@ orgs_router = APIRouter(prefix="/organizations", dependencies=[Depends(orgs_thro
 
 
 @orgs_router.post("/")
-async def create_organization(org_id: str):
+async def create_organization(data: typing.Any):
     pass  # `orgs_router` throttle only applies
 
 

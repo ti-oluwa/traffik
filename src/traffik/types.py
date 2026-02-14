@@ -1,8 +1,5 @@
 """Type definitions and protocols."""
 
-import enum
-
-import math
 import typing
 from collections.abc import Mapping
 from dataclasses import dataclass

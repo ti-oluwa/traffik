@@ -146,6 +146,8 @@ def retry(
     async def handler(
         connection: HTTPConnection, exc_info: ThrottleExceptionInfo
     ) -> WaitPeriod:
+        nonlocal backoff, backoff_multiplier
+
         exc = exc_info["exception"]
         if not isinstance(exc, retry_on):
             raise exc

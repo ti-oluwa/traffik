@@ -39,10 +39,6 @@ async def global_rate(
 
 
 global_throttle = HTTPThrottle("api:v1", rate=global_rate)
-# Register a relationship with the throttles downstream, so they are define bypass rules for this throttle
-global_throttle.register_downstream("users")
-global_throttle.register_downstream("orgs")
-
 main_router = APIRouter(prefix="/api/v1", dependencies=[Depends(global_throttle)])
 
 
@@ -72,9 +68,9 @@ users_throttle = HTTPThrottle(
     rate=user_rate,
     identifier=get_user_id,
 )
-# Register rule on "global" throttle to not apply to connection coming to the users router with method GET
+# Add rule on the global throttle to skip it for GET requests to /api/v1/users
 bypass_GET_users = BypassThrottleRule(path="/api/v1/users", methods={"GET"})
-users_throttle.add_upstream_rules("global", bypass_GET_users)
+users_throttle.add_rules("api:v1", bypass_GET_users)
 
 # Add `users_throttle` a dep for the router
 users_router = APIRouter(prefix="/users", dependencies=[Depends(users_throttle)])
@@ -98,16 +94,16 @@ orgs_throttle = HTTPThrottle(
     rate=orgs_rate,
     identifier=get_user_id,
 )
-# Register rule on "global" throttle to not apply to connection coming to the orgs router with method POST
+# Add rule on the global throttle to skip it for POST requests to /api/v1/orgs
 bypass_POST_orgs = BypassThrottleRule(path="/api/v1/orgs", methods={"POST"})
-orgs_throttle.add_upstream_rules("global", bypass_POST_orgs)
+orgs_throttle.add_rules("api:v1", bypass_POST_orgs)
 
 # Add `orgs_throttle` a dep for the router
 orgs_router = APIRouter(prefix="/organizations", dependencies=[Depends(orgs_throttle)])
 
 
 @orgs_router.post("/")
-async def create_organization(org_id: str):
+async def create_organization(data: typing.Any):
     pass  # `orgs_router` throttle only applies
 
 

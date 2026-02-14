@@ -110,13 +110,11 @@ class Header(typing.Generic[HTTPConnectionT]):
     }
     throttle = HTTPThrottle(..., headers=Headers(headers))
 
-    # Later on in some scope say we want to disable "Header-2" when throttling
-    # We can hit the throttle with updated headers like this.
-    throttle.hit(
-        connection, 
-        context={"scope": "<some_scope>"}, 
-        response=response,
-        headers={"Header-2": Header.DISABLE}, # Disables "Header-2" for this hit.
+    # Later on in some scope say we want to disable "Header-2" when resolving headers.
+    # Pass the override to `get_headers()` to disable it for this specific resolution.
+    resolved = await throttle.get_headers(
+        connection,
+        headers={"Header-2": Header.DISABLE},
     )
     ```
     """
@@ -163,7 +161,7 @@ class Header(typing.Generic[HTTPConnectionT]):
             self._resolver = None
         else:
             self._resolver = v
-            self._raw = None
+            self._raw = None  # type: ignore[assignment]
 
         self._check = when if callable(when) else None
         self._when = when if not callable(when) else None
@@ -293,7 +291,7 @@ def _prep_headers(
     This allows us to optimize for the common case where headers are static
     and do not require dynamic resolution on each request, while still supporting dynamic headers when needed.
     """
-    prepared_headers = {}
+    prepared_headers: typing.Dict[str, typing.Union[Header, str]] = {}
     for name, value in headers.items():
         if isinstance(value, str):
             prepared_headers[name] = value
@@ -411,6 +409,11 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
 
     def __contains__(self, key: typing.Hashable, /) -> bool:
         return key in self._raw
+
+    def items(
+        self,
+    ) -> typing.ItemsView[str, typing.Union[str, Header[HTTPConnectionT]]]:  # type: ignore[override]
+        return self._raw.items()
 
     def __iter__(self) -> typing.Iterator[str]:
         return iter(self._raw)

@@ -10,7 +10,6 @@ from starlette.websockets import WebSocket
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import ConfigurationError, _build_exception_handler_getter
-from traffik.headers import Header
 from traffik.registry import ThrottleRule
 from traffik.throttles import Throttle
 from traffik.types import (
@@ -45,7 +44,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
 
     # Use a predicate to apply throttle for only premium users.
     async def is_premium_user(
-        connection: HTTPConnection, 
+        connection: HTTPConnection,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None
     ) -> bool:
         # Check if the user is a premium user
@@ -144,16 +143,16 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
                 ]
             )
 
+    @property
+    def connection_type(self) -> typing.Type[HTTPConnection]:
+        return self.throttle.connection_type
+
     async def hit(
         self,
         connection: HTTPConnectionT,
         *,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-        headers: typing.Optional[
-            typing.Mapping[str, typing.Union[Header[HTTPConnectionT], str]]
-        ] = None,
-        inject_headers: bool = True,
     ) -> HTTPConnectionT:
         """
         Checks if the throttle applies to the connection and applies it if so.
@@ -163,12 +162,6 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         :param context: An optional mapping of context to pass to the throttle.
             This is merged with the default context provided at initialization,
             with the provided context taking precedence.
-        :param headers: Optional additional headers to resolve for this specific call, which will be merged with the throttle's default headers.
-            Headers provided here will take precedence over the throttle's default headers in case of conflicts.
-            This is valid only when `inject_headers=True`. Otherwise, it is ignored.
-        :param inject_headers: Whether to include/inject resolved headers in the context. Defaults to False.
-            Leave this as False if you want to handle headers yourself, or if you want to avoid the overhead
-            of resolving and injecting headers.
         :return: The connection, possibly modified by the throttle. If throttling criteria
             are not met, returns the original connection unchanged. If throttled, may return
             a modified connection or raise a throttling exception.
@@ -195,11 +188,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             else:
                 merged_context = self._default_context
         return await self.throttle.hit(
-            connection,
-            cost=cost or self.cost,
-            context=merged_context,
-            headers=headers,
-            inject_headers=inject_headers,
+            connection, cost=cost or self.cost, context=merged_context
         )
 
     async def __call__(
@@ -222,43 +211,62 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
 
 _SortThrottles = typing.Union[
     typing.Literal["cheap_first", "cheap_last", False, None],
-    typing.Callable[[MiddlewareThrottle[HTTPConnectionT]], typing.Any],
+    typing.Callable[
+        [typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]],
+        typing.Any,
+    ],
 ]
 
 
-def _prepare_middleware_throttles(
-    middleware_throttles: typing.Sequence[MiddlewareThrottle[HTTPConnectionT]],
+def _prep_throttles(
+    middleware_throttles: typing.Sequence[
+        typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]
+    ],
     *,
     sort: _SortThrottles = "cheap_first",
 ) -> typing.Mapping[
     typing.Literal["http", "websocket"],
-    typing.List[MiddlewareThrottle[HTTPConnectionT]],
+    typing.List[
+        typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]
+    ],
 ]:
     """
-    Prepare middleware throttles by sorting them based on their cost and categorizing by connection type.
+    Prepare throttles by sorting them based on their cost and categorizing by connection type.
 
     Throttles with lower cost are sorted before those with higher cost.
     Throttles without a specified cost are treated as having infinite cost and are sorted last.
 
-    :param middleware_throttles: A sequence of `MiddlewareThrottle` instances to sort.
+    :param middleware_throttles: A sequence of `MiddlewareThrottle` and `Throttle` instances to sort.
     :param sort: Determines the sorting order of throttles based on their cost.
         - "cheap_first": Sorts throttles with lower cost before those with higher cost (default).
         - "cheap_last": Sorts throttles with higher cost before those with lower cost.
         - False or None: No sorting is applied, and throttles are categorized in the order they are provided.
-        - A custom callable that takes a `MiddlewareThrottle` and returns a value to sort by.
+        - A custom callable that takes a `MiddlewareThrottle` or `Throttle` and returns a value to sort by.
             Ensure to return `float("inf")` for throttles without a specified cost if you want them to be sorted last.
     :return: A mapping categorizing the throttles by connection type ('http' or 'websocket'), with each category containing a list of throttles sorted by cost.
     """
-    sorted_throttles: typing.Sequence[MiddlewareThrottle[HTTPConnectionT]]
+    sorted_throttles: typing.Sequence[
+        typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]
+    ]
     if sort == "cheap_first":
         sorted_throttles = sorted(
             middleware_throttles,
-            key=lambda t: t.cost if t.cost is not None else float("inf"),
+            key=lambda t: (
+                t.cost if t.cost is not None else float("inf"),
+                t.rule.predicate is not None,
+            )
+            if isinstance(t, MiddlewareThrottle)
+            else False,
         )
     elif sort == "cheap_last":
         sorted_throttles = sorted(
             middleware_throttles,
-            key=lambda t: -(t.cost if t.cost is not None else float("inf")),
+            key=lambda t: (
+                -(t.cost if t.cost is not None else float("inf")),
+                t.rule.predicate is not None,
+            )
+            if isinstance(t, MiddlewareThrottle)
+            else False,
         )
     elif sort in (False, None):
         sorted_throttles = middleware_throttles
@@ -271,13 +279,15 @@ def _prepare_middleware_throttles(
 
     categorized: typing.Dict[
         typing.Literal["http", "websocket"],
-        typing.List[MiddlewareThrottle[HTTPConnectionT]],
+        typing.List[
+            typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]
+        ],
     ] = {
         "http": [],
         "websocket": [],
     }
     for throttle in sorted_throttles:
-        connection_type = throttle.throttle.connection_type
+        connection_type = throttle.connection_type
         if issubclass(connection_type, WebSocket):
             categorized["websocket"].append(throttle)
         elif issubclass(connection_type, HTTPConnection):
@@ -335,7 +345,9 @@ class ThrottleMiddleware:
     def __init__(
         self,
         app: ASGIApp,
-        middleware_throttles: typing.Sequence[MiddlewareThrottle[typing.Any]],
+        middleware_throttles: typing.Sequence[
+            typing.Union[MiddlewareThrottle[typing.Any], Throttle[typing.Any]]
+        ],
         backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnection]] = None,
         exception_handler_getter: typing.Optional[
             typing.Callable[
@@ -365,9 +377,7 @@ class ThrottleMiddleware:
                 Ensure to return `float("inf")` for throttles without a specified cost if you want them to be sorted last.
         """
         self.app = app
-        self.middleware_throttles = _prepare_middleware_throttles(
-            middleware_throttles, sort=sort
-        )
+        self.middleware_throttles = _prep_throttles(middleware_throttles, sort=sort)
         self.backend = backend or get_throttle_backend(app)
         self.get_exception_handler = exception_handler_getter
         self.context = context

@@ -14,6 +14,7 @@ from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.decorators import throttled
 from traffik.rates import Rate
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
@@ -32,9 +33,10 @@ async def test_throttle_decorator_only(
 ) -> None:
     async with inmemory_backend(app, persistent=True, close_on_exit=True):
         throttle = HTTPThrottle(
-            uid="test-decorator",
+            uid="test-decorator-fa",
             rate=Rate(limit=3, seconds=5),
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @app.get("/throttled", status_code=200)
@@ -66,17 +68,19 @@ async def test_throttle_decorator_with_dependency(
 ) -> None:
     async with inmemory_backend(app, persistent=False, close_on_exit=True):
         burst_throttle = HTTPThrottle(
-            uid="test-burst",
+            uid="test-burst-fa",
             rate=Rate(limit=3, seconds=5),
             identifier=default_client_identifier,
             headers={"X-RateLimit-Mode": "burst"},
             strategy=strategies.TokenBucketWithDebtStrategy(),
+            registry=ThrottleRegistry(),
         )
         sustained_throttle = HTTPThrottle(
-            uid="test-sustained",
+            uid="test-sustained-fa",
             rate=Rate(limit=5, seconds=10),
             identifier=default_client_identifier,
             headers={"X-RateLimit-Mode": "sustained"},
+            registry=ThrottleRegistry(),
         )
 
         def random_value() -> str:
@@ -133,15 +137,17 @@ async def test_throttled_decorator_with_multiple_throttles(
     async with inmemory_backend(app, persistent=False, close_on_exit=True):
         # Burst throttle: 5 per 2 seconds
         burst_throttle = HTTPThrottle(
-            uid="multi-burst",
+            uid="multi-burst-fa",
             rate=Rate(limit=5, seconds=2),
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
         # Sustained throttle: 10 per minute
         sustained_throttle = HTTPThrottle(
-            uid="multi-sustained",
+            uid="multi-sustained-fa",
             rate=Rate(limit=10, minutes=1),
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @app.get("/multi-throttled")
@@ -198,15 +204,17 @@ async def test_throttled_decorator_multiple_throttles_short_circuit(
     async with inmemory_backend(app, persistent=False, close_on_exit=True):
         # Very restrictive first throttle
         first_throttle = HTTPThrottle(
-            uid="first-limit",
+            uid="first-limit-fa",
             rate=Rate(limit=2, seconds=5),
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
         # More permissive second throttle
         second_throttle = HTTPThrottle(
-            uid="second-limit",
+            uid="second-limit-fa",
             rate=Rate(limit=100, minutes=1),
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @app.get("/short-circuit")
@@ -239,9 +247,10 @@ async def test_throttled_decorator_websocket(
     """Test `@throttled` decorator with WebSocketThrottle on a WebSocket route."""
     async with inmemory_backend(app, persistent=True, close_on_exit=True):
         ws_throttle = WebSocketThrottle(
-            uid="test-ws-decorator",
+            uid="test-ws-decorator-fa",
             rate=Rate(limit=2, seconds=5),
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @app.websocket("/ws")
@@ -274,14 +283,16 @@ async def test_throttled_decorator_websocket_multiple_throttles(
     """Test `@throttled` decorator with multiple WebSocketThrottles."""
     async with inmemory_backend(app, persistent=True, close_on_exit=True):
         burst = WebSocketThrottle(
-            uid="ws-burst",
+            uid="ws-burst-fa",
             rate=Rate(limit=2, seconds=5),
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
         sustained = WebSocketThrottle(
-            uid="ws-sustained",
+            uid="ws-sustained-fa",
             rate=Rate(limit=5, minutes=1),
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @app.websocket("/ws")

@@ -12,10 +12,6 @@ class Rate:
 
     __slots__ = (
         "limit",
-        "milliseconds",
-        "seconds",
-        "minutes",
-        "hours",
         "expire",
         "is_subsecond",
         "unlimited",
@@ -92,6 +88,11 @@ class Rate:
             raise AttributeError("`Rate` object is immutable")
         super().__setattr__(name, value)
 
+    def __repr__(self) -> str:
+        if self.unlimited:
+            return f"{self.__class__.__name__}(unlimited)"
+        return f"{self.__class__.__name__}(limit={self.limit}req, expire={self.expire}ms)"
+
     @classmethod
     def parse(cls, rate: str) -> "Rate":
         """
@@ -126,7 +127,7 @@ class Rate:
         :return: A `Rate` object.
         :raises ValueError: If the rate string is invalid or cannot be parsed.
         """
-        rate = rate.strip()
+        rate = str(rate).strip()
         if not rate:
             raise ValueError("Rate string cannot be empty")
         # Use `.lower()` for better cache performance

@@ -19,6 +19,7 @@ from tests.utils import default_client_identifier, unlimited_identifier
 from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 
 
@@ -26,21 +27,28 @@ from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 @pytest.mark.throttle
 async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> None:
     with pytest.raises(ValueError):
-        Throttle("test-init-1", rate=Rate(limit=-1))
+        Throttle(
+            "test-init-1",
+            rate=Rate(limit=-1),
+            registry=ThrottleRegistry(),
+        )
 
-    async def _throttle_handler(connection: Request, wait_ms: float) -> None:
+    async def _throttle_handler(
+        connection: Request, wait_ms: float, *args, **kwargs
+    ) -> None:
         # do nothing, just a placeholder for testing
         return
 
     # Test initialization behaviour
     async with inmemory_backend(close_on_exit=True):
         throttle = Throttle(
-            "test-init-2",
+            "test-init-2-sl",
             rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
             handle_throttled=_throttle_handler,
+            registry=ThrottleRegistry(),
         )
         time_in_ms = 10 + (50 * 1000) + (2 * 60 * 1000) + (1 * 3600 * 1000)
-        assert throttle.rate.expire == time_in_ms
+        assert throttle.rate.expire == time_in_ms  # type: ignore[attr-defined]
         assert throttle.backend is inmemory_backend
         assert throttle.identifier is inmemory_backend.identifier
         # Test that provided throttle handler is used
@@ -50,9 +58,10 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
 @pytest.mark.throttle
 def test_throttle_with_lifespan(inmemory_backend: InMemoryBackend) -> None:
     throttle = HTTPThrottle(
-        "test-throttle-app-lifespan",
+        "test-throttle-app-lifespan-sl",
         rate="2/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     async def ping_endpoint(request: Request) -> JSONResponse:
@@ -85,10 +94,11 @@ def test_throttle_exemption_with_unlimited_identifier(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     throttle = HTTPThrottle(
-        "test-throttle-exemption",
+        "test-throttle-exemption-sl",
         rate="2/s",
         identifier=unlimited_identifier,
         backend=inmemory_backend,
+        registry=ThrottleRegistry(),
     )
 
     async def ping_endpoint(request: Request) -> JSONResponse:
@@ -123,8 +133,9 @@ async def test_http_throttle(backends: BackendGen) -> None:
     for backend in backends(persistent=False, namespace="http_throttle_test"):
         async with backend(close_on_exit=True):
             throttle = HTTPThrottle(
-                "test-http-throttle",
+                "test-http-throttle-sl",
                 rate="3/3500ms",
+                registry=ThrottleRegistry(),
             )
             sleep_time = 4 + (5 / 1000)
 
@@ -166,9 +177,10 @@ async def test_http_throttle_concurrent(backends: BackendGen) -> None:
     for backend in backends(persistent=False, namespace="http_throttle_concurrent"):
         async with backend(close_on_exit=True):
             throttle = HTTPThrottle(
-                "http-throttle-concurrent",
+                "http-throttle-concurrent-sl",
                 rate="3/1050ms",
                 strategy=strategies.TokenBucketStrategy(),
+                registry=ThrottleRegistry(),
             )
 
             async def ping_endpoint(request: Request) -> JSONResponse:
@@ -203,9 +215,10 @@ async def test_websocket_throttle(backends: BackendGen) -> None:
     for backend in backends(persistent=False, namespace="ws_throttle_test"):
         async with backend(close_on_exit=True):
             throttle = WebSocketThrottle(
-                "test-websocket-throttle-inmemory",
+                "test-websocket-throttle-inmemory-sl",
                 rate="3/5005ms",
                 identifier=default_client_identifier,
+                registry=ThrottleRegistry(),
             )
 
             async def ws_endpoint(websocket: WebSocket) -> None:

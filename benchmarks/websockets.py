@@ -21,6 +21,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from traffik import WebSocketThrottle, is_throttled
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.redis import RedisBackend
+from traffik.registry import ThrottleRegistry
 from traffik.strategies.custom import GCRAStrategy
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.strategies.leaky_bucket import LeakyBucketStrategy
@@ -159,6 +160,7 @@ def create_app(
         rate=f"{limit}/{window}s",
         backend=backend,  # type: ignore
         strategy=strategy,
+        registry=ThrottleRegistry(),
     )
 
     @app.websocket("/ws")

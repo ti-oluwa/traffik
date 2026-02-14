@@ -37,6 +37,7 @@
   - Add new `Headers` API, that allows the definition of runtime/throttling-time resolution of headers. It provides a subjectively better way of defining headers for throttles with optized datastructures.
   - Removed `include_headers` initialization argument from `ThrottleMiddleware` since `Throttle`s and `MiddlewareThrottle`s can now define their own headers.
   - Removed redundant shard locking from the `get(..)` method of the `InMemoryBackend` and moved lock acquisition in `set(..)` to exactly when shards needs to be modified. This slight improved high-concurrency performance for same key access for strategies that use `get` and `set` alot. Switching from `_AsyncRLock` to `asyncio.Lock` for shard locks saw a drastic peformance boost for the `InMemoryBackend` especially in high-load scenarios.
+  - Added new `ThrottleRule` and `ThrottleRegistry` classes for defining gates and bypasses for throttles. Enables better DX for applying and bypassing throttles conditionally.
   - Many micro optimizations, that may or may not reflect in high concurrency situations.
   - Moved alot of code around to better structure the library. Public APIs that were moved have aliases in their previous locations for backwards compatibility.
 

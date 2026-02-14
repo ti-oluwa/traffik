@@ -229,8 +229,8 @@ class TestSerializationErrorHandling:
                 assert deserialized == data or (
                     data is None and deserialized is None
                 ), f"Failed for {data}"
-            except Exception as e:
-                pytest.fail(f"Serialization failed for {data}: {e}")
+            except Exception as exc:
+                pytest.fail(f"Serialization failed for {data}: {exc}")
 
 
 @pytest.mark.anyio

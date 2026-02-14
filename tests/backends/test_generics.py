@@ -567,7 +567,9 @@ async def test_asynchronous_lock_synchronization(backends: BackendGen) -> None:
                 blocking: bool, blocking_timeout: float = 0.5
             ):
                 async with await backend.lock(
-                    lock_name, blocking=blocking, blocking_timeout=blocking_timeout
+                    lock_name,
+                    blocking=blocking,
+                    blocking_timeout=blocking_timeout,
                 ):
                     # Read current value
                     value = int(await backend.get(key) or "0")

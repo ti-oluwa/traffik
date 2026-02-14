@@ -19,10 +19,11 @@ class _MockConnection:
     __slots__ = ("scope",)
 
     def __init__(self, *, method: str = "GET", path: str = "/"):
-        self.scope = {"type": "http", "method": method, "path": path}
-
-
-# ── ThrottleRule ──────────────────────────────────────────────────────────────
+        self.scope = {
+            "type": "http",
+            "method": method,
+            "path": path,
+        }
 
 
 class TestThrottleRuleInit:
@@ -74,8 +75,8 @@ class TestThrottleRuleInit:
         rule2 = ThrottleRule(predicate=pred_with_ctx)
         assert rule2._predicate_takes_context is True
 
-    def test_type_rank_is_zero(self) -> None:
-        assert ThrottleRule.__type_rank__ == 0
+    def test_rank_is_zero(self) -> None:
+        assert ThrottleRule.__rank__ == 0
 
 
 class TestThrottleRuleImmutability:
@@ -92,7 +93,7 @@ class TestThrottleRuleImmutability:
     def test_cannot_reassign_predicate(self) -> None:
         rule = ThrottleRule()
         with pytest.raises(AttributeError, match="immutable"):
-            rule.predicate = lambda c: True
+            rule.predicate = lambda c: True  # type: ignore
 
 
 class TestThrottleRuleHash:
@@ -116,10 +117,16 @@ class TestThrottleRuleHash:
         r2 = BypassThrottleRule(path="/api/", methods={"GET"})
         assert hash(r1) != hash(r2)
 
-    def test_usable_in_set(self) -> None:
+    def test_same_instance_deduplicates_in_set(self) -> None:
+        """Same object instance deduplicates in a set."""
+        r = ThrottleRule(path="/api/", methods={"GET"})
+        assert len({r, r}) == 1
+
+    def test_distinct_instances_not_deduplicated(self) -> None:
+        """Two instances with same args are distinct (identity-based equality)."""
         r1 = ThrottleRule(path="/api/", methods={"GET"})
         r2 = ThrottleRule(path="/api/", methods={"GET"})
-        assert len({r1, r2}) == 1
+        assert len({r1, r2}) == 2
 
 
 class TestThrottleRuleCheck:
@@ -172,7 +179,7 @@ class TestThrottleRuleCheck:
         rule = ThrottleRule(predicate=only_admin)
 
         conn_admin = _MockConnection()
-        conn_admin.scope["is_admin"] = True
+        conn_admin.scope["is_admin"] = True  # type: ignore
         assert await rule.check(conn_admin) is True
 
         conn_regular = _MockConnection()
@@ -226,8 +233,8 @@ class TestThrottleRuleCheck:
 
 
 class TestBypassThrottleRuleInit:
-    def test_type_rank_is_one(self) -> None:
-        assert BypassThrottleRule.__type_rank__ == 1
+    def test_rank_is_one(self) -> None:
+        assert BypassThrottleRule.__rank__ == 1
 
     def test_is_subclass_of_throttle_rule(self) -> None:
         assert issubclass(BypassThrottleRule, ThrottleRule)
@@ -279,7 +286,7 @@ class TestBypassThrottleRuleCheck:
         rule = BypassThrottleRule(predicate=is_internal)
 
         internal = _MockConnection()
-        internal.scope["internal"] = True
+        internal.scope["internal"] = True  # type: ignore
         assert await rule.check(internal) is False
 
         external = _MockConnection()

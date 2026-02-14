@@ -46,7 +46,7 @@ class TestHeaderInit:
         assert h._is_static is False
 
     def test_dynamic_header(self) -> None:
-        resolver = lambda conn, stat, ctx: "dynamic"
+        resolver = lambda conn, stat, ctx: "dynamic"  # noqa
         h = Header(resolver, when="always")
         assert h._is_static is False
         assert h._raw is None
@@ -58,7 +58,7 @@ class TestHeaderInit:
         assert h._when == "throttled"
 
     def test_callable_when(self) -> None:
-        predicate = lambda conn, stat, ctx: True
+        predicate = lambda conn, stat, ctx: True  # noqa
         h = Header("val", when=predicate)
         assert h._check is predicate
         assert h._when is None
@@ -86,7 +86,7 @@ class TestHeaderCheck:
         assert h.check(None, stat) is True  # type: ignore[arg-type]
 
     def test_check_custom_predicate(self) -> None:
-        predicate = lambda conn, stat, ctx: stat.hits_remaining < 3
+        predicate = lambda conn, stat, ctx: stat.hits_remaining < 3  # noqa
         h = Header("val", when=predicate)
         assert h.check(None, _make_stat(hits_remaining=2)) is True  # type: ignore[arg-type]
         assert h.check(None, _make_stat(hits_remaining=5)) is False  # type: ignore[arg-type]
@@ -99,13 +99,13 @@ class TestHeaderResolve:
         assert h.resolve(None, stat) == "static-value"  # type: ignore[arg-type]
 
     def test_resolve_dynamic(self) -> None:
-        resolver = lambda conn, stat, ctx: f"remaining-{stat.hits_remaining}"
+        resolver = lambda conn, stat, ctx: f"remaining-{stat.hits_remaining}"  # noqa
         h = Header(resolver, when="always")
         stat = _make_stat(hits_remaining=7)
         assert h.resolve(None, stat) == "remaining-7"  # type: ignore[arg-type]
 
     def test_resolve_dynamic_with_context(self) -> None:
-        resolver = lambda conn, stat, ctx: ctx.get("prefix", "") + "value"
+        resolver = lambda conn, stat, ctx: ctx.get("prefix", "") + "value"  # noqa
         h = Header(resolver, when="always")
         stat = _make_stat()
         assert h.resolve(None, stat, {"prefix": "X-"}) == "X-value"  # type: ignore[arg-type]
@@ -132,7 +132,7 @@ class TestHeaderWhen:
         assert h2._is_static is False
 
     def test_when_preserves_resolver(self) -> None:
-        resolver = lambda conn, stat, ctx: "dynamic"
+        resolver = lambda conn, stat, ctx: "dynamic"  # noqa
         h = Header(resolver, when="always")
         h2 = h.when("throttled")
         stat = _make_stat(hits_remaining=0)

@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from tests.asynctestclient import AsyncTestClient
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
@@ -29,9 +30,10 @@ async def test_http_throttle_with_default_cost(
     """Test HTTPThrottle with default cost."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-default-cost",
+            "test-default-cost-fa",
             rate="5/s",
             identifier=default_client_identifier,  # type: ignore
+            registry=ThrottleRegistry(),
         )
 
         app = FastAPI()
@@ -63,10 +65,11 @@ async def test_http_throttle_with_custom_cost(
     """Test HTTPThrottle with custom cost."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-custom-cost",
+            "test-custom-cost-fa",
             rate="10/s",
             identifier=default_client_identifier,  # type: ignore
             cost=2,
+            registry=ThrottleRegistry(),
         )
         app = FastAPI()
 
@@ -97,10 +100,11 @@ async def test_http_throttle_override_cost_per_request(
     """Test HTTPThrottle with per-request cost override."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-override-cost",
+            "test-override-cost-fa",
             rate="20/2s",
             identifier=default_client_identifier,  # type: ignore
             cost=2,
+            registry=ThrottleRegistry(),
         )
         app = FastAPI()
 
@@ -151,11 +155,12 @@ async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -
             await connection.close(code=1008, reason="Throttled")
 
         ws_throttle = WebSocketThrottle(
-            "test-ws-cost",
+            "test-ws-cost-fa",
             rate="10/2s",
             identifier=default_client_identifier,  # type: ignore
             cost=2,
             handle_throttled=ws_throttled,
+            registry=ThrottleRegistry(),
         )
         app = FastAPI()
 
@@ -224,16 +229,18 @@ async def test_throttle_cost_isolation(inmemory_backend: InMemoryBackend) -> Non
     """Test that costs are isolated between different throttles."""
     async with inmemory_backend(close_on_exit=True):
         throttle1 = HTTPThrottle(
-            "test-isolation",
+            "test-isolation-1-fa",
             rate="10/s",
             identifier=default_client_identifier,  # type: ignore
             cost=2,
+            registry=ThrottleRegistry(),
         )
         throttle2 = HTTPThrottle(
-            "test-isolation",
+            "test-isolation-2-fa",
             rate="10/s",
             identifier=default_client_identifier,  # type: ignore
             cost=3,
+            registry=ThrottleRegistry(),
         )
         app = FastAPI()
 

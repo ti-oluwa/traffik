@@ -19,6 +19,7 @@ from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.decorators import throttled
 from traffik.rates import Rate
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 
 
@@ -45,9 +46,10 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
     # Test initialization behaviour
     async with inmemory_backend(close_on_exit=True):
         throttle = Throttle(
-            "test-init-2",
+            "test-init-2-fa",
             rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
             handle_throttled=_throttle_handler,
+            registry=ThrottleRegistry(),
         )
         time_in_ms = 10 + (50 * 1000) + (2 * 60 * 1000) + (1 * 3600 * 1000)
         assert throttle.rate.expire == time_in_ms  # type: ignore[union-attr]
@@ -61,9 +63,10 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
 @pytest.mark.fastapi
 def test_throttle_with_app_lifespan(lifespan_app: FastAPI) -> None:
     throttle = HTTPThrottle(
-        "test-throttle-app-lifespan",
+        "test-throttle-app-lifespan-fa",
         rate="2/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     @lifespan_app.get(
@@ -96,10 +99,11 @@ def test_throttle_exemption_with_unlimited_identifier(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     throttle = HTTPThrottle(
-        "test-throttle-exemption",
+        "test-throttle-exemption-fa",
         rate="2/s",
         identifier=unlimited_identifier,
         backend=inmemory_backend,
+        registry=ThrottleRegistry(),
     )
     app = FastAPI()
 
@@ -137,8 +141,9 @@ async def test_http_throttle(backends: BackendGen) -> None:
     for backend in backends(persistent=False, namespace="http_throttle_test"):
         async with backend(close_on_exit=True):
             throttle = HTTPThrottle(
-                "test-http-throttle",
+                "test-http-throttle-fa",
                 rate="3/3005ms",
+                registry=ThrottleRegistry(),
             )
             sleep_time = 4 + (5 / 1000)
 
@@ -183,9 +188,10 @@ async def test_http_throttle_concurrent(backends: BackendGen) -> None:
     for backend in backends(persistent=False, namespace="http_throttle_concurrent"):
         async with backend(close_on_exit=True):
             throttle = HTTPThrottle(
-                "http-throttle-concurrent",
+                "http-throttle-concurrent-fa",
                 rate="3/s",
                 strategy=strategies.TokenBucketStrategy(),
+                registry=ThrottleRegistry(),
             )
             app = FastAPI()
 
@@ -222,9 +228,10 @@ async def test_websocket_throttle(backends: BackendGen) -> None:
     for backend in backends(persistent=False, namespace="ws_throttle_test"):
         async with backend(close_on_exit=True):
             throttle = WebSocketThrottle(
-                "test-websocket-throttle-inmemory",
+                "test-websocket-throttle-inmemory-fa",
                 rate="3/5005ms",
                 identifier=default_client_identifier,
+                registry=ThrottleRegistry(),
             )
 
             app = FastAPI()
@@ -346,9 +353,10 @@ def test_throttle_dependency_not_in_openapi_schema(
     leak its internal parameters (cost, context, etc.) into the OpenAPI schema.
     """
     throttle = HTTPThrottle(
-        "test-openapi-schema",
+        "test-openapi-schema-fa",
         rate="10/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     @lifespan_app.post(
@@ -407,9 +415,10 @@ def test_throttle_dependency_does_not_force_body_embed(
     request body should work — no need to wrap it as `{"item": {...}}`.
     """
     throttle = HTTPThrottle(
-        "test-body-embed",
+        "test-body-embed-fa",
         rate="100/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     @lifespan_app.post(
@@ -442,9 +451,10 @@ def test_throttle_decorator_does_not_force_body_embed(
     instead of Depends(throttle).
     """
     throttle = HTTPThrottle(
-        "test-decorator-body-embed",
+        "test-decorator-body-embed-fa",
         rate="100/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     @lifespan_app.post("/create-decorated", status_code=201)

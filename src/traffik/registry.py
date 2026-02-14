@@ -4,7 +4,11 @@ import threading
 import typing
 
 from traffik.exceptions import ConfigurationError
-from traffik.types import HTTPConnectionT, Matchable, ThrottlePredicate
+from traffik.types import (
+    HTTPConnectionT,
+    Matchable,
+    ThrottlePredicate,
+)
 
 __all__ = ["ThrottleRule", "BypassThrottleRule", "ThrottleRegistry"]
 
@@ -12,7 +16,8 @@ __all__ = ["ThrottleRule", "BypassThrottleRule", "ThrottleRegistry"]
 class ThrottleRule(typing.Generic[HTTPConnectionT]):
     """Rule definition determining if a throttle should apply to a HTTP connection"""
 
-    __type_rank__ = 0
+    __rank__ = 0
+    """Higher value means higher check priority. Mainly for optimizing throttle rule checks"""
 
     __slots__ = (
         "path",
@@ -78,7 +83,7 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
                 (
                     type(
                         self
-                    ).__type_rank__,  # Add to differentiate beteween regular and bypass rule
+                    ).__rank__,  # Add to differentiate beteween regular and bypass rule
                     self.path.pattern if self.path is not None else None,
                     self.methods,
                     id(predicate) if predicate is not None else None,
@@ -117,6 +122,14 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
 
         return True
 
+    async def __call__(
+        self,
+        connection: HTTPConnectionT,
+        *,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+    ) -> bool:
+        return await self.check(connection, context=context)
+
     def __hash__(self) -> int:
         return self._hash
 
@@ -133,7 +146,7 @@ class BypassThrottleRule(ThrottleRule[HTTPConnectionT]):
     This basically the opposite of, or negates the regular `ThrottleRule` behaviour.
     """
 
-    __type_rank__ = 1
+    __rank__ = 1
 
     def __init__(
         self,
@@ -152,7 +165,7 @@ class BypassThrottleRule(ThrottleRule[HTTPConnectionT]):
             (
                 type(
                     self
-                ).__type_rank__,  # Add to differentiate beteween regular and bypass rule
+                ).__rank__,  # Add to differentiate beteween regular and bypass rule
                 self.path.pattern if self.path is not None else None,
                 self.methods,
                 id(predicate) if predicate is not None else None,
@@ -209,7 +222,7 @@ def _prep_rules(
     return tuple(
         sorted(
             rules,
-            key=lambda r: (r.predicate is not None, -type(r).__type_rank__),
+            key=lambda r: (r.predicate is not None, -type(r).__rank__),
         )
     )
 
@@ -293,6 +306,11 @@ class ThrottleRegistry:
         """
         with self._lock:
             return list(self._rules.get(uid, []))
+
+    def clear(self) -> None:
+        """Clear the registry"""
+        self._registered = set()
+        self._rules = {}
 
 
 GLOBAL_REGISTRY = ThrottleRegistry()

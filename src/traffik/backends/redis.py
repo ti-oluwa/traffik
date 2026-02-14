@@ -601,9 +601,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             scripts_shas.append(self._lock_script_shas["acquire"])
             scripts_shas.append(self._lock_script_shas["release"])
 
-        exists = await self.connection.script_exists(  # type: ignore
-            *scripts_shas
-        )
+        exists = await self.connection.script_exists(*scripts_shas)  # type: ignore
         return all(exists)
 
     async def ready(self) -> bool:

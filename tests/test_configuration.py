@@ -14,7 +14,7 @@ from traffik.config import (
     set_lock_blocking_timeout,
 )
 from traffik.rates import Rate
-from traffik.strategies.fixed_window import FixedWindowStrategy
+from traffik.strategies.fixed_window import FixedWindow
 from traffik.types import LockConfig
 
 
@@ -192,7 +192,7 @@ async def test_configuration_with_strategy():
     set_lock_blocking_timeout(1.5)
 
     # Create strategy that uses defaults
-    strategy = FixedWindowStrategy(
+    strategy = FixedWindow(
         lock_config=LockConfig(
             blocking=get_lock_blocking(),
             blocking_timeout=get_lock_blocking_timeout(),
@@ -218,7 +218,7 @@ async def test_configuration_strategy_override():
     set_lock_blocking_timeout(1.0)
 
     # Create strategy that overrides defaults
-    strategy = FixedWindowStrategy(
+    strategy = FixedWindow(
         lock_config=LockConfig(
             blocking=True,  # Override global False
             blocking_timeout=5.0,  # Override global 1.0

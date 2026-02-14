@@ -293,8 +293,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self._rules_resolved = False
         self.cache_ids = cache_ids
         self.registry.register(uid)
-        # Register a finalization weakref for when the throttle is garbage-collected
-        # so its UID can be unregistered.
+        # Register a finalization weakref for when the throttle is garbage-collected so its UID can be unregistered.
         weakref.finalize(self, self.registry.unregister, uid)
 
         # Ensure that we copy the context to avoid potential mutation issues from outside after initialization
@@ -700,7 +699,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         if cost == 0:
             return connection  # No cost, no throttling needed
 
-        # Mutation for context downstream is highly prohibited.
+        # Mutation of the context downstream is highly prohibited.
         if context:
             merged_context = self._default_context.copy()
             merged_context.update(context)
@@ -1068,7 +1067,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self.registry.add_rules(target_uid, *rules)
 
     def __repr__(self) -> str:
-        return f"<{self.__class__.__name__} {self.uid!s} rate={self.rate!r} cost={self.cost!r}>"
+        return f"{self.__class__.__name__}({self.uid!s} rate={self.rate!r} cost={self.cost!r} backend={self.backend!r})"
 
 
 def _make_throttle_signature(

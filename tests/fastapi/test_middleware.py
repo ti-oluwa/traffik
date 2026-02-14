@@ -16,6 +16,7 @@ from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
 from traffik.rates import Rate
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
@@ -28,6 +29,7 @@ async def test_throttle_initialization() -> None:
         uid="test-throttle",
         rate="5/min",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     # Test with string path
@@ -36,14 +38,18 @@ async def test_throttle_initialization() -> None:
         path="/api/",
         methods={"GET", "POST"},
     )
-    assert isinstance(middleware_throttle.path, re.Pattern)
+    assert isinstance(middleware_throttle.rule.path, re.Pattern)
     # Methods are stored in both upper and lower case for fast matching
-    assert middleware_throttle.methods is not None
-    assert "get" in middleware_throttle.methods or "GET" in middleware_throttle.methods
+    assert middleware_throttle.rule.methods is not None
     assert (
-        "post" in middleware_throttle.methods or "POST" in middleware_throttle.methods
+        "get" in middleware_throttle.rule.methods
+        or "GET" in middleware_throttle.rule.methods
     )
-    assert middleware_throttle.predicate is None
+    assert (
+        "post" in middleware_throttle.rule.methods
+        or "POST" in middleware_throttle.rule.methods
+    )
+    assert middleware_throttle.rule.predicate is None
 
     # Test with regex path
     regex_pattern = re.compile(r"/api/\d+")
@@ -52,18 +58,18 @@ async def test_throttle_initialization() -> None:
         path=regex_pattern,
         methods={"GET"},
     )
-    assert middleware_throttle_regex.path is regex_pattern
-    assert middleware_throttle_regex.methods is not None
+    assert middleware_throttle_regex.rule.path is regex_pattern
+    assert middleware_throttle_regex.rule.methods is not None
     assert (
-        "get" in middleware_throttle_regex.methods
-        or "GET" in middleware_throttle_regex.methods
+        "get" in middleware_throttle_regex.rule.methods
+        or "GET" in middleware_throttle_regex.rule.methods
     )
 
     # Test with no path/methods (applies to all)
     middleware_throttle_all = MiddlewareThrottle(throttle=throttle)
-    assert middleware_throttle_all.path is None
-    assert middleware_throttle_all.methods is None
-    assert middleware_throttle_all.predicate is None
+    assert middleware_throttle_all.rule.path is None
+    assert middleware_throttle_all.rule.methods is None
+    assert middleware_throttle_all.rule.predicate is None
 
 
 @pytest.mark.asyncio
@@ -76,6 +82,7 @@ async def test_throttle_method_filtering(inmemory_backend: InMemoryBackend) -> N
             uid="method-filter-test",
             rate="1/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Only apply to GET requests
@@ -110,6 +117,7 @@ async def test_throttle_path_filtering(inmemory_backend: InMemoryBackend) -> Non
             uid="path-filter-test",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Only apply to paths starting with /api/
@@ -144,6 +152,7 @@ async def test_throttle_regex_path_filtering(inmemory_backend: InMemoryBackend) 
             uid="regex-path-test",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Apply to paths like /api/123, /api/456, etc.
@@ -180,6 +189,7 @@ async def test_throttle_predicate_filtering(inmemory_backend: InMemoryBackend) -
             uid="predicate-filter-test",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # predicate that only applies to premium users
@@ -227,6 +237,7 @@ async def test_throttle_combined_filters(inmemory_backend: InMemoryBackend) -> N
             uid="combined-filter-test",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         async def is_authorized(connection: HTTPConnection) -> bool:
@@ -268,6 +279,7 @@ def test_middleware_basic_functionality(inmemory_backend: InMemoryBackend) -> No
         uid="middleware-basic-test",
         rate="2/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(
         throttle=throttle,
@@ -318,11 +330,13 @@ def test_middleware_multiple_throttles(inmemory_backend: InMemoryBackend) -> Non
         uid="api-throttle",
         rate="2/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     admin_throttle = HTTPThrottle(
         uid="admin-throttle",
         rate="1/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     middleware_throttles = [
@@ -372,6 +386,7 @@ def test_middleware_method_specificity(inmemory_backend: InMemoryBackend) -> Non
         uid="method-specific-test",
         rate="1/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     # Only throttle POST requests
     middleware_throttle = MiddlewareThrottle(
@@ -423,6 +438,7 @@ def test_middleware_with_predicate(inmemory_backend: InMemoryBackend) -> None:
         uid="predicate-middleware-test",
         rate="1/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     # Only throttle requests with premium tier
@@ -468,6 +484,7 @@ def test_middleware_no_backend_specified(inmemory_backend: InMemoryBackend) -> N
         uid="no-backend-test",
         rate="1/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(throttle=throttle)
 
@@ -501,6 +518,7 @@ async def test_middleware_multiple_backends(backends: BackendGen) -> None:
             uid="redis-middleware-test",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
         middleware_throttle = MiddlewareThrottle(
             throttle=throttle,
@@ -555,6 +573,7 @@ async def test_middleware_concurrent_requests(
         uid="concurrent-middleware-test",
         rate=Rate.parse("3/5s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(throttle=throttle)
 
@@ -598,6 +617,7 @@ def test_middleware_exemption_with_predicate(inmemory_backend: InMemoryBackend) 
         uid="exemption-test",
         rate=Rate.parse("1/1s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     # Exempt admin users from throttling
@@ -643,6 +663,7 @@ def test_middleware_case_insensitive_methods(inmemory_backend: InMemoryBackend) 
         uid="case-insensitive-test",
         rate=Rate.parse("1/1s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     # Specify methods in mixed case
     middleware_throttle = MiddlewareThrottle(
@@ -698,6 +719,7 @@ def test_middleware_websocket_passthrough(inmemory_backend: InMemoryBackend) -> 
         uid="websocket-test",
         rate=Rate.parse("1/1s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(throttle=throttle)
 
@@ -769,11 +791,13 @@ def test_middleware_multiple_overlapping_patterns(
         uid="general-throttle",
         rate=Rate.parse("5/s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     specific_throttle = HTTPThrottle(
         uid="specific-throttle",
         rate=Rate.parse("2/s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     middleware_throttles = [
@@ -833,6 +857,7 @@ async def test_middleware_complex_regex_patterns(
             uid="complex-regex",
             rate="3/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Complex pattern: Match UUIDs in API paths
@@ -877,6 +902,7 @@ async def test_middleware_string_auto_compile_to_regex(
             uid="auto-compile",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Pass string path (should be auto-compiled)
@@ -886,8 +912,8 @@ async def test_middleware_string_auto_compile_to_regex(
         )
 
         # Verify it was compiled to Pattern
-        assert isinstance(middleware_throttle.path, re.Pattern)
-        assert middleware_throttle.path.pattern == "/api/"
+        assert isinstance(middleware_throttle.rule.path, re.Pattern)
+        assert middleware_throttle.rule.path.pattern == "/api/"
 
         # Test that it works
         matching_scope = {"type": "http", "method": "GET", "path": "/api/users"}
@@ -916,6 +942,7 @@ async def test_middleware_regex_with_query_params_ignored(
             uid="query-ignore",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         middleware_throttle = MiddlewareThrottle(
@@ -954,6 +981,7 @@ async def test_middleware_case_sensitive_regex(
             uid="case-sensitive",
             rate="3/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Case-sensitive pattern
@@ -995,6 +1023,7 @@ async def test_middleware_with_streaming_responses(
         uid="streaming-test",
         rate="2/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(
         throttle=throttle,
@@ -1079,6 +1108,7 @@ async def test_middleware_streaming_with_large_chunks(
         uid="large-stream-test",
         rate="10/m",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(
         throttle=throttle,
@@ -1143,6 +1173,7 @@ async def test_middleware_streaming_exception_during_stream(
         uid="stream-exception-test",
         rate="5/m",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(throttle=throttle)
 
@@ -1182,6 +1213,7 @@ def test_middleware_websocket_throttle(inmemory_backend: InMemoryBackend) -> Non
         uid="ws-middleware-throttle",
         rate=Rate.parse("2/5s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(throttle=ws_throttle, path="/ws")
 
@@ -1222,11 +1254,13 @@ def test_middleware_mixed_http_and_websocket_throttles(
         uid="mixed-http",
         rate=Rate.parse("2/5s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     ws_throttle = WebSocketThrottle(
         uid="mixed-ws",
         rate=Rate.parse("2/5s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     app = FastAPI(lifespan=inmemory_backend.lifespan)

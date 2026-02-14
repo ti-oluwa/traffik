@@ -23,6 +23,7 @@ from slowapi import Limiter as SlowAPILimiter
 from traffik import HTTPThrottle, get_remote_address
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.redis import RedisBackend
+from traffik.registry import ThrottleRegistry
 from traffik.strategies.custom import GCRAStrategy
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.strategies.leaky_bucket import (
@@ -188,6 +189,7 @@ def create_traffik_app(
         rate=f"{limit}/{window}s",
         backend=backend,  # type: ignore
         strategy=strategy,
+        registry=ThrottleRegistry(),
     )
 
     @app.get("/test", dependencies=[Depends(throttle)])

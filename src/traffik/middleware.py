@@ -413,9 +413,9 @@ class ThrottleMiddleware:
         # state across multiple connections.
         async with backend(close_on_exit=False, persistent=True):
             context = self.context
-            for middleware_throttle in self.middleware_throttles[typ]:
+            for throttle in self.middleware_throttles[typ]:
                 try:
-                    connection = await middleware_throttle.hit(
+                    connection = await throttle.hit(
                         connection,  # type: ignore[arg-type]
                         context=context,
                     )

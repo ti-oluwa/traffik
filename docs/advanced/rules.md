@@ -107,6 +107,9 @@ BypassThrottleRule(path="/api/internal")  # /api/internal, /api/internal/health,
 !!! note "Regex vs prefix matching"
     When you pass a plain string with no `*`, Traffik compiles it as a regex and uses `re.Pattern.match()`, which matches from the start of the string. Since `match()` doesn't require matching to the end, `/api/users` becomes a prefix match. If you need a full-string match, use a compiled regex with `$` at the end.
 
+!!! tip "`ThrottleMiddleware` path uses `ThrottleRule` underneath"
+    The `path` parameter on `MiddlewareThrottle` (used with `ThrottleMiddleware`) uses the same `ThrottleRule` path-matching logic under the hood. That means it supports the same wildcard patterns — `*`, `**`, plain string prefix match, and compiled `re.Pattern`. See [Middleware](../integration/middleware.md) for usage examples.
+
 ---
 
 ## Attaching Rules at Initialization
@@ -200,14 +203,18 @@ Rules are evaluated in an order optimised for short-circuit performance. Traffik
 
 You don't need to think about this ordering - Traffik handles it. But it's good to know why **cheap method/path rules should always be preferred over predicates** when they can express the same condition.
 
+!!! note "`BypassThrottleRule` always wins first"
+    `BypassThrottleRule` instances are always checked **before** `ThrottleRule` instances within the same priority tier. This short-circuit means: if any bypass rule matches, the throttle is skipped immediately without evaluating any `ThrottleRule` predicates. Keep bypass rules cheap and tight — they protect everything downstream.
+
 ---
 
-## The `GLOBAL_REGISTRY`
+## The `ThrottleRegistry` and `GLOBAL_REGISTRY`
 
-Every throttle registers itself in the `GLOBAL_REGISTRY` on construction (unless you pass a custom `registry`). This is what makes `add_rules()` work across module boundaries without passing references around.
+Every throttle registers itself in the `GLOBAL_REGISTRY` — an instance of `ThrottleRegistry` — on construction (unless you pass a custom `registry`). This is what makes `add_rules()` work across module boundaries without passing references around.
 
 ```python
-from traffik.registry import GLOBAL_REGISTRY
+from traffik import HTTPThrottle
+from traffik.registry import GLOBAL_REGISTRY, ThrottleRegistry
 
 # Check if a throttle has been registered
 GLOBAL_REGISTRY.exist("api:v1")   # True if HTTPThrottle("api:v1", ...) was called
@@ -215,6 +222,10 @@ GLOBAL_REGISTRY.exist("api:v99")  # False
 
 # Add rules directly through the registry
 GLOBAL_REGISTRY.add_rules("api:v1", bypass_rule)
+
+# You can also create isolated registries for testing or multi-tenant setups
+custom_registry = ThrottleRegistry()
+throttle = HTTPThrottle("api:v1", rate="100/min", registry=custom_registry)
 ```
 
 The registry uses a re-entrant lock internally, so it's safe to register throttles and add rules from different threads during application startup.
@@ -405,11 +416,13 @@ There are three ways to make a throttle apply differently to different connectio
 |---|---|
 | `ThrottleRule(path, methods, predicate)` | Apply throttle **only** when connection matches |
 | `BypassThrottleRule(path, methods, predicate)` | Skip throttle **when** connection matches |
+| `BypassThrottleRule` checked first | Short-circuits before any `ThrottleRule` in the same tier |
 | `rules={...}` in constructor | Attach rules at throttle creation |
 | `throttle.add_rules("uid", rule)` | Attach rules to another throttle by UID after creation |
 | `*` in path pattern | Matches one path segment (no `/`) |
 | `**` in path pattern | Matches multiple segments (including `/`) |
 | Plain string path | Prefix regex match |
 | `re.compile(...)` path | Exact regex match |
+| `ThrottleRegistry` | The class backing `GLOBAL_REGISTRY`; pass a custom instance via `registry=` |
 | `GLOBAL_REGISTRY.exist("uid")` | Check if a throttle UID is registered |
 | `dynamic_rules=True` | Re-fetch registry rules on every request |

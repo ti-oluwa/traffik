@@ -5,6 +5,23 @@ FastAPI's `Depends` mechanism is the most idiomatic way to attach throttles to r
 !!! tip "Recommended approach for FastAPI"
     Dependency injection is the standard FastAPI pattern. It composes cleanly with other dependencies, works at the route and router level, and doesn't require you to change your handler signature.
 
+!!! note "Works with plain Starlette too"
+    `Depends(throttle)` is a FastAPI convenience, but the underlying throttle works with **any Starlette `Request`**. If you are using plain Starlette (without FastAPI), you can call the throttle directly in your route handler:
+
+    ```python
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    from traffik import HTTPThrottle
+
+    throttle = HTTPThrottle(uid="api:items", rate="100/min")
+
+    async def list_items(request: Request):
+        await throttle.hit(request)  # raises ConnectionThrottled if over limit
+        return JSONResponse({"items": []})
+    ```
+
+    FastAPI's `Depends` is simply a wrapper around this same call — it resolves the `Request` and calls the throttle for you. In plain Starlette, you manage the call yourself.
+
 ---
 
 ## Basic usage — no Request access needed

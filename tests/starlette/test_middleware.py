@@ -1400,25 +1400,38 @@ def test_prep_throttles_custom_callable() -> None:
 
 @pytest.mark.middleware
 def test_prep_throttles_none_cost_sorted_last() -> None:
-    """Test that throttles without a cost (None) are sorted last with 'cheap_first'."""
+    """Test that MiddlewareThrottle(cost=None) falls back to the wrapped throttle's cost.
+
+    When MiddlewareThrottle.cost is None, _cheap_first uses the wrapped throttle's
+    cost (default 1). So t_no_cost gets sort key (1, False) — the same as t_cheap.
+    Stable sort preserves input order for equal keys, so t_no_cost (index 0) stays
+    before t_cheap (index 2), and both precede t_expensive (cost=100).
+    """
     t_cheap = _make_http_throttle("cheap-sl", cost=1)
     t_no_cost = _make_http_throttle("no-cost-sl", cost=None)
     t_expensive = _make_http_throttle("expensive-sl", cost=100)
 
     result = _prep_throttles([t_no_cost, t_expensive, t_cheap], sort="cheap_first")
-    assert result["http"] == [t_cheap, t_expensive, t_no_cost]
+    # t_no_cost and t_cheap share key (1, False); stable sort preserves input order
+    assert result["http"] == [t_no_cost, t_cheap, t_expensive]
 
 
 @pytest.mark.middleware
 def test_prep_throttles_none_cost_sorted_first_with_cheap_last() -> None:
-    """Test that throttles without a cost (None) are sorted first with 'cheap_last'."""
+    """Test that MiddlewareThrottle(cost=None) falls back to wrapped throttle cost with cheap_last.
+
+    With cheap_last, t_no_cost gets key (-1, False) — same as t_cheap — because the
+    wrapped throttle's cost is 1. t_expensive (cost=100) has the most negative key
+    (-100, False) and sorts first. t_cheap and t_no_cost tie; stable sort preserves
+    their input order.
+    """
     t_cheap = _make_http_throttle("cheap-sl", cost=1)
     t_no_cost = _make_http_throttle("no-cost-sl", cost=None)
     t_expensive = _make_http_throttle("expensive-sl", cost=100)
 
     result = _prep_throttles([t_cheap, t_expensive, t_no_cost], sort="cheap_last")
-    # -inf is the most negative, so None cost (treated as -inf) comes first
-    assert result["http"][0] is t_no_cost
+    # t_expensive sorts first (key -100); t_cheap and t_no_cost tie, input order preserved
+    assert result["http"] == [t_expensive, t_cheap, t_no_cost]
 
 
 @pytest.mark.middleware

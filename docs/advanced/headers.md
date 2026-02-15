@@ -4,7 +4,7 @@ Rate limiting is half the battle. The other half is telling clients *how* they'r
 
 Without response headers, your clients are flying blind - they have no idea how many requests they have left, when their window resets, or why they suddenly got a `429`. With the right headers, a well-behaved client can slow itself down gracefully, show users a meaningful "try again in X seconds" message, and stop hammering your API unnecessarily.
 
-This page covers the `Header` and `Headers` system that Traffik uses to attach rate limit information to your responses.
+This page covers the `Header` and `Headers` system that Traffik uses to **resolve** rate limit header values. Traffik does not automatically inject headers into responses — it computes the values and returns them. It's up to you to attach them to your response however you see fit (e.g., via middleware, a custom dependency, or a Starlette response). The `headers=` parameter on a throttle tells Traffik *which* headers to resolve, not which ones to auto-inject.
 
 ---
 
@@ -26,10 +26,12 @@ Traffik lets you attach these headers to every response, or only to throttled re
 
 ## Built-in Header Presets
 
-For most use cases, you don't need to build your own headers from scratch. Traffik ships two ready-made presets:
+For most use cases, you don't need to build your own headers from scratch. Traffik ships two ready-made presets, available from both `traffik` and `traffik.headers`:
 
 ```python
-from traffik import DEFAULT_HEADERS_ALWAYS, DEFAULT_HEADERS_THROTTLED
+from traffik.headers import DEFAULT_HEADERS_ALWAYS, DEFAULT_HEADERS_THROTTLED
+# or equivalently:
+# from traffik import DEFAULT_HEADERS_ALWAYS, DEFAULT_HEADERS_THROTTLED
 ```
 
 **`DEFAULT_HEADERS_ALWAYS`** - Sends `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `Retry-After` on *every* response. Clients can always see their current status.
@@ -46,7 +48,8 @@ from traffik import DEFAULT_HEADERS_ALWAYS, DEFAULT_HEADERS_THROTTLED
 Pass a `headers` argument when constructing any throttle:
 
 ```python
-from traffik import HTTPThrottle, DEFAULT_HEADERS_ALWAYS
+from traffik import HTTPThrottle
+from traffik.headers import DEFAULT_HEADERS_ALWAYS
 
 throttle = HTTPThrottle(
     "api:items",
@@ -55,7 +58,7 @@ throttle = HTTPThrottle(
 )
 ```
 
-That's it. Traffik injects the resolved headers into throttling responses automatically. On every hit (throttled or not, depending on the preset), the headers are computed from the current strategy statistics and attached to the response.
+The `headers=` parameter tells Traffik which headers to *resolve* on a hit. On every hit (throttled or not, depending on the preset), the header values are computed from the current strategy statistics and returned by `throttle.get_headers()`. You are responsible for attaching them to your response — for example, by calling `response.headers.update(resolved)` in a custom handler or middleware.
 
 ---
 
@@ -170,6 +173,7 @@ The resolver is called on every request where the `when` condition passes. Keep 
 `Headers` is a mapping of header name strings to `Header` instances (or raw strings for static values). It's the recommended way to package headers for a throttle:
 
 ```python
+from traffik import HTTPThrottle
 from traffik.headers import Headers, Header
 
 my_headers = Headers({
@@ -185,7 +189,7 @@ throttle = HTTPThrottle("api:items", rate="100/min", headers=my_headers)
 1. A static string is perfectly valid here - `Headers` will recognize it as always-included and optimise resolution accordingly.
 
 !!! tip "Performance note"
-    `Headers` is smart about optimisation. If all headers in a collection are static strings with `when="always"`, Traffik pre-encodes them once and skips the resolution step entirely on every request. The more static headers you have, the cheaper header injection gets.
+    `Headers` is smart about optimisation. If all headers in a collection are static strings with `when="always"`, Traffik pre-encodes them once and skips the resolution step entirely on every request. The more static headers you have, the cheaper header resolution gets.
 
 ---
 
@@ -194,8 +198,7 @@ throttle = HTTPThrottle("api:items", rate="100/min", headers=my_headers)
 `Headers` supports the `|` operator for creating merged copies, and `|=` for in-place merging. This is useful when you want to extend a preset with extra headers:
 
 ```python
-from traffik import DEFAULT_HEADERS_ALWAYS
-from traffik.headers import Headers, Header
+from traffik.headers import Headers, Header, DEFAULT_HEADERS_ALWAYS
 
 extra = Headers({
     "X-Service-Name": Header("my-api"),
@@ -209,6 +212,8 @@ combined = DEFAULT_HEADERS_ALWAYS | extra
 You can also `.copy()` a `Headers` instance for a shallow duplicate:
 
 ```python
+from traffik.headers import DEFAULT_HEADERS_ALWAYS, Header
+
 my_copy = DEFAULT_HEADERS_ALWAYS.copy()
 my_copy["X-Service-Name"] = Header("my-api")
 ```
@@ -238,38 +243,12 @@ resolved = await throttle.get_headers(
 
 ---
 
-## Backend-Level Header Defaults
-
-You can set a default `headers` on the backend itself. All throttles that use that backend will inherit the backend's headers, unless they specify their own:
-
-```python
-from traffik.backends.inmemory import InMemoryBackend
-from traffik import DEFAULT_HEADERS_ALWAYS, DEFAULT_HEADERS_THROTTLED, HTTPThrottle
-
-backend = InMemoryBackend(
-    namespace="api",
-    headers=DEFAULT_HEADERS_ALWAYS,  # All throttles on this backend get these by default
-)
-
-# This throttle inherits DEFAULT_HEADERS_ALWAYS from the backend
-default_throttle = HTTPThrottle("api:default", rate="100/min")
-
-# This throttle overrides the backend's headers
-quiet_throttle = HTTPThrottle(
-    "api:quiet",
-    rate="50/min",
-    headers=DEFAULT_HEADERS_THROTTLED,  # Only on 429
-)
-```
-
----
-
 ## Real-World Example: GitHub/Stripe-Style Headers
 
-Here's a complete setup that matches the header pattern used by most large REST APIs - headers on every response, plus a millisecond-precision reset time for clients that need it:
+Here's a complete setup that matches the header pattern used by most large REST APIs - headers resolved on every hit, plus a millisecond-precision reset time for clients that need it:
 
 ```python
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request, Response
 from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.headers import Headers, Header
@@ -300,12 +279,35 @@ api_throttle = HTTPThrottle(
     headers=api_headers,
 )
 
-@app.get("/items", dependencies=[Depends(api_throttle)])
-async def list_items():
+@app.get("/items")
+async def list_items(
+    request: Request,
+    response: Response,  # (2)!
+    _=Depends(api_throttle),
+):
+    # Resolve headers for the current request and attach them to the response.
+    # get_headers() fetches live stats from the backend automatically.
+    headers = await api_throttle.get_headers(request)  # (3)!
+    response.headers.update(headers)
     return {"items": ["widget", "gizmo"]}
 ```
 
 1. Some clients (JavaScript frontends, mobile apps) find millisecond precision more useful for scheduling retries than whole seconds.
+2. FastAPI injects a mutable `Response` object. Headers set on it are merged into the final response automatically.
+3. `get_headers()` calls `throttle.stat()` internally to fetch the current rate limit statistics from the backend, then resolves each header's value. You don't need to pass `stat` manually.
+
+!!! tip "Using `JSONResponse` directly"
+    If you prefer to build the response yourself, pass `headers=` to `JSONResponse`:
+    ```python
+    from fastapi.responses import JSONResponse
+    @app.get("/items")
+    async def list_items(request: Request, _=Depends(api_throttle)):
+        headers = await api_throttle.get_headers(request)
+        return JSONResponse({"items": ["widget", "gizmo"]}, headers=headers)
+    ```
+
+!!! note "Headers on throttled responses"
+    When a client is throttled (HTTP 429), the throttle raises an exception before your handler runs. To attach headers to 429 responses, add them in a custom exception handler. See [Custom Throttled Handlers](throttled-handlers.md) for the pattern.
 
 A typical successful response from this setup would look like:
 
@@ -343,8 +345,8 @@ Content-Type: application/json
 
 | Concept | What it does |
 |---|---|
-| `DEFAULT_HEADERS_ALWAYS` | Preset: `Limit` + `Remaining` + `Retry-After` on every response |
-| `DEFAULT_HEADERS_THROTTLED` | Preset: same three headers, but only on `429` responses |
+| `DEFAULT_HEADERS_ALWAYS` (from `traffik.headers`) | Preset: `Limit` + `Remaining` + `Retry-After` resolved on every hit |
+| `DEFAULT_HEADERS_THROTTLED` (from `traffik.headers`) | Preset: same three headers, but only resolved on throttled (`429`) hits |
 | `Header.LIMIT(when=...)` | Resolves to the window's max hit count |
 | `Header.REMAINING(when=...)` | Resolves to hits left this window |
 | `Header.RESET_SECONDS(when=...)` | Resolves to seconds until window resets |

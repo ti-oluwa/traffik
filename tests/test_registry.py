@@ -1,9 +1,11 @@
 """Tests for the throttle rule and registry module."""
 
+import gc
 import re
 
 import pytest
 
+from traffik.backends.inmemory import InMemoryBackend
 from traffik.exceptions import ConfigurationError
 from traffik.registry import (
     BypassThrottleRule,
@@ -11,6 +13,7 @@ from traffik.registry import (
     ThrottleRule,
     _prep_rules,
 )
+from traffik.throttles import HTTPThrottle
 
 
 class _MockConnection:
@@ -464,3 +467,108 @@ class TestThrottleRegistry:
         rules.clear()
         # Internal state should be unaffected
         assert len(registry.get_rules("foo")) == 1
+
+
+# ── ThrottleRegistry disable / enable / get_throttle ─────────────────────────
+
+
+def _make_throttle(uid: str, registry: ThrottleRegistry) -> HTTPThrottle:
+    """Create a minimal HTTPThrottle bound to the given registry."""
+    return HTTPThrottle(
+        uid=uid,
+        rate="100/min",
+        backend=InMemoryBackend(persistent=False),
+        registry=registry,
+    )
+
+
+class TestThrottleRegistryGetThrottle:
+    def test_returns_instance(self) -> None:
+        registry = ThrottleRegistry()
+        throttle = _make_throttle("t1", registry)
+        assert registry.get_throttle("t1") is throttle
+
+    def test_returns_none_for_unknown_uid(self) -> None:
+        registry = ThrottleRegistry()
+        assert registry.get_throttle("unknown") is None
+
+    def test_returns_none_after_gc(self) -> None:
+        registry = ThrottleRegistry()
+        _make_throttle("t-gc", registry)
+        # The throttle is not held by a local variable; collect it.
+        gc.collect()
+        assert registry.get_throttle("t-gc") is None
+
+
+class TestThrottleRegistryDisableEnable:
+    @pytest.mark.asyncio
+    async def test_disable_returns_true_when_found(self) -> None:
+        registry = ThrottleRegistry()
+        _make_throttle("t1", registry)
+        result = await registry.disable("t1")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_disable_returns_false_when_not_found(self) -> None:
+        registry = ThrottleRegistry()
+        result = await registry.disable("missing")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_disable_sets_throttle_disabled(self) -> None:
+        registry = ThrottleRegistry()
+        throttle = _make_throttle("t1", registry)
+        await registry.disable("t1")
+        assert throttle.is_disabled is True
+
+    @pytest.mark.asyncio
+    async def test_enable_returns_true_when_found(self) -> None:
+        registry = ThrottleRegistry()
+        throttle = _make_throttle("t1", registry)
+        await registry.disable("t1")
+        result = await registry.enable("t1")
+        assert result is True
+        assert throttle.is_disabled is False
+
+    @pytest.mark.asyncio
+    async def test_enable_returns_false_when_not_found(self) -> None:
+        registry = ThrottleRegistry()
+        result = await registry.enable("missing")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_disable_all_disables_every_live_throttle(self) -> None:
+        registry = ThrottleRegistry()
+        t1 = _make_throttle("ta", registry)
+        t2 = _make_throttle("tb", registry)
+        await registry.disable_all()
+        assert t1.is_disabled is True
+        assert t2.is_disabled is True
+
+    @pytest.mark.asyncio
+    async def test_enable_all_re_enables_every_throttle(self) -> None:
+        registry = ThrottleRegistry()
+        t1 = _make_throttle("ta", registry)
+        t2 = _make_throttle("tb", registry)
+        await registry.disable_all()
+        await registry.enable_all()
+        assert t1.is_disabled is False
+        assert t2.is_disabled is False
+
+    @pytest.mark.asyncio
+    async def test_disable_all_skips_garbage_collected_throttles(self) -> None:
+        """disable_all() must not raise when a throttle has been GC'd."""
+        registry = ThrottleRegistry()
+        alive = _make_throttle("alive", registry)
+        _make_throttle("dead", registry)
+        gc.collect()
+        # Should not raise even though 'dead' is gone
+        await registry.disable_all()
+        assert alive.is_disabled is True
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_throttle_refs(self) -> None:
+        registry = ThrottleRegistry()
+        _make_throttle("t1", registry)
+        registry.clear()
+        assert registry.get_throttle("t1") is None

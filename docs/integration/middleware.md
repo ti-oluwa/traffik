@@ -2,6 +2,9 @@
 
 `ThrottleMiddleware` sits in the ASGI stack and intercepts every request before it reaches any route handler. Use it when you want to enforce rate limits globally or based on path/method patterns, without touching individual route definitions.
 
+!!! note "Works with any Starlette application"
+    `ThrottleMiddleware` is a standard Starlette middleware and works with **any Starlette-based application** — not just FastAPI. If you're using plain Starlette or any other ASGI framework built on Starlette, you can add `ThrottleMiddleware` the same way: `app.add_middleware(ThrottleMiddleware, middleware_throttles=[...])`.
+
 !!! tip "Use middleware for cross-cutting concerns"
     Middleware is the right tool when the throttle logic is independent of which specific route is hit — for example, a global IP-based limit, or a limit on all `/api/` traffic regardless of endpoint. For per-route or per-handler limits, prefer [dependency injection](dependencies.md).
 
@@ -100,6 +103,9 @@ The `path` argument on `MiddlewareThrottle` limits the throttle to requests whos
 
 !!! note
     When `path` is a string, it is compiled as a regex pattern. If you use a bare string like `"/api/"`, it matches any path that contains `/api/` at that position (anchored from the start). Use `re.compile(...)` explicitly when you need full regex semantics such as anchors or alternation.
+
+!!! note "Wildcard patterns are supported"
+    Because `MiddlewareThrottle`'s `path` parameter uses `ThrottleRule` under the hood, it supports the same wildcard syntax: `*` matches a single path segment (no `/`), and `**` matches any number of segments including `/`. For example, `path="/api/*/users"` matches `/api/v1/users` and `/api/v2/users` but not `/api/v1/admin/users`. See [Throttle Rules & Wildcards](../advanced/rules.md) for the full pattern reference.
 
 ---
 
@@ -239,7 +245,7 @@ app.add_middleware(
 )
 ```
 
-!!! note "Undeteminable thottle cost is treated as infinite"
+!!! note "Indeteminable thottle cost is treated as infinite"
     A `MiddlewareThrottle` with no explicit `cost` (i.e., `cost=None`), and the wrapped `Throttle` uses a dynamic cost function, is treated as having infinite cost and sorted **last** under `"cheap_first"`. This ensures unconstrained throttles don't block cheap ones from short-circuiting early.
 
 ### Custom sort key

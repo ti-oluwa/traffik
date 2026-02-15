@@ -26,15 +26,15 @@ Asynchronous distributed rate limiting for FastAPI/Starlette applications.
 
 Full documentation is available at **[https://ti-oluwa.github.io/traffik/](https://ti-oluwa.github.io/traffik/)**, covering:
 
-- [Getting Started](https://ti-oluwa.github.io/traffik/quickstart/) — up and running in minutes
-- [Core Concepts](https://ti-oluwa.github.io/traffik/core-concepts/) — backends, strategies, identifiers, rate formats
-- [Integration](https://ti-oluwa.github.io/traffik/integration/) — dependencies, decorators, middleware, direct usage
-- [Advanced Features](https://ti-oluwa.github.io/traffik/advanced/) — response headers, throttle rules, quota contexts, and more
-- [Configuration](https://ti-oluwa.github.io/traffik/configuration/) — lock settings, environment variables
-- [Error Handling](https://ti-oluwa.github.io/traffik/error-handling/) — retries, circuit breakers, fallbacks
-- [Extending Traffik](https://ti-oluwa.github.io/traffik/extending/backends/) — custom backends and strategies
-- [Testing](https://ti-oluwa.github.io/traffik/testing/) — patterns for testing throttled endpoints
-- [Benchmarks](https://ti-oluwa.github.io/traffik/benchmarks/) — performance comparisons
+- [Getting Started](https://ti-oluwa.github.io/traffik/quickstart/) - up and running in minutes
+- [Core Concepts](https://ti-oluwa.github.io/traffik/core-concepts/) - backends, strategies, identifiers, rate formats
+- [Integration](https://ti-oluwa.github.io/traffik/integration/) - dependencies, decorators, middleware, direct usage
+- [Advanced Features](https://ti-oluwa.github.io/traffik/advanced/) - response headers, throttle rules, quota contexts, and more
+- [Configuration](https://ti-oluwa.github.io/traffik/configuration/) - lock settings, environment variables
+- [Error Handling](https://ti-oluwa.github.io/traffik/error-handling/) - retries, circuit breakers, fallbacks
+- [Extending Traffik](https://ti-oluwa.github.io/traffik/extending/backends/) - custom backends and strategies
+- [Testing](https://ti-oluwa.github.io/traffik/testing/) - patterns for testing throttled endpoints
+- [Benchmarks](https://ti-oluwa.github.io/traffik/benchmarks/) - performance comparisons
 
 ## Installation
 

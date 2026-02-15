@@ -16,6 +16,7 @@ class CustomBackend(ThrottleBackend[YourConnectionType, HTTPConnection]):
 ```
 
 The two type parameters are:
+
 - `YourConnectionType` — the type of your underlying storage connection (e.g., `aiohttp.ClientSession`, `asyncpg.Pool`, your own client class)
 - `HTTPConnection` — the Starlette HTTP connection type (`Request`, `WebSocket`, or `HTTPConnection` for both)
 
@@ -312,6 +313,6 @@ Every method in your backend must be a coroutine that does not block the event l
 
 - Use `await` for all I/O
 - Never call synchronous blocking APIs (`requests`, `time.sleep`, synchronous DB drivers)
-- Use thread executor only as a last resort: `asyncio.get_event_loop().run_in_executor(...)`
+- Use thread executor only as a last resort: `asyncio.get_running_loop().run_in_executor(...)`
 
 Blocking the event loop under load will stall *all* requests, not just the throttled ones.

@@ -135,6 +135,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         "_uses_cost_func",
         "_error_callback",
         "_connection_type",
+        "_disabled",
+        "_update_lock",
         "__signature__",
         "__weakref__",
     )
@@ -304,7 +306,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self._rules_count = 0
         self.dynamic_rules = dynamic_rules
         self.cache_ids = cache_ids
-        self.registry.register(uid)
+        self._disabled = False
+        self._update_lock = asyncio.Lock()
+        self.registry.register(uid, self)
 
         # Ensure that we copy the context to avoid potential mutation issues from outside after initialization
         # Never modify `_default_context` after initialization. It's unsafe.
@@ -375,6 +379,142 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """Returns True if the throttle uses a dynamic backend, False otherwise."""
         return not self.use_fixed_backend
 
+    @property
+    def is_disabled(self) -> bool:
+        """Returns True if this throttle is currently disabled.
+
+        When disabled, :meth:`hit` returns immediately without consuming any quota.
+        Use :meth:`disable` and :meth:`enable` to change this state.
+        """
+        return self._disabled
+
+    async def disable(self) -> None:
+        """
+        Disable this throttle.
+
+        Acquires the update lock then sets the disabled flag. Once disabled,
+        every call to :meth:`hit` returns the connection immediately without
+        consuming quota or evaluating rules.
+
+        Safe to call from async error handlers (``on_error`` callbacks).
+        """
+        async with self._update_lock:
+            self._disabled = True
+
+    async def enable(self) -> None:
+        """
+        Re-enable this throttle.
+
+        Acquires the update lock then clears the disabled flag so that
+        subsequent :meth:`hit` calls resume normal throttle evaluation.
+        """
+        async with self._update_lock:
+            self._disabled = False
+
+    async def update_rate(self, rate: "RateType[HTTPConnectionT]") -> None:
+        """
+        Update the throttle rate atomically.
+
+        :param rate: New rate — a rate string (``"10/min"``), a :class:`~traffik.rates.Rate`
+            instance, or an async callable ``(connection, context) -> Rate``.
+        """
+        async with self._update_lock:
+            self.rate = Rate.parse(rate) if isinstance(rate, str) else rate  # type: ignore[arg-type]
+            self._uses_rate_func = callable(rate)
+
+    async def update_backend(
+        self, backend: "ThrottleBackend[typing.Any, HTTPConnectionT]"
+    ) -> None:
+        """
+        Replace the throttle's fixed backend atomically.
+
+        :param backend: The new backend instance.
+        """
+        async with self._update_lock:
+            self.backend = backend  # type: ignore[assignment]
+
+    async def update_strategy(self, strategy: "ThrottleStrategy") -> None:
+        """
+        Replace the throttling strategy atomically.
+
+        :param strategy: The new strategy callable.
+        """
+        async with self._update_lock:
+            self.strategy = strategy
+
+    async def update_cost(self, cost: "CostType[HTTPConnectionT]") -> None:
+        """
+        Update the throttle cost atomically.
+
+        :param cost: New cost — a static integer or an async callable
+            ``(connection, context) -> int``.
+        """
+        async with self._update_lock:
+            self._uses_cost_func = callable(cost)
+            self.cost = cost  # type: ignore[assignment]
+
+    async def update_min_wait_period(
+        self, min_wait_period: typing.Optional[int]
+    ) -> None:
+        """
+        Update the minimum wait period atomically.
+
+        :param min_wait_period: New floor wait time in milliseconds, or ``None`` to remove it.
+        """
+        async with self._update_lock:
+            self.min_wait_period = min_wait_period
+
+    async def update_handle_throttled(
+        self,
+        handle_throttled: typing.Optional[
+            ConnectionThrottledHandler[HTTPConnectionT, "Throttle[HTTPConnectionT]"]
+        ],
+    ) -> None:
+        """
+        Replace the throttled-response handler atomically.
+
+        :param handle_throttled: New handler, or ``None`` to fall back to the backend default.
+        """
+        async with self._update_lock:
+            self.handle_throttled = handle_throttled  # type: ignore[assignment]
+
+    async def update_headers(
+        self,
+        headers: typing.Optional[
+            typing.Union[
+                Headers[HTTPConnectionT],
+                typing.Mapping[str, typing.Union[Header[HTTPConnectionT], str]],
+            ]
+        ],
+    ) -> None:
+        """
+        Replace the response header collection atomically.
+
+        :param headers: New headers — a :class:`~traffik.headers.Headers` instance,
+            a plain mapping of ``{name: Header}`` pairs, or ``None`` to clear all headers.
+        """
+        async with self._update_lock:
+            if headers is None:
+                self._headers = typing.cast(Headers[HTTPConnectionT], Headers())
+            elif not isinstance(headers, Headers):
+                self._headers = typing.cast(Headers[HTTPConnectionT], Headers(headers))
+            else:
+                self._headers = headers
+
+    async def update_identifier(
+        self, identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]]
+    ) -> None:
+        """
+        Replace the connection identifier function atomically.
+
+        The identifier determines how connections are keyed for throttle tracking.
+        Updating it takes effect on the next :meth:`hit` call.
+
+        :param identifier: New identifier callable, or ``None`` to use the backend default.
+        """
+        async with self._update_lock:
+            self.identifier = identifier  # type: ignore[assignment]
+
     async def get_headers(
         self,
         connection: HTTPConnectionT,
@@ -385,19 +525,19 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> typing.Dict[str, str]:
         """
-        Resolves the headers to be included in throttling responses based 
+        Resolves the headers to be included in throttling responses based
         on the provided connection, strategy statistics, and context.
 
         :param connection: The HTTP connection for the current request.
-        
-        :param headers: Optional additional headers to resolve for this specific call, 
+
+        :param headers: Optional additional headers to resolve for this specific call,
             which will be merged with the throttle's default headers.
             Headers provided here will take precedence over the throttle's default headers in case of conflicts.
-        
-        :param stat: Optional strategy statistics for the current request. This may be None if headers 
+
+        :param stat: Optional strategy statistics for the current request. This may be None if headers
             are being resolved outside of a throttling operation.
-        
-        :param context: An optional dictionary containing additional context for the throttle. This can 
+
+        :param context: An optional dictionary containing additional context for the throttle. This can
             include any relevant information needed to resolve dynamic headers.
 
         :return: The resolved headers a dictionary of strings to include in throttling responses.
@@ -717,8 +857,14 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         :return: The throttled HTTP connection.
         """
+        if self._disabled:
+            return connection
+
         if cost == 0:
             return connection  # No cost, no throttling needed
+
+        if not self._uses_rate_func and self.rate.unlimited:  # type: ignore[union-attr]
+            return connection  # Static unlimited rate, no throttling needed
 
         # Mutation of the context downstream is highly prohibited.
         if context:

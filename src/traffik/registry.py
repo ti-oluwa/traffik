@@ -2,6 +2,7 @@ import inspect
 import re
 import threading
 import typing
+import weakref
 
 from traffik.exceptions import ConfigurationError
 from traffik.types import (
@@ -286,8 +287,7 @@ class ThrottleRegistry:
     by UID, and any throttle can attach rules to any other registered
     throttle by UID.
     """
-
-    __slots__ = ("_registered", "_lock", "_rules")
+    __slots__ = ("_registered", "_lock", "_rules", "_throttle_refs")
 
     def __init__(self) -> None:
         self._registered: typing.Set[str] = set()
@@ -296,6 +296,8 @@ class ThrottleRegistry:
         """Re-entrant lock for thread-safe registry operations"""
         self._rules: typing.Dict[str, typing.Set[ThrottleRule[typing.Any]]] = {}
         """Mapping of throttle UIDs to rules that must pass for the throttle to be applied"""
+        self._throttle_refs: typing.Dict[str, weakref.ref] = {}  # type: ignore[type-arg]
+        """Weak references to registered throttle instances, keyed by UID"""
 
     def exist(self, uid: str) -> bool:
         """
@@ -306,14 +308,19 @@ class ThrottleRegistry:
         """
         return uid in self._registered
 
-    def register(self, uid: str) -> None:
+    def register(self, uid: str, throttle: typing.Any = None) -> None:
         """
         Register a throttle UID in the registry.
 
         :param uid: The unique string identifier for the throttle.
+        :param throttle: Optional throttle instance to store a weak reference to.
+            When provided, enables registry-level disable/enable via :meth:`disable`
+            and :meth:`disable_all`.
         """
         with self._lock:
             self._registered.add(uid)
+            if throttle is not None:
+                self._throttle_refs[uid] = weakref.ref(throttle)
 
     def unregister(self, uid: str) -> None:
         """
@@ -324,6 +331,7 @@ class ThrottleRegistry:
         with self._lock:
             self._registered.discard(uid)
             self._rules.pop(uid, None)
+            self._throttle_refs.pop(uid, None)
 
     def add_rules(self, target_uid: str, /, *rules: ThrottleRule[typing.Any]) -> None:
         """
@@ -358,11 +366,83 @@ class ThrottleRegistry:
         with self._lock:
             return list(self._rules.get(uid, []))
 
+    def get_throttle(self, uid: str) -> typing.Any:
+        """
+        Return the live throttle instance for the given UID, or `None` if
+        the throttle has been garbage-collected or was never registered with
+        an instance reference.
+
+        :param uid: The UID of the throttle to look up.
+        :return: The throttle instance, or `None`.
+        """
+        with self._lock:
+            ref = self._throttle_refs.get(uid)
+        return ref() if ref is not None else None
+
+    async def disable(self, uid: str) -> bool:
+        """
+        Disable the throttle registered under *uid*.
+
+        Calls :meth:`~traffik.throttles.Throttle.disable` on the live
+        throttle instance so that subsequent `hit()` calls return immediately
+        without consuming quota.
+
+        :param uid: The UID of the throttle to disable.
+        :return: `True` if the throttle was found and disabled, `False`
+            if the UID is unknown or the throttle has been garbage-collected.
+        """
+        throttle = self.get_throttle(uid)
+        if throttle is not None:
+            await throttle.disable()
+            return True
+        return False
+
+    async def enable(self, uid: str) -> bool:
+        """
+        Re-enable the throttle registered under *uid*.
+
+        :param uid: The UID of the throttle to enable.
+        :return: `True` if the throttle was found and enabled, `False`
+            if the UID is unknown or the throttle has been garbage-collected.
+        """
+        throttle = self.get_throttle(uid)
+        if throttle is not None:
+            await throttle.enable()
+            return True
+        return False
+
+    async def disable_all(self) -> None:
+        """
+        Disable every live throttle currently registered in this registry.
+
+        Throttles that have already been garbage-collected are silently skipped.
+        """
+        with self._lock:
+            refs = list(self._throttle_refs.values())
+        for ref in refs:
+            throttle = ref()
+            if throttle is not None:
+                await throttle.disable()
+
+    async def enable_all(self) -> None:
+        """
+        Re-enable every live throttle currently registered in this registry.
+
+        Throttles that have already been garbage-collected are silently skipped.
+        """
+        with self._lock:
+            refs = list(self._throttle_refs.values())
+        for ref in refs:
+            throttle = ref()
+            if throttle is not None:
+                await throttle.enable()
+
     def clear(self) -> None:
         """Clear the registry"""
         with self._lock:
             self._registered = set()
             self._rules = {}
+            self._throttle_refs = {}
 
 
 GLOBAL_REGISTRY = ThrottleRegistry()

@@ -234,6 +234,25 @@ provides three patterns; pick the one that fits your framework.
     await backend.close()
     ```
 
+### Without ASGI lifespan (scripts, tests, CLI tools)
+
+When you are not running an ASGI application — for example, in a standalone script, a CLI tool, or a test that doesn't need a full app — you can use the backend as an async context manager directly without passing an `app`:
+
+```python
+from traffik.backends.inmemory import InMemoryBackend
+
+backend = InMemoryBackend(namespace="myapp")
+
+async def main():
+    async with backend():
+        # backend is ready; use throttles here
+        pass
+```
+
+This initialises the backend on entry and closes it (calling `reset()` if `persistent=False`) on exit. No ASGI app, no lifespan fixture required. This pattern is particularly useful for one-off scripts, data migration tools, or test helpers that need to exercise throttle logic without spinning up a full server.
+
+---
+
 ### Persistence
 
 By default, `persistent=False` — Traffik calls `reset()` on the backend when the

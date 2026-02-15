@@ -1,0 +1,155 @@
+site_name: Traffik
+site_description: Asynchronous distributed rate limiting for FastAPI/Starlette applications.
+site_author: tioluwa
+site_url: https://ti-oluwa.github.io/traffik/
+repo_url: https://github.com/ti-oluwa/traffik
+repo_name: ti-oluwa/traffik
+copyright: Copyright &copy; 2024 tioluwa
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep orange
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep orange
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+    admonition:
+      note: octicons/tag-16
+      tip: octicons/squirrel-16
+      warning: octicons/alert-16
+      danger: octicons/zap-16
+      info: octicons/info-16
+      success: octicons/check-16
+      example: octicons/beaker-16
+
+plugins:
+  - search:
+      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+  - minify:
+      minify_html: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+      combine_header_slug: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      title: On this page
+  - footnotes
+  - def_list
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ti-oluwa/traffik
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/traffik/
+  version:
+    provider: mike
+  analytics:
+    feedback:
+      title: Was this page helpful?
+      ratings:
+        - icon: material/emoticon-happy-outline
+          name: This page was helpful
+          data: 1
+          note: >-
+            Thanks for your feedback!
+        - icon: material/emoticon-sad-outline
+          name: This page could be improved
+          data: 0
+          note: >-
+            Thanks for your feedback! Help us improve by
+            <a href="https://github.com/ti-oluwa/traffik/issues/new" target="_blank" rel="noopener">opening an issue</a>.
+
+extra_css:
+  - assets/css/custom.css
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: installation.md
+      - Quick Start: quickstart.md
+  - Core Concepts:
+      - Overview: core-concepts/index.md
+      - Rate Format: core-concepts/rates.md
+      - Backends: core-concepts/backends.md
+      - Strategies: core-concepts/strategies.md
+      - Identifiers: core-concepts/identifiers.md
+  - Integration:
+      - Overview: integration/index.md
+      - Dependencies: integration/dependencies.md
+      - Decorators: integration/decorators.md
+      - Middleware: integration/middleware.md
+      - Direct Usage: integration/direct-usage.md
+  - Advanced:
+      - Overview: advanced/index.md
+      - Response Headers: advanced/headers.md
+      - Throttle Rules & Wildcards: advanced/rules.md
+      - Request Costs: advanced/request-costs.md
+      - Multiple Limits: advanced/multiple-limits.md
+      - Exemptions: advanced/exemptions.md
+      - Context-Aware Backends: advanced/context-backends.md
+      - Strategy Statistics: advanced/statistics.md
+      - Custom Throttled Handlers: advanced/throttled-handlers.md
+      - Quota Context: advanced/quota-context.md
+  - Configuration: configuration.md
+  - Error Handling: error-handling.md
+  - Extending Traffik:
+      - Custom Strategies: extending/strategies.md
+      - Custom Backends: extending/backends.md
+  - Testing: testing.md
+  - Benchmarks: benchmarks.md
+  - Performance: performance.md

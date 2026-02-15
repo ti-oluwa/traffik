@@ -1,0 +1,119 @@
+/* Traffik docs - custom styles */
+
+:root {
+  --md-code-bg-color: #1a1a2e;
+}
+
+/* Hero section on home page */
+.tx-hero {
+  margin: 2rem 0 3rem;
+  color: var(--md-primary-fg-color);
+}
+
+.tx-hero h1 {
+  margin-bottom: 1rem;
+  color: currentColor;
+  font-weight: 700;
+}
+
+.tx-hero__content {
+  padding-bottom: 1rem;
+  margin: 0 auto;
+}
+
+.tx-hero .md-button {
+  margin-top: 0.5rem;
+  margin-right: 0.5rem;
+}
+
+.tx-hero .md-button--primary {
+  background-color: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+  border-color: var(--md-primary-fg-color);
+}
+
+/* Feature cards on home page */
+.tx-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1.2rem;
+  margin: 2rem 0;
+}
+
+.tx-card {
+  padding: 1.5rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  background: var(--md-code-bg-color);
+  transition: box-shadow 0.2s;
+}
+
+.tx-card:hover {
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+}
+
+.tx-card h3 {
+  margin-top: 0;
+  font-size: 1rem;
+}
+
+.tx-card p {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  margin-bottom: 0;
+}
+
+/* Badges in feature table */
+.tx-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 2rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+/* Tighten up nav */
+.md-nav__title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+}
+
+/* Better admonition icons */
+.md-typeset .admonition.tip,
+.md-typeset details.tip {
+  border-color: #ff9800;
+}
+
+.md-typeset .tip > .admonition-title,
+.md-typeset .tip > summary {
+  background-color: rgba(255, 152, 0, 0.1);
+}
+
+.md-typeset .tip > .admonition-title::before,
+.md-typeset .tip > summary::before {
+  background-color: #ff9800;
+}
+
+/* Code block tweaks */
+.md-typeset pre > code {
+  font-size: 0.85rem;
+}
+
+/* Inline code highlight */
+.md-typeset code {
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+}
+
+/* Table improvements */
+.md-typeset table:not([class]) th {
+  background-color: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+}
+
+/* Footer tweak */
+.md-footer-meta {
+  background-color: var(--md-footer-bg-color);
+}

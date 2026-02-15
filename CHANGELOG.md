@@ -40,6 +40,7 @@
   - Added new `ThrottleRule` and `ThrottleRegistry` classes for defining gates and bypasses for throttles. Enables better DX for applying and bypassing throttles conditionally.
   - Many micro optimizations, that may or may not reflect in high concurrency situations.
   - Moved alot of code around to better structure the library. Public APIs that were moved have aliases in their previous locations for backwards compatibility.
+  - Official documentation added.
 
 - **Bug Fixes**:
   - Minor bug fixes and code cleanups.

@@ -287,6 +287,7 @@ class ThrottleRegistry:
     by UID, and any throttle can attach rules to any other registered
     throttle by UID.
     """
+
     __slots__ = ("_registered", "_lock", "_rules", "_throttle_refs")
 
     def __init__(self) -> None:
@@ -314,8 +315,8 @@ class ThrottleRegistry:
 
         :param uid: The unique string identifier for the throttle.
         :param throttle: Optional throttle instance to store a weak reference to.
-            When provided, enables registry-level disable/enable via :meth:`disable`
-            and :meth:`disable_all`.
+            When provided, enables registry-level disable/enable via `disable()`
+            and `disable_all()`.
         """
         with self._lock:
             self._registered.add(uid)
@@ -361,7 +362,7 @@ class ThrottleRegistry:
         Get all rules associated with a throttle.
 
         :param uid: The UID of the throttle.
-        :return: A list of `ThrottleRule`` instances, or an empty list if none exist.
+        :return: A list of `ThrottleRule` instances, or an empty list if none exist.
         """
         with self._lock:
             return list(self._rules.get(uid, []))
@@ -383,8 +384,8 @@ class ThrottleRegistry:
         """
         Disable the throttle registered under *uid*.
 
-        Calls :meth:`~traffik.throttles.Throttle.disable` on the live
-        throttle instance so that subsequent `hit()` calls return immediately
+        Calls `disable` on the live throttle instance so that subsequent
+        `hit` calls return immediately
         without consuming quota.
 
         :param uid: The UID of the throttle to disable.

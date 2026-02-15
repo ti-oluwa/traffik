@@ -4,7 +4,7 @@ Rate limiting is half the battle. The other half is telling clients *how* they'r
 
 Without response headers, your clients are flying blind - they have no idea how many requests they have left, when their window resets, or why they suddenly got a `429`. With the right headers, a well-behaved client can slow itself down gracefully, show users a meaningful "try again in X seconds" message, and stop hammering your API unnecessarily.
 
-This page covers the `Header` and `Headers` system that Traffik uses to **resolve** rate limit header values. Traffik does not automatically inject headers into responses — it computes the values and returns them. It's up to you to attach them to your response however you see fit (e.g., via middleware, a custom dependency, or a Starlette response). The `headers=` parameter on a throttle tells Traffik *which* headers to resolve, not which ones to auto-inject.
+This page covers the `Header` and `Headers` system that Traffik uses to **resolve** rate limit header values. Traffik does not automatically inject headers into responses, it computes the values and returns them. It's up to you to attach them to your response however you see fit (e.g., via middleware, a custom dependency, or a Starlette response). The `headers=` parameter on a throttle tells Traffik *which* headers to resolve, not which ones to auto-inject.
 
 ---
 
@@ -20,7 +20,7 @@ Standard rate limit headers have become a de facto convention - GitHub, Stripe, 
 
 A client that reads these headers can back off gracefully, show users a countdown timer, or queue requests intelligently. A client that doesn't get them just crashes and retries until you block it.
 
-Traffik lets you attach these headers to every response, or only to throttled responses - whichever fits your API contract.
+Traffik lets you attach these headers to every response, or only to throttled responses, whichever fits your API contract.
 
 ---
 
@@ -39,7 +39,7 @@ from traffik.headers import DEFAULT_HEADERS_ALWAYS, DEFAULT_HEADERS_THROTTLED
 **`DEFAULT_HEADERS_THROTTLED`** - Sends the same three headers *only* when a client is throttled (i.e., receives a `429`). Quieter by default; headers appear only when they matter most.
 
 !!! tip "Which should I use?"
-    `DEFAULT_HEADERS_ALWAYS` is friendlier for client developers - they can poll their remaining quota without making a special endpoint for it. `DEFAULT_HEADERS_THROTTLED` keeps response size smaller on normal requests and is common in APIs where clients are expected to track their own usage. GitHub uses "always"; many simpler APIs use "throttled".
+    `DEFAULT_HEADERS_ALWAYS` is friendlier for client developers, they can poll their remaining quota without making a special endpoint for it. `DEFAULT_HEADERS_THROTTLED` keeps response size smaller on normal requests and is common in APIs where clients are expected to track their own usage. GitHub uses "always"; many simpler APIs use "throttled".
 
 ---
 
@@ -58,13 +58,13 @@ throttle = HTTPThrottle(
 )
 ```
 
-The `headers=` parameter tells Traffik which headers to *resolve* on a hit. On every hit (throttled or not, depending on the preset), the header values are computed from the current strategy statistics and returned by `throttle.get_headers()`. You are responsible for attaching them to your response — for example, by calling `response.headers.update(resolved)` in a custom handler or middleware.
+The `headers=` parameter tells Traffik which headers to *resolve* on a hit. On every hit (throttled or not, depending on the preset), the header values are computed from the current strategy statistics and returned by `throttle.get_headers()`. You are responsible for attaching them to your response, for example by calling `response.headers.update(resolved)` in a custom handler or middleware.
 
 ---
 
 ## The `Header` Class
 
-Under the hood, each header in a `Headers` collection is a `Header` instance - a small, immutable object that knows *when* to include itself and *how* to compute its value.
+Internally, each header in a `Headers` collection is a `Header` instance, a small, immutable object that knows *when* to include itself and *how* to compute its value.
 
 ```python
 from traffik.headers import Header
@@ -81,10 +81,10 @@ Header.RESET_SECONDS(when=...)  # Retry-After: seconds until window resets
 Header.RESET_MILLISECONDS(when=...)  # X-RateLimit-Reset-Ms: milliseconds until reset
 ```
 
-Each returns a `Header` instance that resolves its value at request time from the live strategy statistics. The `when` parameter is **required** - it controls when the header appears in the response.
+Each returns a `Header` instance that resolves its value at request time from the live strategy statistics. The `when` parameter is **required**, it controls when the header appears in the response.
 
 !!! note "Why is `when` required on class methods?"
-    Traffik makes the inclusion condition explicit rather than defaulting silently. Forgetting a `when` value on a header builder would be a common footgun - should a `Retry-After` header appear on every `200` response? Probably not. Making it explicit keeps the contract clear.
+    Traffik makes the inclusion condition explicit rather than defaulting silently. Forgetting a `when` value on a header builder would be a common footgun: should a `Retry-After` header appear on every `200` response? Probably not. Making it explicit keeps the contract clear.
 
 ---
 
@@ -164,7 +164,7 @@ def my_resolver(connection, stat, context):
 custom_dynamic = Header(my_resolver, when="always")
 ```
 
-The resolver is called on every request where the `when` condition passes. Keep it fast - it's on the hot path.
+The resolver is called on every request where the `when` condition passes. Keep it fast, it's on the hot path.
 
 ---
 
@@ -189,7 +189,7 @@ throttle = HTTPThrottle("api:items", rate="100/min", headers=my_headers)
 1. A static string is perfectly valid here - `Headers` will recognize it as always-included and optimise resolution accordingly.
 
 !!! tip "Performance note"
-    `Headers` is smart about optimisation. If all headers in a collection are static strings with `when="always"`, Traffik pre-encodes them once and skips the resolution step entirely on every request. The more static headers you have, the cheaper header resolution gets.
+    `Headers` optimises resolution. If all headers in a collection are static strings with `when="always"`, Traffik pre-encodes them once and skips the resolution step entirely on every request. The more static headers you have, the cheaper header resolution gets.
 
 ---
 
@@ -222,7 +222,7 @@ my_copy["X-Service-Name"] = Header("my-api")
 
 ## Disabling a Header Per-Request
 
-Sometimes you want to suppress a specific header for a particular call - say, you have a global `DEFAULT_HEADERS_ALWAYS` on a throttle but want to hide `X-RateLimit-Remaining` on one specific endpoint.
+Sometimes you want to suppress a specific header for a particular call, for example you have a global `DEFAULT_HEADERS_ALWAYS` on a throttle but want to hide `X-RateLimit-Remaining` on one specific endpoint.
 
 Use `Header.DISABLE` as a sentinel value in an override mapping passed to `throttle.get_headers()`:
 
@@ -236,7 +236,7 @@ resolved = await throttle.get_headers(
 )
 ```
 
-`Header.DISABLE` is a string sentinel (`":___disabled___:"`). The resolver checks identity (`is`), not equality - so a plain string with the same content would not trigger the disable logic.
+`Header.DISABLE` is a string sentinel (`":___disabled___:"`). The resolver checks identity (`is`), not equality, so a plain string with the same content would not trigger the disable logic.
 
 !!! warning "Identity matters"
     Always use `Header.DISABLE` directly. A variable holding the same string value won't work because Python string interning doesn't guarantee identity for all strings.
@@ -245,7 +245,7 @@ resolved = await throttle.get_headers(
 
 ## Real-World Example: GitHub/Stripe-Style Headers
 
-Here's a complete setup that matches the header pattern used by most large REST APIs - headers resolved on every hit, plus a millisecond-precision reset time for clients that need it:
+Here's a complete setup that matches the header pattern used by most large REST APIs, with headers resolved on every hit plus a millisecond-precision reset time for clients that need it:
 
 ```python
 from fastapi import FastAPI, Depends, Request, Response
@@ -337,7 +337,7 @@ Content-Type: application/json
 ```
 
 !!! tip "RFC 9440 - The emerging standard"
-    The IETF's [RFC 9440](https://www.rfc-editor.org/rfc/rfc9440) standardises rate limit headers. If your API needs to be strictly spec-compliant, the `RateLimit` (combined) and `RateLimit-Policy` headers are the future direction. The `X-RateLimit-*` prefix is widely understood but not standardised - it's the safe pragmatic choice for compatibility today.
+    The IETF's [RFC 9440](https://www.rfc-editor.org/rfc/rfc9440) standardises rate limit headers. If your API needs to be strictly spec-compliant, the `RateLimit` (combined) and `RateLimit-Policy` headers are the future direction. The `X-RateLimit-*` prefix is widely understood but not standardised, it's the safe pragmatic choice for compatibility today.
 
 ---
 
@@ -356,3 +356,5 @@ Content-Type: application/json
 | `Headers({...})` | A collection of headers attached to a throttle |
 | `headers_a \| headers_b` | Merge two header collections (non-mutating) |
 | `Header.DISABLE` | Sentinel to suppress a specific header in a call |
+
+--8<-- "includes/abbreviations.md"

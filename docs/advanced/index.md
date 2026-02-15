@@ -1,7 +1,7 @@
 # Advanced Features
 
 You know the basics: create a throttle, attach it to a route, done. That gets you
-surprisingly far — but Traffik has a deeper toolkit for the situations where "one
+surprisingly far, but Traffik has a deeper toolkit for the situations where "one
 size fits all" doesn't quite fit.
 
 This section is for when you're ready to graduate from `"100/min"` to something
@@ -48,8 +48,8 @@ async def get_data():
 
 ### [Exemptions](exemptions.md)
 
-Some clients should never be throttled — your internal services, premium users,
-admin tokens, whitelisted IPs. The `EXEMPTED` sentinel lets you carve out those
+Some clients should never be throttled, such as your internal services, premium users,
+admin tokens, and whitelisted IPs. The `EXEMPTED` sentinel lets you carve out those
 exceptions cleanly, with zero overhead: no counter touched, no backend called.
 
 ```python
@@ -67,10 +67,10 @@ async def tiered_identifier(request: Request):
 
 ### [Context-Aware Backends](context-backends.md)
 
-Building a multi-tenant SaaS? Different tenants likely need different backends —
-enterprise tenants get their own Redis instance, free-tier users share one pool.
-The `dynamic_backend=True` flag makes the throttle ask "which backend should I use
-right now?" on every request instead of locking in one backend at startup.
+Building a multi-tenant SaaS? Different tenants likely need different backends.
+Enterprise tenants get their own Redis instance, free-tier users share one pool.
+The `dynamic_backend=True` flag makes the throttle resolve which backend to use
+on every request instead of locking in one backend at startup.
 
 ```python
 throttle = HTTPThrottle(
@@ -97,3 +97,5 @@ throttle = HTTPThrottle(
     These features compose cleanly. A dynamic-backend throttle can have per-request
     costs and an identifier that returns `EXEMPTED` for admin tokens. Stack them as
     your use case demands.
+
+--8<-- "includes/abbreviations.md"

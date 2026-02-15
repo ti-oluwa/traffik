@@ -1,7 +1,7 @@
 # Strategies
 
 A strategy is the algorithm that decides **how Traffik counts**. Every strategy
-receives the same inputs — a key, a rate, and a backend — and returns a wait time in
+receives the same inputs, a key, a rate, and a backend, and returns a wait time in
 milliseconds. Zero means "go ahead". Anything positive means "slow down".
 
 Choosing a strategy is a trade-off between accuracy, memory, and burst tolerance.
@@ -11,16 +11,16 @@ The table below gives you the overview; the sections that follow go deeper.
 
 ## Strategy comparison
 
-| Strategy                  | Accuracy | Memory       | Bursts           | Best For                                 |
-|---------------------------|----------|--------------|------------------|------------------------------------------|
-| `FixedWindow`             | Low      | O(1)         | Yes (boundary)   | Simple limits, high throughput APIs      |
-| `SlidingWindowCounter`    | Medium   | O(1)         | Minimal          | General purpose, good default            |
-| `SlidingWindowLog`        | Highest  | O(limit)     | No               | Financial, security-critical, strict SLA |
-| `TokenBucket`             | High     | O(1)         | Yes (configurable) | Variable traffic, mobile clients       |
-| `TokenBucketWithDebt`     | High     | O(1)         | Yes + overdraft  | Gradual degradation, user-facing APIs    |
-| `LeakyBucket`             | High     | O(1)         | No               | Protecting downstream services           |
-| `LeakyBucketWithQueue`    | High     | O(limit)     | No (strict FIFO) | Ordered processing, fairness guarantees  |
-| `GCRA`                    | Highest  | O(1)         | Configurable     | Telecom, smooth pipelines, strict SLA    |
+| Strategy               | Accuracy | Memory    | Bursts             | Best For                                  |
+|------------------------|----------|-----------|--------------------|-------------------------------------------|
+| `FixedWindow`          | Low      | O(1)      | Yes (boundary)     | Simple limits, high throughput APIs       |
+| `SlidingWindowCounter` | Medium   | O(1)      | Minimal            | General purpose, good default             |
+| `SlidingWindowLog`     | Highest  | O(limit)  | No                 | Financial, security-critical, strict SLA  |
+| `TokenBucket`          | High     | O(1)      | Yes (configurable) | Variable traffic, mobile clients          |
+| `TokenBucketWithDebt`  | High     | O(1)      | Yes + overdraft    | Gradual degradation, user-facing APIs     |
+| `LeakyBucket`          | High     | O(1)      | No                 | Protecting downstream services            |
+| `LeakyBucketWithQueue` | High     | O(limit)  | No (strict FIFO)   | Ordered processing, fairness guarantees   |
+| `GCRA`                 | Highest  | O(1)      | Configurable       | Telecom, smooth pipelines, strict SLA     |
 
 ---
 
@@ -31,7 +31,7 @@ boundaries (e.g., 00:00–01:00, 01:00–02:00). Each request increments a count
 the current window. When the window ends, the counter resets automatically via TTL.
 
 **The boundary problem:** A user can make up to `limit` requests at 00:59 and another
-`limit` at 01:00 — up to 2x the limit within any two-second span. If that is
+`limit` at 01:00, up to 2x the limit within any two-second span. If that is
 acceptable, `FixedWindow` is your best friend: it is fast, cheap, and requires only
 one atomic counter per key.
 
@@ -52,7 +52,7 @@ throttle = HTTPThrottle(
 - `{namespace}:{key}:fixedwindow:start` — window start timestamp (sub-second windows only)
 
 !!! tip "FixedWindow is the default"
-    You do not need to pass `strategy=FixedWindow()` explicitly — it is what you get
+    You do not need to pass `strategy=FixedWindow()` explicitly, it is what you get
     when you omit the `strategy` argument entirely.
 
 ---
@@ -62,7 +62,7 @@ throttle = HTTPThrottle(
 A smarter cousin of `FixedWindow`. Instead of snapping to fixed clock boundaries,
 it tracks two consecutive windows and computes a weighted count:
 
-```
+```text
 weighted_count = (previous_count * overlap_percentage) + current_count
 ```
 
@@ -148,14 +148,14 @@ throttle = HTTPThrottle(
 
 **Refill formula:** `new_tokens = min(current + elapsed_ms * (limit / expire_ms), capacity)`
 
-Tokens are refilled lazily on every request — there is no background process.
+Tokens are refilled lazily on every request, there is no background process.
 
 ---
 
 ## TokenBucketWithDebt
 
 An extended token bucket that lets the bucket go **negative**. Requests are still
-allowed when the bucket is at zero — they go into "debt" up to `max_debt`. The debt
+allowed when the bucket is at zero, they go into "debt" up to `max_debt`. The debt
 is paid back through normal token refilling. This produces a softer experience: users
 never hit a sudden wall; traffic degrades gradually.
 
@@ -187,7 +187,7 @@ The inverse of `TokenBucket`. Instead of tokens filling a bucket, requests fill 
 and it drains (leaks) at a constant rate. If the bucket is full when a new request
 arrives, that request is rejected.
 
-The effect is perfectly smooth output — no bursts are ever allowed. This is ideal for
+The effect is perfectly smooth output, no bursts are ever allowed. This is ideal for
 protecting downstream services that cannot handle spikes.
 
 ```python
@@ -232,7 +232,7 @@ throttle = HTTPThrottle(
 
 ## GCRA
 
-The **Generic Cell Rate Algorithm** — also called "leaky bucket as a meter" or
+The **Generic Cell Rate Algorithm**, also called "leaky bucket as a meter" or
 "virtual scheduling". Originally designed for ATM networks, it provides the smoothest
 possible rate enforcement with the smallest memory footprint of any stateful
 algorithm: a single float (the Theoretical Arrival Time, TAT).
@@ -291,6 +291,8 @@ from traffik.strategies.custom import (
 )
 ```
 
-Each of these strategies is a drop-in replacement — same interface, same `__call__`
+Each of these strategies is a drop-in replacement, same interface, same `__call__`
 signature. Check the API reference and the `traffik.strategies.custom` module for
 full configuration details and examples.
+
+--8<-- "includes/abbreviations.md"

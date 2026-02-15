@@ -4,7 +4,7 @@
 
 ## Stop the flood. Let the right traffic through
 
-**Traffik** is async-first, distributed rate limiting for FastAPI and Starlette - built for correctness under pressure, not just greenfield demos.
+**Traffik** is async-first, distributed rate limiting for FastAPI and Starlette, built for correctness under pressure, not just greenfield demos.
 
 [Get Started](installation.md){ .md-button .md-button--primary }
 [Quick Start](quickstart.md){ .md-button }
@@ -18,7 +18,7 @@
 
 Rate limiting is one of those things that looks simple until it isn't. A naive counter in a dictionary works fine locally, then falls apart the moment you add a second server, a Redis timeout, or a burst of 5,000 simultaneous requests.
 
-Traffik is built to handle all of that - correctly. It's an async, distributed rate limiter for FastAPI and Starlette that gives you atomic operations, 10+ battle-tested strategies, HTTP *and* WebSocket support, circuit breakers, and backend failover - all with an API that stays out of your way.
+Traffik is built to handle all of that, correctly. It's an async, distributed rate limiter for FastAPI and Starlette that gives you atomic operations, 10+ proven strategies, HTTP *and* WebSocket support, circuit breakers, and backend failover, all with an API that stays out of your way.
 
 Zero ceremony. Maximum protection.
 
@@ -105,7 +105,7 @@ async def list_items():
     return {"items": ["widget", "gizmo", "thingamajig"]}
 ```
 
-1. Start with the in-memory backend for local development - no external services needed.
+1. Start with the in-memory backend for local development — no external services needed.
 2. Pass the backend's lifespan to FastAPI so it initializes and cleans up properly.
 3. Define your throttle with a unique ID and a human-readable rate string.
 4. Attach it as a FastAPI dependency. That's it. Exceeded limits return `HTTP 429` automatically.
@@ -120,7 +120,7 @@ There are other rate limiting libraries out there. Here's what makes Traffik dif
 
 ### Correctness under concurrency
 
-Simple in-process rate limiters use a plain Python dict. That works until two requests hit simultaneously and both read the same counter before either writes back. Traffik uses atomic operations at the backend level - Lua scripts for Redis, distributed locks for Memcached - so your counts are always correct, even at high concurrency.
+Simple in-process rate limiters use a plain Python dict. That works until two requests hit simultaneously and both read the same counter before either writes back. Traffik uses atomic operations at the backend level, Lua scripts for Redis, distributed locks for Memcached, so your counts are always correct, even at high concurrency.
 
 ### Async all the way down
 
@@ -134,9 +134,9 @@ Most rate limiters only think about HTTP. Traffik ships a `WebSocketThrottle` th
 
 Backend unavailable? You choose what happens: allow the request through (`on_error="allow"`), treat it as throttled (`on_error="throttle"`), raise the error (`on_error="raise"`), or use a full circuit breaker with automatic failover to a secondary backend. No silent data loss, no surprise outages.
 
-### Identifiers as a first-class concept
+### Identifiers as a natively supported concept
 
-Who counts as "one client"? An IP address? A user ID? An API key? A tenant? In Traffik, this is a first-class concept. Pass any async function as `identifier` and Traffik uses it everywhere. Returning the special `EXEMPTED` sentinel from your identifier function bypasses rate limiting entirely for that connection - no special cases needed.
+Who counts as "one client"? An IP address? A user ID? An API key? A tenant? In Traffik, this is a natively supported concept. Pass any async function as `identifier` and Traffik uses it everywhere. Returning the special `EXEMPTED` sentinel from your identifier function bypasses rate limiting entirely for that connection, no special cases needed.
 
 ### Plays nicely with FastAPI
 
@@ -183,3 +183,5 @@ Throttles are callable objects that implement `__call__` with a clean, FastAPI-c
     [Core Concepts](core-concepts/index.md){ .md-button }
 
 </div>
+
+--8<-- "includes/abbreviations.md"

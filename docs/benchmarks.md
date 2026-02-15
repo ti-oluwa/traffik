@@ -13,9 +13,9 @@ The headline: Traffik is occasionally slower in raw throughput (by design), but 
 
 Benchmarks were run on:
 
-- **Machine**: 8-core CPU, 32 GB RAM
-- **Python**: 3.12
-- **Backend versions**: Redis 7.2, Memcached 1.6
+- **Machine**: 8-core CPU, 16 GB RAM
+- **Python**: 3.9.22
+- **Backend versions**: Redis v6.2.0, aiomcache v0.8.2
 - **Comparison**: [SlowAPI](https://github.com/laurentS/slowapi) — a popular FastAPI rate limiter
 - **Test client**: `httpx.AsyncClient` with `ASGITransport` (in-process, no real network)
 - **Concurrency**: batches of 50 concurrent requests unless noted otherwise

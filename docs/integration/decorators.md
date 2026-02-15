@@ -2,7 +2,7 @@
 
 The `@throttled` decorator applies throttling directly to a route function. It keeps the rate limit configuration visible right above the handler, which some developers find easier to scan than a `dependencies=[...]` list on the route decorator.
 
-Traffik ships **two versions** of `@throttled` — one for Starlette and one for FastAPI. They behave differently in how the throttle receives the connection object.
+Traffik ships **two versions** of `@throttled`: one for Starlette and one for FastAPI. They behave differently in how the throttle receives the connection object.
 
 ---
 
@@ -18,9 +18,9 @@ Traffik ships **two versions** of `@throttled` — one for Starlette and one for
 
 ---
 
-## `traffik.decorators.throttled` — FastAPI version
+## `traffik.decorators.throttled`: FastAPI version
 
-Import from `traffik.decorators`. Your route function does **not** need to declare a `Request` parameter — FastAPI resolves the connection behind the scenes.
+Import from `traffik.decorators`. Your route function does **not** need to declare a `Request` parameter. FastAPI resolves the connection internally.
 
 ```python
 from fastapi import FastAPI
@@ -46,9 +46,9 @@ The decorator order matters: `@app.get(...)` must be the outermost decorator, `@
 
 ---
 
-## `traffik.throttles.throttled` — Starlette version
+## `traffik.throttles.throttled`: Starlette version
 
-Import from `traffik.throttles` (or directly from `traffik`). The route function **must** declare a `Request` or `WebSocket` parameter — the decorator inspects the function arguments at call time to find the connection object.
+Import from `traffik.throttles` (or directly from `traffik`). The route function **must** declare a `Request` or `WebSocket` parameter. The decorator inspects the function arguments at call time to find the connection object.
 
 ```python
 from starlette.applications import Starlette
@@ -76,7 +76,7 @@ app = Starlette(
 !!! warning "The Starlette decorator requires an `HTTPConnection` parameter"
     If the decorated function has no `Request` or `WebSocket` parameter (positional or keyword), Traffik raises a `ValueError` at call time. For FastAPI routes without a `Request` parameter, use `traffik.decorators.throttled` instead.
 
-The Starlette version also works in FastAPI if you prefer it — just make sure your handler declares the `Request`.
+The Starlette version also works in FastAPI if you prefer it, just make sure your handler declares the `Request`.
 
 ```python
 from fastapi import FastAPI
@@ -100,7 +100,7 @@ async def list_items(request: Request):  # <-- required for starlette.throttles 
 
 ## Multiple throttles with `@throttled`
 
-Pass multiple throttles to `@throttled`. They are checked **sequentially** — the first throttle is checked first, and if it rejects the request, the remaining throttles are never consulted.
+Pass multiple throttles to `@throttled`. They are checked **sequentially**: the first throttle is checked first, and if it rejects the request, the remaining throttles are never consulted.
 
 === "FastAPI decorator"
 
@@ -150,13 +150,13 @@ Pass multiple throttles to `@throttled`. They are checked **sequentially** — t
     ```
 
 !!! note "Sequential checking: first failure stops the rest"
-    With `@throttled(first, second, third)`, if `first` rejects the request, `second` and `third` are never evaluated. This is efficient — no unnecessary quota checks — but it also means the order of throttles matters. Put the most restrictive (or cheapest to evaluate) throttle first.
+    With `@throttled(first, second, third)`, if `first` rejects the request, `second` and `third` are never evaluated. This is efficient, no unnecessary quota checks, but it also means the order of throttles matters. Put the most restrictive (or cheapest to evaluate) throttle first.
 
 ---
 
 ## WebSocket routes
 
-`@throttled` works with WebSocket routes too. Use `WebSocketThrottle` and apply the decorator the same way. This throttles at the **connection** level — one hit is recorded when the WebSocket handshake occurs.
+`@throttled` works with WebSocket routes too. Use `WebSocketThrottle` and apply the decorator the same way. This throttles at the **connection** level, recording one hit when the WebSocket handshake occurs.
 
 === "FastAPI decorator"
 
@@ -208,12 +208,12 @@ For per-message throttling inside an established WebSocket connection, see [Dire
 
 ---
 
-## Decorators vs. dependencies — when to prefer each
+## Decorators vs. dependencies: when to prefer each
 
 Both approaches produce the same runtime behavior. The choice is largely a matter of style:
 
 - **Decorators** keep the throttle configuration adjacent to the handler. If you scan a file top-to-bottom, the rate limit is immediately visible before you read the function body.
-- **Dependencies** keep route configuration in the route decorator. Useful when you want all route metadata — status codes, response models, dependencies — in one place.
+- **Dependencies** keep route configuration in the route decorator. Useful when you want all route metadata, including status codes, response models, and dependencies, in one place.
 
 You can mix them freely. A common pattern is to use a router-level dependency for a broad limit and a decorator for a tight per-handler limit:
 
@@ -246,3 +246,5 @@ async def export_data():
 
 app.include_router(router)
 ```
+
+--8<-- "includes/abbreviations.md"

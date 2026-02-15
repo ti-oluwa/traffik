@@ -29,7 +29,7 @@
   - Fix potential issue where `backend.close(...)` might not be called on backent context exit if an exception is raised when `backend.reset(...)` is called. Now ensures that `backend.close(...)` is always called on context exit, even if an exception occurs during `backend.reset(...)`. This prevents potential resource leaks and ensures proper cleanup of backend resources.
   - Small fixes to docstrings and type hints for better clarity and accuracy.
   
-## Version 1.0.3 (In Development)
+## Version 1.1.0 (2026-02-15)
 
 - **Enhancements**:
   - `HTTPThrottle` now supports a `use_method` arg, when allows disabling using the request method in the throttling key. This enables applying the same throttle a connection, for the same route/path and scope but different methods. Hence, duplicate throttle don't have to be made to achieve this.

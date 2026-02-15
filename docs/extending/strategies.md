@@ -171,7 +171,7 @@ throttle = HTTPThrottle(
 
 ## Best Practices
 
-### 1. Handle rate.unlimited First
+### 1. Handle `rate.unlimited` First
 
 This is the zero-overhead fast path. Never skip it:
 
@@ -182,7 +182,7 @@ async def __call__(self, key, rate, backend, cost=1):
     # ... your logic
 ```
 
-### 2. Use @dataclass(frozen=True) for Configuration
+### 2. Use `@dataclass(frozen=True)` for Configuration
 
 Frozen dataclasses prevent accidental mutation and make your strategy safe to share across threads and requests:
 
@@ -196,7 +196,7 @@ class MyStrategy:
     lock_config: LockConfig = field(default_factory=dict)
 ```
 
-### 3. Use backend.lock() for Multi-Step Operations
+### 3. Use `backend.lock()` for Multi-Step Operations
 
 Any strategy that reads and then writes needs a lock to prevent race conditions under concurrency. The lock key should be derived from the throttle key:
 
@@ -207,7 +207,7 @@ async with await backend.lock(f"lock:{full_key}:mystrategy", **self.lock_config)
     await backend.set(some_key, new_value, expire=ttl)
 ```
 
-### 4. Use increment_with_ttl() When Possible
+### 4. Use `increment_with_ttl()` When Possible
 
 This is an atomic increment-and-set-TTL operation — much more efficient than `get()` + `increment()` + `expire()` with a lock:
 

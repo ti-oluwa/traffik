@@ -1,6 +1,6 @@
 # Quick Start
 
-Let's go from zero to a rate-limited API in a few minutes. Each step builds on the last, so by the end you'll have a solid mental model of how Traffik works - and a production-ready example to draw from.
+Let's go from zero to a rate-limited API in a few minutes. Each step builds on the last, so by the end you'll have a solid mental model of how Traffik works, and a production-ready example to draw from.
 
 ---
 
@@ -51,7 +51,7 @@ Retry-After: 42
 
 Why does the backend need a lifespan? Because backends hold open connections (to Redis, Memcached, etc.) and run background cleanup tasks. The lifespan ensures those are set up before your first request and torn down cleanly when you shut down.
 
-The `backend.lifespan` is just a standard Starlette/FastAPI lifespan context manager. If you already have a lifespan, compose them:
+The `backend.lifespan` is just a standard Starlette/FastAPI `lifespan` context manager. If you already have a lifespan, compose them:
 
 ```python
 from contextlib import asynccontextmanager
@@ -101,7 +101,7 @@ Both styles work identically. The first (`dependencies=[...]`) is cleaner when y
 
 ### Applying multiple throttles
 
-Stack throttles to enforce multiple limits simultaneously - for example, a per-minute burst limit and a per-hour sustained limit:
+Stack throttles to enforce multiple limits simultaneously, for example, a per-minute burst limit and a per-hour sustained limit:
 
 ```python
 burst_throttle    = HTTPThrottle("uploads:burst",     rate="10/min")
@@ -138,7 +138,7 @@ async def upload_file():
 
 ## Step 4: The Decorator Style
 
-Prefer decorators? Traffik has you covered. For FastAPI routes, use `traffik.decorators.throttled` - your route doesn't need an explicit `Request` parameter:
+Prefer decorators? Traffik has you covered. For FastAPI routes, use `traffik.decorators.throttled`, your route doesn't need an explicit `Request` parameter:
 
 ```python
 from fastapi import FastAPI
@@ -166,7 +166,7 @@ async def search():
     | `from traffik.decorators import throttled` | FastAPI only | No |
     | `from traffik.throttles import throttled` | Starlette + FastAPI | Yes |
 
-    For Starlette routes, use `traffik.throttles.throttled` and make sure your route function has a `Request` parameter. For FastAPI, prefer `traffik.decorators.throttled` - cleaner signatures, no extra parameters.
+    For Starlette routes, use `traffik.throttles.throttled` and make sure your route function has a `Request` parameter. For FastAPI, prefer `traffik.decorators.throttled`, cleaner signatures, no extra parameters.
 
 ---
 
@@ -258,7 +258,7 @@ HTTPThrottle("api:e", rate="2 per second")  # 2 per second
 Or use the `Rate` object directly for complex periods:
 
 ```python
-from traffik import Rate
+from traffik.rates import Rate
 
 # 100 requests per 5 minutes and 30 seconds
 rate = Rate(limit=100, minutes=5, seconds=30)
@@ -272,7 +272,7 @@ HTTPThrottle("api:open", rate="0/0")
 
 ## Step 6: WebSocket Rate Limiting
 
-Traffik treats WebSocket connections as first-class citizens. You can throttle at two levels:
+Traffik natively supports WebSocket connections. You can throttle at two levels:
 
 1. **Connection level** - Gate the WebSocket handshake (reject new connections when over the limit).
 2. **Message level** - Allow the connection but rate-limit individual messages within it.
@@ -376,7 +376,7 @@ throttle = HTTPThrottle(
 ```
 
 !!! tip "The `EXEMPTED` sentinel"
-    Returning `EXEMPTED` from an identifier function completely bypasses throttling for that connection. This is the cleanest way to whitelist specific clients, internal services, or admin users - no special-casing needed in your throttle configuration.
+    Returning `EXEMPTED` from an identifier function completely bypasses throttling for that connection. This is the cleanest way to whitelist specific clients, internal services, or admin users, no special-casing needed in your throttle configuration.
 
 ---
 
@@ -389,3 +389,5 @@ You now know the essential patterns. Here's where to go deeper:
 - **[Advanced Features](advanced/index.md)** - Throttle rules, request costs, exemptions, quota contexts, and more.
 - **[Error Handling](error-handling.md)** - Circuit breakers, failover, and custom error handlers.
 - **[Testing](testing.md)** - How to write tests for throttled endpoints without fighting your own rate limiter.
+
+--8<-- "includes/abbreviations.md"

@@ -290,11 +290,11 @@ bandit -r src/
 ### Building Documentation Locally
 
 ```bash
-# Install documentation dependencies (if added in the future)
-# pip install -e ".[docs]"
+# Install documentation dependencies
+pip install -e ".[docs]"
 
-# For now, documentation is primarily in README.md and docstrings
-# Use any markdown viewer to preview changes
+# Serve docs locally
+mkdocs serve
 ```
 
 ## Issue Reporting

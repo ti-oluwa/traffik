@@ -8,6 +8,7 @@ import asyncio
 import typing
 from collections import OrderedDict
 
+from traffik._locks import _AsyncFairRLock, _AsyncRLock
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError
 from traffik.types import (
@@ -16,7 +17,14 @@ from traffik.types import (
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
-from traffik.utils import _AsyncRLock, time
+from traffik.utils import time
+
+
+class _AsyncLock(typing.Protocol):
+    async def acquire(self) -> bool: ...
+    def release(self) -> None: ...
+    def is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool: ...
+    def locked(self) -> bool: ...
 
 
 class _AsyncInMemoryLock:
@@ -24,8 +32,8 @@ class _AsyncInMemoryLock:
 
     __slots__ = "_lock"
 
-    def __init__(self) -> None:
-        self._lock = _AsyncRLock()
+    def __init__(self, lock: _AsyncLock) -> None:
+        self._lock = lock
 
     def locked(self) -> bool:
         return self._lock.locked()
@@ -125,7 +133,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
         number_of_shards: int = 3,
-        cleanup_frequency: typing.Optional[float] = 3.0,
+        cleanup_frequency: typing.Optional[float] = 10.0,
+        lock_kind: typing.Literal["fair", "unfair"] = "unfair",
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -168,15 +177,16 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             raise ValueError("`number_of_shards` must be at least 1")
 
         self._num_shards = number_of_shards
-        self._shard_locks: typing.List[_AsyncRLock] = []
+        self._shard_locks: typing.List[asyncio.Lock] = []
         """Locks for each shard to allow concurrent access."""
         self._shard_stores: typing.List[OrderedDict] = []
         """In-memory storage shards."""
 
+        self._lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
         # Separate registry for user-requested named locks
         self._named_locks: typing.Dict[str, _AsyncInMemoryLock] = {}
         """Lock registry for named locks requested by users."""
-        self._named_locks_lock = _AsyncRLock()
+        self._named_locks_lock = self._lock_cls()
         """Lock to protect access to the named locks registry."""
 
         self._cleanup_task: typing.Optional[asyncio.Task] = None
@@ -189,7 +199,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             return
 
         if not self._shard_locks:
-            self._shard_locks = [_AsyncRLock() for _ in range(self._num_shards)]
+            self._shard_locks = [asyncio.Lock() for _ in range(self._num_shards)]
         if not self._shard_stores:
             self._shard_stores = [OrderedDict() for _ in range(self._num_shards)]
 
@@ -202,7 +212,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     async def ready(self) -> bool:
         return self._initialized
 
-    def _get_shard(self, key: str) -> typing.Tuple[int, _AsyncRLock, OrderedDict]:
+    def _get_shard(self, key: str) -> typing.Tuple[int, asyncio.Lock, OrderedDict]:
         """Get shard index, lock, and store for a key."""
         shard_idx = hash(key) % self._num_shards
         return shard_idx, self._shard_locks[shard_idx], self._shard_stores[shard_idx]
@@ -258,12 +268,14 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         This is for user-requested locks (e.g., strategy locking, multi-key operations).
         Internal shard locks are separate and automatic.
         """
-        if name not in self._named_locks:
-            async with self._named_locks_lock:
-                lock = _AsyncInMemoryLock()
-                self._named_locks[name] = lock
-                return lock
-        return self._named_locks[name]
+        named_locks = self._named_locks
+        if name in named_locks:
+            return named_locks[name]
+
+        async with self._named_locks_lock:
+            lock = _AsyncInMemoryLock(lock=self._lock_cls())
+            named_locks[name] = lock
+        return lock
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any
@@ -275,18 +287,17 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             )
 
         _, lock, store = self._get_shard(key)
+        entry = store.get(key)
+        if entry is None:
+            return None
 
-        async with lock:
-            entry = store.get(key)
-            if entry is None:
-                return None
-
-            value, expires_at = entry
-            # Check if expired
-            if expires_at is not None and expires_at < time():
+        value, expires_at = entry
+        # Check if expired
+        if expires_at is not None and expires_at < time():
+            async with lock:
                 del store[key]
-                return None
-            return value
+            return None
+        return value
 
     async def set(
         self, key: str, value: str, expire: typing.Optional[float] = None
@@ -298,10 +309,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             )
 
         _, lock, store = self._get_shard(key)
+        expires_at = None
+        if expire is not None:
+            expires_at = time() + expire
+
         async with lock:
-            expires_at = None
-            if expire is not None:
-                expires_at = time() + expire
             store[key] = (value, expires_at)
 
     async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:

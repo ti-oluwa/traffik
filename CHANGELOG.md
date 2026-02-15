@@ -29,3 +29,19 @@
   - Fix potential issue where `backend.close(...)` might not be called on backent context exit if an exception is raised when `backend.reset(...)` is called. Now ensures that `backend.close(...)` is always called on context exit, even if an exception occurs during `backend.reset(...)`. This prevents potential resource leaks and ensures proper cleanup of backend resources.
   - Small fixes to docstrings and type hints for better clarity and accuracy.
   
+## Version 1.1.0 (2026-02-15)
+
+- **Enhancements**:
+  - `HTTPThrottle` now supports a `use_method` arg, when allows disabling using the request method in the throttling key. This enables applying the same throttle a connection, for the same route/path and scope but different methods. Hence, duplicate throttle don't have to be made to achieve this.
+  - Removed `headers` property from `Throttle` class as headers are now treated as an entity separate from the throttle `context`, which must be passed and defined explictly. A new method `get_headers(...)` was added in its stead.
+  - Add new `Headers` API, that allows the definition of runtime/throttling-time resolution of headers. It provides a subjectively better way of defining headers for throttles with optized datastructures.
+  - Removed `include_headers` initialization argument from `ThrottleMiddleware` since `Throttle`s and `MiddlewareThrottle`s can now define their own headers.
+  - Removed redundant shard locking from the `get(..)` method of the `InMemoryBackend` and moved lock acquisition in `set(..)` to exactly when shards needs to be modified. This slight improved high-concurrency performance for same key access for strategies that use `get` and `set` alot. Switching from `_AsyncRLock` to `asyncio.Lock` for shard locks saw a drastic peformance boost for the `InMemoryBackend` especially in high-load scenarios.
+  - Added new `ThrottleRule` and `ThrottleRegistry` classes for defining gates and bypasses for throttles. Enables better DX for applying and bypassing throttles conditionally.
+  - Many micro optimizations, that may or may not reflect in high concurrency situations.
+  - Moved a lot of code around to better structure the library. Public APIs that were moved have aliases in their previous locations for backwards compatibility.
+  - Official documentation added.
+
+- **Bug Fixes**:
+  - Minor bug fixes and code cleanups.
+  - Small fixes to docstrings and type hints and names for better clarity and accuracy.

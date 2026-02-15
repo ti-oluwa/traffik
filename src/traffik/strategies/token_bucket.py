@@ -176,7 +176,7 @@ class TokenBucketStrategy:
         capacity = self.burst_size if self.burst_size is not None else rate.limit
 
         full_key = backend.get_key(str(key))
-        bucket_key = f"{full_key}:tokenbucket"
+        bucket_key = f"{full_key}:tokenbucket:{capacity}"
         ttl_seconds = max(
             int((refill_period_ms * 2) // 1000), 1
         )  # 2x refill period for safety, at least 1s
@@ -247,7 +247,7 @@ class TokenBucketStrategy:
         capacity = self.burst_size if self.burst_size is not None else rate.limit
 
         full_key = backend.get_key(str(key))
-        bucket_key = f"{full_key}:tokenbucket"
+        bucket_key = f"{full_key}:tokenbucket:{capacity}"
 
         old_state_json = await backend.get(bucket_key)
         # If state exists, load tokens and last refill time
@@ -387,6 +387,13 @@ class TokenBucketWithDebtStrategy:
     """Maximum negative tokens allowed (overdraft limit). Set to 0 for standard behavior."""
     lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
 
+    def __post_init__(self) -> None:
+        if self.burst_size is not None and self.burst_size < 0:
+            raise ValueError("burst_size must be non-negative")
+
+        if self.max_debt < 0:
+            raise ValueError("max_debt must be non-negative")
+
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
     ) -> WaitPeriod:
@@ -406,9 +413,10 @@ class TokenBucketWithDebtStrategy:
         refill_period_ms = rate.expire
         refill_rate = rate.limit / refill_period_ms
         capacity = self.burst_size if self.burst_size is not None else rate.limit
+        max_debt = self.max_debt
 
         full_key = backend.get_key(str(key))
-        bucket_key = f"{full_key}:tokenbucket:debt"
+        bucket_key = f"{full_key}:tokenbucket:{capacity}:debt:{max_debt}"
         ttl_seconds = max(
             int((refill_period_ms * 2) // 1000), 1
         )  # 2x refill period for safety, at least 1s
@@ -436,7 +444,7 @@ class TokenBucketWithDebtStrategy:
             tokens = min(tokens + tokens_to_add, float(capacity))
 
             # If consuming cost tokens would still be within debt limit, allow request
-            if tokens - cost >= -self.max_debt:
+            if tokens - cost >= -max_debt:
                 # Allow request and consume cost tokens (may go negative)
                 tokens -= cost
                 new_state = dump_data({"tokens": tokens, "last_refill": now})
@@ -444,7 +452,7 @@ class TokenBucketWithDebtStrategy:
                 return 0.0
 
             # If consuming would exceed debt limit, calculate wait time
-            tokens_needed = -self.max_debt - tokens + cost
+            tokens_needed = -max_debt - tokens + cost
             wait_ms = tokens_needed / refill_rate
 
             # Save current state without consuming tokens
@@ -475,9 +483,10 @@ class TokenBucketWithDebtStrategy:
         refill_period_ms = rate.expire
         refill_rate = rate.limit / refill_period_ms
         capacity = self.burst_size if self.burst_size is not None else rate.limit
+        max_debt = self.max_debt
 
         full_key = backend.get_key(str(key))
-        bucket_key = f"{full_key}:tokenbucket:debt"
+        bucket_key = bucket_key = f"{full_key}:tokenbucket:{capacity}:debt:{max_debt}"
 
         old_state_json = await backend.get(bucket_key)
         # If state exists, load tokens and last refill time
@@ -501,11 +510,11 @@ class TokenBucketWithDebtStrategy:
         tokens = min(tokens + tokens_to_add, float(capacity))
 
         # Hits remaining includes debt allowance: tokens can go to -max_debt
-        hits_remaining = max(tokens + self.max_debt, 0.0)
+        hits_remaining = max(tokens + max_debt, 0.0)
 
         # If tokens are below negative debt limit, calculate wait time
-        if tokens < -self.max_debt:
-            tokens_needed = -self.max_debt - tokens
+        if tokens < -max_debt:
+            tokens_needed = -max_debt - tokens
             wait_ms = tokens_needed / refill_rate
         else:
             wait_ms = 0.0
@@ -519,7 +528,7 @@ class TokenBucketWithDebtStrategy:
                 strategy="token_bucket_with_debt",
                 tokens=tokens,
                 capacity=capacity,
-                max_debt=self.max_debt,
+                max_debt=max_debt,
                 current_debt=max(-tokens, 0.0) if tokens < 0 else 0.0,
                 refill_rate_per_ms=refill_rate,
                 last_refill_ms=last_refill,

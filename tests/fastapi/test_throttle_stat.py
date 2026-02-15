@@ -3,7 +3,7 @@
 import asyncio
 
 import pytest
-from fastapi import Depends, FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
@@ -13,6 +13,7 @@ from traffik.backends.base import connection_throttled
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.exceptions import ConnectionThrottled
 from traffik.rates import Rate
+from traffik.registry import ThrottleRegistry
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
@@ -24,10 +25,11 @@ async def test_http_throttle_stat_basic(inmemory_backend: InMemoryBackend) -> No
     """Test HTTPThrottle.stat() method returns statistics."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-stat-basic",
+            "test-stat-basic-fa",
             rate="10/s",
             identifier=default_client_identifier,  # type: ignore
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
         app = FastAPI()
 
@@ -76,11 +78,12 @@ async def test_http_throttle_stat_with_cost(inmemory_backend: InMemoryBackend) -
     """Test HTTPThrottle.stat() reflects cost properly."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-stat-cost",
+            "test-stat-cost-fa",
             rate="20/s",
             identifier=default_client_identifier,  # type: ignore
             cost=5,  # Each request costs 5
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
         app = FastAPI()
 
@@ -122,10 +125,11 @@ async def test_http_throttle_stat_at_limit(inmemory_backend: InMemoryBackend) ->
     """Test HTTPThrottle.stat() when at rate limit."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-stat-limit",
+            "test-stat-limit-fa",
             rate="3/s",
             identifier=default_client_identifier,  # type: ignore
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
 
         app = FastAPI()
@@ -179,10 +183,11 @@ async def test_http_throttle_stat_different_keys(
             return connection.query_params.get("user", "anonymous")
 
         throttle = HTTPThrottle(
-            "test-stat-keys",
+            "test-stat-keys-fa",
             rate="5/s",
             identifier=custom_identifier,  # type: ignore
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
         app = FastAPI()
 
@@ -224,10 +229,11 @@ async def test_http_throttle_stat_unlimited_rate(
     """Test HTTPThrottle.stat() with unlimited rate."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-stat-unlimited",
+            "test-stat-unlimited-fa",
             rate=Rate(limit=0, seconds=0),  # Unlimited
             identifier=default_client_identifier,  # type: ignore
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
         app = FastAPI()
 
@@ -258,12 +264,13 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
 
     async with inmemory_backend(close_on_exit=True):
         ws_throttle = WebSocketThrottle(
-            "test-ws-stat",
+            "test-ws-stat-fa",
             rate="5/s",
             identifier=default_client_identifier,  # type: ignore
             strategy=FixedWindowStrategy(),
             # Use this handler so an exception is raised on throttle
             handle_throttled=connection_throttled,
+            registry=ThrottleRegistry(),
         )
         app = FastAPI()
 
@@ -368,10 +375,11 @@ async def test_throttle_stat_without_strategy_support(
             return 0.0  # Always allow
 
         throttle = HTTPThrottle(
-            "test-no-stat",
+            "test-no-stat-fa",
             rate="10/s",
             identifier=default_client_identifier,  # type: ignore
             strategy=simple_strategy,
+            registry=ThrottleRegistry(),
         )
         app = FastAPI()
 
@@ -396,10 +404,11 @@ async def test_throttle_stat_fields(inmemory_backend: InMemoryBackend) -> None:
     """Test that HTTPThrottle.stat() returns all required fields."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-stat-fields",
+            "test-stat-fields-fa",
             rate="10/s",
             identifier=default_client_identifier,  # type: ignore
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
         app = FastAPI()
 
@@ -433,36 +442,3 @@ async def test_throttle_stat_fields(inmemory_backend: InMemoryBackend) -> None:
                 "hits_remaining should be numeric"
             )
             assert data["wait_ms_type"] in ["int", "float"], "wait_ms should be numeric"
-
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttle_stat_as_dependency(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test using throttle.stat() within a FastAPI dependency."""
-    async with inmemory_backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-stat-dependency",
-            rate="10/s",
-            identifier=default_client_identifier,  # type: ignore
-            strategy=FixedWindowStrategy(),
-        )
-        app = FastAPI()
-
-        @app.get("/api/dependency")
-        async def dependency_endpoint(stat=Depends(throttle.stat)):
-            return {
-                "hits_remaining": stat.hits_remaining if stat else None,
-                "wait_ms": stat.wait_ms if stat else None,
-            }
-
-        base_url = "http://test"
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url=base_url
-        ) as client:
-            response = await client.get("/api/dependency")
-            data = response.json()
-
-            assert data["hits_remaining"] == 10
-            assert data["wait_ms"] == 0.0

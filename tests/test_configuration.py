@@ -5,17 +5,17 @@ import os
 import pytest
 
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.rates import Rate
-from traffik.strategies.fixed_window import FixedWindowStrategy
-from traffik.types import LockConfig
-from traffik.utils import (
-    DEFAUL_BLOCKING_SETTING_ENV_VAR,
+from traffik.config import (
+    DEFAULT_BLOCKING_SETTING_ENV_VAR,
     DEFAULT_BLOCKING_TIMEOUT_ENV_VAR,
     get_lock_blocking,
     get_lock_blocking_timeout,
     set_lock_blocking,
     set_lock_blocking_timeout,
 )
+from traffik.rates import Rate
+from traffik.strategies.fixed_window import FixedWindow
+from traffik.types import LockConfig
 
 
 class TestBlockingConfiguration:
@@ -173,7 +173,7 @@ class TestConfigurationIntegration:
 
     def test_environment_variable_names(self):
         """Test correct environment variable names are used."""
-        assert DEFAUL_BLOCKING_SETTING_ENV_VAR == "TRAFFIK_DEFAULT_BLOCKING"
+        assert DEFAULT_BLOCKING_SETTING_ENV_VAR == "TRAFFIK_DEFAULT_BLOCKING"
         assert DEFAULT_BLOCKING_TIMEOUT_ENV_VAR == "TRAFFIK_DEFAULT_BLOCKING_TIMEOUT"
 
         # Test they're actually used
@@ -192,7 +192,7 @@ async def test_configuration_with_strategy():
     set_lock_blocking_timeout(1.5)
 
     # Create strategy that uses defaults
-    strategy = FixedWindowStrategy(
+    strategy = FixedWindow(
         lock_config=LockConfig(
             blocking=get_lock_blocking(),
             blocking_timeout=get_lock_blocking_timeout(),
@@ -218,7 +218,7 @@ async def test_configuration_strategy_override():
     set_lock_blocking_timeout(1.0)
 
     # Create strategy that overrides defaults
-    strategy = FixedWindowStrategy(
+    strategy = FixedWindow(
         lock_config=LockConfig(
             blocking=True,  # Override global False
             blocking_timeout=5.0,  # Override global 1.0

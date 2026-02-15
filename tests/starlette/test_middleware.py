@@ -16,12 +16,9 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from tests.conftest import BackendGen
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.middleware import (
-    MiddlewareThrottle,
-    ThrottleMiddleware,
-    _prepare_middleware_throttles,
-)
+from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware, _prep_throttles
 from traffik.rates import Rate
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
@@ -30,9 +27,10 @@ from traffik.throttles import HTTPThrottle, WebSocketThrottle
 async def test_throttle_initialization() -> None:
     """Test `MiddlewareThrottle` initialization with different parameters."""
     throttle = HTTPThrottle(
-        uid="test-throttle",
+        uid="test-throttle-sl",
         rate="5/min",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     # Test with string path
@@ -41,14 +39,18 @@ async def test_throttle_initialization() -> None:
         path="/api/",
         methods={"GET", "POST"},
     )
-    assert isinstance(middleware_throttle.path, re.Pattern)
+    assert isinstance(middleware_throttle.rule.path, re.Pattern)
     # Methods are stored in both upper and lower case for fast matching
-    assert middleware_throttle.methods is not None
-    assert "get" in middleware_throttle.methods or "GET" in middleware_throttle.methods
+    assert middleware_throttle.rule.methods is not None
     assert (
-        "post" in middleware_throttle.methods or "POST" in middleware_throttle.methods
+        "get" in middleware_throttle.rule.methods
+        or "GET" in middleware_throttle.rule.methods
     )
-    assert middleware_throttle.predicate is None
+    assert (
+        "post" in middleware_throttle.rule.methods
+        or "POST" in middleware_throttle.rule.methods
+    )
+    assert middleware_throttle.rule.predicate is None
 
     # Test with regex path
     regex_pattern = re.compile(r"/api/\d+")
@@ -57,18 +59,18 @@ async def test_throttle_initialization() -> None:
         path=regex_pattern,
         methods={"GET"},
     )
-    assert middleware_throttle_regex.path is regex_pattern
-    assert middleware_throttle_regex.methods is not None
+    assert middleware_throttle_regex.rule.path is regex_pattern
+    assert middleware_throttle_regex.rule.methods is not None
     assert (
-        "get" in middleware_throttle_regex.methods
-        or "GET" in middleware_throttle_regex.methods
+        "get" in middleware_throttle_regex.rule.methods
+        or "GET" in middleware_throttle_regex.rule.methods
     )
 
     # Test with no path/methods (applies to all)
     middleware_throttle_all = MiddlewareThrottle(throttle=throttle)
-    assert middleware_throttle_all.path is None
-    assert middleware_throttle_all.methods is None
-    assert middleware_throttle_all.predicate is None
+    assert middleware_throttle_all.rule.path is None
+    assert middleware_throttle_all.rule.methods is None
+    assert middleware_throttle_all.rule.predicate is None
 
 
 @pytest.mark.asyncio
@@ -77,9 +79,10 @@ async def test_throttle_method_filtering(inmemory_backend: InMemoryBackend) -> N
     """Test that `MiddlewareThrottle` correctly filters by HTTP method."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            uid="method-filter-test",
+            uid="method-filter-test-sl",
             rate="1/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Only apply to GET requests
@@ -110,9 +113,10 @@ async def test_throttle_path_filtering(inmemory_backend: InMemoryBackend) -> Non
     """Test that `MiddlewareThrottle` correctly filters by path pattern."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            uid="path-filter-test",
+            uid="path-filter-test-sl",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Only apply to paths starting with /api/
@@ -143,9 +147,10 @@ async def test_throttle_regex_path_filtering(inmemory_backend: InMemoryBackend) 
     """Test `MiddlewareThrottle` with regex path patterns."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            uid="regex-path-test",
+            uid="regex-path-test-sl",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Apply to paths like /api/123, /api/456, etc.
@@ -178,9 +183,10 @@ async def test_throttle_hook_filtering(inmemory_backend: InMemoryBackend) -> Non
     """Test `MiddlewareThrottle` with custom hook filtering."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            uid="hook-filter-test",
+            uid="hook-filter-test-sl",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Hook that only applies to premium users
@@ -224,9 +230,10 @@ async def test_throttle_combined_filters(inmemory_backend: InMemoryBackend) -> N
     """Test `MiddlewareThrottle` with multiple filters combined."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            uid="combined-filter-test",
+            uid="combined-filter-test-sl",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         async def auth_hook(connection: HTTPConnection) -> bool:
@@ -264,9 +271,10 @@ async def test_throttle_combined_filters(inmemory_backend: InMemoryBackend) -> N
 def test_middleware_basic_functionality(inmemory_backend: InMemoryBackend) -> None:
     """Test basic `ThrottleMiddleware` functionality with Starlette."""
     throttle = HTTPThrottle(
-        uid="middleware-basic-test",
+        uid="middleware-basic-test-sl",
         rate="2/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(
         throttle=throttle,
@@ -316,14 +324,16 @@ def test_middleware_with_multiple_throttles(inmemory_backend: InMemoryBackend) -
     """Test `ThrottleMiddleware` with multiple `MiddlewareThrottle` instances."""
     # Different throttles for different endpoints
     api_throttle = HTTPThrottle(
-        uid="api-throttle",
-        rate="2/700ms",
+        uid="api-throttle-sl",
+        rate="2/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     admin_throttle = HTTPThrottle(
-        uid="admin-throttle",
+        uid="admin-throttle-sl",
         rate="1/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     middleware_throttles = [
@@ -372,9 +382,10 @@ def test_middleware_with_multiple_throttles(inmemory_backend: InMemoryBackend) -
 def test_middleware_method_specificity(inmemory_backend: InMemoryBackend) -> None:
     """Test that middleware only applies to specified HTTP methods."""
     throttle = HTTPThrottle(
-        uid="method-specific-test",
+        uid="method-specific-test-sl",
         rate="1/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     # Only throttle POST requests
     middleware_throttle = MiddlewareThrottle(
@@ -425,9 +436,10 @@ def test_middleware_method_specificity(inmemory_backend: InMemoryBackend) -> Non
 def test_middleware_with_hook(inmemory_backend: InMemoryBackend) -> None:
     """Test `ThrottleMiddleware` with custom hook logic."""
     throttle = HTTPThrottle(
-        uid="hook-middleware-test",
+        uid="hook-middleware-test-sl",
         rate="1/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     # Only throttle requests with premium tier
@@ -474,9 +486,10 @@ def test_middleware_with_no_backend_specified(
 ) -> None:
     """Test `ThrottleMiddleware` without explicit backend (should use lifespan backend)."""
     throttle = HTTPThrottle(
-        uid="no-backend-test",
+        uid="no-backend-test-sl",
         rate="1/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     middleware_throttle = MiddlewareThrottle(throttle=throttle)
@@ -509,9 +522,10 @@ async def test_middleware_multiple_backends(backends: BackendGen) -> None:
     """Test `ThrottleMiddleware` with all backends."""
     for backend in backends(persistent=False, namespace="middleware_test"):
         throttle = HTTPThrottle(
-            uid="redis-middleware-test",
+            uid="redis-middleware-test-sl",
             rate="2/s",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
         middleware_throttle = MiddlewareThrottle(
             throttle=throttle,
@@ -564,9 +578,10 @@ async def test_middleware_multiple_backends(backends: BackendGen) -> None:
 async def test_middleware_concurrency(inmemory_backend: InMemoryBackend) -> None:
     """Test `ThrottleMiddleware` under concurrent load."""
     throttle = HTTPThrottle(
-        uid="concurrent-middleware-test",
+        uid="concurrent-middleware-test-sl",
         rate=Rate.parse("3/5s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(throttle=throttle)
 
@@ -610,9 +625,10 @@ async def test_middleware_concurrency(inmemory_backend: InMemoryBackend) -> None
 def test_middleware_exemption_with_hook(inmemory_backend: InMemoryBackend) -> None:
     """Test middleware with exemption logic using hook."""
     throttle = HTTPThrottle(
-        uid="exemption-test",
+        uid="exemption-test-sl",
         rate=Rate.parse("1/1s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     # Exempt admin users from throttling
@@ -657,9 +673,10 @@ def test_middleware_methods_filter_is_case_insensitive(
 ) -> None:
     """Test that middleware handles HTTP methods in case-insensitive manner."""
     throttle = HTTPThrottle(
-        uid="case-insensitive-test",
+        uid="case-insensitive-test-sl",
         rate=Rate.parse("1/1s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     # Specify methods in mixed case
     middleware_throttle = MiddlewareThrottle(
@@ -714,9 +731,10 @@ def test_middleware_methods_filter_is_case_insensitive(
 def test_middleware_websocket_passthrough(inmemory_backend: InMemoryBackend) -> None:
     """Test that `ThrottleMiddleware` doesn't interfere with WebSocket connections."""
     throttle = HTTPThrottle(
-        uid="websocket-test",
+        uid="websocket-test-sl",
         rate=Rate.parse("1/1s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(throttle=throttle)
 
@@ -788,14 +806,16 @@ def test_middleware_with_multiple_overlapping_patterns(
     """Test `ThrottleMiddleware` with overlapping path patterns."""
     # Two throttles that could both match the same request
     general_throttle = HTTPThrottle(
-        uid="general-throttle",
+        uid="general-throttle-sl",
         rate=Rate.parse("5/s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     specific_throttle = HTTPThrottle(
-        uid="specific-throttle",
+        uid="specific-throttle-sl",
         rate=Rate.parse("2/s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     middleware_throttles = [
@@ -854,9 +874,10 @@ async def test_middleware_complex_regex_patterns(
     """Test middleware with complex regex patterns including groups, alternation, and anchors."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            uid="complex-regex",
+            uid="complex-regex-sl",
             rate="3/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Complex pattern: Match UUIDs in API paths
@@ -896,9 +917,10 @@ async def test_middleware_string_auto_compile_to_regex(
     """Test that string paths are automatically compiled to regex patterns."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            uid="auto-compile",
+            uid="auto-compile-sl",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Pass string path (should be auto-compiled)
@@ -908,8 +930,8 @@ async def test_middleware_string_auto_compile_to_regex(
         )
 
         # Verify it was compiled to Pattern
-        assert isinstance(middleware_throttle.path, re.Pattern)
-        assert middleware_throttle.path.pattern == "/api/"
+        assert isinstance(middleware_throttle.rule.path, re.Pattern)
+        assert middleware_throttle.rule.path.pattern == "/api/"
 
         # Test that it works
         matching_scope = {"type": "http", "method": "GET", "path": "/api/users"}
@@ -933,9 +955,10 @@ async def test_middleware_regex_with_query_params_ignored(
     """Test that regex matching works on path only, ignoring query parameters."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            uid="query-ignore",
+            uid="query-ignore-sl",
             rate="2/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         middleware_throttle = MiddlewareThrottle(
@@ -970,9 +993,10 @@ async def test_middleware_case_sensitive_regex(
     """Test that regex patterns are case-sensitive by default."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            uid="case-sensitive",
+            uid="case-sensitive-sl",
             rate="3/min",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         # Case-sensitive pattern
@@ -1009,9 +1033,10 @@ async def test_middleware_with_streaming_responses(
     3. Prevent streaming entirely if request is throttled (return 429 immediately)
     """
     throttle = HTTPThrottle(
-        uid="streaming-test",
+        uid="streaming-test-sl",
         rate="2/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(
         throttle=throttle,
@@ -1095,9 +1120,10 @@ async def test_middleware_streaming_with_large_chunks(
     doesn't interfere with data integrity.
     """
     throttle = HTTPThrottle(
-        uid="large-stream-test",
+        uid="large-stream-test-sl",
         rate="10/m",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(
         throttle=throttle,
@@ -1158,9 +1184,10 @@ async def test_middleware_streaming_exception_during_stream(
     streaming are not related to throttling logic.
     """
     throttle = HTTPThrottle(
-        uid="stream-exception-test",
+        uid="stream-exception-test-sl",
         rate="5/m",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(throttle=throttle)
 
@@ -1197,9 +1224,10 @@ def test_middleware_websocket_throttle(inmemory_backend: InMemoryBackend) -> Non
     """Test that `ThrottleMiddleware` throttles WebSocket connections with `WebSocketThrottle`."""
 
     ws_throttle = WebSocketThrottle(
-        uid="ws-middleware-throttle",
+        uid="ws-middleware-throttle-sl",
         rate=Rate.parse("2/5s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     middleware_throttle = MiddlewareThrottle(throttle=ws_throttle, path="/ws")
 
@@ -1237,14 +1265,16 @@ def test_middleware_mixed_http_and_websocket_throttles(
     """Test `ThrottleMiddleware` with both HTTP and WebSocket throttles simultaneously."""
 
     http_throttle = HTTPThrottle(
-        uid="mixed-http",
+        uid="mixed-http-sl",
         rate=Rate.parse("2/5s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     ws_throttle = WebSocketThrottle(
-        uid="mixed-ws",
+        uid="mixed-ws-sl",
         rate=Rate.parse("2/5s"),
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     async def http_endpoint(request: Request) -> JSONResponse:
@@ -1292,16 +1322,16 @@ def test_middleware_mixed_http_and_websocket_throttles(
                 websocket.receive_json()
 
 
-# --- Sort functionality tests for _prepare_middleware_throttles ---
-
-
 def _make_http_throttle(
     uid: str, cost: typing.Optional[int] = None
 ) -> MiddlewareThrottle:
     """Helper to create an HTTP MiddlewareThrottle with a given cost."""
     return MiddlewareThrottle(
         throttle=HTTPThrottle(
-            uid=uid, rate="10/s", identifier=default_client_identifier
+            uid=uid,
+            rate="10/s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         ),
         cost=cost,
     )
@@ -1313,108 +1343,114 @@ def _make_ws_throttle(
     """Helper to create a WebSocket MiddlewareThrottle with a given cost."""
     return MiddlewareThrottle(
         throttle=WebSocketThrottle(
-            uid=uid, rate="10/s", identifier=default_client_identifier
+            uid=uid,
+            rate="10/s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         ),
         cost=cost,
     )
 
 
 @pytest.mark.middleware
-def test_prepare_middleware_throttles_cheap_first() -> None:
+def test_prep_throttles_cheap_first() -> None:
     """Test that 'cheap_first' sorts throttles by ascending cost."""
-    t_cheap = _make_http_throttle("cheap", cost=1)
-    t_mid = _make_http_throttle("mid", cost=5)
-    t_expensive = _make_http_throttle("expensive", cost=10)
+    t_cheap = _make_http_throttle("cheap-sl", cost=1)
+    t_mid = _make_http_throttle("mid-sl", cost=5)
+    t_expensive = _make_http_throttle("expensive-sl", cost=10)
 
-    result = _prepare_middleware_throttles(
-        [t_expensive, t_cheap, t_mid], sort="cheap_first"
-    )
+    result = _prep_throttles([t_expensive, t_cheap, t_mid], sort="cheap_first")
     assert result["http"] == [t_cheap, t_mid, t_expensive]
 
 
 @pytest.mark.middleware
-def test_prepare_middleware_throttles_cheap_last() -> None:
+def test_prep_throttles_cheap_last() -> None:
     """Test that 'cheap_last' sorts throttles by descending cost."""
-    t_cheap = _make_http_throttle("cheap", cost=1)
-    t_mid = _make_http_throttle("mid", cost=5)
-    t_expensive = _make_http_throttle("expensive", cost=10)
+    t_cheap = _make_http_throttle("cheap-sl", cost=1)
+    t_mid = _make_http_throttle("mid-sl", cost=5)
+    t_expensive = _make_http_throttle("expensive-sl", cost=10)
 
-    result = _prepare_middleware_throttles(
-        [t_cheap, t_mid, t_expensive], sort="cheap_last"
-    )
+    result = _prep_throttles([t_cheap, t_mid, t_expensive], sort="cheap_last")
     assert result["http"] == [t_expensive, t_mid, t_cheap]
 
 
 @pytest.mark.middleware
-def test_prepare_middleware_throttles_no_sort() -> None:
+def test_prep_throttles_no_sort() -> None:
     """Test that False/None preserves the original insertion order."""
-    t1 = _make_http_throttle("first", cost=10)
-    t2 = _make_http_throttle("second", cost=1)
-    t3 = _make_http_throttle("third", cost=5)
+    t1 = _make_http_throttle("first-sl", cost=10)
+    t2 = _make_http_throttle("second-sl", cost=1)
+    t3 = _make_http_throttle("third-sl", cost=5)
 
     for sort_val in (False, None):
-        result = _prepare_middleware_throttles([t1, t2, t3], sort=sort_val)
+        result = _prep_throttles([t1, t2, t3], sort=sort_val)
         assert result["http"] == [t1, t2, t3]
 
 
 @pytest.mark.middleware
-def test_prepare_middleware_throttles_custom_callable() -> None:
+def test_prep_throttles_custom_callable() -> None:
     """Test that a custom callable is used as the sort key."""
-    t1 = _make_http_throttle("alpha", cost=5)
-    t2 = _make_http_throttle("beta", cost=1)
-    t3 = _make_http_throttle("gamma", cost=10)
+    t1 = _make_http_throttle("alpha-sl", cost=5)
+    t2 = _make_http_throttle("beta-sl", cost=1)
+    t3 = _make_http_throttle("gamma-sl", cost=10)
 
     # Sort by throttle uid alphabetically
-    result = _prepare_middleware_throttles([t3, t1, t2], sort=lambda t: t.throttle.uid)
+    result = _prep_throttles([t3, t1, t2], sort=lambda t: t.throttle.uid)  # type: ignore
     assert result["http"] == [t1, t2, t3]
 
 
 @pytest.mark.middleware
-def test_prepare_middleware_throttles_none_cost_sorted_last() -> None:
-    """Test that throttles without a cost (None) are sorted last with 'cheap_first'."""
-    t_cheap = _make_http_throttle("cheap", cost=1)
-    t_no_cost = _make_http_throttle("no-cost", cost=None)
-    t_expensive = _make_http_throttle("expensive", cost=100)
+def test_prep_throttles_none_cost_sorted_last() -> None:
+    """Test that MiddlewareThrottle(cost=None) falls back to the wrapped throttle's cost.
 
-    result = _prepare_middleware_throttles(
-        [t_no_cost, t_expensive, t_cheap], sort="cheap_first"
-    )
-    assert result["http"] == [t_cheap, t_expensive, t_no_cost]
+    When MiddlewareThrottle.cost is None, _cheap_first uses the wrapped throttle's
+    cost (default 1). So t_no_cost gets sort key (1, False) — the same as t_cheap.
+    Stable sort preserves input order for equal keys, so t_no_cost (index 0) stays
+    before t_cheap (index 2), and both precede t_expensive (cost=100).
+    """
+    t_cheap = _make_http_throttle("cheap-sl", cost=1)
+    t_no_cost = _make_http_throttle("no-cost-sl", cost=None)
+    t_expensive = _make_http_throttle("expensive-sl", cost=100)
 
-
-@pytest.mark.middleware
-def test_prepare_middleware_throttles_none_cost_sorted_first_with_cheap_last() -> None:
-    """Test that throttles without a cost (None) are sorted first with 'cheap_last'."""
-    t_cheap = _make_http_throttle("cheap", cost=1)
-    t_no_cost = _make_http_throttle("no-cost", cost=None)
-    t_expensive = _make_http_throttle("expensive", cost=100)
-
-    result = _prepare_middleware_throttles(
-        [t_cheap, t_expensive, t_no_cost], sort="cheap_last"
-    )
-    # -inf is the most negative, so None cost (treated as -inf) comes first
-    assert result["http"][0] is t_no_cost
+    result = _prep_throttles([t_no_cost, t_expensive, t_cheap], sort="cheap_first")
+    # t_no_cost and t_cheap share key (1, False); stable sort preserves input order
+    assert result["http"] == [t_no_cost, t_cheap, t_expensive]
 
 
 @pytest.mark.middleware
-def test_prepare_middleware_throttles_invalid_sort() -> None:
+def test_prep_throttles_none_cost_sorted_first_with_cheap_last() -> None:
+    """Test that MiddlewareThrottle(cost=None) falls back to wrapped throttle cost with cheap_last.
+
+    With cheap_last, t_no_cost gets key (-1, False) — same as t_cheap — because the
+    wrapped throttle's cost is 1. t_expensive (cost=100) has the most negative key
+    (-100, False) and sorts first. t_cheap and t_no_cost tie; stable sort preserves
+    their input order.
+    """
+    t_cheap = _make_http_throttle("cheap-sl", cost=1)
+    t_no_cost = _make_http_throttle("no-cost-sl", cost=None)
+    t_expensive = _make_http_throttle("expensive-sl", cost=100)
+
+    result = _prep_throttles([t_cheap, t_expensive, t_no_cost], sort="cheap_last")
+    # t_expensive sorts first (key -100); t_cheap and t_no_cost tie, input order preserved
+    assert result["http"] == [t_expensive, t_cheap, t_no_cost]
+
+
+@pytest.mark.middleware
+def test_prep_throttles_invalid_sort() -> None:
     """Test that an invalid sort value raises ValueError."""
-    t = _make_http_throttle("test", cost=1)
+    t = _make_http_throttle("test-sl", cost=1)
     with pytest.raises(ValueError, match="Invalid value for `sort`"):
-        _prepare_middleware_throttles([t], sort="invalid")  # type: ignore[arg-type]
+        _prep_throttles([t], sort="invalid")  # type: ignore[arg-type]
 
 
 @pytest.mark.middleware
-def test_prepare_middleware_throttles_categorization() -> None:
+def test_prep_throttles_categorization() -> None:
     """Test that throttles are categorized into 'http' and 'websocket' buckets."""
-    t_http1 = _make_http_throttle("http1", cost=1)
-    t_http2 = _make_http_throttle("http2", cost=2)
-    t_ws1 = _make_ws_throttle("ws1", cost=1)
-    t_ws2 = _make_ws_throttle("ws2", cost=2)
+    t_http1 = _make_http_throttle("http1-sl", cost=1)
+    t_http2 = _make_http_throttle("http2-sl", cost=2)
+    t_ws1 = _make_ws_throttle("ws1-sl", cost=1)
+    t_ws2 = _make_ws_throttle("ws2-sl", cost=2)
 
-    result = _prepare_middleware_throttles(
-        [t_ws2, t_http2, t_ws1, t_http1], sort="cheap_first"
-    )
+    result = _prep_throttles([t_ws2, t_http2, t_ws1, t_http1], sort="cheap_first")
     assert result["http"] == [t_http1, t_http2]
     assert result["websocket"] == [t_ws1, t_ws2]
 
@@ -1426,13 +1462,18 @@ def test_middleware_sort_parameter_integration(
     """Test that the sort parameter on ThrottleMiddleware is applied correctly."""
     t_expensive = MiddlewareThrottle(
         throttle=HTTPThrottle(
-            uid="expensive", rate="10/s", identifier=default_client_identifier
+            uid="expensive-sl",
+            rate="10/s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         ),
         cost=10,
     )
     t_cheap = MiddlewareThrottle(
         throttle=HTTPThrottle(
-            uid="cheap", rate="10/s", identifier=default_client_identifier
+            uid="cheap-sl",
+            rate="10/s",
+            identifier=default_client_identifier,
         ),
         cost=1,
     )

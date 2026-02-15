@@ -19,6 +19,7 @@ from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.decorators import throttled
 from traffik.rates import Rate
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 
 
@@ -45,9 +46,10 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
     # Test initialization behaviour
     async with inmemory_backend(close_on_exit=True):
         throttle = Throttle(
-            "test-init-2",
+            "test-init-2-fa",
             rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
             handle_throttled=_throttle_handler,
+            registry=ThrottleRegistry(),
         )
         time_in_ms = 10 + (50 * 1000) + (2 * 60 * 1000) + (1 * 3600 * 1000)
         assert throttle.rate.expire == time_in_ms  # type: ignore[union-attr]
@@ -61,9 +63,10 @@ async def test_throttle_initialization(inmemory_backend: InMemoryBackend) -> Non
 @pytest.mark.fastapi
 def test_throttle_with_app_lifespan(lifespan_app: FastAPI) -> None:
     throttle = HTTPThrottle(
-        "test-throttle-app-lifespan",
+        "test-throttle-app-lifespan-fa",
         rate="2/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     @lifespan_app.get(
@@ -96,10 +99,11 @@ def test_throttle_exemption_with_unlimited_identifier(
     inmemory_backend: InMemoryBackend,
 ) -> None:
     throttle = HTTPThrottle(
-        "test-throttle-exemption",
+        "test-throttle-exemption-fa",
         rate="2/s",
         identifier=unlimited_identifier,
         backend=inmemory_backend,
+        registry=ThrottleRegistry(),
     )
     app = FastAPI()
 
@@ -137,8 +141,9 @@ async def test_http_throttle(backends: BackendGen) -> None:
     for backend in backends(persistent=False, namespace="http_throttle_test"):
         async with backend(close_on_exit=True):
             throttle = HTTPThrottle(
-                "test-http-throttle",
+                "test-http-throttle-fa",
                 rate="3/3005ms",
+                registry=ThrottleRegistry(),
             )
             sleep_time = 4 + (5 / 1000)
 
@@ -183,9 +188,10 @@ async def test_http_throttle_concurrent(backends: BackendGen) -> None:
     for backend in backends(persistent=False, namespace="http_throttle_concurrent"):
         async with backend(close_on_exit=True):
             throttle = HTTPThrottle(
-                "http-throttle-concurrent",
+                "http-throttle-concurrent-fa",
                 rate="3/s",
                 strategy=strategies.TokenBucketStrategy(),
+                registry=ThrottleRegistry(),
             )
             app = FastAPI()
 
@@ -222,9 +228,10 @@ async def test_websocket_throttle(backends: BackendGen) -> None:
     for backend in backends(persistent=False, namespace="ws_throttle_test"):
         async with backend(close_on_exit=True):
             throttle = WebSocketThrottle(
-                "test-websocket-throttle-inmemory",
+                "test-websocket-throttle-inmemory-fa",
                 rate="3/5005ms",
                 identifier=default_client_identifier,
+                registry=ThrottleRegistry(),
             )
 
             app = FastAPI()
@@ -346,9 +353,10 @@ def test_throttle_dependency_not_in_openapi_schema(
     leak its internal parameters (cost, context, etc.) into the OpenAPI schema.
     """
     throttle = HTTPThrottle(
-        "test-openapi-schema",
+        "test-openapi-schema-fa",
         rate="10/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     @lifespan_app.post(
@@ -407,9 +415,10 @@ def test_throttle_dependency_does_not_force_body_embed(
     request body should work — no need to wrap it as `{"item": {...}}`.
     """
     throttle = HTTPThrottle(
-        "test-body-embed",
+        "test-body-embed-fa",
         rate="100/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     @lifespan_app.post(
@@ -442,9 +451,10 @@ def test_throttle_decorator_does_not_force_body_embed(
     instead of Depends(throttle).
     """
     throttle = HTTPThrottle(
-        "test-decorator-body-embed",
+        "test-decorator-body-embed-fa",
         rate="100/s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     @lifespan_app.post("/create-decorated", status_code=201)
@@ -479,3 +489,127 @@ def test_throttle_decorator_does_not_force_body_embed(
         assert "context" not in body_schema.get("properties", {}), (
             "Throttle 'context' param leaked into OpenAPI schema via @throttled"
         )
+
+
+# ── Throttle disable / enable ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_throttle_is_disabled_default_false(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    throttle = HTTPThrottle(
+        uid="fa-dis-default",
+        rate="5/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    assert throttle.is_disabled is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_throttle_disable_sets_flag(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="fa-dis-flag",
+        rate="5/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    await throttle.disable()
+    assert throttle.is_disabled is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_throttle_enable_clears_flag(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="fa-dis-enable",
+        rate="5/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    await throttle.disable()
+    await throttle.enable()
+    assert throttle.is_disabled is False
+
+
+# ── Throttle update_* ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_rate_string(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="fa-upd-rate-str",
+        rate="5/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    await throttle.update_rate("100/s")
+    assert throttle.rate == Rate.parse("100/s")
+    assert throttle._uses_rate_func is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_rate_callable(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="fa-upd-rate-fn",
+        rate="5/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+
+    async def dynamic_rate(conn, ctx):
+        return Rate.parse("50/min")
+
+    await throttle.update_rate(dynamic_rate)
+    assert throttle._uses_rate_func is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_cost(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="fa-upd-cost",
+        rate="10/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    await throttle.update_cost(3)
+    assert throttle.cost == 3
+    assert throttle._uses_cost_func is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_identifier(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="fa-upd-ident",
+        rate="10/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+
+    async def new_identifier(conn):
+        return "custom-id"
+
+    await throttle.update_identifier(new_identifier)
+    assert throttle.identifier is new_identifier
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_min_wait_period(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="fa-upd-mwp",
+        rate="10/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    await throttle.update_min_wait_period(500)
+    assert throttle.min_wait_period == 500
+    await throttle.update_min_wait_period(None)
+    assert throttle.min_wait_period is None

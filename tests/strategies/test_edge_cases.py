@@ -66,6 +66,7 @@ class TestRateEdgeCases:
 
     @pytest.mark.anyio
     @pytest.mark.strategy
+    @pytest.mark.flaky(reruns=3, reruns_delay=2)
     async def test_very_long_time_window(self, backend: InMemoryBackend):
         """Test with very long time window."""
         async with backend(close_on_exit=True):

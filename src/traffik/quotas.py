@@ -2,8 +2,6 @@
 
 import asyncio
 import inspect
-import math
-import random
 import typing
 from collections import deque
 from contextlib import AsyncExitStack
@@ -12,6 +10,13 @@ from types import TracebackType
 from starlette.exceptions import HTTPException
 from typing_extensions import Self
 
+from traffik.backoff import (
+    DEFAULT_BACKOFF,
+    ConstantBackoff,
+    ExponentialBackoff,
+    LinearBackoff,
+    LogarithmicBackoff,
+)
 from traffik.exceptions import (
     QuotaAppliedError,
     QuotaCancelledError,
@@ -27,13 +32,7 @@ from traffik.types import (
     StrategyStat,
 )
 
-__all__ = [
-    "QuotaContext",
-    "ConstantBackoff",
-    "LinearBackoff",
-    "ExponentialBackoff",
-    "LogarithmicBackoff",
-]
+__all__ = ["QuotaContext"]
 
 _NON_RETRYABLE_EXCEPTIONS: typing.Tuple[typing.Type[BaseException], ...] = (
     asyncio.CancelledError,
@@ -43,75 +42,11 @@ _NON_RETRYABLE_EXCEPTIONS: typing.Tuple[typing.Type[BaseException], ...] = (
 )
 """Tuple of exceptions that should not be retried. They are considered non-retryable signals."""
 
-
-def ConstantBackoff(
-    attempt: int,
-    base_delay: float,
-) -> float:
-    """Delay remains the same for each attempt."""
-    return base_delay
-
-
-class LinearBackoff:
-    """Delay increases linearly with each attempt."""
-
-    __slots__ = ("increment",)
-
-    def __init__(self, increment: float = 1.0) -> None:
-        """
-        :param increment: Amount to increase delay per attempt (in seconds).
-        """
-        self.increment = increment
-
-    def __call__(self, attempt: int, base_delay: float) -> float:
-        return base_delay + (attempt - 1) * self.increment
-
-
-class ExponentialBackoff:
-    """Delay doubles (or multiplies) with each attempt."""
-
-    __slots__ = ("multiplier", "max_delay", "jitter")
-
-    def __init__(
-        self,
-        multiplier: float = 2.0,
-        max_delay: typing.Optional[float] = None,
-        jitter: bool = False,
-    ) -> None:
-        """
-        :param multiplier: Factor to multiply delay by each attempt.
-        :param max_delay: Maximum delay cap (in seconds).
-        :param jitter: Whether to add random jitter to prevent thundering herd.
-        """
-        self.multiplier = multiplier
-        self.max_delay = max_delay
-        self.jitter = jitter
-
-    def __call__(self, attempt: int, base_delay: float) -> float:
-        delay = base_delay * (self.multiplier ** (attempt - 1))
-        if self.max_delay is not None:
-            delay = min(delay, self.max_delay)
-        if self.jitter:
-            delay = delay * (0.5 + random.random())  # nosec
-        return delay
-
-
-class LogarithmicBackoff:
-    """Delay increases logarithmically with each attempt."""
-
-    __slots__ = ("base",)
-
-    def __init__(self, base: float = 2.0) -> None:
-        """
-        :param base: Logarithm base.
-        """
-        self.base = base
-
-    def __call__(self, attempt: int, base_delay: float) -> float:
-        return base_delay * math.log(attempt + 1, self.base)
-
-
-DEFAULT_BACKOFF = ExponentialBackoff(multiplier=2.0, max_delay=60.0, jitter=True)
+# Aliases for backwards compatibility
+ConstantBackoff = ConstantBackoff
+LinearBackoff = LinearBackoff
+LogarithmicBackoff = LogarithmicBackoff
+ExponentialBackoff = ExponentialBackoff
 
 
 def _resolve_lock_key(
@@ -125,6 +60,7 @@ def _resolve_lock_key(
         - `None` or `True`: Use owner throttle's UID as key (if bound)
         - `False`: No locking (returns None)
         - `str`: Use the string as lock key
+
     :param owner: The bound throttle (if any) to use when lock is None/True.
     :return: The resolved lock key string, or None if locking is disabled.
     """
@@ -575,10 +511,10 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         2. Both entries must have the SAME context (exact dict equality)
         3. Both entries must have FIXED costs (no cost functions)
         4. All retry configuration must match exactly:
-           - retry count
-           - retry_on condition (identity check for callables)
-           - backoff strategy (identity check)
-           - base_delay value
+           - `retry` count
+           - `retry_on` condition (identity check for callables)
+           - `backoff` strategy (identity check)
+           - `base_delay` value
 
         :param last_entry: The last entry currently in the queue.
         :param throttle: The throttle for the new entry.
@@ -590,26 +526,26 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         :param base_delay: Base delay for the new entry.
         :return: True if aggregation is possible, False otherwise.
         """
-        # Rule 1: Must be the exact same throttle instance
+        # Both must be the exact same throttle instance
         # Using `is` instead of `==` ensures we're checking identity, not equality
         if last_entry.throttle is not throttle:
             return False
 
-        # Rule 2: Must have identical context dictionaries
+        # Both must have identical context dictionaries
         # Note: This checks exact equality - {"a": 1} != {"a": 1, "b": None}
         if last_entry.context != context:
             return False
 
-        # Rule 3: Both must have fixed costs (no cost functions)
+        # Both must have fixed costs (no cost functions)
         # We can only aggregate fixed costs, not dynamic costs
         if last_entry.cost is None or cost is None:
             return False
 
-        # Rule 4a: Retry count must match
+        # Both must have matching retry counts
         if last_entry.retry != retry:
             return False
 
-        # Rule 4b: Retry condition must match
+        # Both must have matching retry conditions
         # For callables, we use identity check (`is`) because:
         # - Different lambda instances are never equal even with same code
         # - We want to ensure the exact same retry logic applies
@@ -618,12 +554,12 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             if not (last_entry.retry_on is None and retry_on is None):
                 return False
 
-        # Rule 4c: Backoff strategy must match
+        # Backoff strategy must match
         # Using identity check because backoff objects may not implement __eq__
         if last_entry.backoff is not backoff:
             return False
 
-        # Rule 4d: Base delay must match exactly
+        # Base delay must match exactly
         if last_entry.base_delay != base_delay:
             return False
 
@@ -734,11 +670,11 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         This performs a non-consuming check of the throttle's current state.
 
         Note:
-            This should be used as a best-effort pre-check only. The actual
-            quota may change between this check and the eventual consumption
-            (classic Time-of-Check to Time-of-Use issue).
-            A way to avoid this is to ensure that the throttle checked/used is unique to this context,
-            or best, throttle optimistically and handle rejections gracefully.
+        This should be used as a best-effort pre-check only. The actual
+        quota may change between this check and the eventual consumption
+        (classic Time-of-Check to Time-of-Use issue).
+        A way to avoid this is to ensure that the throttle checked/used is unique to this context,
+        or best, throttle optimistically and handle rejections gracefully.
 
         :param throttle: Specific throttle to check. If None and context is bound,
             checks the owner throttle. If None and unbound, checks all queued entries.
@@ -947,7 +883,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             attempt += 1
             try:
                 # Hit the throttle
-                await entry.throttle(
+                await entry.throttle.hit(
                     self.connection,
                     cost=actual_cost,
                     context=entry.context,

@@ -111,7 +111,7 @@ class TestStrategyStateSerialization:
 
             # Get stored data
             full_key = backend.get_key(key)
-            state_key = f"{full_key}:tokenbucket"
+            state_key = f"{full_key}:tokenbucket:100"
             stored = await backend.get(state_key)
 
             assert stored is not None, "State should be stored"
@@ -229,8 +229,8 @@ class TestSerializationErrorHandling:
                 assert deserialized == data or (
                     data is None and deserialized is None
                 ), f"Failed for {data}"
-            except Exception as e:
-                pytest.fail(f"Serialization failed for {data}: {e}")
+            except Exception as exc:
+                pytest.fail(f"Serialization failed for {data}: {exc}")
 
 
 @pytest.mark.anyio
@@ -247,7 +247,7 @@ async def test_state_survives_strategy_recreation(backend: InMemoryBackend):
 
         # Get current token count
         full_key = backend.get_key(key)
-        state_key = f"{full_key}:tokenbucket"
+        state_key = f"{full_key}:tokenbucket:100"
         stored1 = await backend.get(state_key)
         assert stored1 is not None
         state1 = load_data(stored1)

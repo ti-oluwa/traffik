@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from aiomcache import Client as MemcachedClient
 from aiomcache import ClientException
 
+from traffik._locks import fence_token_generator
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.types import (
@@ -21,7 +22,7 @@ from traffik.types import (
     T,
     ThrottleErrorHandler,
 )
-from traffik.utils import fence_token_generator, time
+from traffik.utils import time
 
 
 def _on_error_return(
@@ -180,21 +181,20 @@ class _AsyncMemcachedLock:
                 f"Cannot release lock '{self._name}'. Lock not owned by this instance"
             )
 
+        name = self._name
         try:
             # Ensure we only delete if we own the lock (fence token matches)
-            current = await self._client.get(self._name.encode())
+            current = await self._client.get(name.encode())
             if current and current.decode() == self._fence_token:
-                await self._client.delete(self._name.encode())
+                await self._client.delete(name.encode())
             else:
-                sys.stderr.write(f"Warning: Lock '{self._name}' expired or stolen\n")
+                sys.stderr.write(f"Warning: Lock '{name}' expired or stolen\n")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # nosec
             # Lock might have expired or been released already
             # Log and ignore release errors to avoid deadlocks
-            sys.stderr.write(
-                f"Warning: Failed to release lock '{self._name}': {str(exc)}\n"
-            )
+            sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
         finally:
             # Reset state
             self._acquired = False
@@ -507,14 +507,15 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             )
 
         # Try to increment existing counter
-        new_value = await self.connection.incr(key.encode(), amount)
+        encoded_key = key.encode()
+        new_value = await self.connection.incr(encoded_key, amount)
         if new_value is not None:
             return new_value
 
         # Key doesn't exist, initialize it
         # Use add() to atomically create if not exists
         added = await self.connection.add(
-            key.encode(),
+            encoded_key,
             str(amount).encode(),
             exptime=0,
         )
@@ -524,7 +525,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             return amount
 
         # Someone else created it, try increment again
-        new_value = await self.connection.incr(key.encode(), amount)
+        new_value = await self.connection.incr(encoded_key, amount)
         return new_value  # type: ignore[return-value]
 
     async def decrement(self, key: str, amount: int = 1) -> int:
@@ -544,14 +545,15 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             )
 
         # Try to decrement existing counter
-        new_value = await self.connection.decr(key.encode(), amount)
+        encoded_key = key.encode()
+        new_value = await self.connection.decr(encoded_key, amount)
         if new_value is not None:
             return new_value
 
         # Key doesn't exist, initialize it to 0 - amount
         # Use add() to atomically create if not exists
         added = await self.connection.add(
-            key.encode(),
+            encoded_key,
             str(-amount).encode(),
             exptime=0,
         )
@@ -561,7 +563,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             return -amount
 
         # Someone else created it, try decrement again
-        new_value = await self.connection.decr(key.encode(), amount)
+        new_value = await self.connection.decr(encoded_key, amount)
         return new_value  # type: ignore[return-value]
 
     async def expire(self, key: str, seconds: int) -> bool:
@@ -581,13 +583,14 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             )
 
         # Get current value
-        value = await self.connection.get(key.encode())
+        encoded_key = key.encode()
+        value = await self.connection.get(encoded_key)
         if value is None:
             return False
 
         # Set with new expiration
         is_set = await self.connection.set(
-            key.encode(),
+            encoded_key,
             value,
             exptime=seconds,
         )
@@ -611,14 +614,15 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             )
 
         # Try to increment existing counter
-        new_value = await self.connection.incr(key.encode(), amount)
+        encoded_key = key.encode()
+        new_value = await self.connection.incr(encoded_key, amount)
         if new_value is not None:
             return new_value
 
         # Key doesn't exist, create with TTL
         # Atomically create with TTL
         added = await self.connection.add(
-            key.encode(),
+            encoded_key,
             str(amount).encode(),
             exptime=ttl,
         )
@@ -628,7 +632,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             return amount
 
         # Someone else created it, increment
-        new_value = await self.connection.incr(key.encode(), amount)
+        new_value = await self.connection.incr(encoded_key, amount)
         return new_value  # type: ignore[return-value]
 
     async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:

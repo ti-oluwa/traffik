@@ -1,14 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <!-- Traffic light pole -->
-  <rect x="44" y="70" width="12" height="25" rx="3" fill="#555"/>
+  <!-- Shield border (amber/secondary color) -->
+  <path d="M50 3 L89 19 L89 53 C89 74 71 90 50 97 C29 90 11 74 11 53 L11 19 Z"
+        fill="#ffc107"/>
+  <!-- Shield body (deep orange/primary) -->
+  <path d="M50 9 L83 23 L83 53 C83 72 67 86 50 92 C33 86 17 72 17 53 L17 23 Z"
+        fill="#ff5722"/>
   <!-- Traffic light housing -->
-  <rect x="28" y="8" width="44" height="65" rx="8" fill="#333"/>
-  <!-- Red light -->
-  <circle cx="50" cy="24" r="12" fill="#FF4444" opacity="0.95"/>
-  <!-- Amber light -->
-  <circle cx="50" cy="47" r="12" fill="#FF9800" opacity="0.95"/>
-  <!-- Green light -->
-  <circle cx="50" cy="70" r="12" fill="#66BB6A" opacity="0.3"/>
-  <!-- Glow on amber (active) -->
-  <circle cx="50" cy="47" r="10" fill="#FFB74D" opacity="0.5"/>
+  <rect x="38" y="22" width="24" height="52" rx="7" fill="#1a1a1a"/>
+  <!-- Red light (top) - dimmed -->
+  <circle cx="50" cy="34" r="7" fill="#b71c1c" opacity="0.6"/>
+  <!-- Amber light (middle) - active/glowing -->
+  <circle cx="50" cy="50" r="7" fill="#ffc107"/>
+  <circle cx="50" cy="50" r="5" fill="#ffe57f" opacity="0.7"/>
+  <!-- Green light (bottom) - dimmed -->
+  <circle cx="50" cy="66" r="7" fill="#1b5e20" opacity="0.5"/>
 </svg>

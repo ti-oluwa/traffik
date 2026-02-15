@@ -323,3 +323,235 @@ async def test_websocket_throttle(backends: BackendGen) -> None:
                     else:
                         assert result[0] == "success"
                         assert result[1] == 200
+
+
+# ── Throttle disable / enable ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_throttle_is_disabled_default_false(
+    inmemory_backend: InMemoryBackend,
+) -> None:
+    throttle = HTTPThrottle(
+        uid="dis-default",
+        rate="5/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    assert throttle.is_disabled is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_throttle_disable_sets_flag(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="dis-flag",
+        rate="5/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    await throttle.disable()
+    assert throttle.is_disabled is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_throttle_enable_clears_flag(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="dis-enable",
+        rate="5/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    await throttle.disable()
+    await throttle.enable()
+    assert throttle.is_disabled is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_disabled_throttle_skips_hit(inmemory_backend: InMemoryBackend) -> None:
+    """A disabled throttle should pass all requests through, even past the rate limit."""
+    throttle = HTTPThrottle(
+        uid="dis-skip-hit",
+        rate="1/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    await throttle.disable()
+
+    async with inmemory_backend():
+        transport = ASGITransport(
+            app=Starlette(
+                routes=[
+                    Route("/test", lambda req: JSONResponse({"ok": True}))
+                ]
+            )
+        )
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            req = Request(scope={"type": "http", "method": "GET", "path": "/test",
+                                  "query_string": b"", "headers": []})
+            # Fire 5 requests — all should pass because the throttle is disabled
+            for _ in range(5):
+                result = await throttle.hit(req)
+                assert result is req
+
+
+# ── Throttle update_* ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_rate_string(inmemory_backend: InMemoryBackend) -> None:
+    """update_rate() should parse a rate string and update _uses_rate_func."""
+    throttle = HTTPThrottle(
+        uid="upd-rate-str",
+        rate="5/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    await throttle.update_rate("100/s")
+    assert throttle.rate == Rate.parse("100/s")
+    assert throttle._uses_rate_func is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_rate_rate_object(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="upd-rate-obj",
+        rate="5/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    new_rate = Rate.parse("200/h")
+    await throttle.update_rate(new_rate)
+    assert throttle.rate is new_rate
+    assert throttle._uses_rate_func is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_rate_callable(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="upd-rate-fn",
+        rate="5/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+
+    async def dynamic_rate(conn, ctx):
+        return Rate.parse("50/min")
+
+    await throttle.update_rate(dynamic_rate)
+    assert throttle._uses_rate_func is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_cost_static(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="upd-cost",
+        rate="10/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    await throttle.update_cost(3)
+    assert throttle.cost == 3
+    assert throttle._uses_cost_func is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_cost_callable(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="upd-cost-fn",
+        rate="10/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+
+    async def dynamic_cost(conn, ctx):
+        return 5
+
+    await throttle.update_cost(dynamic_cost)
+    assert throttle._uses_cost_func is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_min_wait_period(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="upd-mwp",
+        rate="10/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    await throttle.update_min_wait_period(500)
+    assert throttle.min_wait_period == 500
+    await throttle.update_min_wait_period(None)
+    assert throttle.min_wait_period is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_identifier(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="upd-ident",
+        rate="10/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+
+    async def new_identifier(conn):
+        return "custom-id"
+
+    await throttle.update_identifier(new_identifier)
+    assert throttle.identifier is new_identifier
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_headers_none_clears(inmemory_backend: InMemoryBackend) -> None:
+    from traffik.headers import DEFAULT_HEADERS_ALWAYS
+
+    throttle = HTTPThrottle(
+        uid="upd-hdrs",
+        rate="10/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+        headers=DEFAULT_HEADERS_ALWAYS,
+    )
+    await throttle.update_headers(None)
+    assert len(throttle._headers) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_strategy(inmemory_backend: InMemoryBackend) -> None:
+    from traffik.strategies.sliding_window import SlidingWindowLogStrategy
+
+    throttle = HTTPThrottle(
+        uid="upd-strategy",
+        rate="10/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    new_strategy = SlidingWindowLogStrategy()
+    await throttle.update_strategy(new_strategy)
+    assert throttle.strategy is new_strategy
+
+
+@pytest.mark.asyncio
+@pytest.mark.throttle
+async def test_update_backend(inmemory_backend: InMemoryBackend) -> None:
+    throttle = HTTPThrottle(
+        uid="upd-backend",
+        rate="10/min",
+        backend=inmemory_backend,
+        identifier=default_client_identifier,
+    )
+    new_backend = InMemoryBackend(persistent=False)
+    await throttle.update_backend(new_backend)
+    assert throttle.backend is new_backend

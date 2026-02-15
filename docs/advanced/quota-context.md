@@ -1,6 +1,6 @@
 # Quota Context (Deferred Throttling)
 
-This is one of Traffik's most powerful features, and also the one most people don't need on day one. But when you do need it, you'll be very glad it exists.
+This is one of Traffik's useful features, and also the one most people don't need on day one. But when you do need it, you'll be very glad it exists.
 
 ---
 
@@ -23,6 +23,9 @@ Or the reverse:
 
 !!! warning "This is an advanced feature"
     Quota Context adds real complexity. For most use cases, standard `Depends(throttle)` is simpler and should be preferred. Use Quota Context when you have specific conditional consumption requirements.
+
+!!! warning "QuotaContext is NOT atomic"
+    QuotaContext consumption does **not** guarantee "all or nothing" like an ACID transaction. It prevents optimistic over-consumption (quota is not deducted until `apply()` is called), but if a context partially succeeds before failing during `apply()` — for example, if entry 3 of 5 fails — the quota already consumed by entries 1 and 2 is **not rolled back**. The cost of wasted quota falls on the API, not the client. Design your quota contexts accordingly: keep them small, and use `apply_on_error=False` (the default) to avoid charging clients for server-side failures.
 
 ---
 

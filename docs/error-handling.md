@@ -24,7 +24,7 @@ async def my_handler(
     return 0
 ```
 
-### ThrottleExceptionInfo Fields
+### `ThrottleExceptionInfo` Fields
 
 | Field | Type | Description |
 |---|---|---|
@@ -59,7 +59,7 @@ throttle = HTTPThrottle("api", rate="100/min", on_error="raise")
 
 ---
 
-## backend_fallback — Automatic Failover
+## `backend_fallback` — Automatic Failover
 
 Switch to a backup backend when the primary fails:
 
@@ -97,7 +97,7 @@ throttle = HTTPThrottle(
 
 ---
 
-## retry — Retry Transient Failures
+## `retry` — Retry Transient Failures
 
 Retry the throttle operation with backoff before giving up:
 
@@ -127,7 +127,7 @@ throttle = HTTPThrottle(
 
 ---
 
-## failover — Full Circuit Breaker + Retry + Fallback
+## `failover` — Full Circuit Breaker + Retry + Fallback
 
 The recommended pattern for production. Combines all resilience techniques:
 
@@ -176,7 +176,7 @@ throttle = HTTPThrottle(
 
 ---
 
-## CircuitBreaker Reference
+## `CircuitBreaker` Reference
 
 ```python
 from traffik.error_handlers import CircuitBreaker
@@ -282,3 +282,51 @@ write_throttle = HTTPThrottle(
 ```
 
 Throttle-level `on_error` always takes precedence over backend-level `on_error`.
+
+---
+
+## `ConnectionThrottled`
+
+When a client exceeds the rate limit, Traffik raises `ConnectionThrottled`. This is a subclass of Starlette's `HTTPException`, which means FastAPI and Starlette handle it automatically — no custom handler registration is needed for basic behavior. The client receives a `429 Too Many Requests` response without any extra setup on your part.
+
+```python
+from traffik.exceptions import ConnectionThrottled
+```
+
+### Custom handler for richer responses
+
+If you want to return a richer response — for example, including `Retry-After` information in the response body or a custom JSON structure — register a custom exception handler:
+
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from traffik.exceptions import ConnectionThrottled
+
+app = FastAPI()
+
+async def throttle_handler(request: Request, exc: ConnectionThrottled) -> JSONResponse:
+    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "rate_limit_exceeded",
+            "detail": exc.detail,
+            "retry_after": retry_after,
+        },
+        headers=exc.headers or {},
+    )
+
+app.add_exception_handler(ConnectionThrottled, throttle_handler)
+```
+
+### Why prefer `ConnectionThrottled` over plain `HTTPException`?
+
+When writing throttle-related code — custom handlers, middleware, or decorators — use `ConnectionThrottled` rather than a plain `HTTPException(status_code=429)`. It carries the same automatic handling, but conveys clearer semantics: this is a rate-limit error specifically, not just any 429. It also makes your exception handlers easier to scope precisely.
+
+```python
+# Prefer this in throttle-related code:
+raise ConnectionThrottled(detail="Too many requests. Please slow down.")
+
+# Rather than the generic form:
+# raise HTTPException(status_code=429, detail="Too many requests.")
+```

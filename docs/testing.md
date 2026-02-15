@@ -258,3 +258,19 @@ The `test-fast` command skips Redis and Memcached tests by setting `SKIP_REDIS_T
 
 !!! tip "CI strategy"
     For your CI pipeline, run `test-fast` on every PR (fast, catches logic bugs) and `test` on merge to main (comprehensive, catches distributed coordination issues). The full test suite including Redis and Memcached is where race condition correctness tests run.
+
+!!! tip "Makefile shortcuts"
+    If your project has a `Makefile`, check for a `make test` target or similar — it may wrap the Docker test commands above into a single convenient call. You can also add your own Makefile targets for frequently used test commands:
+
+    ```makefile
+    test:
+        ./docker-test.sh test
+
+    test-fast:
+        ./docker-test.sh test-fast
+
+    test-ci:
+        ./docker-test.sh test-matrix
+    ```
+
+    Running `make test-fast` during local development keeps the feedback loop tight without needing to remember the full shell command.

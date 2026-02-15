@@ -32,22 +32,23 @@ async def my_identifier(request: Request):
 ```
 
 !!! tip "Zero overhead"
-    When `EXEMPTED` is returned, Traffik exits immediately. No cost function runs,
-    no backend call is made, no lock is acquired. It's the most efficient way to
-    bypass throttling — cheaper even than `cost=0`, which still invokes the identifier.
+    When `EXEMPTED` is returned, Traffik exits immediately. No backend call is made,
+    no lock is acquired. It's an extremely efficient way to bypass throttling. Note
+    that `cost=0` is actually checked *before* the identifier, so a zero-cost request
+    never even reaches the identifier stage — but `EXEMPTED` skips everything that
+    follows the identifier, including the backend lookup.
 
 ---
 
 ## How It Works
 
-Traffik's `hit(...)` method checks the identifier's return value before doing
-anything else meaningful:
+Traffik's `hit(...)` method evaluates exemptions in a specific order:
 
-1. Resolve the identifier (your function is called).
-2. If the result is `EXEMPTED` — stop. Return the connection untouched.
-3. Otherwise, proceed with cost calculation, backend lookup, and counter increment.
+1. **Cost check** — if `cost=0` is resolved (e.g., via a dynamic cost function returning `0`), the hit is a no-op: no backend call, no counter increment. The connection passes through.
+2. **Identifier check** — the identifier function is called. If the result is `EXEMPTED` — stop. Return the connection untouched.
+3. Otherwise, proceed with backend lookup and counter increment.
 
-Step 2 is the key: the entire downstream machinery simply never runs.
+Step 2 is the key short-circuit: the entire downstream machinery simply never runs when `EXEMPTED` is returned. Note that `cost=0` is checked first (step 1) — this means a zero-cost hit never even reaches the identifier stage.
 
 ---
 
@@ -175,6 +176,60 @@ api_throttle = HTTPThrottle(
     identifier=smart_identifier,
 )
 ```
+
+---
+
+## Alternative Exemption Mechanisms
+
+`EXEMPTED` is the cleanest way to skip throttling for a specific client, but it's
+not the only tool in the box. Two lighter-weight alternatives are worth knowing:
+
+### `cost=0` — Silent Pass-Through
+
+Setting `cost=0` on a throttle call (or returning `0` from a dynamic cost function)
+causes Traffik to skip the entire backend operation for that hit — no counter is
+incremented, no lock is acquired. The check happens *before* the identifier is even
+called, making it the cheapest possible path through the throttle:
+
+```python
+from traffik import HTTPThrottle
+
+async def dynamic_cost(connection, context=None) -> int:
+    # Internal health check probes carry no cost
+    if connection.headers.get("x-internal-probe") == "1":
+        return 0
+    return 1
+
+throttle = HTTPThrottle(uid="api:main", rate="100/min", cost=dynamic_cost)
+```
+
+This is more efficient than `EXEMPTED` for cases where you don't need to identify
+the client at all — the cost check short-circuits before the identifier runs.
+
+### Very Low `rate` — Soft Throttle / Soft Allow
+
+Setting a very high limit (e.g. `rate="1000000/min"`) effectively gives a client
+unlimited capacity without fully exempting them. They still go through the full
+throttle pipeline and still consume quota — just at a rate that will never realistically
+be hit. This is useful when you want throttle telemetry (statistics, headers) for a
+client but don't want to restrict them:
+
+```python
+from traffik import HTTPThrottle, Rate
+
+async def effective_rate(connection, context=None) -> Rate:
+    user = getattr(connection.state, "user", None)
+    if user and user.tier == "enterprise":
+        return Rate.parse("1000000/min")  # Effectively unlimited, but tracked
+    return Rate.parse("100/min")
+
+throttle = HTTPThrottle(uid="api:tiered", rate=effective_rate)
+```
+
+!!! tip "Which to reach for?"
+    - Use `EXEMPTED` when a client should produce zero backend activity — health checks, internal services, admin tokens.
+    - Use `cost=0` when you want to suppress quota consumption based on request content (headers, payload type) rather than client identity.
+    - Use a very high `rate` when you want the client tracked in telemetry but never blocked.
 
 ---
 

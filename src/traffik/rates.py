@@ -91,7 +91,9 @@ class Rate:
     def __repr__(self) -> str:
         if self.unlimited:
             return f"{self.__class__.__name__}(unlimited)"
-        return f"{self.__class__.__name__}(limit={self.limit}req, expire={self.expire}ms)"
+        return (
+            f"{self.__class__.__name__}(limit={self.limit}req expire={self.expire}ms)"
+        )
 
     @classmethod
     def parse(cls, rate: str) -> "Rate":

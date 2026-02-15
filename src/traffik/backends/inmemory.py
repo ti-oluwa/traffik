@@ -294,6 +294,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         value, expires_at = entry
         # Check if expired
         if expires_at is not None and expires_at < time():
+            async with lock:
+                del store[key]
             return None
         return value
 

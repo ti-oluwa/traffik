@@ -42,7 +42,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/ti-oluwa/traffik"
-Documentation = "https://github.com/ti-oluwa/traffik#readme"
+Documentation = "https://ti-oluwa.github.io/traffik/"
 Repository = "https://github.com/ti-oluwa/traffik.git"
 "Bug Tracker" = "https://github.com/ti-oluwa/traffik/issues"
 Changelog = "https://github.com/ti-oluwa/traffik/blob/main/CHANGELOG.md"
@@ -76,6 +76,12 @@ benchmark = [
     "line-profiler>=5.0.0",
     "pymemcache>=4.0.0",
 ]
+docs = [
+    "mkdocs-material>=9.5.0",
+    "mkdocs-minify-plugin>=0.8.0",
+    "pymdown-extensions>=10.0.0",
+    "traffik",
+]
 redis = ["pottery>=3.0.1", "redis>=5.0.0"]
 memcached = [
     "aiomcache>=0.8.2",
@@ -90,6 +96,9 @@ name = "testpypi"
 url = "https://test.pypi.org/simple/"
 publish-url = "https://test.pypi.org/legacy/"
 explicit = true
+
+[tool.uv.sources]
+traffik = { workspace = true }
 
 [tool.pytest.ini_options]
 addopts = []

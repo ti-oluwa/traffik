@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Traffic light pole -->
+  <rect x="44" y="70" width="12" height="25" rx="3" fill="#555"/>
+  <!-- Traffic light housing -->
+  <rect x="28" y="8" width="44" height="65" rx="8" fill="#333"/>
+  <!-- Red light -->
+  <circle cx="50" cy="24" r="12" fill="#FF4444" opacity="0.95"/>
+  <!-- Amber light -->
+  <circle cx="50" cy="47" r="12" fill="#FF9800" opacity="0.95"/>
+  <!-- Green light -->
+  <circle cx="50" cy="70" r="12" fill="#66BB6A" opacity="0.3"/>
+  <!-- Glow on amber (active) -->
+  <circle cx="50" cy="47" r="10" fill="#FFB74D" opacity="0.5"/>
+</svg>

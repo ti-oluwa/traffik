@@ -218,6 +218,46 @@ _SortThrottles = typing.Union[
 ]
 
 
+def _cheap_first(
+    throttle: typing.Union[
+        MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]
+    ],
+) -> typing.Any:
+    if isinstance(throttle, MiddlewareThrottle):
+        if throttle.cost is not None:
+            cost = throttle.cost
+        else:
+            wrapped_throttle = throttle.throttle
+            cost = (
+                wrapped_throttle.cost  # type: ignore[assignment]
+                if not wrapped_throttle._uses_cost_func
+                else float("inf")
+            )
+        return (cost, throttle.rule.predicate is not None)
+
+    return throttle.cost if not throttle._uses_cost_func else float("inf")
+
+
+def _cheap_last(
+    throttle: typing.Union[
+        MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]
+    ],
+) -> typing.Any:
+    if isinstance(throttle, MiddlewareThrottle):
+        if throttle.cost is not None:
+            cost = throttle.cost
+        else:
+            wrapped_throttle = throttle.throttle
+            cost = (
+                wrapped_throttle.cost  # type: ignore[assignment]
+                if not wrapped_throttle._uses_cost_func
+                else float("inf")
+            )
+        return (-cost, throttle.rule.predicate is not None)  # type: ignore
+
+    return -throttle.cost if not throttle._uses_cost_func else -float("inf")  # type: ignore
+
+
 def _prep_throttles(
     middleware_throttles: typing.Sequence[
         typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]
@@ -251,22 +291,12 @@ def _prep_throttles(
     if sort == "cheap_first":
         sorted_throttles = sorted(
             middleware_throttles,
-            key=lambda t: (
-                t.cost if t.cost is not None else float("inf"),
-                t.rule.predicate is not None,
-            )
-            if isinstance(t, MiddlewareThrottle)
-            else False,
+            key=_cheap_first,
         )
     elif sort == "cheap_last":
         sorted_throttles = sorted(
             middleware_throttles,
-            key=lambda t: (
-                -(t.cost if t.cost is not None else float("inf")),
-                t.rule.predicate is not None,
-            )
-            if isinstance(t, MiddlewareThrottle)
-            else False,
+            key=_cheap_last,
         )
     elif sort in (False, None):
         sorted_throttles = middleware_throttles

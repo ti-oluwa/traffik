@@ -8,6 +8,7 @@ from starlette.requests import HTTPConnection
 
 from tests.conftest import BackendGen
 from tests.utils import default_client_identifier
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
 
@@ -30,7 +31,10 @@ async def test_multi_service_shared_backend(backends: BackendGen) -> None:
 
             # Service A
             app_a = FastAPI()
-            throttle_a = HTTPThrottle(**shared_throttle_config)
+            throttle_a = HTTPThrottle(
+                **shared_throttle_config,
+                registry=ThrottleRegistry(),
+            )
 
             @app_a.get("/api/shared", dependencies=[Depends(throttle_a)])
             async def service_a_endpoint() -> typing.Dict[str, str]:
@@ -38,7 +42,10 @@ async def test_multi_service_shared_backend(backends: BackendGen) -> None:
 
             # Service B
             app_b = FastAPI()
-            throttle_b = HTTPThrottle(**shared_throttle_config)
+            throttle_b = HTTPThrottle(
+                **shared_throttle_config,
+                registry=ThrottleRegistry(),
+            )
 
             @app_b.get("/api/shared", dependencies=[Depends(throttle_b)])
             async def service_b_endpoint() -> typing.Dict[str, str]:
@@ -94,7 +101,10 @@ async def test_multi_service_path_isolation(backends: BackendGen) -> None:
 
             # Service A
             app_a = FastAPI()
-            throttle_a = HTTPThrottle(**shared_uid_config)
+            throttle_a = HTTPThrottle(
+                **shared_uid_config,
+                registry=ThrottleRegistry(),
+            )
 
             @app_a.get("/service-a/data", dependencies=[Depends(throttle_a)])
             async def service_a_endpoint() -> typing.Dict[str, str]:
@@ -102,7 +112,10 @@ async def test_multi_service_path_isolation(backends: BackendGen) -> None:
 
             # Service B
             app_b = FastAPI()
-            throttle_b = HTTPThrottle(**shared_uid_config)
+            throttle_b = HTTPThrottle(
+                **shared_uid_config,
+                registry=ThrottleRegistry(),
+            )
 
             @app_b.get("/service-b/data", dependencies=[Depends(throttle_b)])
             async def service_b_endpoint() -> typing.Dict[str, str]:
@@ -169,6 +182,7 @@ async def test_microservices_pattern(backends: BackendGen) -> None:
                 uid="tenant_api_operations",
                 rate="3/min",
                 identifier=tenant_identifier,
+                registry=ThrottleRegistry(),
             )
 
             @app_user.get("/api/operations", dependencies=[Depends(user_throttle)])
@@ -181,6 +195,7 @@ async def test_microservices_pattern(backends: BackendGen) -> None:
                 uid="tenant_api_operations",  # Same UID
                 rate="3/min",
                 identifier=tenant_identifier,
+                registry=ThrottleRegistry(),
             )
 
             @app_order.get("/api/operations", dependencies=[Depends(order_throttle)])
@@ -262,12 +277,14 @@ async def test_multi_service_endpoint_isolation(backends: BackendGen) -> None:
                 uid=shared_uid,
                 rate="2/min",
                 identifier=default_client_identifier,
+                registry=ThrottleRegistry(),
             )
             write_throttle = HTTPThrottle(
                 uid=shared_uid,  # Same UID
                 # Different limit to test isolation
                 rate="1/min",
                 identifier=default_client_identifier,
+                registry=ThrottleRegistry(),
             )
 
             @app.get("/api/read", dependencies=[Depends(read_throttle)])
@@ -325,6 +342,7 @@ async def test_multi_service_namespace_isolation(backends: BackendGen) -> None:
                 rate="2/s",
                 identifier=default_client_identifier,
                 backend=backend_a,
+                registry=ThrottleRegistry(),
             )
 
             @app_a.get("/data", dependencies=[Depends(throttle_a)])
@@ -338,6 +356,7 @@ async def test_multi_service_namespace_isolation(backends: BackendGen) -> None:
                 rate="2/s",
                 identifier=default_client_identifier,
                 backend=backend_b,
+                registry=ThrottleRegistry(),
             )
 
             @app_b.get("/data", dependencies=[Depends(throttle_b)])
@@ -398,7 +417,10 @@ async def test_multi_service_concurrency(backends: BackendGen) -> None:
 
             # Service A
             app_a = FastAPI()
-            throttle_a = HTTPThrottle(**shared_config)
+            throttle_a = HTTPThrottle(
+                **shared_config,
+                registry=ThrottleRegistry(),
+            )
 
             @app_a.get("/endpoint", dependencies=[Depends(throttle_a)])
             async def service_a_endpoint() -> typing.Dict[str, str]:
@@ -406,7 +428,10 @@ async def test_multi_service_concurrency(backends: BackendGen) -> None:
 
             # Service B
             app_b = FastAPI()
-            throttle_b = HTTPThrottle(**shared_config)
+            throttle_b = HTTPThrottle(
+                **shared_config,
+                registry=ThrottleRegistry(),
+            )
 
             @app_b.get("/endpoint", dependencies=[Depends(throttle_b)])
             async def service_b_endpoint() -> typing.Dict[str, str]:
@@ -414,7 +439,10 @@ async def test_multi_service_concurrency(backends: BackendGen) -> None:
 
             # Service C
             app_c = FastAPI()
-            throttle_c = HTTPThrottle(**shared_config)
+            throttle_c = HTTPThrottle(
+                **shared_config,
+                registry=ThrottleRegistry(),
+            )
 
             @app_c.get("/endpoint", dependencies=[Depends(throttle_c)])
             async def service_c_endpoint() -> typing.Dict[str, str]:

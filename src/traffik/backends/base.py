@@ -14,6 +14,15 @@ from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
 from typing_extensions import Self
 
+from traffik._locks import _AsyncLockContext
+from traffik.config import (
+    ANONYMOUS_IDENTIFIER,
+    APP_CONTEXT_ATTR,
+    BACKEND_APP_CONTEXT_KEY,
+    get_lock_blocking,
+    get_lock_blocking_timeout,
+    get_lock_ttl,
+)
 from traffik.exceptions import BackendError, ConnectionThrottled
 from traffik.types import (
     AsyncLock,
@@ -26,16 +35,7 @@ from traffik.types import (
     ThrottleErrorHandler,
     WaitPeriod,
 )
-from traffik.utils import (
-    _AsyncLockContext,
-    get_lock_blocking,
-    get_lock_blocking_timeout,
-    get_lock_ttl,
-    get_remote_address,
-)
-
-ANONYMOUS_IDENTIFIER = "__anonymous__"
-"""Default identifier for anonymous connections."""
+from traffik.utils import get_remote_address
 
 
 async def default_identifier(connection: HTTPConnection) -> typing.Any:
@@ -79,9 +79,6 @@ _backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVar(
 )
 """Throttle backend contextvar. Private variable !!!Do not use directly!!!"""
 
-BACKEND_APP_CONTEXT_KEY = "__traffik_throttle_backend__"
-APP_CONTEXT_ATTR = "state"
-
 
 def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
     """Builds a key using the provided parameters."""
@@ -93,11 +90,11 @@ def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
     return hashlib.md5(":".join(key_parts).encode()).hexdigest()  # nosec
 
 
-def _raises_error(
+def _reraise_as_backend_error(
     func: typing.Callable[P, R],
     target_exc_type: typing.Type[BaseException] = BaseException,
 ) -> typing.Callable[P, R]:
-    """Decorator"""
+    """Decorator to wrap functions to raise target execption types as `BackendError`"""
     if getattr(func, "_error_wrapped_", None):
         # Already wrapped
         return func
@@ -203,7 +200,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
                 setattr(
                     cls,
                     method_name,
-                    _raises_error(
+                    _reraise_as_backend_error(
                         func=method,
                         target_exc_type=cls.base_exception_type,
                     ),
@@ -666,11 +663,3 @@ def get_throttle_backend(
     ):
         backend = getattr(app_ctx, BACKEND_APP_CONTEXT_KEY, None)
     return backend
-
-
-__all__ = [
-    "ThrottleBackend",
-    "default_identifier",
-    "connection_throttled",
-    "get_throttle_backend",
-]

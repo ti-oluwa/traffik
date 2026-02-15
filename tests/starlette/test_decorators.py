@@ -11,6 +11,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle, throttled
 
 
@@ -20,9 +21,10 @@ async def test_throttled_single_throttle(inmemory_backend: InMemoryBackend) -> N
     """Test `@throttled` with a single throttle on an async route."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-decorator-single",
+            "test-decorator-single-sl",
             rate="3/s",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @throttled(throttle)
@@ -54,14 +56,16 @@ async def test_throttled_multiple_throttles(
     """Test `@throttled` with multiple throttles applied sequentially."""
     async with inmemory_backend(close_on_exit=True):
         burst_throttle = HTTPThrottle(
-            "test-decorator-burst",
+            "test-decorator-burst-sl",
             rate="2/s",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
         sustained_throttle = HTTPThrottle(
-            "test-decorator-sustained",
+            "test-decorator-sustained-sl",
             rate="10/s",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @throttled(burst_throttle, sustained_throttle)
@@ -92,9 +96,10 @@ async def test_throttled_with_route_parameter(
     """Test throttled(throttle, route=func) direct form."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-decorator-route-param",
+            "test-decorator-route-param-sl",
             rate="2/s",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         async def endpoint(request: Request) -> JSONResponse:
@@ -124,9 +129,10 @@ async def test_throttled_no_connection_raises(
     """Test that throttled raises ValueError when no HTTPConnection in params."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-decorator-no-conn",
+            "test-decorator-no-conn-sl",
             rate="5/s",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @throttled(throttle)
@@ -152,9 +158,10 @@ async def test_throttled_preserves_function_metadata(
     """Test that @throttled preserves the wrapped function's metadata."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-decorator-meta",
+            "test-decorator-meta-sl",
             rate="5/s",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @throttled(throttle)
@@ -174,9 +181,10 @@ async def test_throttled_connection_in_kwargs(
     """Test that throttled finds HTTPConnection in kwargs."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-decorator-kwargs",
+            "test-decorator-kwargs-sl",
             rate="2/s",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @throttled(throttle)
@@ -207,9 +215,10 @@ async def test_throttled_different_routes(
     """Test that throttled works correctly on different routes with same throttle."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-decorator-routes",
+            "test-decorator-routes-sl",
             rate="3/s",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @throttled(throttle)
@@ -251,9 +260,10 @@ async def test_throttled_retry_after_header(
     """Test that throttled responses include Retry-After header."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-decorator-retry",
+            "test-decorator-retry-sl",
             rate="1/s",
             identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
         )
 
         @throttled(throttle)
@@ -280,9 +290,10 @@ def test_throttled_websocket_single_throttle(
 ) -> None:
     """Test `@throttled` with a WebSocketThrottle on a WebSocket route."""
     throttle = WebSocketThrottle(
-        "test-ws-decorator",
+        "test-ws-decorator-sl",
         rate="2/5s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     @throttled(throttle)
@@ -313,14 +324,16 @@ def test_throttled_websocket_multiple_throttles(
 ) -> None:
     """Test `@throttled` with multiple `WebSocketThrottles` applied sequentially."""
     burst = WebSocketThrottle(
-        "test-ws-burst",
+        "test-ws-burst-sl",
         rate="2/5s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
     sustained = WebSocketThrottle(
-        "test-ws-sustained",
+        "test-ws-sustained-sl",
         rate="5/60s",
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     @throttled(burst, sustained)

@@ -9,6 +9,7 @@ from starlette.routing import Route
 
 from tests.conftest import BackendGen
 from tests.utils import default_client_identifier
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
 
@@ -29,7 +30,10 @@ async def test_multi_service_shared_backend(backends: BackendGen) -> None:
             }
 
             # Service A
-            throttle_a = HTTPThrottle(**shared_throttle_config)
+            throttle_a = HTTPThrottle(
+                **shared_throttle_config,
+                registry=ThrottleRegistry(),
+            )
 
             async def service_a_endpoint(request):
                 await throttle_a(request)
@@ -39,7 +43,10 @@ async def test_multi_service_shared_backend(backends: BackendGen) -> None:
             app_a = Starlette(routes=routes_a)
 
             # Service B
-            throttle_b = HTTPThrottle(**shared_throttle_config)
+            throttle_b = HTTPThrottle(
+                **shared_throttle_config,
+                registry=ThrottleRegistry(),
+            )
 
             async def service_b_endpoint(request):
                 await throttle_b(request)
@@ -96,7 +103,10 @@ async def test_multi_service_path_isolation(backends: BackendGen) -> None:
             }
 
             # Service A
-            throttle_a = HTTPThrottle(**shared_uid_config)
+            throttle_a = HTTPThrottle(
+                **shared_uid_config,
+                registry=ThrottleRegistry(),
+            )
 
             async def service_a_endpoint(request):
                 await throttle_a(request)
@@ -106,7 +116,10 @@ async def test_multi_service_path_isolation(backends: BackendGen) -> None:
             app_a = Starlette(routes=routes_a)
 
             # Service B
-            throttle_b = HTTPThrottle(**shared_uid_config)
+            throttle_b = HTTPThrottle(
+                **shared_uid_config,
+                registry=ThrottleRegistry(),
+            )
 
             async def service_b_endpoint(request):
                 await throttle_b(request)
@@ -174,6 +187,7 @@ async def test_microservices_pattern(backends: BackendGen) -> None:
                 uid="tenant_api_operations",
                 rate="3/min",
                 identifier=tenant_identifier,
+                registry=ThrottleRegistry(),
             )
 
             async def get_user_operations(request):
@@ -190,6 +204,7 @@ async def test_microservices_pattern(backends: BackendGen) -> None:
                 uid="tenant_api_operations",  # Same UID
                 rate="3/min",
                 identifier=tenant_identifier,
+                registry=ThrottleRegistry(),
             )
 
             async def get_order_operations(request):
@@ -273,12 +288,14 @@ async def test_multi_service_endpoint_isolation(backends: BackendGen) -> None:
                 uid=shared_uid,
                 rate="2/1050ms",
                 identifier=default_client_identifier,  # type: ignore
+                registry=ThrottleRegistry(),
             )
             write_throttle = HTTPThrottle(
                 uid=shared_uid,  # Same UID
                 # Different limit to test isolation
                 rate="1/1050ms",
                 identifier=default_client_identifier,  # type: ignore
+                registry=ThrottleRegistry(),
             )
 
             async def read_endpoint(request):
@@ -336,6 +353,7 @@ async def test_multi_service_namespace_isolation(backends: BackendGen) -> None:
                 rate="2/s",
                 identifier=default_client_identifier,
                 backend=backend_a,
+                registry=ThrottleRegistry(),
             )
 
             async def service_a_data(request):
@@ -351,6 +369,7 @@ async def test_multi_service_namespace_isolation(backends: BackendGen) -> None:
                 rate="2/s",
                 identifier=default_client_identifier,
                 backend=backend_b,
+                registry=ThrottleRegistry(),
             )
 
             async def service_b_data(request):
@@ -408,7 +427,10 @@ async def test_multi_service_concurrency(backends: BackendGen) -> None:
             }
 
             # Service A
-            throttle_a = HTTPThrottle(**shared_config)
+            throttle_a = HTTPThrottle(
+                **shared_config,
+                registry=ThrottleRegistry(),
+            )
 
             async def service_a_endpoint(request):
                 await throttle_a(request)
@@ -418,7 +440,10 @@ async def test_multi_service_concurrency(backends: BackendGen) -> None:
             app_a = Starlette(routes=routes_a)
 
             # Service B
-            throttle_b = HTTPThrottle(**shared_config)
+            throttle_b = HTTPThrottle(
+                **shared_config,
+                registry=ThrottleRegistry(),
+            )
 
             async def service_b_endpoint(request):
                 await throttle_b(request)
@@ -428,7 +453,10 @@ async def test_multi_service_concurrency(backends: BackendGen) -> None:
             app_b = Starlette(routes=routes_b)
 
             # Service C
-            throttle_c = HTTPThrottle(**shared_config)
+            throttle_c = HTTPThrottle(
+                **shared_config,
+                registry=ThrottleRegistry(),
+            )
 
             async def service_c_endpoint(request):
                 await throttle_c(request)

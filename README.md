@@ -79,21 +79,31 @@ pip install "traffik[dev]"
 
 Let's get you up and running in under a minute. The examples below show just how little code you need to add rate limiting to your application.
 
-### Minimal Example (5 lines)
+### Minimal Example
 
 ```python
-from fastapi import FastAPI, Depends
-from traffik import HTTPThrottle
+from fastapi import FastAPI, Depends, APIRouter, Request
+from traffik import HTTPThrottle, Rate
 from traffik.backends.inmemory import InMemoryBackend
 
-backend = InMemoryBackend(namespace="api")
+backend = InMemoryBackend(namespace="myapp")
 app = FastAPI(lifespan=backend.lifespan)
 
-throttle = HTTPThrottle(uid="basic", rate="100/minute", backend=backend)
+async def rate_func(request: Request, context: typing.Optional[typing.Mapping[str, typing.Any]]) -> Rate:
+    if connection.scope["method"] == "GET":
+        return Rate.parse("500/min")
+    return Rate.parse("300/min")
 
-@app.get("/", dependencies=[Depends(throttle)])
-async def root():
+global_throttle = HTTPThrottle("api:v1", rate=rate_func)
+router = APIRouter(prefix="/api/v1", dependencies=[global_throttle])
+
+throttle = HTTPThrottle("api:get", rate="100/min")
+
+@router.get("/", dependencies=[Depends(throttle)])
+async def get_something():
     return {"message": "ok"}
+
+app.include_router(router)
 ```
 
 **What this does:**
@@ -115,7 +125,7 @@ from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 from traffik import HTTPThrottle
 from traffik.backends.redis import RedisBackend
-from traffik.strategies import SlidingWindowCounterStrategy
+from traffik.strategies import SlidingWindowCounter
 from traffik.error_handlers import failover, CircuitBreaker
 from traffik.backends.inmemory import InMemoryBackend
 
@@ -143,12 +153,12 @@ async def lifespan(app: FastAPI):
         yield
         await fallback_backend.close()
 
-app = FastAPI(lifespan=lifespan)
 
+app = FastAPI(lifespan=lifespan)
 api_throttle = HTTPThrottle(
-    uid="api",
+    "api",
     rate="1000/hour",
-    strategy=SlidingWindowCounterStrategy(),
+    strategy=SlidingWindowCounter(),
     backend=backend,
     on_error=failover(
         backend=fallback_backend,
@@ -169,7 +179,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends
 from traffik import WebSocketThrottle, is_throttled
 from traffik.backends.redis import RedisBackend
-from traffik.strategies import SlidingWindowCounterStrategy
+from traffik.strategies import SlidingWindowCounter
 from traffik.error_handlers import failover, CircuitBreaker
 from traffik.backends.inmemory import InMemoryBackend
 
@@ -197,12 +207,12 @@ async def lifespan(app: FastAPI):
         yield
         await fallback_backend.close()
 
-app = FastAPI(lifespan=lifespan)
 
+app = FastAPI(lifespan=lifespan)
 ws_throttle = WebSocketThrottle(
-    uid="ws",
+    "ws",
     rate="1000/hour",
-    strategy=SlidingWindowCounterStrategy(),
+    strategy=SlidingWindowCounter(),
     backend=backend,
     on_error=failover(
         backend=fallback_backend,
@@ -255,10 +265,10 @@ Trafik offers flexible ways to define your rate limits. Whether you prefer terse
 from traffik import HTTPThrottle, Rate
 
 # String format (recommended)
-HTTPThrottle(uid="api", rate="100/minute")
-HTTPThrottle(uid="api", rate="5/10seconds")
-HTTPThrottle(uid="api", rate="1000/500ms")
-HTTPThrottle(uid="api", rate="20 per 2 mins")
+HTTPThrottle("api", rate="100/minute")
+HTTPThrottle("api", rate="5/10seconds")
+HTTPThrottle("api", rate="1000/500ms")
+HTTPThrottle("api", rate="20 per 2 mins")
 
 # Supported units
 # ms, millisecond(s)
@@ -269,10 +279,10 @@ HTTPThrottle(uid="api", rate="20 per 2 mins")
 
 # Rate object for complex periods
 rate = Rate(limit=100, minutes=5, seconds=30)  # 100 per 5.5 minutes
-HTTPThrottle(uid="api", rate=rate)
+HTTPThrottle("api", rate=rate)
 
 # Unlimited
-HTTPThrottle(uid="api", rate="0/0")  # No limits
+HTTPThrottle("api", rate="0/0")  # No limits
 ```
 
 ### Backends
@@ -334,11 +344,9 @@ backend = RedisBackend(
 import redis.asyncio as redis
 
 async def get_redis():
-    return await redis.from_url("redis://localhost:6379/0")
+    return await redis.from_url("redis://localhost:6379/0", decode_responses=True)
 
-backend = RedisBackend(
-    connection=get_redis, namespace="app"
-)
+backend = RedisBackend(connection=get_redis, namespace="app")
 ```
 
 **Lock Types:**
@@ -376,9 +384,9 @@ backend = MemcachedBackend(
 
 **Characteristics:**
 
-- Best-effort distributed locks
+- Best-effort distributed locks.
 - No native persistence/non-persistence guarantees. Use `track_keys=True` for better cleanup (at the cost of some latency).
-- Good for high-throughput scenarios
+- Good for high-throughput scenarios.
 
 **Important:** Memcached has no `KEYS` command. The `clear()` method is a no-op unless `track_keys=True` is enabled but this adds overhead.
 
@@ -396,17 +404,15 @@ Not all rate limiting algorithms are created equal. Each strategy makes differen
 
 Traffik also provides some advanced strategies like GCRA, Adaptive, Tiered, Priority Queue, etc., for specialized use cases. Check `traffik.strategies.custom` to access them.
 
-> All strategies have short aliases without the `Strategy` suffix for convenience — e.g., `FixedWindow`, `TokenBucket`, `SlidingWindowLog`, `GCRA`. Both forms are interchangeable.
-
 #### Fixed Window (Default)
 
 ```python
 from traffik.strategies import FixedWindow  # or FixedWindowStrategy
 
 HTTPThrottle(
-    uid="api",
+    "api",
     rate="100/minute",
-    strategy=FixedWindow()
+    strategy=FixedWindow(),
 )
 ```
 
@@ -424,12 +430,12 @@ HTTPThrottle(
 #### Sliding Window Counter
 
 ```python
-from traffik.strategies import SlidingWindowCounterStrategy
+from traffik.strategies import SlidingWindowCounter
 
 HTTPThrottle(
-    uid="api",
+    "api",
     rate="100/minute",
-    strategy=SlidingWindowCounterStrategy()
+    strategy=SlidingWindowCounter(),
 )
 ```
 
@@ -447,12 +453,12 @@ HTTPThrottle(
 #### Sliding Window Log
 
 ```python
-from traffik.strategies import SlidingWindowLogStrategy
+from traffik.strategies import SlidingWindowLog
 
 HTTPThrottle(
-    uid="payment",
+    "payment",
     rate="10/minute",
-    strategy=SlidingWindowLogStrategy()
+    strategy=SlidingWindowLog(),
 )
 ```
 
@@ -470,12 +476,12 @@ HTTPThrottle(
 #### Token Bucket
 
 ```python
-from traffik.strategies import TokenBucketStrategy
+from traffik.strategies import TokenBucket
 
 HTTPThrottle(
-    uid="api",
+    "api",
     rate="100/minute",
-    strategy=TokenBucketStrategy(burst_size=150)
+    strategy=TokenBucket(burst_size=150)
 )
 ```
 
@@ -493,15 +499,12 @@ HTTPThrottle(
 **With Debt:**
 
 ```python
-from traffik.strategies import TokenBucketWithDebtStrategy
+from traffik.strategies import TokenBucketWithDebt
 
 HTTPThrottle(
-    uid="api",
+    "api",
     rate="100/minute",
-    strategy=TokenBucketWithDebtStrategy(
-        burst_size=150,
-        max_debt=50  # Can go to -50 tokens
-    )
+    strategy=TokenBucketWithDebt(burst_size=150, max_debt=50)   # Can go to -50 tokens
 )
 ```
 
@@ -510,12 +513,12 @@ Allows temporary overdraft, good for variable traffic.
 #### Leaky Bucket
 
 ```python
-from traffik.strategies import LeakyBucketStrategy
+from traffik.strategies import LeakyBucket
 
 HTTPThrottle(
-    uid="external_api",
+    "external_api",
     rate="50/minute",
-    strategy=LeakyBucketStrategy()
+    strategy=LeakyBucket(),
 )
 ```
 
@@ -532,12 +535,12 @@ HTTPThrottle(
 **With Queue:**
 
 ```python
-from traffik.strategies import LeakyBucketWithQueueStrategy
+from traffik.strategies import LeakyBucketWithQueue
 
 HTTPThrottle(
-    uid="api",
+    "api",
     rate="50/minute",
-    strategy=LeakyBucketWithQueueStrategy()
+    strategy=LeakyBucketWithQueue(),
 )
 ```
 
@@ -546,12 +549,12 @@ Maintains FIFO queue of requests with strict ordering.
 #### GCRA (Generic Cell Rate Algorithm)
 
 ```python
-from traffik.strategies import GCRAStrategy
+from traffik.strategies import GCRA
 
 HTTPThrottle(
-    uid="telecom",
+    "telecom",
     rate="100/minute",
-    strategy=GCRAStrategy(burst_tolerance_ms=500)
+    strategy=GCRA(burst_tolerance_ms=500),
 )
 ```
 
@@ -577,10 +580,10 @@ HTTPThrottle(
 
 ```python
 # Perfectly smooth (no bursts)
-GCRAStrategy(burst_tolerance_ms=0)
+GCRA(burst_tolerance_ms=0)
 
 # Allow small bursts (500ms tolerance)
-GCRAStrategy(burst_tolerance_ms=500)
+GCRA(burst_tolerance_ms=500)
 ```
 
 ### Identifiers
@@ -589,11 +592,12 @@ Identifiers are how Traffik knows who's who. By default, rate limits are applied
 
 ```python
 from starlette.requests import HTTPConnection
-from traffik import EXEMPTED
+from traffik import EXEMPTED, ANONYMOUS
+
 
 # Default: IP-based
 async def default_identifier(connection: HTTPConnection) -> str:
-    return get_remote_address(connection) or "__anonymous__"
+    return get_remote_address(connection) or ANONYMOUS
 
 # User-based
 async def user_identifier(connection: HTTPConnection) -> str:
@@ -614,7 +618,7 @@ async def admin_exempt_identifier(connection: HTTPConnection) -> str:
 
 # Usage
 HTTPThrottle(
-    uid="api",
+    "api",
     rate="100/minute",
     identifier=user_identifier,
 )
@@ -633,20 +637,22 @@ from fastapi import FastAPI, Depends, Request
 from traffik import HTTPThrottle
 
 app = FastAPI()
-throttle = HTTPThrottle(uid="api", rate="100/minute")
+throttle = HTTPThrottle("api", rate="100/minute")
 
 # Single throttle
 @app.get("/data", dependencies=[Depends(throttle)])
 async def get_data():
     return {"data": "value"}
 
+
 # Multiple throttles
-burst = HTTPThrottle(uid="burst", rate="10/minute")
-sustained = HTTPThrottle(uid="sustained", rate="100/hour")
+burst = HTTPThrottle("burst", rate="10/minute")
+sustained = HTTPThrottle("sustained", rate="100/hour")
 
 @app.post("/upload", dependencies=[Depends(burst), Depends(sustained)])
 async def upload():
     return {"status": "ok"}
+
 
 # With request access
 @app.get("/dynamic")
@@ -657,18 +663,18 @@ async def dynamic(request: Request = Depends(throttle)):
 
 ### Decorators
 
-Some developers prefer seeing the rate limit configuration right at the endpoint definition. The `@throttled` decorator provides that clean, declarative syntax while doing the same thing as dependencies under the hood.
+Some developers prefer seeing the rate limit configuration right at the endpoint definition. The `@throttled(...)` decorator provides that clean, declarative syntax while doing the same thing as dependencies under the hood.
 
-Traffik provides two versions of `@throttled`:
+Traffik provides two versions of `@throttled(...)`:
 
 | Import | Framework | `Request` param required? |
 | ------ | --------- | ------------------------- |
-| `traffik.throttles.throttled` | Starlette / FastAPI | Yes |
-| `traffik.decorators.throttled` | FastAPI only | No |
+| `traffik.throttles.throttled(...)` | Starlette / FastAPI | Yes |
+| `traffik.decorators.throttled(...)` | FastAPI only | No |
 
 #### Starlette
 
-For Starlette apps (or FastAPI apps that prefer explicit request access), use `throttled` from `traffik.throttles`. The decorated route **must** have a `Request` (or `WebSocket`) parameter:
+For Starlette apps (or FastAPI apps that prefer explicit request access), use `throttled(...)` from `traffik.throttles`. The decorated route **must** have a `Request` (or `WebSocket`) parameter:
 
 ```python
 from starlette.applications import Starlette
@@ -678,14 +684,14 @@ from starlette.responses import JSONResponse
 from traffik import HTTPThrottle
 from traffik.throttles import throttled
 
-burst = HTTPThrottle(uid="burst", rate="10/minute")
-sustained = HTTPThrottle(uid="sustained", rate="100/hour")
+burst = HTTPThrottle("burst", rate="10/minute")
+sustained = HTTPThrottle("sustained", rate="100/hour")
 
 app = Starlette()
 
 # Single throttle
 @app.route("/limited")
-@throttled(HTTPThrottle(uid="limited", rate="5/minute"))
+@throttled(HTTPThrottle("limited", rate="5/minute"))
 async def limited(request: Request):
     return JSONResponse({"data": "limited"})
 
@@ -700,20 +706,21 @@ async def create_resource(request: Request):
 
 #### FastAPI
 
-For FastAPI, you can use the FastAPI-specific `throttled` from `traffik.decorators`. It hooks into FastAPI's dependency injection, so routes **don't** need an explicit `Request` parameter:
+For FastAPI, you can use the FastAPI-specific `throttled(...)` from `traffik.decorators`. It hooks into FastAPI's dependency injection, so routes **don't** need an explicit `Request` parameter:
 
 ```python
 import fastapi
 from traffik import HTTPThrottle
 from traffik.decorators import throttled
 
-burst = HTTPThrottle(uid="burst", rate="10/minute")
-sustained = HTTPThrottle(uid="sustained", rate="100/hour")
+burst = HTTPThrottle("burst", rate="10/minute")
+sustained = HTTPThrottle("sustained", rate="100/hour")
 
 router = fastapi.APIRouter()
 
+
 @router.get("/limited")
-@throttled(HTTPThrottle(uid="limited", rate="5/minute"))
+@throttled(HTTPThrottle("limited", rate="5/minute"))
 async def limited():
     return {"data": "limited"}
 
@@ -729,7 +736,7 @@ async def create_resource():
 
 > FastAPI can also use the Starlette version (`traffik.throttles.throttled`), but then a `Request` parameter must be present in the route signature.
 >
-> **Note:** When using multiple throttles with `@throttled()`, all limits are checked sequentially before the request proceeds. If any throttle is exceeded, the request is rejected immediately without checking the remaining throttles.
+> **Note:** When using multiple throttles with `@throttled(...)`, all limits are checked sequentially before the request proceeds. If any throttle is exceeded, the request is rejected immediately without checking the remaining throttles.
 
 ### Middleware
 
@@ -739,22 +746,19 @@ Traffik's middleware allows applying throttles globally or conditionally based o
 
 ```python
 import re
-
 from traffik.middleware import ThrottleMiddleware, MiddlewareThrottle
 
 # Basic
-api_throttle = HTTPThrottle(uid="api", rate="100/minute")
-
+api_throttle = HTTPThrottle("api", rate="100/minute")
 app.add_middleware(
     ThrottleMiddleware,
     middleware_throttles=[
         MiddlewareThrottle(api_throttle)
     ],
-    backend=backend,
 )
 
 # WebSocket throttling
-ws_throttle = WebSocketThrottle(uid="ws", rate="30/minute")
+ws_throttle = WebSocketThrottle("ws", rate="30/minute")
 
 app.add_middleware(
     ThrottleMiddleware,
@@ -766,8 +770,8 @@ app.add_middleware(
 )
 
 # Path-based
-admin_throttle = HTTPThrottle(uid="admin", rate="5/minute")
-public_throttle = HTTPThrottle(uid="public", rate="1000/minute")
+admin_throttle = HTTPThrottle("admin", rate="5/minute")
+public_throttle = HTTPThrottle("public", rate="1000/minute")
 
 app.add_middleware(
     ThrottleMiddleware,
@@ -784,24 +788,24 @@ app.add_middleware(
     middleware_throttles=[
         # String patterns (auto-compiled as regex)
         MiddlewareThrottle(
-            HTTPThrottle(uid="api_v1", rate="100/minute"),
+            HTTPThrottle("api:v1", rate="100/minute"),
             path="/api/v1/"  # Matches /api/v1/*
         ),
         # Explicit regex patterns
         MiddlewareThrottle(
-            HTTPThrottle(uid="user_endpoints", rate="50/minute"),
+            HTTPThrottle("api:users", rate="50/minute"),
             path=re.compile(r"/api/users/\d+")  # Matches /api/users/123, etc.
         ),
         MiddlewareThrottle(
-            HTTPThrottle(uid="file_downloads", rate="10/minute"),
+            HTTPThrottle("api:downloads", rate="10/minute"),
             path=re.compile(r"/files/.*\.(pdf|zip|tar\.gz)$")  # Specific file types
         ),
     ],
 )
 
 # Method-based: Apply based on HTTP method
-write_throttle = HTTPThrottle(uid="writes", rate="10/minute")
-read_throttle = HTTPThrottle(uid="reads", rate="1000/minute")
+write_throttle = HTTPThrottle("api:writes", rate="10/minute")
+read_throttle = HTTPThrottle("api:reads", rate="1000/minute")
 
 app.add_middleware(
     ThrottleMiddleware,
@@ -819,7 +823,7 @@ app.add_middleware(
     ThrottleMiddleware,
     middleware_throttles=[
         MiddlewareThrottle(
-            HTTPThrottle(uid="auth", rate="200/minute"),
+            HTTPThrottle("api:auth", rate="200/minute"),
             predicate=is_authenticated
         ),
     ],
@@ -830,7 +834,7 @@ app.add_middleware(
     ThrottleMiddleware,
     middleware_throttles=[
         MiddlewareThrottle(
-            throttle=HTTPThrottle(uid="complex", rate="25/minute"),
+            throttle=HTTPThrottle("api:complex", rate="25/minute"),
             path="/api/",
             methods={"POST"},
             predicate=is_authenticated,
@@ -880,7 +884,7 @@ from traffik import HTTPThrottle
 from traffik.middleware import MiddlewareThrottle
 
 write_throttle = MiddlewareThrottle(
-    HTTPThrottle(uid="writes", rate="10/minute"),
+    HTTPThrottle("writes", rate="10/minute"),
     methods={"POST", "PUT", "DELETE"},
 )
 
@@ -908,14 +912,13 @@ from starlette.requests import Request
 @app.get("/manual")
 async def manual_throttle(request: Request):
     # Check and record hit
-    await throttle(request)
+    await throttle.hit(request)
     
     # Manual cost
-    await throttle.hit(request, cost=5) # `__call__` calls `.hit(...)` behind the scenes.
+    await throttle.hit(request, cost=5)
     
     # With context
-    await throttle(request, context={"operation": "export"})
-    
+    await throttle(request, context={"operation": "export"})    # `__call__` calls `.hit(...)` behind the scenes.
     return {"status": "ok"}
 ```
 
@@ -932,13 +935,13 @@ from traffik import HTTPThrottle
 
 # Fixed cost
 expensive_throttle = HTTPThrottle(
-    uid="reports",
+    "reports",
     rate="100/hour",
     cost=10,  # Each request counts as 10
 )
 
 # Dynamic cost
-upload_throttle = HTTPThrottle(uid="uploads", rate="1000/hour")
+upload_throttle = HTTPThrottle("uploads", rate="1000/hour")
 
 @app.post("/upload")
 async def upload(request: Request, file: UploadFile):
@@ -956,7 +959,7 @@ async def calculate_cost(connection: HTTPConnection, context: typing.Mapping[str
     return COSTS.get(operation, 1)
 
 dynamic_throttle = HTTPThrottle(
-    uid="dynamic",
+    "dynamic",
     rate="100/hour",
     cost=calculate_cost,
 )
@@ -968,10 +971,10 @@ Real APIs often need multiple layers of protection—a short-term burst limit to
 
 ```python
 # Burst: 10 per minute
-burst = HTTPThrottle(uid="burst", rate="10/minute")
+burst = HTTPThrottle("burst", rate="10/minute")
 
 # Sustained: 100 per hour
-sustained = HTTPThrottle(uid="sustained", rate="100/hour")
+sustained = HTTPThrottle("sustained", rate="100/hour")
 
 @app.get("/data", dependencies=[Depends(burst), Depends(sustained)])
 async def get_data():
@@ -999,7 +1002,7 @@ async def premium_identifier(connection: HTTPConnection) -> typing.Any:
     return f"user:{user.id}"
 
 throttle = HTTPThrottle(
-    uid="api",
+    "api",
     rate="100/hour",
     identifier=premium_identifier,
 )
@@ -1030,7 +1033,7 @@ app = FastAPI()
 # Step 1: Create throttle with dynamic_backend=True
 # No backend specified - it will be resolved from context at runtime
 api_throttle = HTTPThrottle(
-    uid="api",
+    "api",
     rate="1000/hour",
     dynamic_backend=True,
 )
@@ -1049,7 +1052,7 @@ async def tenant_backend_middleware(request: Request, call_next):
     elif tenant_tier == "premium":
         # Premium: Shared Redis with tenant namespace
         backend = RedisBackend(
-            "redis://premium-redis:6379/0",
+            connection="redis://premium-redis:6379/0",
             namespace=f"tenant:{tenant_id}"
         )
     else:
@@ -1086,11 +1089,11 @@ def get_tenant_tier(tenant_id: str) -> str:
 
 ```python
 # Bad: Unnecessary dynamic resolution overhead
-api_throttle = HTTPThrottle(uid="api", rate="1000/h", dynamic_backend=True)
+api_throttle = HTTPThrottle("api", rate="1000/h", dynamic_backend=True)
 
 # Good: Explicit backend for shared storage
 shared_redis = RedisBackend("redis://shared-redis:6379/0")
-api_throttle = HTTPThrottle(uid="api", rate="1000/h", backend=shared_redis)
+api_throttle = HTTPThrottle("api", rate="1000/h", backend=shared_redis)
 ```
 
 **Performance impact:** ~1-20ms overhead per request for backend resolution, depending on backend initialization/connection speed.
@@ -1107,12 +1110,12 @@ The `stat()` method returns a `StrategyStat` object containing the current rate 
 from fastapi import FastAPI, Request
 from traffik import HTTPThrottle
 
-throttle = HTTPThrottle(uid="api", rate="100/hour", backend=backend)
+throttle = HTTPThrottle("api", rate="100/hour")
 
 @app.get("/usage")
 async def get_usage(request: Request):
     # Get current statistics without consuming quota
-    stat = await throttle.stat(request, context={"scope": "<some_optional_request_scope>"})
+    stat = await throttle.stat(request, context={"scope": "<some_scope>"})
     if stat is None:
         return {"error": "Could not retrieve statistics"}
     
@@ -1138,10 +1141,9 @@ from traffik.strategies import (
 from traffik.types import StrategyStat
 
 throttle = HTTPThrottle(
-    uid="api",
+    "api",
     rate="100/hour",
     strategy=TokenBucketStrategy(burst_size=150),
-    backend=backend,
 )
 
 @app.get("/status", dependencies=[Depends(throttle)])
@@ -1160,16 +1162,16 @@ async def get_status(request: Request):
 
 | Strategy | Metadata Type | Key Fields |
 | -------- | ------------- | ---------- |
-| `FixedWindowStrategy` | `FixedWindowStatMetadata` | `window_start_ms`, `window_end_ms`, `current_count` |
-| `SlidingWindowLogStrategy` | `SlidingWindowLogStatMetadata` | `entry_count`, `current_cost_sum`, `oldest_entry_ms` |
-| `SlidingWindowCounterStrategy` | `SlidingWindowCounterStatMetadata` | `current_count`, `previous_count`, `weighted_count` |
-| `TokenBucketStrategy` | `TokenBucketStatMetadata` | `tokens`, `capacity`, `refill_rate_per_ms` |
-| `TokenBucketWithDebtStrategy` | `TokenBucketWithDebtStatMetadata` | `tokens`, `current_debt`, `max_debt` |
-| `LeakyBucketStrategy` | `LeakyBucketStatMetadata` | `bucket_level`, `bucket_capacity`, `leak_rate_per_ms` |
-| `LeakyBucketWithQueueStrategy` | `LeakyBucketWithQueueStatMetadata` | `queue_size`, `queue_cost` |
-| `TieredRateStrategy` | `TieredRateStatMetadata` | `tier`, `tier_multiplier`, `effective_limit` |
-| `AdaptiveThrottleStrategy` | `AdaptiveThrottleStatMetadata` | `effective_limit`, `current_load` |
-| `GCRAStrategy` | `GCRAStatMetadata` | `tat_ms`, `emission_interval_ms`, `conformant` |
+| `FixedWindow` | `FixedWindowStatMetadata` | `window_start_ms`, `window_end_ms`, `current_count` |
+| `SlidingWindowLog` | `SlidingWindowLogStatMetadata` | `entry_count`, `current_cost_sum`, `oldest_entry_ms` |
+| `SlidingWindowCounter` | `SlidingWindowCounterStatMetadata` | `current_count`, `previous_count`, `weighted_count` |
+| `TokenBucket` | `TokenBucketStatMetadata` | `tokens`, `capacity`, `refill_rate_per_ms` |
+| `TokenBucketWithDebt` | `TokenBucketWithDebtStatMetadata` | `tokens`, `current_debt`, `max_debt` |
+| `LeakyBucket` | `LeakyBucketStatMetadata` | `bucket_level`, `bucket_capacity`, `leak_rate_per_ms` |
+| `LeakyBucketWithQueue` | `LeakyBucketWithQueueStatMetadata` | `queue_size`, `queue_cost` |
+| `TieredRate` | `TieredRateStatMetadata` | `tier`, `tier_multiplier`, `effective_limit` |
+| `AdaptiveThrottle` | `AdaptiveThrottleStatMetadata` | `effective_limit`, `current_load` |
+| `GCRA` | `GCRAStatMetadata` | `tat_ms`, `emission_interval_ms`, `conformant` |
 
 #### Adding Rate Limit Headers
 
@@ -1181,7 +1183,7 @@ from fastapi import FastAPI, Request, Response, Depends
 from traffik import HTTPThrottle
 from traffik.types import StrategyStat
 
-throttle = HTTPThrottle(uid="api", rate="100/hour", backend=backend)
+throttle = HTTPThrottle("api", rate="100/hour")
 
 @app.get("/data", dependencies=[Depends(throttle)])
 async def get_data(request: Request, response: Response):
@@ -1216,7 +1218,7 @@ async def get_resource(request: Request):
     stat = throttle.stat(request)
     if stat is not None:
         rate_limit_remaining.labels(
-            throttle_uid="api",
+            throttle_"api",
             user_id=user_id
         ).set(stat.hits_remaining)
     
@@ -1286,10 +1288,9 @@ async def custom_http_throttled(
     )
 
 throttle = HTTPThrottle(
-    uid="api",
+    "api",
     rate="100/hour",
     handle_throttled=custom_http_throttled,
-    backend=backend,
 )
 
 @app.get("/data", dependencies=[Depends(throttle)])
@@ -1339,10 +1340,9 @@ async def custom_ws_throttled(
     })
 
 ws_throttle = WebSocketThrottle(
-    uid="ws_chat",
+    "ws_chat",
     rate="30/minute",
     handle_throttled=custom_ws_throttled,
-    backend=backend,
 )
 ```
 
@@ -1373,10 +1373,9 @@ async def raising_ws_handler(
     )
 
 ws_throttle = WebSocketThrottle(
-    uid="ws_api",
+    "ws_api",
     rate="60/minute",
     handle_throttled=raising_ws_handler,
-    backend=backend,
 )
 
 @app.websocket("/ws", dependencies=[Depends(ws_throttle)])
@@ -1397,7 +1396,7 @@ async def websocket_endpoint(websocket: WebSocket):
             break
 ```
 
-> **⚠️ Performance Note:** Exception handling in Python has overhead. For WebSocket connections with high message rates, prefer sending throttled messages directly in the handler (Option 1) rather than raising exceptions (Option 2).
+> **⚠️ Performance Note:** Exception handling in Python has overhead. For WebSocket connections with high message rates, prefer sending throttled messages directly in the handler (and may be closing the connection immediately) rather than raising exceptions.
 
 #### Close WebSocket on Throttle
 
@@ -1430,10 +1429,9 @@ async def closing_ws_handler(
     await connection.close(code=1008, reason="Rate limit exceeded")
 
 ws_throttle = WebSocketThrottle(
-    uid="ws_strict",
+    "ws_strict",
     rate="10/minute",
     handle_throttled=closing_ws_handler,
-    backend=backend,
 )
 ```
 
@@ -1450,20 +1448,19 @@ backend = InMemoryBackend(
 )
 
 # This throttle uses the backend's default handler
-throttle1 = HTTPThrottle(uid="api1", rate="100/hour", backend=backend)
+throttle1 = HTTPThrottle("api1", rate="100/hour")
 
 # This throttle overrides with its own handler
 throttle2 = HTTPThrottle(
-    uid="api2",
+    "api2",
     rate="50/hour",
-    backend=backend,
     handle_throttled=another_custom_handler,  # Overrides backend default
 )
 ```
 
 ### Quota Context
 
-When you need fine-grained control over *when* quota is consumed—not just *whether* it is—`QuotaContext` lets you defer, aggregate, and conditionally apply rate limit costs. Instead of consuming quota immediately on every throttle call, you queue entries and decide later whether to actually apply them.
+When you need fine-grained control over *when* quota is consumed — not just *whether* it is, `QuotaContext` lets you defer, aggregate, and conditionally apply rate limit costs. Instead of consuming quota immediately on every throttle call, you queue entries and decide later whether to actually apply them.
 
 This is useful when:
 
@@ -1476,12 +1473,12 @@ This is useful when:
 
 There are two ways to create a `QuotaContext`:
 
-**Bound mode** — created via `throttle.quota()`, tied to a specific throttle:
+**Bound mode** — created via `throttle.quota()` or `QuotaContext(..., owner=throttle)`, tied to a specific throttle:
 
 ```python
 from traffik import HTTPThrottle
 
-throttle = HTTPThrottle(uid="api", rate="100/hour")
+throttle = HTTPThrottle("api", rate="100/hour")
 
 @app.post("/process")
 async def process(request: Request):
@@ -1498,8 +1495,8 @@ async def process(request: Request):
 ```python
 from traffik.quotas import QuotaContext
 
-throttle_a = HTTPThrottle(uid="reads", rate="100/hour")
-throttle_b = HTTPThrottle(uid="writes", rate="50/hour")
+throttle_a = HTTPThrottle("reads", rate="100/hour")
+throttle_b = HTTPThrottle("writes", rate="50/hour")
 
 @app.post("/transfer")
 async def transfer(request: Request):
@@ -1765,9 +1762,9 @@ timeout = get_lock_blocking_timeout()       # Returns float or None
 Strategies can override global settings:
 
 ```python
-from traffik.strategies import FixedWindowStrategy
+from traffik.strategies import FixedWindow
 
-strategy = FixedWindowStrategy(
+strategy = FixedWindow(
     lock_config=dict(
         ttl=10.0,  # Override global TTL
         blocking=True,
@@ -1790,18 +1787,18 @@ If you're pushing Traffik hard—think high concurrency, sub-second rate windows
 
 | Strategy | Locking Required | When |
 | -------- | ---------------- | ---- |
-| FixedWindowStrategy | Conditional | Only for sub-second windows (< 1s) |
-| SlidingWindowLogStrategy | Always | Multi-step log operations |
-| SlidingWindowCounterStrategy | Conditional | Only for sub-second windows |
-| TokenBucketStrategy | Always | Token refill + consume atomicity |
-| TokenBucketWithDebtStrategy | Always | Debt tracking + token operations |
-| LeakyBucketStrategy | Always | Queue level management |
-| LeakyBucketWithQueueStrategy | Always | Queue operations |
-| GCRAStrategy | Always | TAT calculations |
+| FixedWindow | Conditional | Only for sub-second windows (< 1s) |
+| SlidingWindowLog | Always | Multi-step log operations |
+| SlidingWindowCounter | Conditional | Only for sub-second windows |
+| TokenBucket | Always | Token refill + consume atomicity |
+| TokenBucketWithDebt | Always | Debt tracking + token operations |
+| LeakyBucket | Always | Queue level management |
+| LeakyBucketWithQueue | Always | Queue operations |
+| GCRA | Always | TAT calculations |
 
 **Sub-second window considerations:**
 
-For windows less than 1 second (e.g., `"100/500ms"`), `FixedWindowStrategy` and `SlidingWindowCounterStrategy` must use explicit locking because:
+For windows less than 1 second (e.g., `"100/500ms"`), `FixedWindow` and `SlidingWindowCounter` must use explicit locking because:
 
 1. Minimum TTL for backend keys is typically 1 second
 2. Window boundaries must be tracked separately from key expiration
@@ -1809,10 +1806,10 @@ For windows less than 1 second (e.g., `"100/500ms"`), `FixedWindowStrategy` and 
 
 ```python
 # This uses locking (sub-second window)
-fast_throttle = HTTPThrottle(uid="fast", rate="10/100ms", strategy=FixedWindowStrategy())
+fast_throttle = HTTPThrottle("fast", rate="10/100ms", strategy=FixedWindow())
 
 # This does NOT use locking (>= 1 second window, uses atomic increment)
-normal_throttle = HTTPThrottle(uid="normal", rate="100/s", strategy=FixedWindowStrategy())
+normal_throttle = HTTPThrottle("normal", rate="100/s", strategy=FixedWindow())
 ```
 
 **Lock contention under high load:**
@@ -1830,23 +1827,21 @@ Under high concurrency with locking strategies, you may experience:
 
    ```python
    # For high-throughput, fail fast
-   strategy = FixedWindowStrategy(
+   strategy = FixedWindow(
        lock_config=dict(blocking=True, blocking_timeout=0.05)  # 50ms
    )
    
    # For accuracy-critical, wait longer
-   strategy = TokenBucketStrategy(
+   strategy = TokenBucket(
        lock_config=dict(blocking=True, blocking_timeout=1.0)  # 1s
    )
    ```
 
-3. **Consider non-locking strategies** - For >= 1 second windows, `FixedWindowStrategy` uses atomic `increment_with_ttl` without locks
+3. **Consider non-locking strategies** - For >= 1 second windows, `FixedWindow` uses atomic `increment_with_ttl` without locks
 4. **Use `blocking=False` for best-effort** - Accepts potential accuracy loss for lower latency:
 
    ```python
-   strategy = TokenBucketStrategy(
-       lock_config=dict(blocking=False)  # Fail immediately if lock unavailable
-   )
+   strategy = TokenBucket(lock_config=dict(blocking=False))  # Fail immediately if lock unavailable
    ```
 
 **Monitoring recommendation:**
@@ -1862,12 +1857,12 @@ In production, things go wrong—Redis connections drop, Memcached runs out of m
 Custom error handlers receive rich context about what went wrong, letting you make intelligent decisions:
 
 ```python
-from traffik.throttles import ExceptionInfo
+from traffik.throttles import ThrottleExceptionInfo
 from traffik.types import WaitPeriod
 
 async def error_handler(
     connection: HTTPConnection,
-    exc_info: ExceptionInfo,  # Rich exception context
+    exc_info: ThrottleExceptionInfo,  # Rich exception context
 ) -> WaitPeriod:  # Return wait time in milliseconds
     """
     exc_info contains:
@@ -1896,21 +1891,21 @@ For straightforward cases, you can use string literals that cover the most commo
 ```python
 # Development: Allow on errors (fail open)
 HTTPThrottle(
-    uid="dev",
+    "dev",
     rate="100/minute",
     on_error="allow",  # Allow all requests on errors
 )
 
 # Production: Throttle on errors (fail closed)
 HTTPThrottle(
-    uid="prod",
+    "prod",
     rate="100/minute",
     on_error="throttle",  # Block all requests on errors (default `min_wait_period` or 1000ms wait, override `min_wait_period` if needed)
 )
 
 # Re-raise for external handling
 HTTPThrottle(
-    uid="api",
+    "api",
     rate="100/minute",
     on_error="raise",  # Let exception propagate
 )
@@ -1934,7 +1929,7 @@ async def startup():
     await fallback.initialize()
 
 throttle = HTTPThrottle(
-    uid="ha",
+    "ha",
     rate="100/minute",
     backend=primary,
     on_error=backend_fallback(
@@ -1959,7 +1954,7 @@ Retry transient failures:
 from traffik.error_handlers import retry
 
 throttle = HTTPThrottle(
-    uid="retry-example",
+    "retry-example",
     rate="100/minute",
     on_error=retry(
         max_retries=3,
@@ -1977,7 +1972,7 @@ throttle = HTTPThrottle(
 - Attempt 3: 200ms delay
 - Attempt 4: 400ms delay
 
-#### Failover Handler (Production)
+#### Failover Handler
 
 Combines circuit breaker + retry + fallback:
 
@@ -1996,7 +1991,7 @@ breaker = CircuitBreaker(
 )
 
 throttle = HTTPThrottle(
-    uid="production",
+    "production",
     rate="1000/hour",
     backend=primary,
     on_error=failover(
@@ -2029,13 +2024,13 @@ Record failure ──> Use fallback backend
 
 ```python
 import logging
-from traffik.throttles import ExceptionInfo
+from traffik.throttles import ThrottleExceptionInfo
 from traffik.types import WaitPeriod
 
 logger = logging.getLogger(__name__)
 
 async def handle_errors(
-    connection: HTTPConnection, exc_info: ExceptionInfo
+    connection: HTTPConnection, exc_info: ThrottleExceptionInfo
 ) -> WaitPeriod:
     exc = exc_info["exception"]
     backend_type = type(exc_info["backend"]).__name__
@@ -2058,7 +2053,7 @@ async def handle_errors(
     return 1000.0  # Default: 1s wait
 
 throttle = HTTPThrottle(
-    uid="custom",
+    "custom",
     rate="100/minute",
     on_error=handle_errors,
 )
@@ -2109,11 +2104,7 @@ class CustomStrategy:
     param2: float = 0.5
     
     async def __call__(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend,
-        cost: int = 1,
+        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
     ) -> WaitPeriod:
         """
         Apply rate limiting.
@@ -2148,7 +2139,7 @@ class CustomStrategy:
 
 # Usage
 throttle = HTTPThrottle(
-    uid="api",
+    "api",
     rate="100/minute",
     strategy=CustomStrategy(param1=20),
 )
@@ -2295,7 +2286,7 @@ async def backend():
 @pytest.mark.anyio
 async def test_throttling(backend):
     app = FastAPI(lifespan=backend.lifespan)
-    throttle = HTTPThrottle(uid="test", rate="2/second")
+    throttle = HTTPThrottle("test", rate="2/second")
     
     @app.get("/", dependencies=[Depends(throttle)])
     async def root():
@@ -2321,15 +2312,15 @@ async def test_throttling(backend):
 
 ```python
 @pytest.mark.parametrize("strategy", [
-    FixedWindowStrategy(),
-    SlidingWindowCounterStrategy(),
-    SlidingWindowLogStrategy(),
-    TokenBucketStrategy(),
+    FixedWindow(),
+    SlidingWindowCounter(),
+    SlidingWindowLog(),
+    TokenBucket(),
 ])
 @pytest.mark.anyio
 async def test_strategy(backend, strategy):
     throttle = HTTPThrottle(
-        uid="test",
+        "test",
         rate="5/second",
         strategy=strategy,
     )
@@ -2357,7 +2348,7 @@ async def test_fallback_handler():
     await fallback.initialize()
     
     throttle = HTTPThrottle(
-        uid="test",
+        "test",
         rate="5/second",
         backend=primary,
         on_error=backend_fallback(fallback),
@@ -2398,7 +2389,7 @@ See [DOCKER.md](DOCKER.md) and [TESTING.md](TESTING.md) for details.
 
 ## Benchmarks
 
-Numbers matter when you're adding middleware to every request. We've run extensive benchmarks comparing Traffik against [SlowAPI](https://github.com/laurents/slowapi), one of the most popular rate limiting libraries for FastAPI.
+Numbers matter when you're adding middleware to every request. I've run extensive benchmarks comparing Traffik against [SlowAPI](https://github.com/laurents/slowapi), one of the most popular rate limiting libraries for FastAPI.
 
 **Test Environment:** Python 3.9, single-process, 3 iterations per scenario, Fixed Window strategy (default for both). Middleware-based throttling.
 
@@ -2465,19 +2456,19 @@ Traffik supports native WebSocket rate limiting — limiting individual messages
 
 ### Why Traffik Seems Slower When all Requests Hit the Same Key
 
-For the in-memory backend, Traffik uses `_AsyncRLock` (a custom fair re-entrant version of `asyncio.Lock`) on backend operations to guarantee atomicity. Under high concurrency (50 coroutines hitting the same rate limit key), each request must wait its turn. SlowAPI uses synchronous `threading.RLock` on an in-memory `Counter`, which doesn't yield the event loop — concurrent coroutines don't actually contend because the lock is acquired and released within a single synchronous call.
+For the in-memory backend, Traffik uses `_Async*RLock` (a custom fair/unfair re-entrant version of `asyncio.Lock`) on backend operations to guarantee atomicity. Under high concurrency (50 coroutines hitting the same rate limit key), each request must wait its turn. SlowAPI uses an atomic counter operation, so no lock contention.
 
 This is an intentional tradeoff:
 
-- **SlowAPI's approach**: Higher concurrent throughput on the same key, but loses correctness on distributed backends (Redis/Memcached) where operations aren't single-threaded
-- **Traffik's approach**: True atomic operations ensure perfect accuracy across all backends, at the cost of serializing concurrent requests to the same key
+- **SlowAPI's approach**: Higher concurrent throughput on the same key, but loses correctness on distributed backends (Redis/Memcached) where operations aren't single-threaded.
+- **Traffik's approach**: True atomic operations ensure perfect accuracy across all backends, at the cost of serializing concurrent requests to the same key.
 
-In practice, this rarely impacts production workloads because different clients have different identifiers — meaning different keys, different shards, and no lock contention. The sustained benchmark is a worst case where all requests share a single identity.
+In practice, this rarely impacts production workloads because different clients have different identifiers, meaning different keys, different shards, and no lock contention. The sustained benchmark is a worst case where all requests share a single identity.
 
 ### Key Takeaways
 
 - **Sequential throughput**: Traffik is faster in Low/High load (up to +29%)
-- **Concurrent throughput**: SlowAPI is faster when many coroutines hit the same key simultaneously
+- **Concurrent throughput**: SlowAPI is faster when many coroutines hit the same key simultaneously (This is only valid for the in-memory backend)
 - **Correctness**: Traffik has **perfect accuracy across all backends**. SlowAPI fails on Redis/Memcached under concurrent load (over-throttling by 100% in race conditions)
 - **Sliding Window**: Traffik is significantly faster (+10% to +32%) in non-concurrent scenarios
 - **WebSocket**: Sub-millisecond P50 latencies (0.06ms) at up to 14,000 messages/sec
@@ -2691,7 +2682,7 @@ Understanding how each backend handles concurrent requests helps you make inform
 
 | Backend    | Lock Mechanism             | Contention Behavior                            | Best For                 |
 | ---------- | -------------------------- | ---------------------------------------------- | ------------------------ |
-| InMemory   | `_AsyncRLock` per shard   | Coroutines queue on same-shard keys            | Single-process, dev/test |
+| InMemory   | `_Async*RLock` per shard   | Coroutines may queue on same-shard keys            | Single-process, dev/test |
 | Redis      | Lua scripts (atomic)       | No application-level lock needed for basic ops | Distributed, production  |
 | Memcached  | Atomic `add()`             | Lightweight CAS-style locking                  | High-throughput reads    |
 

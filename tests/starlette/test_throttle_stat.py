@@ -16,6 +16,7 @@ from tests.utils import default_client_identifier
 from traffik import connection_throttled
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
+from traffik.registry import ThrottleRegistry
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
@@ -26,10 +27,11 @@ async def test_http_throttle_stat_basic(inmemory_backend: InMemoryBackend) -> No
     """Test HTTPThrottle.stat() method returns statistics."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-stat-basic",
+            "test-stat-basic-sl",
             rate="10/s",
             identifier=default_client_identifier,
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
 
         async def data_endpoint(request: Request) -> JSONResponse:
@@ -82,11 +84,12 @@ async def test_http_throttle_stat_with_cost(inmemory_backend: InMemoryBackend) -
     """Test HTTPThrottle.stat() reflects cost properly."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-stat-cost",
+            "test-stat-cost-sl",
             rate="20/s",
             identifier=default_client_identifier,
             cost=5,  # Each request costs 5
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
 
         async def expensive_endpoint(request: Request) -> JSONResponse:
@@ -130,10 +133,11 @@ async def test_http_throttle_stat_at_limit(inmemory_backend: InMemoryBackend) ->
     """Test HTTPThrottle.stat() when at rate limit."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-stat-limit",
+            "test-stat-limit-sl",
             rate="3/s",
             identifier=default_client_identifier,
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
 
         async def limited_endpoint(request: Request) -> JSONResponse:
@@ -188,10 +192,11 @@ async def test_http_throttle_stat_different_keys(
             return connection.query_params.get("user", "anonymous")
 
         throttle = HTTPThrottle(
-            "test-stat-keys",
+            "test-stat-keys-sl",
             rate="5/s",
             identifier=custom_identifier,
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
 
         async def resource_endpoint(request: Request) -> JSONResponse:
@@ -235,10 +240,11 @@ async def test_http_throttle_stat_unlimited_rate(
     """Test HTTPThrottle.stat() with unlimited rate."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-stat-unlimited",
+            "test-stat-unlimited-sl",
             rate=Rate(limit=0, seconds=0),  # Unlimited
             identifier=default_client_identifier,
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
 
         async def unlimited_endpoint(request: Request) -> JSONResponse:
@@ -272,12 +278,13 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
     """Test WebSocketThrottle.stat() method."""
     async with inmemory_backend(close_on_exit=True):
         ws_throttle = WebSocketThrottle(
-            "test-ws-stat",
+            "test-ws-stat-sl",
             rate="5/s",
             identifier=default_client_identifier,
             strategy=FixedWindowStrategy(),
             # Use this handler so an exception is raised on throttle
             handle_throttled=connection_throttled,
+            registry=ThrottleRegistry(),
         )
 
         async def websocket_endpoint(websocket: WebSocket) -> None:
@@ -385,10 +392,11 @@ async def test_throttle_stat_without_strategy_support(
             return 0.0  # Always allow
 
         throttle = HTTPThrottle(
-            "test-no-stat",
+            "test-no-stat-sl",
             rate="10/s",
             identifier=default_client_identifier,
             strategy=simple_strategy,
+            registry=ThrottleRegistry(),
         )
 
         async def no_stat_endpoint(request: Request) -> JSONResponse:
@@ -414,10 +422,11 @@ async def test_throttle_stat_fields(inmemory_backend: InMemoryBackend) -> None:
     """Test that HTTPThrottle.stat() returns all required fields."""
     async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
-            "test-stat-fields",
+            "test-stat-fields-sl",
             rate="10/s",
             identifier=default_client_identifier,
             strategy=FixedWindowStrategy(),
+            registry=ThrottleRegistry(),
         )
 
         async def fields_endpoint(request: Request) -> JSONResponse:

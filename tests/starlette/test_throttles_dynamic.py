@@ -12,6 +12,7 @@ from starlette.testclient import TestClient
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
 
@@ -24,20 +25,22 @@ async def test_throttle_with_dynamic_backend(inmemory_backend: InMemoryBackend) 
     with pytest.raises(ValueError):
         throttle = HTTPThrottle(
             "test-dynamic-backend-with-backend",
-            rate=Rate(2, seconds=50, minutes=2, hours=1),
+            rate=Rate(limit=2, seconds=50, minutes=2, hours=1),
             dynamic_backend=True,
             backend=inmemory_backend,
+            registry=ThrottleRegistry(),
         )
 
     # This throttle should respect the context of the backend
     # and should use the backend from the context if available.
     throttle = HTTPThrottle(
         "test-dynamic-backend-no-backend",
-        rate=Rate(2, seconds=50, minutes=2, hours=1),
+        rate=Rate(limit=2, seconds=50, minutes=2, hours=1),
         dynamic_backend=True,
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
-    assert throttle.uses_fixed_backend is False
+    assert throttle.use_fixed_backend is False
     assert throttle.backend is None
 
     dummy_request = Request(
@@ -83,6 +86,7 @@ def test_throttle_with_dynamic_backend_and_lifespan(
         rate="2/s",
         dynamic_backend=True,
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     # Create a separate backend for endpoint-specific usage
@@ -150,10 +154,11 @@ def test_throttle_with_dynamic_backend_and_middleware(
 ) -> None:
     # Shared throttle for all tenants
     quota_throttle = HTTPThrottle(
-        uid="api_quota",
+        uid="api_quota-sl",
         rate="2/min",
         dynamic_backend=True,
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     # Different backends for different tenant tiers

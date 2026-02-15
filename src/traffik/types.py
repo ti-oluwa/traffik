@@ -1,8 +1,5 @@
 """Type definitions and protocols."""
 
-import enum
-
-import math
 import typing
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -132,9 +129,22 @@ A callable that implements a backoff strategy.
 Takes the current attempt number and base delay, and returns the delay in seconds before the next retry.
 """
 
+ThrottlePredicate: TypeAlias = typing.Union[
+    typing.Callable[[HTTPConnectionT], typing.Awaitable[bool]],
+    typing.Callable[
+        [HTTPConnectionT, typing.Optional[typing.Mapping[str, typing.Any]]],
+        typing.Awaitable[bool],
+    ],
+]
+"""
+A type alias for a callable that takes an HTTP connection (and an optional context) and returns a boolean.
 
-class _TransactionExceptionInfo(TypedDict):
-    """Information about an exception that occurred during throttling transaction."""
+This is used as a predicate to determine if the throttle should apply.
+"""
+
+
+class _ExceptionInfo(TypedDict):
+    """Information about an exception that occurred during retried throttling operations."""
 
     connection: HTTPConnection
     exception: BaseException
@@ -147,7 +157,7 @@ RetryOn = typing.Union[
     typing.Type[BaseException],
     typing.Tuple[typing.Type[BaseException], ...],
     typing.Callable[
-        [_TransactionExceptionInfo],
+        [_ExceptionInfo],
         typing.Union[bool, typing.Awaitable[bool]],
     ],
 ]

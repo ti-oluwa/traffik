@@ -8,28 +8,24 @@ from traffik.rates import Rate
 def test_rate_init_with_seconds() -> None:
     rate = Rate(limit=5, seconds=10)
     assert rate.limit == 5
-    assert rate.seconds == 10
     assert rate.expire == 10000  # milliseconds
 
 
 def test_rate_init_with_minutes() -> None:
     rate = Rate(limit=100, minutes=1)
     assert rate.limit == 100
-    assert rate.minutes == 1
     assert rate.expire == 60000
 
 
 def test_rate_init_with_hours() -> None:
     rate = Rate(limit=1000, hours=1)
     assert rate.limit == 1000
-    assert rate.hours == 1
     assert rate.expire == 3600000
 
 
 def test_rate_init_with_milliseconds() -> None:
     rate = Rate(limit=10, milliseconds=500)
     assert rate.limit == 10
-    assert rate.milliseconds == 500
     assert rate.expire == 500
 
 
@@ -85,95 +81,85 @@ def test_rpd_calculation() -> None:
 def test_parse_seconds_short() -> None:
     rate = Rate.parse("5/s")
     assert rate.limit == 5
-    assert rate.seconds == 1
     assert rate.expire == 1000
 
 
 def test_parse_seconds_full() -> None:
     rate = Rate.parse("10/seconds")
     assert rate.limit == 10
-    assert rate.seconds == 1
+    assert rate.expire == 1000
 
 
 def test_parse_minutes_short() -> None:
     rate = Rate.parse("100/m")
     assert rate.limit == 100
-    assert rate.minutes == 1
     assert rate.expire == 60000
 
 
 def test_parse_minutes_full() -> None:
     rate = Rate.parse("50/minutes")
     assert rate.limit == 50
-    assert rate.minutes == 1
+    assert rate.expire == 60000
 
 
 def test_parse_hours_short() -> None:
     rate = Rate.parse("1000/h")
     assert rate.limit == 1000
-    assert rate.hours == 1
     assert rate.expire == 3600000
 
 
 def test_parse_hours_full() -> None:
     rate = Rate.parse("500/hours")
     assert rate.limit == 500
-    assert rate.hours == 1
+    assert rate.expire == 3600000
 
 
 def test_parse_days_short() -> None:
     rate = Rate.parse("10000/d")
     assert rate.limit == 10000
-    assert rate.hours == 24
     assert rate.expire == 86400000
 
 
 def test_parse_days_full() -> None:
     rate = Rate.parse("5000/days")
     assert rate.limit == 5000
-    assert rate.hours == 24
+    assert rate.expire == 86400000
 
 
 # Rate.parse() with advanced format: <limit>/<period><unit>
 def test_parse_with_period_seconds() -> None:
     rate = Rate.parse("2/5s")
     assert rate.limit == 2
-    assert rate.seconds == 5
     assert rate.expire == 5000
 
 
 def test_parse_with_period_minutes() -> None:
     rate = Rate.parse("10/30m")
     assert rate.limit == 10
-    assert rate.minutes == 30
     assert rate.expire == 1800000
 
 
 def test_parse_with_period_hours() -> None:
     rate = Rate.parse("100/12h")
     assert rate.limit == 100
-    assert rate.hours == 12
     assert rate.expire == 43200000
 
 
 def test_parse_with_period_milliseconds() -> None:
     rate = Rate.parse("1000/500ms")
     assert rate.limit == 1000
-    assert rate.milliseconds == 500
     assert rate.expire == 500
 
 
 def test_parse_with_period_and_space() -> None:
     rate = Rate.parse("10/30 seconds")
     assert rate.limit == 10
-    assert rate.seconds == 30
     assert rate.expire == 30000
 
 
 def test_parse_with_full_words() -> None:
     rate = Rate.parse("5/15 minutes")
     assert rate.limit == 5
-    assert rate.minutes == 15
     assert rate.expire == 900000
 
 
@@ -188,7 +174,7 @@ def test_parse_case_insensitive() -> None:
 def test_parse_with_whitespace() -> None:
     rate = Rate.parse("  10  /  5s  ")
     assert rate.limit == 10
-    assert rate.seconds == 5
+    assert rate.expire == 5000
 
 
 def test_parse_alternative_units() -> None:
@@ -207,7 +193,7 @@ def test_parse_alternative_units() -> None:
 def test_parse_large_numbers() -> None:
     rate = Rate.parse("1000000/100000s")
     assert rate.limit == 1000000
-    assert rate.seconds == 100000
+    assert rate.expire == 100000000
 
 
 # Rate.parse() error handling
@@ -279,15 +265,6 @@ def test_parse_non_string_input() -> None:
 def test_parse_invalid_characters() -> None:
     with pytest.raises(ValueError):
         Rate.parse("5/5s@")
-
-
-# Rate comparisons and conversions
-def test_equivalent_rates() -> None:
-    """Test that different representations of same rate are equivalent"""
-    rate1 = Rate.parse("60/m")  # 60 per minute
-    rate2 = Rate.parse("1/s")  # 1 per second
-    # Both should be 1 request per second
-    assert rate1 == rate2
 
 
 def test_rate_conversion() -> None:

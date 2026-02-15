@@ -1,6 +1,6 @@
 [project]
 name = "traffik"
-version = "1.0.2"
+version = "1.0.3"
 description = "Asynchronous distributed rate limiting for FastAPI/Starlette applications."
 readme = "README.md"
 authors = [

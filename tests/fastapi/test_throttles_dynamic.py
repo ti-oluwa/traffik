@@ -10,6 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
+from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
 
@@ -22,20 +23,21 @@ async def test_throttle_dynamic_backend(inmemory_backend: InMemoryBackend) -> No
     with pytest.raises(ValueError):
         throttle = HTTPThrottle(
             "test-dynamic-backend-with-backend",
-            rate=Rate(2, seconds=50, minutes=2, hours=1),
+            rate=Rate(limit=2, seconds=50, minutes=2, hours=1),
             dynamic_backend=True,
             backend=inmemory_backend,
+            registry=ThrottleRegistry(),
         )
 
     # This throttle should respect the context of the backend
     # and should use the backend from the context if available.
     throttle = HTTPThrottle(
         "test-dynamic-backend-no-backend",
-        rate=Rate(2, seconds=50, minutes=2, hours=1),
+        rate=Rate(limit=2, seconds=50, minutes=2, hours=1),
         dynamic_backend=True,
         identifier=default_client_identifier,
     )
-    assert throttle.uses_fixed_backend is False
+    assert throttle.use_fixed_backend is False
     assert throttle.backend is None
 
     dummy_request = Request(
@@ -82,6 +84,7 @@ def test_throttle_with_dynamic_backend_and_lifespan(
         rate="2/1020ms",
         dynamic_backend=True,
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )  # Create app with lifespan using `inmemory_backend`
     app = FastAPI(lifespan=inmemory_backend.lifespan)
 
@@ -143,10 +146,11 @@ def test_throttle_with_dynamic_backend_and_middleware(
 ) -> None:
     # Shared throttle for all tenants
     api_quota_throttle = HTTPThrottle(
-        uid="api_quota",
+        uid="api_quota-fa",
         rate="2/min",
         dynamic_backend=True,
         identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
     )
 
     # Different backends for different tenant tiers
@@ -173,7 +177,7 @@ def test_throttle_with_dynamic_backend_and_middleware(
 
     # Create app with lifespan and middleware
     app = FastAPI(lifespan=inmemory_backend.lifespan)
-    app.add_middleware(TenantMiddleware)
+    app.add_middleware(TenantMiddleware)  # type: ignore[arg-type]
 
     @app.get("/api/data", dependencies=[Depends(api_quota_throttle)])
     async def get_data() -> typing.Dict[str, str]:

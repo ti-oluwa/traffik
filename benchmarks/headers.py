@@ -160,7 +160,7 @@ async def run_scenario(
         latencies, successful, throttled = await _run_concurrent(
             client, config.num_requests, config.concurrency
         )
-    
+
     end_time = time.perf_counter()
     return ScenarioResult(
         name=name,

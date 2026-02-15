@@ -377,11 +377,11 @@ Contributors will be acknowledged in:
 - Release notes for significant contributions
 - Future CONTRIBUTORS.md file
 
-## 🧬 Branching Strategy
+## Branching Strategy
 
 We follow a structured Git workflow inspired by Git Flow to manage code changes efficiently and keep the `main` branch production-ready at all times.
 
-### 🔀 Primary Branches
+### Primary Branches
 
 - **`main`**  
   This is the production-ready branch. Only `release/*` and `hotfix/*` branches may be merged into `main`.
@@ -391,7 +391,7 @@ We follow a structured Git workflow inspired by Git Flow to manage code changes 
 
 ---
 
-### 🌿 Branch Types
+### Branch Types
 
 | Branch Type     | Source     | Target         | Purpose                                   |
 |------------------|------------|----------------|-------------------------------------------|
@@ -405,7 +405,7 @@ We follow a structured Git workflow inspired by Git Flow to manage code changes 
 
 ---
 
-### ✅ Pull Request Rules
+### Pull Request Rules
 
 - PRs to `main` **must** come from `release/*` or `hotfix/*` branches.
 - PRs to `develop` **must** come from `feature/*`, `chore/*`, `docs/*`, `test/*`, or `fix/*` branches.
@@ -416,7 +416,7 @@ We follow a structured Git workflow inspired by Git Flow to manage code changes 
 
 ---
 
-### 📦 Release Flow
+### Release Flow
 
 1. Create `release/x.y.z` from `develop`.
 2. Finalize and test the release.
@@ -425,7 +425,7 @@ We follow a structured Git workflow inspired by Git Flow to manage code changes 
 
 ---
 
-### 🚑 Hotfix Flow
+### Hotfix Flow
 
 1. Create `hotfix/x.y.z` from `main`.
 2. Apply and test the fix.

@@ -193,7 +193,7 @@ def throttled(
 
     if len(throttles) > 1:
         connection_type = throttles[0].connection_type
-        if not all(t.connection_type == connection_type for t in throttles):
+        if not all(t.connection_type is connection_type for t in throttles):
             raise ValueError("All throttles must have the same connection type.")
 
         async def throttle(connection: HTTPConnectionT) -> HTTPConnectionT:

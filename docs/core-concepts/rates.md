@@ -23,7 +23,7 @@ rate = "1000/500ms"  # sub-second windows work too
 
 The general grammar is:
 
-```
+```text
 <limit>/<period><unit>
 <limit> per <period><unit>
 <limit>/<period> <unit>
@@ -67,7 +67,7 @@ one of the values in the table below.
 
 ## The `Rate` object
 
-When you need a period that spans multiple units — say, 5 minutes and 30 seconds —
+When you need a period that spans multiple units, for example 5 minutes and 30 seconds,
 or when you want to construct a rate programmatically, use `Rate` directly.
 
 ```python
@@ -85,19 +85,19 @@ rate = Rate(limit=50, milliseconds=500)
 
 `Rate` accepts the following keyword arguments (all default to `0`):
 
-| Parameter      | Unit         |
-|----------------|--------------|
+| Parameter      | Unit          |
+|----------------|---------------|
 | `limit`        | Request count |
-| `milliseconds` | ms           |
-| `seconds`      | s            |
-| `minutes`      | min          |
-| `hours`        | h            |
+| `milliseconds` | ms            |
+| `seconds`      | s             |
+| `minutes`      | min           |
+| `hours`        | h             |
 
-All time parameters are additive — the expire period is their sum in milliseconds.
+All time parameters are additive, the expire period is their sum in milliseconds.
 
 `Rate` objects are **immutable** and **final** (subclassing is forbidden). Once
-created, every attribute — `limit`, `expire`, `rps`, `rpm`, `rph`, `rpd`,
-`is_subsecond`, `unlimited` — is frozen.
+created, every attribute, `limit`, `expire`, `rps`, `rpm`, `rph`, `rpd`,
+`is_subsecond`, `unlimited`, is frozen.
 
 !!! warning "Both limit and period must be set together"
     Passing `limit=100` without any time unit raises `ValueError`. Passing
@@ -108,7 +108,7 @@ created, every attribute — `limit`, `expire`, `rps`, `rpm`, `rph`, `rpd`,
 
 ## Parsing with `Rate.parse()`
 
-Under the hood, string rates go through `Rate.parse()`, which wraps an LRU-cached
+Internally, string rates go through `Rate.parse()`, which wraps an LRU-cached
 internal function with a capacity of 512 entries. This means the thousandth time you
 hit `"100/min"`, the parse cost is effectively zero.
 
@@ -152,7 +152,7 @@ throttle = HTTPThrottle(
 
 !!! tip "Dynamic rates are called on every request"
     Unlike static strings or `Rate` objects, dynamic functions are called on every
-    request. Keep them fast — a database lookup per request is a latency hit on
+    request. Keep them fast, a database lookup per request is a latency hit on
     every single call.
 
 ---
@@ -167,10 +167,12 @@ Rate.parse("0/0")    # string form
 ```
 
 Both produce `Rate(unlimited=True)` with `rate.unlimited == True`. Traffik's
-strategies detect this flag and short-circuit immediately — zero backend I/O, zero
+strategies detect this flag and short-circuit immediately, zero backend I/O, zero
 overhead.
 
 !!! tip "Use unlimited for internal health check endpoints"
     A health check that hits the same throttle as your main API can skew your
     counters. Give it an unlimited rate (or return `EXEMPTED` from the identifier)
     and keep your metrics clean.
+
+--8<-- "includes/abbreviations.md"

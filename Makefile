@@ -29,11 +29,11 @@ test: ## Run full test suite. Requires all dependencies. Use `make test m=marker
 		uv run pytest -v --tb=short; \
 	fi
 
-test-fast: ## Run tests not marked as slow
-	uv run pytest -m -x "not slow" -v --tb=short
+test-fast: ## Run tests not marked as slow]
+	SKIP_REDIS_TESTS=true SKIP_MEMCACHED_TESTS=true uv run pytest -m "not slow" -x -v --tb=short
 
 test-slow: ## Run slow tests
-	uv run pytest -m "slow" -v --tb=short
+	SKIP_REDIS_TESTS=false SKIP_MEMCACHED_TESTS=false uv run pytest -m "slow" -v --tb=short
 
 test-watch: ## Run tests in watch mode
 	uv run pytest-watch --onpass "echo 'Tests passed'" --onfail "echo 'Tests failed'" -- -v --tb=short 

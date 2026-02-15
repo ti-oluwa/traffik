@@ -1,6 +1,6 @@
 # Direct Usage
 
-Sometimes you need the throttle to behave differently based on runtime information — the size of an uploaded file, the number of records in a query, or whether a previous step succeeded. Direct usage lets you call the throttle methods yourself from inside a handler, giving you full programmatic control.
+Sometimes you need the throttle to behave differently based on runtime information, such as the size of an uploaded file, the number of records in a query, or whether a previous step succeeded. Direct usage lets you call the throttle methods yourself from inside a handler, giving you full programmatic control.
 
 ---
 
@@ -15,7 +15,7 @@ For simpler cases, [dependency injection](dependencies.md) or [decorators](decor
 
 ---
 
-## `await throttle.hit(connection)` — check and apply
+## `await throttle.hit(connection)`: check and apply
 
 `hit()` is the core method. It records a hit, checks the quota, and rejects the request if the limit is exceeded. Returns the connection object.
 
@@ -39,7 +39,7 @@ If the client is throttled, `hit()` raises an exception by default (handled by T
 
 ---
 
-## `await throttle.hit(connection, cost=N)` — custom cost per call
+## `await throttle.hit(connection, cost=N)`: custom cost per call
 
 Pass a `cost` argument to override the throttle's default cost for this specific call. Useful when different invocations of the same endpoint should consume different amounts of quota.
 
@@ -67,7 +67,7 @@ async def upload_file(request: Request):
 ```
 
 !!! tip
-    A cost of `0` is a no-op — Traffik short-circuits immediately without recording anything or checking the backend. You can use this to conditionally skip throttling without an `if` branch:
+    A cost of `0` is a no-op. Traffik short-circuits immediately without recording anything or checking the backend. You can use this to conditionally skip throttling without an `if` branch:
 
     ```python
     cost = 0 if request.headers.get("X-Internal") == "true" else 1
@@ -76,7 +76,7 @@ async def upload_file(request: Request):
 
 ---
 
-## `await throttle(connection, context={...})` — `__call__` alias
+## `await throttle(connection, context={...})`: `__call__` alias
 
 Calling the throttle instance directly is an alias for `hit()`. The `context` keyword argument lets you pass extra information that throttle strategies, identifiers, or rules can read.
 
@@ -101,12 +101,12 @@ The `context` dict is merged with the throttle's default context (set at constru
 
 ---
 
-## `await throttle.check(connection, cost=N)` — non-consuming pre-check
+## `await throttle.check(connection, cost=N)`: non-consuming pre-check
 
 `check()` inspects the current quota state without consuming any quota. It returns `True` if there is sufficient quota available for the given cost, `False` otherwise.
 
 !!! warning "Best-effort only"
-    `check()` is inherently subject to race conditions (Time-of-Check to Time-of-Use). Between the check and the eventual `hit()`, another request may consume the remaining quota. Use `check()` only for fast pre-screening — always follow up with `hit()` to actually consume quota.
+    `check()` is inherently subject to race conditions (Time-of-Check to Time-of-Use). Between the check and the eventual `hit()`, another request may consume the remaining quota. Use `check()` only for fast pre-screening, always follow up with `hit()` to actually consume quota.
 
 ```python
 from fastapi import FastAPI, Request
@@ -144,7 +144,7 @@ When the throttle strategy doesn't support stats (e.g., a custom strategy withou
 
 ---
 
-## `await throttle.stat(connection)` — read state without consuming
+## `await throttle.stat(connection)`: read state without consuming
 
 `stat()` returns a `StrategyStat` object with the current throttle state for the connection. No quota is consumed. Returns `None` if the strategy doesn't support stats.
 
@@ -199,7 +199,7 @@ async def get_data(request: Request):
 
 ## WebSocket: `is_throttled(websocket)` — check state after hit
 
-For WebSocket connections, `hit()` doesn't raise an exception on throttle by default — instead it sends a `rate_limit` JSON message to the client and marks the connection state. Use `is_throttled()` to check whether the last hit was throttled.
+For WebSocket connections, `hit()` doesn't raise an exception on throttle by default. Instead it sends a `rate_limit` JSON message to the client and marks the connection state. Use `is_throttled()` to check whether the last hit was throttled.
 
 ```python
 from fastapi import FastAPI, WebSocket
@@ -236,7 +236,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 ---
 
-## Putting it together — dynamic cost with conditional throttling
+## Putting it together: dynamic cost with conditional throttling
 
 This example shows a multi-step pattern: compute cost from the request body, pre-check availability, then consume quota only on success.
 
@@ -282,3 +282,5 @@ async def process_batch(request: Request):
 
     return {"processed": actual_cost, "results": results}
 ```
+
+--8<-- "includes/abbreviations.md"

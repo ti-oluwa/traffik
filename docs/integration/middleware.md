@@ -3,10 +3,10 @@
 `ThrottleMiddleware` sits in the ASGI stack and intercepts every request before it reaches any route handler. Use it when you want to enforce rate limits globally or based on path/method patterns, without touching individual route definitions.
 
 !!! note "Works with any Starlette application"
-    `ThrottleMiddleware` is a standard Starlette middleware and works with **any Starlette-based application** — not just FastAPI. If you're using plain Starlette or any other ASGI framework built on Starlette, you can add `ThrottleMiddleware` the same way: `app.add_middleware(ThrottleMiddleware, middleware_throttles=[...])`.
+    `ThrottleMiddleware` is a standard Starlette middleware and works with **any Starlette-based application**, not just FastAPI. If you're using plain Starlette or any other ASGI framework built on Starlette, you can add `ThrottleMiddleware` the same way: `app.add_middleware(ThrottleMiddleware, middleware_throttles=[...])`.
 
 !!! tip "Use middleware for cross-cutting concerns"
-    Middleware is the right tool when the throttle logic is independent of which specific route is hit — for example, a global IP-based limit, or a limit on all `/api/` traffic regardless of endpoint. For per-route or per-handler limits, prefer [dependency injection](dependencies.md).
+    Middleware is the right tool when the throttle logic is independent of which specific route is hit, for example, a global IP-based limit, or a limit on all `/api/` traffic regardless of endpoint. For per-route or per-handler limits, prefer [dependency injection](dependencies.md).
 
 ---
 
@@ -39,7 +39,7 @@ This applies the throttle to every HTTP request. `MiddlewareThrottle` without an
 
 ## HTTP and WebSocket throttles in middleware
 
-`ThrottleMiddleware` handles both HTTP and WebSocket connections. Pass throttles for each connection type in the same `middleware_throttles` list — Traffik routes them automatically based on the connection's ASGI scope type.
+`ThrottleMiddleware` handles both HTTP and WebSocket connections. Pass throttles for each connection type in the same `middleware_throttles` list. Traffik routes them automatically based on the connection's ASGI scope type.
 
 ```python
 from fastapi import FastAPI
@@ -105,7 +105,7 @@ The `path` argument on `MiddlewareThrottle` limits the throttle to requests whos
     When `path` is a string, it is compiled as a regex pattern. If you use a bare string like `"/api/"`, it matches any path that contains `/api/` at that position (anchored from the start). Use `re.compile(...)` explicitly when you need full regex semantics such as anchors or alternation.
 
 !!! note "Wildcard patterns are supported"
-    Because `MiddlewareThrottle`'s `path` parameter uses `ThrottleRule` under the hood, it supports the same wildcard syntax: `*` matches a single path segment (no `/`), and `**` matches any number of segments including `/`. For example, `path="/api/*/users"` matches `/api/v1/users` and `/api/v2/users` but not `/api/v1/admin/users`. See [Throttle Rules & Wildcards](../advanced/rules.md) for the full pattern reference.
+    Because `MiddlewareThrottle`'s `path` parameter uses `ThrottleRule` internally, it supports the same wildcard syntax: `*` matches a single path segment (no `/`), and `**` matches any number of segments including `/`. For example, `path="/api/*/users"` matches `/api/v1/users` and `/api/v2/users` but not `/api/v1/admin/users`. See [Throttle Rules & Wildcards](../advanced/rules.md) for the full pattern reference.
 
 ---
 
@@ -162,7 +162,7 @@ premium_middleware_throttle = MiddlewareThrottle(
 
 ## Combined: path + methods + predicate
 
-All three filters are evaluated conjunctively — the throttle only fires when **all** conditions are met.
+All three filters are evaluated conjunctively: the throttle only fires when **all** conditions are met.
 
 ```python
 import typing
@@ -264,7 +264,7 @@ app.add_middleware(
 
 ## Using `MiddlewareThrottle` as a FastAPI dependency
 
-`MiddlewareThrottle` implements `__call__` and exposes a `__signature__` compatible with FastAPI's dependency injection. This is a niche use case — for example, when you have a `MiddlewareThrottle` instance configured with path and method filters, and you also want to use the same filtered throttle as a route-level dependency.
+`MiddlewareThrottle` implements `__call__` and exposes a `__signature__` compatible with FastAPI's dependency injection. This is a niche use case, for example when you have a `MiddlewareThrottle` instance configured with path and method filters, and you also want to use the same filtered throttle as a route-level dependency.
 
 ```python
 from fastapi import FastAPI, Depends
@@ -288,7 +288,7 @@ async def create_resource(payload: dict):
 ```
 
 !!! note
-    When used as a dependency, `MiddlewareThrottle` applies its path and method filters using the actual request. This means you get the same filtered behavior as in middleware, but scoped to a specific route. This is rarely needed — prefer plain `Depends(throttle)` for route-level throttling.
+    When used as a dependency, `MiddlewareThrottle` applies its path and method filters using the actual request. This means you get the same filtered behavior as in middleware, but scoped to a specific route. This is rarely needed, prefer plain `Depends(throttle)` for route-level throttling.
 
 ---
 
@@ -345,3 +345,5 @@ async def get_data():
 async def create_data(payload: dict):
     return {"created": True}
 ```
+
+--8<-- "includes/abbreviations.md"

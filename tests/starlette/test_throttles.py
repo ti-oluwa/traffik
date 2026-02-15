@@ -384,14 +384,19 @@ async def test_disabled_throttle_skips_hit(inmemory_backend: InMemoryBackend) ->
     async with inmemory_backend():
         transport = ASGITransport(
             app=Starlette(
-                routes=[
-                    Route("/test", lambda req: JSONResponse({"ok": True}))
-                ]
+                routes=[Route("/test", lambda req: JSONResponse({"ok": True}))]
             )
         )
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            req = Request(scope={"type": "http", "method": "GET", "path": "/test",
-                                  "query_string": b"", "headers": []})
+            req = Request(
+                scope={
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/test",
+                    "query_string": b"",
+                    "headers": [],
+                }
+            )
             # Fire 5 requests — all should pass because the throttle is disabled
             for _ in range(5):
                 result = await throttle.hit(req)

@@ -232,9 +232,6 @@ class TestThrottleRuleCheck:
         assert await rule.check(conn) is True
 
 
-# ── BypassThrottleRule ────────────────────────────────────────────────────────
-
-
 class TestBypassThrottleRuleInit:
     def test_rank_is_one(self) -> None:
         assert BypassThrottleRule.__rank__ == 1
@@ -306,9 +303,6 @@ class TestBypassThrottleRuleCheck:
         assert await rule.check(conn, context={"bypass": False}) is True
 
 
-# ── _prep_rules ───────────────────────────────────────────────────────────────
-
-
 class TestPrepRules:
     def test_empty_returns_empty_tuple(self) -> None:
         assert _prep_rules(()) == ()
@@ -365,9 +359,6 @@ class TestPrepRules:
         rule = ThrottleRule(path="/x/")
         result = _prep_rules([rule])
         assert result == (rule,)
-
-
-# ── ThrottleRegistry ──────────────────────────────────────────────────────────
 
 
 class TestThrottleRegistry:
@@ -469,9 +460,6 @@ class TestThrottleRegistry:
         assert len(registry.get_rules("foo")) == 1
 
 
-# ── ThrottleRegistry disable / enable / get_throttle ─────────────────────────
-
-
 def _make_throttle(uid: str, registry: ThrottleRegistry) -> HTTPThrottle:
     """Create a minimal HTTPThrottle bound to the given registry."""
     return HTTPThrottle(
@@ -504,9 +492,10 @@ class TestThrottleRegistryDisableEnable:
     @pytest.mark.asyncio
     async def test_disable_returns_true_when_found(self) -> None:
         registry = ThrottleRegistry()
-        _make_throttle("t1", registry)
+        throttle = _make_throttle("t1", registry)
         result = await registry.disable("t1")
         assert result is True
+        del throttle
 
     @pytest.mark.asyncio
     async def test_disable_returns_false_when_not_found(self) -> None:

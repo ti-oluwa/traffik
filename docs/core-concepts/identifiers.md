@@ -5,7 +5,7 @@ calls the identifier function to get a string key that represents the caller. Al
 counter increments, lock names, and backend keys are namespaced under that key.
 
 Get the identifier right and you get per-user, per-tenant, or per-API-key rate
-limiting for free. Return the wrong thing and everyone shares a single counter.
+limiting. Return the wrong thing and everyone shares a single counter.
 
 ---
 
@@ -18,7 +18,7 @@ If you do not provide an identifier, Traffik uses `get_remote_address()`, which 
 2. The `remote-addr` header
 3. `connection.client.host`
 
-The fallback when none of those are available is `ANONYMOUS` (`"__anonymous__"`).
+The fallback when none of those are available is `ANONYMOUS_IDENTIFIER` (`"__anonymous__"`).
 
 ```python
 from traffik import HTTPThrottle
@@ -116,7 +116,7 @@ backend = RedisBackend(
 
 ---
 
-## EXEMPTED: bypassing all throttle logic
+## `EXEMPTED`: bypassing all throttle logic
 
 Return the `EXEMPTED` sentinel to completely bypass throttling for a connection.
 Traffik will not call the strategy, will not touch the backend, and will not
@@ -143,7 +143,7 @@ async def identifier_with_allowlist(connection: HTTPConnection):
 
 ---
 
-## ANONYMOUS: the fallback constant
+## `ANONYMOUS_IDENTIFIER`: the fallback constant
 
 When `get_remote_address()` cannot determine an IP address (e.g., a Unix socket
 connection, a test client without a client address), it returns `None`. The default
@@ -194,3 +194,5 @@ the case).
 
     If you must do I/O, at least make sure `cache_ids=True` (the default) so the
     I/O only happens once per request, not once per throttle per request.
+
+--8<-- "includes/abbreviations.md"

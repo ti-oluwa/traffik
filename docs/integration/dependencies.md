@@ -1,6 +1,6 @@
 # Dependency Injection
 
-FastAPI's `Depends` mechanism is the most idiomatic way to attach throttles to routes. Traffik throttle instances are callable and expose a clean `__signature__` that FastAPI understands natively — they slot in exactly like any other dependency.
+FastAPI's `Depends` mechanism is the most idiomatic way to attach throttles to routes. Traffik throttle instances are callable and expose a clean `__signature__` that FastAPI understands natively, slotting in exactly like any other dependency.
 
 !!! tip "Recommended approach for FastAPI"
     Dependency injection is the standard FastAPI pattern. It composes cleanly with other dependencies, works at the route and router level, and doesn't require you to change your handler signature.
@@ -20,7 +20,7 @@ FastAPI's `Depends` mechanism is the most idiomatic way to attach throttles to r
         return JSONResponse({"items": []})
     ```
 
-    FastAPI's `Depends` is simply a wrapper around this same call — it resolves the `Request` and calls the throttle for you. In plain Starlette, you manage the call yourself.
+    FastAPI's `Depends` is simply a wrapper around this same call, resolving the `Request` and calling the throttle for you. In plain Starlette, you manage the call yourself.
 
 ---
 
@@ -47,9 +47,9 @@ FastAPI resolves the throttle before executing the handler. If the client exceed
 
 ---
 
-## With Request access
+## With `Request` access
 
-If your handler also needs the request object — for example, to read headers or query parameters — declare the throttle as a named parameter. FastAPI injects both the `Request` and the throttle result.
+If your handler also needs the request object, for example to read headers or query parameters, declare the throttle as a named parameter. FastAPI injects both the `Request` and the throttle result.
 
 ```python
 from fastapi import FastAPI, Depends, Request
@@ -196,3 +196,5 @@ async def chat(websocket: WebSocket = Depends(ws_throttle)):
 
 !!! note
     For WebSocket throttles that apply per-message (rather than per-connection), use [direct usage](direct-usage.md) inside the message loop instead.
+
+--8<-- "includes/abbreviations.md"

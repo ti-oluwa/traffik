@@ -11,7 +11,7 @@ Before you install, make sure you have:
 - **Python 3.9+** - Traffik uses modern async features and type hints throughout.
 - **FastAPI** or **Starlette** - Traffik integrates with Starlette's `HTTPConnection` model, which FastAPI is built on.
 
-That's it. No mandatory external services, no heavyweight dependencies. The in-memory backend works out of the box.
+That's it. No mandatory external services, no heavyweight dependencies. The in-memory backend works with no additional setup.
 
 ---
 
@@ -83,7 +83,7 @@ Traffik ships with optional extras for each storage backend. Install only what y
 | Extra | What it adds | When to use it |
 |---|---|---|
 | *(none)* | Core package + `InMemoryBackend` | Local development, tests, single-process apps |
-| `[redis]` | `redis[hiredis]`, `redlock-py` | Multi-instance production deployments |
+| `[redis]` | `redis-py`, `pottery` | Multi-instance production deployments |
 | `[memcached]` | `aiomcache` | High-throughput environments where you already run Memcached |
 | `[all]` | Everything above | When you want to try all backends or run the full test suite |
 | `[dev]` | Testing tools, linters, type checkers | Contributing to Traffik |
@@ -93,7 +93,7 @@ Traffik ships with optional extras for each storage backend. Install only what y
 ## Choosing a Backend
 
 !!! tip "Start with InMemory, graduate to Redis"
-    During local development and in CI, the `InMemoryBackend` is perfect. It requires zero configuration and zero external services. When you're ready to deploy, swap it for `RedisBackend` - the rest of your code stays the same.
+    During local development and in CI, the `InMemoryBackend` is perfect. It requires zero configuration and zero external services. When you're ready to deploy, swap it for `RedisBackend`, the rest of your code stays the same.
 
     ```python
     # Development
@@ -118,7 +118,7 @@ Traffik ships with optional extras for each storage backend. Install only what y
 ```python
 import traffik
 
-print(traffik.__version__)  # Should print "1.0.3"
+print(traffik.__version__)  # Should print "1.*.*"
 ```
 
 Or from the command line:
@@ -131,7 +131,7 @@ python -c "import traffik; print(traffik.__version__)"
 
 ## Fully Typed
 
-Traffik is a [PEP 561](https://peps.python.org/pep-0561/) compliant package. It ships with a `py.typed` marker, which means type checkers like `mypy` and `pyright` pick up its type annotations automatically - no stub packages required.
+Traffik is a [PEP 561](https://peps.python.org/pep-0561/) compliant package. It ships with a `py.typed` marker, which means type checkers like `mypy` and `pyright` pick up its type annotations automatically, no stub packages required.
 
 !!! tip "Pyright / Pylance users"
     Traffik's generics (`Throttle[Request]`, `ThrottleBackend[..., Request]`) resolve correctly with strict mode. If you see false positives, make sure you're on the latest version of your type checker.
@@ -141,3 +141,5 @@ Traffik is a [PEP 561](https://peps.python.org/pep-0561/) compliant package. It 
 ## Next Steps
 
 You're all set. Head over to the [Quick Start](quickstart.md) to write your first throttled endpoint.
+
+--8<-- "includes/abbreviations.md"

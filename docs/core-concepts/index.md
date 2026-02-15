@@ -10,7 +10,7 @@ is built around four simple, composable ideas. Master these and you master every
 ### Rate
 
 A **Rate** is the answer to "how much traffic is too much?" It bundles a request
-limit together with a time window — "100 requests per minute", "5 per second", "1000
+limit together with a time window, "100 requests per minute", "5 per second", "1000
 per hour". You can express it as a human-friendly string like `"100/min"` or
 construct it as a `Rate` object when you need a more complex period.
 
@@ -22,9 +22,9 @@ construct it as a `Rate` object when you need a more complex period.
 
 A **Backend** is where Traffik keeps score. Every time a request comes in, the backend
 increments a counter, checks whether the limit has been crossed, and hands back a
-verdict. Traffik ships with three backends out of the box: an **InMemory** backend
-for development and single-process apps, a **Redis** backend for production and
-distributed systems, and a **Memcached** backend for when you already have Memcached
+verdict. Traffik ships with three backends: an `InMemoryBackend`
+for development and single-process apps, a `RedisBackend` for production and
+distributed systems, and a `MemcachedBackend` for when you already have Memcached
 in your stack.
 
 [Backends in depth &rarr;](backends.md)
@@ -36,8 +36,8 @@ in your stack.
 A **Strategy** is the algorithm that decides *how* to count. Should Traffik use a
 simple fixed window that resets every minute? A sliding window that's immune to
 boundary bursts? A token bucket that allows occasional burst traffic? There are seven
-strategies built in — from the dead-simple `FixedWindow` to the telecom-grade `GCRA`
-— plus a whole collection of advanced strategies in `traffik.strategies.custom`.
+strategies built in, from the dead-simple `FixedWindow` to the telecom-grade `GCRA`,
+plus a whole collection of advanced strategies in `traffik.strategies.custom`.
 
 [Strategies in depth &rarr;](strategies.md)
 
@@ -72,5 +72,7 @@ throttle = HTTPThrottle(
 )
 ```
 
-Once you understand these four things — **Rate**, **Backend**, **Strategy**,
-**Identifier** — you understand Traffik.
+Once you understand these four things, **Rate**, **Backend**, **Strategy**,
+**Identifier**, you understand Traffik.
+
+--8<-- "includes/abbreviations.md"

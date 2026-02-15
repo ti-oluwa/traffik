@@ -8,15 +8,15 @@ the first architectural decision you'll make when adding Traffik to a project.
 
 ## Choosing a backend
 
-| Feature            | InMemory                  | Redis                      | Memcached                  |
-|--------------------|---------------------------|----------------------------|----------------------------|
-| Best for           | Dev, tests, single process| Production, distributed    | Existing Memcached stacks  |
-| Persistence        | No                        | Optional (`persistent=True`) | Optional (`persistent=True` & `track_keys=True`(enables resets)) |
-| Distributed        | No                        | Yes                        | Yes                        |
-| Lock type          | asyncio RLock             | Redis Lua / Redlock        | Memcached `add` CAS        |
-| Overhead           | Lowest                    | Low (Lua scripts, pipelining) | Low                     |
-| Requires extra dep | No                        | `redis` + `pottery`        | `aiomcache`                |
-| `reset()` / `clear()` | Full                  | Full (Lua SCAN)            | Only when `track_keys=True` |
+| Feature               | InMemory                   | Redis                                    | Memcached                                                         |
+|-----------------------|----------------------------|------------------------------------------|-------------------------------------------------------------------|
+| Best for              | Dev, tests, single process | Production, distributed                  | Existing Memcached stacks                                         |
+| Persistence           | No                         | Optional (`persistent=True`)             | Optional (`persistent=True` & `track_keys=True`(enables resets))  |
+| Distributed           | No                         | Yes                                      | Yes                                                               |
+| Lock type             | asyncio RLock              | Redis Lua / Redlock                      | Memcached `add` CAS                                               |
+| Overhead              | Lowest                     | Low (Lua scripts, pipelining)            | Low                                                               |
+| Requires extra dep    | No                         | `redis` + `pottery`                      | `aiomcache`                                                       |
+| `reset()` / `clear()` | Full                       | Full (Lua SCAN)                          | Only when `track_keys=True`                                       |
 
 ---
 
@@ -108,10 +108,10 @@ backend = RedisBackend(
 
 ### Lock types
 
-| `lock_type` | Algorithm      | Best for                                               |
-|-------------|----------------|--------------------------------------------------------|
-| `"redis"`   | SET NX EX + Lua fencing | Single Redis instance, lowest latency       |
-| `"redlock"` | Redlock (via `pottery.AIORedlock`) | Redis clusters, multiple instances |
+| `lock_type` | Algorithm                           | Best for                              |
+|-------------|-------------------------------------|---------------------------------------|
+| `"redis"`   | SET NX EX + Lua fencing             | Single Redis instance, lowest latency |
+| `"redlock"` | Redlock (via `pottery.AIORedlock`)  | Redis clusters, multiple instances    |
 
 !!! warning "Redlock is slower by design"
     Redlock involves multiple round-trips across several Redis nodes. Unless you
@@ -121,7 +121,7 @@ backend = RedisBackend(
 
 **Characteristics:**
 
-- Atomic `increment_with_ttl` is implemented as a single Lua script — no race
+- Atomic `increment_with_ttl` is implemented as a single Lua script, no race
   conditions between increment and expire.
 - `multi_get` uses Redis `MGET` (one round-trip for multiple keys).
 - `multi_set` uses a Redis pipeline with `MULTI/EXEC` for atomicity.
@@ -166,13 +166,13 @@ backend = MemcachedBackend(
 - Locks are implemented using Memcached's atomic `add` operation (add only succeeds
   if the key does not exist), with a fencing token for ownership verification.
 - Locks are instance-bound, not task-reentrant the way Redis locks are.
-- Memcached keys are limited to 250 bytes — keep your `namespace` short.
+- Memcached keys are limited to 250 bytes, keep your `namespace` short.
 
 ### The `track_keys` limitation
 
 Memcached has no equivalent of Redis `SCAN`, so Traffik cannot natively list all keys
-in a namespace. The `clear()` method — called during non-persistent context teardown
-— is therefore a **no-op by default**.
+in a namespace. The `clear()` method, called during non-persistent context teardown,
+is therefore a **no-op by default**.
 
 Enable `track_keys=True` to have Traffik maintain a side-car key that records every
 key it sets:
@@ -236,7 +236,7 @@ provides three patterns; pick the one that fits your framework.
 
 ### Without ASGI lifespan (scripts, tests, CLI tools)
 
-When you are not running an ASGI application — for example, in a standalone script, a CLI tool, or a test that doesn't need a full app — you can use the backend as an async context manager directly without passing an `app`:
+When you are not running an ASGI application, for example in a standalone script, a CLI tool, or a test that doesn't need a full app, you can use the backend as an async context manager directly without passing an `app`:
 
 ```python
 from traffik.backends.inmemory import InMemoryBackend
@@ -255,7 +255,7 @@ This initialises the backend on entry and closes it (calling `reset()` if `persi
 
 ### Persistence
 
-By default, `persistent=False` — Traffik calls `reset()` on the backend when the
+By default, `persistent=False`, Traffik calls `reset()` on the backend when the
 context exits. This wipes all throttle counters, which is what you usually want
 between test runs and application restarts.
 
@@ -273,9 +273,11 @@ backend = RedisBackend(
 
 All three backends share the same error-handling knob:
 
-| Value        | Behaviour on backend error                                 |
-|--------------|------------------------------------------------------------|
-| `"throttle"` | Treat the request as if it exceeded the limit (safe default) |
-| `"allow"`    | Let the request through (optimistic)                       |
-| `"raise"`    | Propagate the exception to your exception handler          |
-| `callable`   | Call your function `(connection, exc_info) -> wait_ms`     |
+| Value        | Behaviour on backend error                                    |
+|--------------|---------------------------------------------------------------|
+| `"throttle"` | Treat the request as if it exceeded the limit (safe default)  |
+| `"allow"`    | Let the request through (optimistic)                          |
+| `"raise"`    | Propagate the exception to your exception handler             |
+| `callable`   | Call your function `(connection, exc_info) -> wait_ms`        |
+
+--8<-- "includes/abbreviations.md"

@@ -6,7 +6,7 @@ The contract is well-defined, the base class handles a lot of the plumbing for y
 
 ---
 
-## Inherit from ThrottleBackend
+## Inherit from `ThrottleBackend`
 
 ```python
 from traffik.backends.base import ThrottleBackend
@@ -83,7 +83,7 @@ class CustomBackend(ThrottleBackend):
 
 These methods have default implementations in the base class, but overriding them with native operations is strongly recommended for production backends:
 
-### increment_with_ttl()
+### `increment_with_ttl()`
 
 The most important override. Called on every request for `FixedWindow` and `SlidingWindowCounter` with windows >= 1 second.
 
@@ -105,7 +105,7 @@ async def increment_with_ttl(
     return results[0]
 ```
 
-### multi_get()
+### `multi_get()`
 
 Batch read — called by `SlidingWindowCounter` and the stats system:
 
@@ -115,7 +115,7 @@ async def multi_get(self, *keys: str) -> List[Optional[str]]:
     return await self.connection.mget(*keys)
 ```
 
-### multi_set()
+### `multi_set()`
 
 Batch write — called during window resets in sub-second strategies:
 

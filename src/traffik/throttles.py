@@ -383,8 +383,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
     def is_disabled(self) -> bool:
         """Returns True if this throttle is currently disabled.
 
-        When disabled, :meth:`hit` returns immediately without consuming any quota.
-        Use :meth:`disable` and :meth:`enable` to change this state.
+        When disabled, `hit(...)` returns immediately without consuming any quota.
+        Use `disable()` and `enable()` to change this state.
         """
         return self._disabled
 
@@ -393,10 +393,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         Disable this throttle.
 
         Acquires the update lock then sets the disabled flag. Once disabled,
-        every call to :meth:`hit` returns the connection immediately without
+        every call to `hit(...)` returns the connection immediately without
         consuming quota or evaluating rules.
 
-        Safe to call from async error handlers (``on_error`` callbacks).
+        Safe to call from async error handlers (`on_error` callbacks).
         """
         async with self._update_lock:
             self._disabled = True
@@ -406,24 +406,24 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         Re-enable this throttle.
 
         Acquires the update lock then clears the disabled flag so that
-        subsequent :meth:`hit` calls resume normal throttle evaluation.
+        subsequent `hit` calls resume normal throttle evaluation.
         """
         async with self._update_lock:
             self._disabled = False
 
-    async def update_rate(self, rate: "RateType[HTTPConnectionT]") -> None:
+    async def update_rate(self, rate: RateType[HTTPConnectionT]) -> None:
         """
         Update the throttle rate atomically.
 
-        :param rate: New rate — a rate string (``"10/min"``), a :class:`~traffik.rates.Rate`
-            instance, or an async callable ``(connection, context) -> Rate``.
+        :param rate: The new rate, a rate string (`"10/min"`), a `Rate`
+            instance, or an async callable `(connection, context) -> Rate`.
         """
         async with self._update_lock:
             self.rate = Rate.parse(rate) if isinstance(rate, str) else rate  # type: ignore[arg-type]
             self._uses_rate_func = callable(rate)
 
     async def update_backend(
-        self, backend: "ThrottleBackend[typing.Any, HTTPConnectionT]"
+        self, backend: ThrottleBackend[typing.Any, HTTPConnectionT]
     ) -> None:
         """
         Replace the throttle's fixed backend atomically.
@@ -442,12 +442,12 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         async with self._update_lock:
             self.strategy = strategy
 
-    async def update_cost(self, cost: "CostType[HTTPConnectionT]") -> None:
+    async def update_cost(self, cost: CostType[HTTPConnectionT]) -> None:
         """
         Update the throttle cost atomically.
 
-        :param cost: New cost — a static integer or an async callable
-            ``(connection, context) -> int``.
+        :param cost: The new cost, a static integer or an async callable
+            `(connection, context) -> int`.
         """
         async with self._update_lock:
             self._uses_cost_func = callable(cost)
@@ -459,7 +459,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """
         Update the minimum wait period atomically.
 
-        :param min_wait_period: New floor wait time in milliseconds, or ``None`` to remove it.
+        :param min_wait_period: The new floor wait time in milliseconds, or `None` to remove it.
         """
         async with self._update_lock:
             self.min_wait_period = min_wait_period
@@ -473,7 +473,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """
         Replace the throttled-response handler atomically.
 
-        :param handle_throttled: New handler, or ``None`` to fall back to the backend default.
+        :param handle_throttled: New handler, or `None` to fall back to the backend default.
         """
         async with self._update_lock:
             self.handle_throttled = handle_throttled  # type: ignore[assignment]
@@ -490,8 +490,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """
         Replace the response header collection atomically.
 
-        :param headers: New headers — a :class:`~traffik.headers.Headers` instance,
-            a plain mapping of ``{name: Header}`` pairs, or ``None`` to clear all headers.
+        :param headers: New headers, a `Headers` instance,
+            a plain mapping of `{name: Header}` pairs, or `None` to clear all headers.
         """
         async with self._update_lock:
             if headers is None:
@@ -508,12 +508,24 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         Replace the connection identifier function atomically.
 
         The identifier determines how connections are keyed for throttle tracking.
-        Updating it takes effect on the next :meth:`hit` call.
+        Updating it takes effect on the next `hit(...)` call.
 
-        :param identifier: New identifier callable, or ``None`` to use the backend default.
+        :param identifier: New identifier callable, or `None` to use the backend default.
         """
         async with self._update_lock:
             self.identifier = identifier  # type: ignore[assignment]
+
+    async def update_error_handler(
+        self,
+        handler: ThrottleErrorHandler[HTTPConnectionT, ThrottleExceptionInfo],
+    ) -> None:
+        """
+        Update the error handler for the throttle.
+
+        :param handler: The custom error handler to set.
+        """
+        async with self._update_lock:
+            self._error_callback = handler
 
     async def get_headers(
         self,
@@ -1062,17 +1074,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             check_cost = self.cost  # type: ignore[assignment]
 
         return stat.hits_remaining >= check_cost
-
-    def set_error_handler(
-        self,
-        handler: ThrottleErrorHandler[HTTPConnectionT, ThrottleExceptionInfo],
-    ) -> None:
-        """
-        Set a custom error handler for the throttle.
-
-        :param handler: The custom error handler to set.
-        """
-        self._error_callback = handler
 
     def quota(
         self,
@@ -1674,6 +1675,9 @@ def throttled(
         raise ValueError("At least one throttle must be provided.")
 
     if len(throttles) > 1:
+        connection_type = throttles[0].connection_type
+        if not all(t.connection_type is connection_type for t in throttles):
+            raise ValueError("All throttles must have the same connection type.")
 
         async def throttle(connection: HTTPConnectionT) -> HTTPConnectionT:
             nonlocal throttles
@@ -1682,6 +1686,10 @@ def throttled(
             return connection
     else:
         throttle = throttles[0]  # type: ignore[assignment]
+        connection_type = throttle.connection_type
+
+    if not issubclass(connection_type, HTTPConnection):
+        raise ValueError("Throttles must be designed for HTTP connections.")
 
     def _decorator(
         route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
@@ -1693,12 +1701,12 @@ def throttled(
             async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
                 connection = None
                 for arg in args:
-                    if isinstance(arg, HTTPConnection):
+                    if isinstance(arg, connection_type):
                         connection = arg
                         break
                 if connection is None:
                     for kwarg in kwargs.values():
-                        if isinstance(kwarg, HTTPConnection):
+                        if isinstance(kwarg, connection_type):
                             connection = kwarg
                             break
 
@@ -1718,12 +1726,12 @@ def throttled(
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             connection = None
             for arg in args:
-                if isinstance(arg, HTTPConnection):
+                if isinstance(arg, connection_type):
                     connection = arg
                     break
             if connection is None:
                 for kwarg in kwargs.values():
-                    if isinstance(kwarg, HTTPConnection):
+                    if isinstance(kwarg, connection_type):
                         connection = kwarg
                         break
 

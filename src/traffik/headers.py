@@ -250,6 +250,11 @@ class Header(typing.Generic[HTTPConnectionT]):
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self._raw!r})"
 
+    def __setattr__(self, name: str, value: typing.Any):
+        if name in self.__slots__ and hasattr(self, name):
+            raise AttributeError(f"`{self.__class__.__name__}` object is immutable")
+        super().__setattr__(name, value)
+
     @property
     def always(self) -> Self:
         """Returns a new `Header` instance that is always included in the response."""
@@ -311,14 +316,6 @@ def _is_static(headers: typing.Mapping[str, typing.Union[Header, str]]) -> bool:
     This is used to determine if we can optimize header resolution by pre-encoding them and skipping dynamic resolution on each request.
     """
     return all(isinstance(v, str) for v in headers.values())
-
-
-def encode_headers(
-    headers: typing.Mapping[str, str],
-) -> typing.List[typing.Tuple[bytes, bytes]]:
-    return [
-        (k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in headers.items()
-    ]
 
 
 class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
@@ -386,10 +383,12 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
     def update(
         self, other: typing.Mapping[str, typing.Union[str, Header[HTTPConnectionT]]], /
     ) -> None:
+        """In-place update the headers. This can be slow, especially for large updates. Use `|` (union) instead."""
         for k, v in other.items():
             self[k] = v
 
     def copy(self) -> Self:
+        """Make a shallow copy of the headers instance"""
         return self.__class__(dict(self._raw), _prepped=True, _static=self._is_static)
 
     def __getitem__(self, key: str, /) -> Header[HTTPConnectionT]:
@@ -401,11 +400,11 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
     def __setitem__(
         self, key: str, value: typing.Union[str, Header[HTTPConnectionT]], /
     ) -> None:
+        # This method has a worst case of O(N-keys).
+        # But since headers are usually not that large, it is acceptable.
         self._raw[key] = value
-        # Update the static status of the headers after setting a new value.
-        # Once False, it stays False unless explicitly reset
-        if not (isinstance(value, str) or getattr(value, "_is_static", False)):
-            self._is_static = False
+        # Recompute static status after mutation.
+        self._is_static = _is_static(self._raw)
 
     def __contains__(self, key: typing.Hashable, /) -> bool:
         return key in self._raw
@@ -474,7 +473,7 @@ DEFAULT_HEADERS_ALWAYS = Headers[typing.Any](
     {
         "X-RateLimit-Limit": Header.LIMIT(when="always"),
         "X-RateLimit-Remaining": Header.REMAINING(when="always"),
-        "X-RateLimit-Reset": Header.RESET_SECONDS(when="always"),
+        "Retry-After": Header.RESET_SECONDS(when="always"),
     }
 )
 """
@@ -483,14 +482,14 @@ Default headers to include in all responses, regardless of throttling status.
 These headers include:
 - `X-RateLimit-Limit`: The maximum number of hits allowed in the current period.
 - `X-RateLimit-Remaining`: The number of hits remaining in the current period.
-- `X-RateLimit-Reset`: The time to wait (in seconds) before the next allowed request.
+- `Retry-After`: The time to wait (in seconds) before the next allowed request (RFC 6585).
 """
 
 DEFAULT_HEADERS_THROTTLED = Headers[typing.Any](
     {
         "X-RateLimit-Limit": Header.LIMIT(when="throttled"),
         "X-RateLimit-Remaining": Header.REMAINING(when="throttled"),
-        "X-RateLimit-Reset": Header.RESET_SECONDS(when="throttled"),
+        "Retry-After": Header.RESET_SECONDS(when="throttled"),
     }
 )
 """
@@ -499,5 +498,5 @@ Default headers to include only in throttled responses.
 These headers include:
 - `X-RateLimit-Limit`: The maximum number of hits allowed in the current period
 - `X-RateLimit-Remaining`: The number of hits remaining in the current period
-- `X-RateLimit-Reset`: The time to wait (in seconds) before the next allowed request
+- `Retry-After`: The time to wait (in seconds) before the next allowed request (RFC 6585)
 """

@@ -13,8 +13,41 @@ from traffik.types import (
 __all__ = ["ThrottleRule", "BypassThrottleRule", "ThrottleRegistry"]
 
 
+def _glob_to_regex(pattern: str) -> str:
+    """
+    Helper to convert a simple glob wildcards in a path pattern to regex equivalents.
+
+    - `**` is replaced with `.*` (matches anything, including `/`)
+    - A standalone `*` (not part of `**`) is replaced with `[^/]+`
+      (matches a single non-empty path segment)
+
+    Bare `*` is not valid regex (it's a quantifier without a preceding token),
+    so any path string containing `*` is assumed to be a glob, not regex.
+    Strings without `*` pass through unchanged and are compiled as regex directly.
+    """
+    if "*" not in pattern:
+        return pattern
+    # Replace ** first to avoid double-conversion
+    pattern = pattern.replace("**", "\x00")
+    pattern = pattern.replace("*", "[^/]+")
+    pattern = pattern.replace("\x00", ".*")
+    return pattern
+
+
 class ThrottleRule(typing.Generic[HTTPConnectionT]):
-    """Rule definition determining if a throttle should apply to a HTTP connection"""
+    """
+    A Throttle "Gate" Rule.
+
+    Determines when a throttle should apply to an HTTP connection.
+
+    When used with a throttle, all rules are checked conjunctively on each `hit(...)` call.
+    If **any** rule returns `False`, the throttle is skipped for that connection.
+    A `ThrottleRule` returns `True` when the connection matches its criteria (path,
+    methods, predicate), meaning "yes, apply the throttle". Non-matching connections
+    pass through without consuming quota.
+
+    See also: `BypassThrottleRule` for the inverse behavior.
+    """
 
     __rank__ = 0
     """Higher value means higher check priority. Mainly for optimizing throttle rule checks"""
@@ -37,24 +70,30 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
         """
         Initialize the throttle rule.
 
-        :param path: A matchable path (string or regex) to apply the throttle to.
-            If string, it's compiled as a regex pattern.
+        :param path: A matchable path (string, glob, or compiled regex) to apply the throttle to.
+            If a string is provided, simple wildcards are supported and converted to regex:
 
-            Examples:
-            - "/api/" matches paths starting with "/api/"
-            - r"/api/\\d+" matches "/api/" followed by digits
-            - None applies to all paths.
+            - `*` matches a single path segment (everything except `/`)
+            - `**` matches any number of segments (including `/`)
+
+            Wildcard examples:
+
+            - `"/api/*/users"` matches `/api/v1/users`, `/api/v2/users`
+            - `"/api/**"` matches `/api/`, `/api/v1/data`, `/api/v1/v2/nested`
+            - `"/api/"` matches paths starting with `/api/` (plain regex, no wildcards)
+            - `r"/api/\\d+"` matches `/api/` followed by digits (plain regex)
+            - `None` applies to all paths.
 
         :param methods: A set of HTTP methods (e.g., 'GET', 'POST') to apply the throttle to.
             If None, the throttle applies to all methods. Ignored for `WebSocket` connections.
-        :param predicate: An optional callable that takes an HTTP connection (and an otpioanl context) and returns a boolean.
+        :param predicate: An optional callable that takes an HTTP connection (and an optional context) and returns a boolean.
             If provided, the throttle will only apply if this returns True for the connection.
             This is useful for more complex conditions that cannot be expressed with just path and methods.
             It is run after checking the path and methods, so it should be used for more expensive checks.
         """
         self.path: typing.Optional[re.Pattern[str]]
         if isinstance(path, str):
-            self.path = re.compile(path)
+            self.path = re.compile(_glob_to_regex(path))
         else:
             self.path = path
 
@@ -141,9 +180,21 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
 
 class BypassThrottleRule(ThrottleRule[HTTPConnectionT]):
     """
-    Rule definition for determining if a throttle should be skipped/bypassed for an HTTP connection.
+    A Throttle "Bypass" Rule.
 
-    This basically the opposite of, or negates the regular `ThrottleRule` behaviour.
+    Skip/bypass the throttle when this rule matches an HTTP connection.
+
+    The inverse of `ThrottleRule`. When a connection matches the bypass criteria
+    (path, methods, predicate), the throttle is **not** applied and the connection
+    passes through without consuming quota.
+
+    Semantics of `check(...)`:
+
+    - Returns `False` when the connection **matches** the bypass criteria,
+      causing the conjunctive rule check in `hit(...)` to short-circuit and skip
+      the throttle.
+    - Returns `True` when the connection does **not** match, allowing other
+      rules (and the throttle itself) to proceed normally.
     """
 
     __rank__ = 1
@@ -203,11 +254,11 @@ def _prep_rules(
     Sort rules for optimal short-circuit evaluation order.
 
     Bypass rules (`BypassThrottleRule`) are placed before regular rules
-    because they return `False` on match — the fastest path to skip a throttle.
+    because they return `False` on match, which is the fastest path to skip a throttle.
     Within each tier, rules without predicates come first since path/method
     checks (frozenset lookup + regex) are cheaper than arbitrary async predicates.
 
-    Resulting order:
+    The resulting order becomes:
 
     1. `BypassThrottleRule` without predicate
     2. `ThrottleRule` without predicate
@@ -302,15 +353,16 @@ class ThrottleRegistry:
         Get all rules associated with a throttle.
 
         :param uid: The UID of the throttle.
-        :return: A list of ``ThrottleRule`` instances, or an empty list if none exist.
+        :return: A list of `ThrottleRule`` instances, or an empty list if none exist.
         """
         with self._lock:
             return list(self._rules.get(uid, []))
 
     def clear(self) -> None:
         """Clear the registry"""
-        self._registered = set()
-        self._rules = {}
+        with self._lock:
+            self._registered = set()
+            self._rules = {}
 
 
 GLOBAL_REGISTRY = ThrottleRegistry()

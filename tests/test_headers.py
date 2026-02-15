@@ -14,7 +14,6 @@ from traffik.headers import (
     Headers,
     _is_static,
     _prep_headers,
-    encode_headers,
 )
 from traffik.rates import Rate
 from traffik.types import StrategyStat
@@ -401,31 +400,17 @@ class TestIsStatic:
         assert _is_static({}) is True
 
 
-class TestEncodeHeaders:
-    def test_encode(self) -> None:
-        result = encode_headers({"X-A": "value"})
-        assert result == [(b"x-a", b"value")]
-
-    def test_encode_multiple(self) -> None:
-        result = encode_headers({"X-A": "a", "X-B": "b"})
-        assert len(result) == 2
-
-    def test_encode_lowercases_keys(self) -> None:
-        result = encode_headers({"X-RateLimit-Limit": "100"})
-        assert result[0][0] == b"x-ratelimit-limit"
-
-
 class TestDefaultPresets:
     def test_default_always_has_expected_keys(self) -> None:
         assert "X-RateLimit-Limit" in DEFAULT_HEADERS_ALWAYS
         assert "X-RateLimit-Remaining" in DEFAULT_HEADERS_ALWAYS
-        assert "X-RateLimit-Reset" in DEFAULT_HEADERS_ALWAYS
+        assert "Retry-After" in DEFAULT_HEADERS_ALWAYS
         assert len(DEFAULT_HEADERS_ALWAYS) == 3
 
     def test_default_throttled_has_expected_keys(self) -> None:
         assert "X-RateLimit-Limit" in DEFAULT_HEADERS_THROTTLED
         assert "X-RateLimit-Remaining" in DEFAULT_HEADERS_THROTTLED
-        assert "X-RateLimit-Reset" in DEFAULT_HEADERS_THROTTLED
+        assert "Retry-After" in DEFAULT_HEADERS_THROTTLED
         assert len(DEFAULT_HEADERS_THROTTLED) == 3
 
     def test_default_always_is_not_static(self) -> None:

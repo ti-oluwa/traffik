@@ -124,6 +124,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         "registry",
         "_rules",
         "_rules_resolved",
+        "_rules_count",
+        "dynamic_rules",
         "cache_ids",
         "on_error",
         "use_fixed_backend",
@@ -163,6 +165,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         registry: typing.Optional[ThrottleRegistry] = None,
         rules: typing.Optional[typing.Iterable[ThrottleRule[HTTPConnectionT]]] = None,
         cache_ids: bool = True,
+        dynamic_rules: bool = False,
     ) -> None:
         """
         Initialize the throttle instance.
@@ -262,6 +265,13 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             Setting this to `True` is especially useful for long-lived connections
             like `WebSocket`s where the connection does not change after establishment,
             and caching avoids redundant/expensive identifier computations.
+
+        :param dynamic_rules: Whether to re-fetch registry rules on every `hit(...)` call.
+            Defaults to False. When False, registry rules are merged and cached on the first
+            `hit(...)` call for efficiency. When True, `add_rules(...)` calls made after the
+            first hit are picked up on subsequent calls. The overhead is minimal (a dict
+            lookup + length comparison per hit), but only enable this if you need to add
+            rules after the throttle has already started processing requests.
         """
         if not uid or not isinstance(uid, str):
             raise ValueError("uid is required and must be a non-empty string")
@@ -291,10 +301,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             _prep_rules(set(rules)) if rules else ()
         )
         self._rules_resolved = False
+        self._rules_count = 0
+        self.dynamic_rules = dynamic_rules
         self.cache_ids = cache_ids
         self.registry.register(uid)
-        # Register a finalization weakref for when the throttle is garbage-collected so its UID can be unregistered.
-        weakref.finalize(self, self.registry.unregister, uid)
 
         # Ensure that we copy the context to avoid potential mutation issues from outside after initialization
         # Never modify `_default_context` after initialization. It's unsafe.
@@ -357,6 +367,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         # expose `connection`, FastAPI injects the request correctly.
         self.__signature__ = self._make_signature()
 
+        # Register a finalization weakref for when the throttle is garbage-collected so its UID can be unregistered.
+        weakref.finalize(self, self.registry.unregister, uid)
+
     @property
     def is_dynamic(self) -> bool:
         """Returns True if the throttle uses a dynamic backend, False otherwise."""
@@ -372,13 +385,21 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> typing.Dict[str, str]:
         """
-        Resolves the headers to include in throttling responses based on the provided connection, strategy statistics, and context.
+        Resolves the headers to be included in throttling responses based 
+        on the provided connection, strategy statistics, and context.
 
         :param connection: The HTTP connection for the current request.
-        :param headers: Optional additional headers to resolve for this specific call, which will be merged with the throttle's default headers.
+        
+        :param headers: Optional additional headers to resolve for this specific call, 
+            which will be merged with the throttle's default headers.
             Headers provided here will take precedence over the throttle's default headers in case of conflicts.
-        :param stat: Optional strategy statistics for the current request. This may be None if headers are being resolved outside of a throttling operation.
-        :param context: An optional dictionary containing additional context for the throttle. This can include any relevant information needed to resolve dynamic headers.
+        
+        :param stat: Optional strategy statistics for the current request. This may be None if headers 
+            are being resolved outside of a throttling operation.
+        
+        :param context: An optional dictionary containing additional context for the throttle. This can 
+            include any relevant information needed to resolve dynamic headers.
+
         :return: The resolved headers a dictionary of strings to include in throttling responses.
         """
         if not headers and not self._headers:
@@ -451,7 +472,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 _cache_connection_type(type(self), args[0])
                 return args[0]  # type: ignore[return-value]
 
-        # If the `__orig_class__` attribute is not set, walk class hierarchy for concrete type args on Throttle bases
+        # If the `__orig_class__` attribute is not set, walk class hierarchy for concrete type args on `Throttle` bases
         # e.g. `HTTPThrottle(Throttle[Request])` gives `Request` as the connection type
         for cls in type(self).__mro__:
             for base in getattr(cls, "__orig_bases__", ()):
@@ -472,7 +493,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                     _cache_connection_type(type(self), args[0])
                     return args[0]  # type: ignore[return-value]
 
-        # Lastly, inspect the `hit` method signature for a concrete connection annotation
+        # Lastly, inspect the `hit(...)` method signature for a concrete connection annotation
         try:
             hints = typing.get_type_hints(type(self).hit, include_extras=False)
             # Check for a parameter named "connection" first since that's the conventional name for the connection parameter in `__call__`.
@@ -706,15 +727,20 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         else:
             merged_context = self._default_context
 
-        # Resolve and cache rules on first hit.
+        # Resolve rules. By default, registry rules are merged and cached on the
+        # first hit for efficiency. When `dynamic_rules=True`, registry rules are
+        # re-fetched on every hit so that `add_rules(...)` calls after the first hit
+        # are picked up. Re-sorting only happens when the rule count actually changes.
         rules = self._rules
-        if not self._rules_resolved:
+        if not self._rules_resolved or self.dynamic_rules:
             registry_rules = self.registry.get_rules(self.uid)
             if registry_rules:
-                seen = set(rules)
-                merged = rules + tuple(r for r in registry_rules if r not in seen)
-                # Re-sort since registry rules were added to the pre-sorted constructor rules
-                self._rules = rules = _prep_rules(merged)
+                total = len(rules) + len(registry_rules)
+                if total != self._rules_count:
+                    seen = set(rules)
+                    merged = rules + tuple(r for r in registry_rules if r not in seen)
+                    self._rules = rules = _prep_rules(merged)
+                    self._rules_count = len(rules)
             self._rules_resolved = True
 
         if rules:
@@ -1191,6 +1217,7 @@ class HTTPThrottle(Throttle[Request]):
         registry: typing.Optional[ThrottleRegistry] = None,
         rules: typing.Optional[typing.Iterable[ThrottleRule[Request]]] = None,
         cache_ids: bool = True,
+        dynamic_rules: bool = False,
         use_method: bool = True,
     ) -> None:
         """
@@ -1286,6 +1313,13 @@ class HTTPThrottle(Throttle[Request]):
             like WebSockets where the connection does not change after establishment,
             and caching avoids redundant/expensive identifier computations.
 
+        :param dynamic_rules: Whether to re-fetch registry rules on every `hit(...)` call.
+            Defaults to False. When False, registry rules are merged and cached on the first
+            `hit(...)` call for efficiency. When True, `add_rules(...)` calls made after the
+            first hit are picked up on subsequent calls. The overhead is minimal (a dict
+            lookup + length comparison per hit), but only enable this if you need to add
+            rules after the throttle has already started processing requests.
+
         :param use_method: Whether to include the HTTP method in the scoped key for throttling.
             Defaults to True. If set to False, the throttle will ignore the HTTP method and only use the path for throttling.
             This can be useful if you want to apply the same throttling to all methods for a given path (e.g., GET, POST, etc.),
@@ -1307,6 +1341,7 @@ class HTTPThrottle(Throttle[Request]):
             registry=registry,
             rules=rules,
             cache_ids=cache_ids,
+            dynamic_rules=dynamic_rules,
         )
         self.use_method = use_method
 
@@ -1396,6 +1431,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
         registry: typing.Optional[ThrottleRegistry] = None,
         rules: typing.Optional[typing.Iterable[ThrottleRule[WebSocket]]] = None,
         cache_ids: bool = True,
+        dynamic_rules: bool = False,
     ) -> None:
         if handle_throttled is None:
             handle_throttled = websocket_throttled
@@ -1415,6 +1451,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
             registry=registry,
             rules=rules,
             cache_ids=cache_ids,
+            dynamic_rules=dynamic_rules,
         )
 
     def get_scoped_key(

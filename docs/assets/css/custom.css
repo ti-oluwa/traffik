@@ -126,6 +126,11 @@
   color: var(--md-primary-bg-color);
 }
 
+/* Mermaid chart text — force black for titles and axis labels */
+.mermaid text {
+  fill: #000000 !important;
+}
+
 /* Footer tweak */
 .md-footer-meta {
   background-color: var(--md-footer-bg-color);

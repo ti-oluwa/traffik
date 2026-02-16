@@ -57,8 +57,8 @@ def _resolve_lock_key(
     Resolve a lock configuration into a lock key string.
 
     :param lock: Lock configuration. Can be:
-        - `None` or `True`: Use owner throttle's UID as key (if bound)
-        - `False`: No locking (returns None)
+        - None or True: Use owner throttle's UID as key (if bound)
+        - False: No locking (returns None)
         - `str`: Use the string as lock key
 
     :param owner: The bound throttle (if any) to use when lock is None/True.
@@ -258,14 +258,14 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         :param owner: The throttle this context is bound to (if any).
             When set, calling the context without a throttle argument will use the owner.
         :param apply_on_error: Whether to consume quotas even on exceptions.
-            - `False` (default): Don't consume on any exception
-            - `True`: Consume on all exceptions
+            - False (default): Don't consume on any exception
+            - True: Consume on all exceptions
             - `tuple[Exception, ...]`: Consume only for these exception types
         :param apply_on_exit: Whether to auto-consume on successful exit.
         :param lock: Controls locking to prevent race conditions.
-            - `None` (default): Use throttle UID as lock key if bound, else disable locking
-            - `True`: Same as None (use throttle UID if bound, else disable)
-            - `False`: Explicitly disable locking
+            - None (default): Use throttle UID as lock key if bound, else disable locking
+            - True: Same as None (use throttle UID if bound, else disable)
+            - False: Explicitly disable locking
             - `str`: Use the provided string as the lock key
 
             When enabled, the lock is acquired on context entry and released on exit.
@@ -927,9 +927,9 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         :param apply_on_error: Override error handling (inherits from parent if None).
         :param apply_on_exit: Whether child auto-applies to parent on exit.
         :param lock: Controls locking for this nested context.
-            - `None` (default): No lock (operates under parent's lock context)
-            - `False`: Explicitly disable locking
-            - `True`: Use child's owner throttle UID as lock key (if bound)
+            - None (default): No lock (operates under parent's lock context)
+            - False: Explicitly disable locking
+            - True: Use child's owner throttle UID as lock key (if bound)
             - `str`: Use the provided string as the lock key
 
             **Pitfalls of nested quota context locks:**

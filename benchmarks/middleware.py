@@ -15,7 +15,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+import aiomcache
 import httpx
+import redis.asyncio as aioredis
 from base import BenchmarkMemcachedBackend, custom_identifier  # type: ignore[import]
 from fastapi import FastAPI, Request
 from slowapi import Limiter as SlowAPILimiter
@@ -231,6 +233,38 @@ def create_slowapi_backend(config: BenchmarkConfig):
         return config.slowapi_memcached_url
     # inmemory
     return "memory://"
+
+
+async def flush_slowapi_storage(config: BenchmarkConfig) -> None:
+    """Flush SlowAPI's storage between iterations for fair benchmarking.
+
+    Traffik's backend context manager resets state on exit, so each iteration
+    starts clean. Without this, SlowAPI's Redis/Memcached keys accumulate
+    across iterations, unfairly inflating throttle counts.
+    """
+    if config.slowapi_backend == "redis" and config.slowapi_redis_url:
+        client = aioredis.from_url(config.slowapi_redis_url)
+        try:
+            await client.flushdb()
+        finally:
+            await client.aclose()
+    elif config.slowapi_backend == "memcached" and config.slowapi_memcached_url:
+        url = config.slowapi_memcached_url
+        # Parse host:port from memcached://host:port
+        host = "localhost"
+        port = 11211
+        if "://" in url:
+            addr = url.split("://", 1)[1].rstrip("/")
+            if ":" in addr:
+                host, port_str = addr.rsplit(":", 1)
+                port = int(port_str)
+            else:
+                host = addr
+        client = aiomcache.Client(host, port)
+        try:
+            await client.flush_all()
+        finally:
+            await client.close()
 
 
 def create_slowapi_app(
@@ -689,6 +723,11 @@ async def run_benchmark_suite(
 
         scenario_results = []
         for i in range(config.iterations):
+            # Flush SlowAPI storage before each iteration so both libraries
+            # start from a clean state (Traffik resets via backend context manager)
+            if library == "SlowAPI":
+                await flush_slowapi_storage(config)
+
             result = await runner(library, config)
             scenario_results.append(result)
 
@@ -925,6 +964,59 @@ def print_comparison(
     print("\n" + "=" * 80 + "\n")
 
 
+def print_single_library_results(
+    library: str, results: Dict[str, List[ScenarioResult]]
+):
+    """Print results for a single library."""
+    print("\n" + "=" * 80)
+    print(f"BENCHMARK RESULTS — {library}")
+    print("=" * 80)
+
+    print(
+        f"\n{'Scenario':<25} {'req/s':<12} {'P50 (ms)':<12} {'P95 (ms)':<12} {'P99 (ms)':<12} {'Success %':<10}"
+    )
+    print("-" * 83)
+
+    performance_scenarios = [
+        "Low Load",
+        "High Load",
+        "Sustained Load",
+        "Burst Load",
+        "Selective Throttling",
+    ]
+    for scenario in performance_scenarios:
+        if scenario not in results:
+            continue
+        agg = aggregate_results(results[scenario])
+        print(
+            f"{scenario:<25} {agg.requests_per_second:<12.2f} {agg.p50_latency:<12.2f} "
+            f"{agg.p95_latency:<12.2f} {agg.p99_latency:<12.2f} {agg.success_rate:<10.1f}"
+        )
+
+    # Correctness tests
+    correctness_scenarios = [
+        "Race Condition Test",
+        "Distributed Correctness",
+        "Selective Throttling",
+    ]
+    has_correctness = any(
+        s in results for s in ["Race Condition Test", "Distributed Correctness"]
+    )
+    if has_correctness:
+        print("\nCORRECTNESS TESTS")
+        print("-" * 83)
+        for scenario in ["Race Condition Test", "Distributed Correctness"]:
+            if scenario not in results:
+                continue
+            agg = aggregate_results(results[scenario])
+            print(
+                f"{scenario}: {agg.successful_requests} successful, "
+                f"{agg.throttled_requests} throttled (out of {agg.total_requests})"
+            )
+
+    print("\n" + "=" * 80 + "\n")
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description="Benchmark Traffik vs SlowAPI middleware rate limiting",
@@ -1056,9 +1148,13 @@ async def main():
     if "slowapi" in libraries:
         results["SlowAPI"] = await run_benchmark_suite("SlowAPI", config)
 
-    # Print comparison if both were tested
+    # Print comparison if both were tested, single-library results otherwise
     if "Traffik" in results and "SlowAPI" in results:
         print_comparison(results["Traffik"], results["SlowAPI"])
+    elif "Traffik" in results:
+        print_single_library_results("Traffik", results["Traffik"])
+    elif "SlowAPI" in results:
+        print_single_library_results("SlowAPI", results["SlowAPI"])
 
     print("Benchmark complete!")
 

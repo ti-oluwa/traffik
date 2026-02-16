@@ -85,11 +85,11 @@ set_lock_blocking_timeout(1.0)   # Give up after 1 second
 set_lock_ttl(10.0)
 ```
 
-Tradeoff: if the lock can't be acquired within 1 second, the strategy runs without it — potentially allowing a small burst above the limit.
+Tradeoff: if the lock can't be acquired within 1 second, We get a `LockTimeoutError`. But you can provide an error handler to reject or allow the request — potentially allowing a small burst above the limit.
 
 ### High-Concurrency Configuration
 
-Use this for very high request volumes where you need maximum throughput and can tolerate some over-counting:
+Use this for very high request volumes where you need maximum throughput and can tolerate allowing clients to use above their quota:
 
 ```python
 set_lock_blocking(False)         # Don't wait at all — fail immediately

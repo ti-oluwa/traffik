@@ -177,8 +177,8 @@ ApplyOnError = typing.Union[
 Type definition for applying throttles on error.
 
 Can be either:
-- `False`: Don't apply on any exception
-- `True`: Apply on all exceptions
+- False: Don't apply on any exception
+- True: Apply on all exceptions
 - A single exception type to apply on
 - A tuple of exception types to apply on
 """

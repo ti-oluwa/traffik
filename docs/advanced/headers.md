@@ -357,4 +357,4 @@ Content-Type: application/json
 | `headers_a \| headers_b` | Merge two header collections (non-mutating) |
 | `Header.DISABLE` | Sentinel to suppress a specific header in a call |
 
---8<-- "includes/abbreviations.md"
+

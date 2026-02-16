@@ -230,4 +230,4 @@ registry.clear()
 | `throttle.update_headers(h)` | Replace header collection atomically |
 | `throttle.update_identifier(fn)` | Replace identifier function atomically |
 
---8<-- "includes/abbreviations.md"
+

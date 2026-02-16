@@ -1,8 +1,8 @@
-# Traffik Library Testing Guide
+# Traffik Testing Guide
 
 This comprehensive guide covers all testing approaches for the library, including Docker-based cross-platform testing and local development options.
 
-## 🚀 Quick Start
+## Quick Start
 
 Choose the testing approach that works best for your environment:
 
@@ -10,8 +10,11 @@ Choose the testing approach that works best for your environment:
 
 ```bash
 git clone https://github.com/ti-oluwa/traffik.git
+
 cd traffik
+
 uv sync --extra test
+
 make test-fast
 ```
 
@@ -19,8 +22,11 @@ make test-fast
 
 ```bash
 git clone https://github.com/ti-oluwa/traffik.git
+
 cd traffik
+
 ./docker-test.sh test-fast  # Quick Docker test
+
 ./docker-test.sh test       # Full test suite
 ```
 
@@ -28,12 +34,15 @@ cd traffik
 
 ```bash
 git clone https://github.com/ti-oluwa/traffik.git
+
 cd traffik
+
 uv sync --extra test
+
 uv run pytest -v -k "not backend"  # Skip throttle backend tests
 ```
 
-## 🐳 Docker Testing (Recommended for Full Testing)
+## Docker Testing (Recommended for Full Testing)
 
 ### Available Docker Testing Commands
 
@@ -62,7 +71,7 @@ uv run pytest -v -k "not backend"  # Skip throttle backend tests
 
 See [DOCKER.md](DOCKER.md) for complete Docker documentation.
 
-## 🔧 Local Testing with Makefile
+## Local Testing with Makefile
 
 The Makefile provides convenient commands for local development:
 
@@ -127,7 +136,7 @@ Available targets:
   release-check   Pre-release checks
 ```
 
-## 🧪 Manual Testing
+## Manual Testing
 
 For manual testing without automation tools:
 
@@ -158,7 +167,7 @@ uv run pytest tests/*/test_decorators.py -v
 uv run pytest --cov=src/traffik --cov-report=html
 ```
 
-## 🚢 CI/CD Integration
+## CI/CD Integration
 
 ### GitHub Actions
 
@@ -178,7 +187,7 @@ make ci
 ./docker-test.sh ci
 ```
 
-## 🔍 Testing Scenarios
+## Testing Scenarios
 
 ### 1. Development Testing
 
@@ -227,7 +236,7 @@ make release-check        # Pre-release validation
 make build               # Package building
 ```
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -266,7 +275,7 @@ docker --version  # If available
 redis-cli ping    # If Redis installed
 ```
 
-## 🔐 Security Testing
+## Security Testing
 
 ```bash
 # Security analysis
@@ -276,7 +285,7 @@ make security
 uv run bandit -r src/
 ```
 
-## 📈 Coverage Analysis
+## Coverage Analysis
 
 ```bash
 # Generate HTML coverage report
@@ -287,7 +296,7 @@ open htmlcov/index.html  # macOS
 xdg-open htmlcov/index.html  # Linux
 ```
 
-## 🚀 Next Steps
+## Next Steps
 
 After testing:
 
@@ -298,13 +307,12 @@ After testing:
 5. **Contribute**: Submit pull requests
 6. **Release**: Follow release process
 
-## 📚 Additional Resources
+## Additional Resources
 
-- [README.md](README.md) - Main documentation
 - [DOCKER.md](DOCKER.md) - Docker-specific guide
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Development guidelines
 
-## 💡 Tips for Contributors
+## Tips for Contributors
 
 1. **Start with fast tests**: `make test-fast`
 2. **Use Docker for full testing**: `./docker-test.sh test`

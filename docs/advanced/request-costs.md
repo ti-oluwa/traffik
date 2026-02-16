@@ -143,13 +143,13 @@ async def selective_cost(
     Returning `0` from a cost function and returning `EXEMPTED` from an identifier
     function both skip throttling — but they do it at different stages:
 
-    - **`cost=0`**: Skips *after* the identifier is resolved. The identifier is still called.
+    - **`cost=0`**: Skips *before* the identifier is resolved (immediately `hit(...)` is called).
     - **`EXEMPTED`**: Skips *at the identifier stage*. Nothing downstream runs at all.
 
     For exempting entire client categories (admins, internal services), `EXEMPTED`
-    from the identifier is cleaner and slightly cheaper.
+    from the identifier is cleaner.
     For skipping specific paths or methods within a shared throttle, `cost=0` is
-    a pragmatic shortcut.
+    a pragmatic shortcut and slightly cheaper.
 
 ---
 

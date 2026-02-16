@@ -146,7 +146,7 @@ When the throttle strategy doesn't support stats (e.g., a custom strategy withou
 
 ## `await throttle.stat(connection)`: read state without consuming
 
-`stat()` returns a `StrategyStat` object with the current throttle state for the connection. No quota is consumed. Returns `None` if the strategy doesn't support stats.
+`stat(...)` returns a `StrategyStat` object with the current throttle state for the connection. No quota is consumed. Returns `None` if the strategy doesn't support stats.
 
 The `StrategyStat` object contains:
 
@@ -283,4 +283,4 @@ async def process_batch(request: Request):
     return {"processed": actual_cost, "results": results}
 ```
 
---8<-- "includes/abbreviations.md"
+

@@ -8,7 +8,7 @@ Quick reference for every public class and function in Traffik. Each entry lists
 
 ### `HTTPThrottle`
 
-Rate limiter for HTTP requests. The most common entry point.
+Rate limiter for HTTP requests. The most common entry point. Can also be accessed as `RequestThrottle`
 
 ```python
 from traffik import HTTPThrottle
@@ -34,6 +34,7 @@ from traffik import HTTPThrottle
 | `min_wait_period` | `int` | `None` | Minimum wait floor in milliseconds for throttled responses. |
 | `cache_ids` | `bool` | `True` | Cache connection identifiers within a single request for performance. |
 | `dynamic_rules` | `bool` | `False` | Re-evaluate registry rules on every hit instead of caching them at startup. |
+| `use_method` | `bool` | `True` | If set to False, the throttle will ignore the HTTP method and only use the path for throttling. |
 
 **Key methods:**
 
@@ -67,7 +68,7 @@ from traffik import WebSocketThrottle
 
 **Guide:** [Dependencies](integration/dependencies.md#websocket-routes) · [Direct Usage](integration/direct-usage.md)
 
-Same parameters as `HTTPThrottle`, but scoped to `WebSocket` connections. Use inside a WebSocket handler to throttle per-message.
+Takes mostly the same parameters as `HTTPThrottle` but with a few exceptions, and scoped to `WebSocket` connections. Use inside a WebSocket handler to throttle per-message.
 
 ---
 
@@ -422,4 +423,4 @@ from traffik.config import (
 | `get_lock_blocking()` / `set_lock_blocking(v)` | `TRAFFIK_DEFAULT_BLOCKING` | `True` | Whether to block when acquiring a lock. |
 | `get_lock_blocking_timeout()` / `set_lock_blocking_timeout(v)` | `TRAFFIK_DEFAULT_BLOCKING_TIMEOUT` | `None` | Max seconds to wait for a lock. `None` means wait indefinitely. |
 
---8<-- "includes/abbreviations.md"
+

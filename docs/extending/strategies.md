@@ -22,7 +22,7 @@ async def __call__(
 
 That's the entire contract. Return `0.0` to allow the request. Return a positive number of milliseconds to throttle the client.
 
-!!! tip "Add get_stat() for observability"
+!!! tip "Add `get_stat(...)` for observability"
     If you also implement `get_stat(key, rate, backend) -> StrategyStat`, your strategy will support `throttle.stat()` calls and all the observability features that come with it. It's optional but highly recommended.
 
 ---

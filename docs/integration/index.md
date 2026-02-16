@@ -85,4 +85,4 @@ async def upload(request: Request):
 
 There is no wrong choice. Dependency injection and decorators are interchangeable stylistic preferences. Middleware and direct usage solve different structural problems. You can also combine them, for example, a global middleware throttle plus a tighter per-route dependency.
 
---8<-- "includes/abbreviations.md"
+

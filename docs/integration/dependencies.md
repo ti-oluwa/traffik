@@ -197,4 +197,4 @@ async def chat(websocket: WebSocket = Depends(ws_throttle)):
 !!! note
     For WebSocket throttles that apply per-message (rather than per-connection), use [direct usage](direct-usage.md) inside the message loop instead.
 
---8<-- "includes/abbreviations.md"
+

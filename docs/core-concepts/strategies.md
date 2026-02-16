@@ -295,4 +295,4 @@ Each of these strategies is a drop-in replacement, same interface, same `__call_
 signature. Check the API reference and the `traffik.strategies.custom` module for
 full configuration details and examples.
 
---8<-- "includes/abbreviations.md"
+

@@ -144,7 +144,7 @@ dependencies=[Depends(burst_throttle), Depends(sustained_throttle)]
 dependencies=[Depends(sustained_throttle), Depends(burst_throttle)]
 ```
 
-!!! tip "Recommend: strictest limit first"
+!!! tip "Recommended: strictest limit first"
     Put your tightest limit first. It fails fast and saves you a backend roundtrip
     for the looser limit. It also gives the client a more actionable `Retry-After`
     header — "wait 30 seconds" is more useful than "wait 54 minutes".

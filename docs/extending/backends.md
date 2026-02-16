@@ -183,8 +183,8 @@ class DictBackend(ThrottleBackend[None, HTTPConnection]):
 
     base_exception_type = Exception
 
-    def __init__(self, namespace: str = "dict") -> None:
-        super().__init__(connection=None, namespace=namespace)
+    def __init__(self, namespace: str = "dict", **kwargs: typing.Any) -> None:
+        super().__init__(connection=None, namespace=namespace, **kwargs)
         self._store: typing.Dict[str, typing.Tuple[str, typing.Optional[float]]] = {}
         # value, expires_at
         self._locks: typing.Dict[str, _SimpleLock] = {}
@@ -200,6 +200,10 @@ class DictBackend(ThrottleBackend[None, HTTPConnection]):
 
     async def initialize(self) -> None:
         pass  # Nothing to initialize for a dict backend
+
+    async def ready(self) -> bool:
+        # No connection to setup so its always ready
+        return True
 
     async def get(self, key: str) -> typing.Optional[str]:
         if self._is_expired(key):

@@ -264,7 +264,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             may change frequently during the connection's lifetime, or if you want to
             ensure that identifiers are always freshly resolved on each request.
 
-            Setting this to `True` is especially useful for long-lived connections
+            Setting this to True is especially useful for long-lived connections
             like `WebSocket`s where the connection does not change after establishment,
             and caching avoids redundant/expensive identifier computations.
 
@@ -433,7 +433,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         async with self._update_lock:
             self.backend = backend  # type: ignore[assignment]
 
-    async def update_strategy(self, strategy: "ThrottleStrategy") -> None:
+    async def update_strategy(self, strategy: ThrottleStrategy) -> None:
         """
         Replace the throttling strategy atomically.
 
@@ -459,7 +459,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """
         Update the minimum wait period atomically.
 
-        :param min_wait_period: The new floor wait time in milliseconds, or `None` to remove it.
+        :param min_wait_period: The new floor wait time in milliseconds, or None to remove it.
         """
         async with self._update_lock:
             self.min_wait_period = min_wait_period
@@ -467,13 +467,13 @@ class Throttle(typing.Generic[HTTPConnectionT]):
     async def update_handle_throttled(
         self,
         handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[HTTPConnectionT, "Throttle[HTTPConnectionT]"]
+            ConnectionThrottledHandler[HTTPConnectionT, Self]
         ],
     ) -> None:
         """
-        Replace the throttled-response handler atomically.
+        Replace the throttled handler atomically.
 
-        :param handle_throttled: New handler, or `None` to fall back to the backend default.
+        :param handle_throttled: New handler, or None to fall back to the backend default.
         """
         async with self._update_lock:
             self.handle_throttled = handle_throttled  # type: ignore[assignment]
@@ -491,7 +491,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         Replace the response header collection atomically.
 
         :param headers: New headers, a `Headers` instance,
-            a plain mapping of `{name: Header}` pairs, or `None` to clear all headers.
+            a plain mapping of `{name: Header}` pairs, or None to clear all headers.
         """
         async with self._update_lock:
             if headers is None:
@@ -510,7 +510,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         The identifier determines how connections are keyed for throttle tracking.
         Updating it takes effect on the next `hit(...)` call.
 
-        :param identifier: New identifier callable, or `None` to use the backend default.
+        :param identifier: New identifier callable, or None to use the backend default.
         """
         async with self._update_lock:
             self.identifier = identifier  # type: ignore[assignment]
@@ -1104,15 +1104,15 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :param context: Additional throttle context. Can contain any relevant information needed
             to uniquely identify the connection for throttling purposes.
         :param apply_on_error: Whether to consume quota even when an exception occurs.
-            - `False` (default): Don't consume on any exception
-            - `True`: Consume on all exceptions
+            - False (default): Don't consume on any exception
+            - True: Consume on all exceptions
             - `tuple[Exception, ...]`: Consume only for these exception types
         :param apply_on_exit: Whether to auto-consume on successful context exit.
-            Set to `False` for nested contexts that should only consume with parent.
+            Set to False for nested contexts that should only consume with parent.
         :param lock: Controls locking to prevent race conditions.
-            - `None` (default): Use this throttle's UID as the lock key
-            - `True`: Same as None (use this throttle's UID as lock key)
-            - `False`: Disable locking (not recommended for concurrent scenarios)
+            - None (default): Use this throttle's UID as the lock key
+            - True: Same as None (use this throttle's UID as lock key)
+            - False: Disable locking (not recommended for concurrent scenarios)
             - `str`: Use the provided string as the lock key
 
             When enabled, the lock is acquired on context entry and released on exit,
@@ -1199,7 +1199,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         Add rules that gate another throttle's application.
 
         Rules are checked conjunctively on the target throttle's `hit(...)` call.
-        If any rule returns `False`, the target throttle is skipped for that
+        If any rule returns False, the target throttle is skipped for that
         connection. This lets one throttle selectively bypass another for
         certain methods, paths, or custom predicates.
 
@@ -1456,7 +1456,7 @@ class HTTPThrottle(Throttle[Request]):
             Defaults to True. Disable only for advanced use cases where connection IDs
             may change frequently during the connection's lifetime.
 
-            Setting this to `True` is especially useful for long-lived connections
+            Setting this to True is especially useful for long-lived connections
             like WebSockets where the connection does not change after establishment,
             and caching avoids redundant/expensive identifier computations.
 

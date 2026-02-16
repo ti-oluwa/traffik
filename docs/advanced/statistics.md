@@ -2,10 +2,10 @@
 
 Sometimes you want to *look* at the rate limit counter without actually *touching* it. Maybe you want to add `X-RateLimit-Remaining` headers to every response. Maybe you want a `/usage` endpoint that tells clients where they stand. Maybe you want to feed data into Prometheus.
 
-That's what `throttle.stat()` is for.
+That's what `throttle.stat(...)` is for.
 
 !!! tip "stat() is read-only"
-    Calling `stat()` never consumes quota. It reads the current state from the backend and returns it. Your clients can call a stats endpoint as often as they like — it won't move the rate limit needle.
+    Calling `stat(...)` never consumes quota. It reads the current state from the backend and returns it. Your clients can call a stats endpoint as often as they like — it won't move the rate limit needle.
 
 ---
 
@@ -15,7 +15,7 @@ That's what `throttle.stat()` is for.
 stat = await throttle.stat(request, context={...})
 ```
 
-`stat()` returns a `StrategyStat` object, or `None` if the strategy doesn't support stats (custom strategies) or if the client is exempt from throttling.
+`stat(...)` returns a `StrategyStat` object, or `None` if the strategy doesn't support stats (custom strategies) or if the client is exempt from throttling.
 
 ```python
 from fastapi import FastAPI, Request, Depends
@@ -142,7 +142,7 @@ throttle = HTTPThrottle("api", rate="100/min", backend=backend)
 async def get_items(
     request: Request = Depends(throttle),
     response: Response = None,
-):
+):  
     stat = await throttle.stat(request)
     if stat:
         response.headers["X-RateLimit-Limit"] = str(int(stat.rate.limit))
@@ -185,8 +185,8 @@ async def get_usage(request: Request):
     return {
         "limit": int(stat.rate.limit),
         "remaining": max(int(stat.hits_remaining), 0),
-        "reset_in_ms": stat.wait_ms,
-        "window": str(stat.rate),
+        "reset_ms": stat.wait_ms,
+        "window_ms": stat.rate.expire,
     }
 ```
 
@@ -233,14 +233,14 @@ async def collect_throttle_metrics(request: Request, call_next):
     return response
 ```
 
-!!! warning "Avoid calling stat() in tight loops"
-    Each `stat()` call hits the backend. In a middleware that runs on every request, that's fine — it's one extra read per request. But calling it in a loop for many keys at once is a different story. Batch them if you need to.
+!!! warning "Avoid calling `stat(...)` in tight loops"
+    Each `stat(...)` call hits the backend. In a middleware that runs on every request, that's fine — it's one extra read per request. But calling it in a loop for many keys at once is a different story. Batch them if you need to.
 
 ---
 
 ## Summary
 
-- `stat()` is your window into the rate limiter's current state — **without modifying it**
+- `stat(...)` is your window into the rate limiter's current state — **without modifying it**
 - Returns `None` for exempt clients and strategies without stat support
 - Use it for response headers, usage endpoints, dashboards, and metrics
-- All built-in strategies support `stat()` with typed metadata
+- All built-in strategies support `stat(...)` with typed metadata

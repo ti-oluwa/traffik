@@ -425,4 +425,4 @@ There are three ways to make a throttle apply differently to different connectio
 | `GLOBAL_REGISTRY.exist("uid")` | Check if a throttle UID is registered |
 | `dynamic_rules=True` | Re-fetch registry rules on every request |
 
---8<-- "includes/abbreviations.md"
+

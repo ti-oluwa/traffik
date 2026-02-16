@@ -184,7 +184,7 @@ from traffik.backends.inmemory import InMemoryBackend
 from traffik.strategies import SlidingWindowCounter
 from traffik.error_handlers import failover, CircuitBreaker
 
-# --- Backends ---
+# Backends 
 
 # Primary: Redis (distributed, persistent)
 redis_backend = RedisBackend(
@@ -199,7 +199,7 @@ redis_backend = RedisBackend(
 # Fallback: InMemory (used when Redis is unavailable)
 fallback_backend = InMemoryBackend(namespace="myapp:fallback")
 
-# --- Circuit Breaker ---
+#  Circuit Breaker 
 # Opens after 10 failures, attempts recovery after 60 seconds
 breaker = CircuitBreaker(
     failure_threshold=10,
@@ -207,7 +207,7 @@ breaker = CircuitBreaker(
     success_threshold=3,  # Requires 3 successes before fully reopening
 )
 
-# --- Application ---
+# Application 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -218,7 +218,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# --- Throttles ---
+# Throttles 
 
 api_throttle = HTTPThrottle(
     "api:v1",
@@ -389,5 +389,3 @@ You now know the essential patterns. Here's where to go deeper:
 - **[Advanced Features](advanced/index.md)** - Throttle rules, request costs, exemptions, quota contexts, and more.
 - **[Error Handling](error-handling.md)** - Circuit breakers, failover, and custom error handlers.
 - **[Testing](testing.md)** - How to write tests for throttled endpoints without fighting your own rate limiter.
-
---8<-- "includes/abbreviations.md"

@@ -85,7 +85,7 @@ Traffik ships with optional extras for each storage backend. Install only what y
 | *(none)* | Core package + `InMemoryBackend` | Local development, tests, single-process apps |
 | `[redis]` | `redis-py`, `pottery` | Multi-instance production deployments |
 | `[memcached]` | `aiomcache` | High-throughput environments where you already run Memcached |
-| `[all]` | Everything above | When you want to try all backends or run the full test suite |
+| `[all]` | Everything above | When you want to try all backends |
 | `[dev]` | Testing tools, linters, type checkers | Contributing to Traffik |
 
 ---
@@ -142,4 +142,4 @@ Traffik is a [PEP 561](https://peps.python.org/pep-0561/) compliant package. It 
 
 You're all set. Head over to the [Quick Start](quickstart.md) to write your first throttled endpoint.
 
---8<-- "includes/abbreviations.md"
+

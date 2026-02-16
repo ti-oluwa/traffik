@@ -1,6 +1,6 @@
 # Performance Tips
 
-Traffik is designed to be fast out of the box. But like all systems, there are knobs to turn when you need to squeeze out more. This page covers the most impactful optimizations, roughly ordered by impact.
+Traffik is designed to be performant out of the box. But like all systems, there are knobs to turn when you need to squeeze out more. This page covers the most impactful optimizations, roughly ordered by impact.
 
 ---
 

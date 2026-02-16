@@ -192,7 +192,7 @@ class Header(typing.Generic[HTTPConnectionT]):
         :param connection: The HTTP connection for the current request.
         :param stat: The strategy statistics for the current request.
         :param context: An optional dictionary containing additional context for the throttle.
-        :return: `True` if the header should be included in the response, `False` otherwise.
+        :return: True if the header should be included in the response, False otherwise.
         """
         if self._check is not None:
             return self._check(connection, stat, context)

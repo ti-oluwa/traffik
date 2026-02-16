@@ -42,8 +42,8 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
     Determines when a throttle should apply to an HTTP connection.
 
     When used with a throttle, all rules are checked conjunctively on each `hit(...)` call.
-    If **any** rule returns `False`, the throttle is skipped for that connection.
-    A `ThrottleRule` returns `True` when the connection matches its criteria (path,
+    If **any** rule returns False, the throttle is skipped for that connection.
+    A `ThrottleRule` returns True when the connection matches its criteria (path,
     methods, predicate), meaning "yes, apply the throttle". Non-matching connections
     pass through without consuming quota.
 
@@ -83,7 +83,7 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
             - `"/api/**"` matches `/api/`, `/api/v1/data`, `/api/v1/v2/nested`
             - `"/api/"` matches paths starting with `/api/` (plain regex, no wildcards)
             - `r"/api/\\d+"` matches `/api/` followed by digits (plain regex)
-            - `None` applies to all paths.
+            - None applies to all paths.
 
         :param methods: A set of HTTP methods (e.g., 'GET', 'POST') to apply the throttle to.
             If None, the throttle applies to all methods. Ignored for `WebSocket` connections.
@@ -191,10 +191,10 @@ class BypassThrottleRule(ThrottleRule[HTTPConnectionT]):
 
     Semantics of `check(...)`:
 
-    - Returns `False` when the connection **matches** the bypass criteria,
+    - Returns False when the connection **matches** the bypass criteria,
       causing the conjunctive rule check in `hit(...)` to short-circuit and skip
       the throttle.
-    - Returns `True` when the connection does **not** match, allowing other
+    - Returns True when the connection does **not** match, allowing other
       rules (and the throttle itself) to proceed normally.
     """
 
@@ -255,7 +255,7 @@ def _prep_rules(
     Sort rules for optimal short-circuit evaluation order.
 
     Bypass rules (`BypassThrottleRule`) are placed before regular rules
-    because they return `False` on match, which is the fastest path to skip a throttle.
+    because they return False on match, which is the fastest path to skip a throttle.
     Within each tier, rules without predicates come first since path/method
     checks (frozenset lookup + regex) are cheaper than arbitrary async predicates.
 
@@ -339,7 +339,7 @@ class ThrottleRegistry:
         Add rules that gate a throttle's application.
 
         Rules are checked conjunctively on the target throttle's `hit(...)` call.
-        If any rule returns `False`, the throttle is skipped for that connection.
+        If any rule returns False, the throttle is skipped for that connection.
 
         :param target_uid: The UID of the throttle to attach rules to.
         :param rules: One or more `ThrottleRule` instances to add.
@@ -369,12 +369,12 @@ class ThrottleRegistry:
 
     def get_throttle(self, uid: str) -> typing.Any:
         """
-        Return the live throttle instance for the given UID, or `None` if
+        Return the live throttle instance for the given UID, or None if
         the throttle has been garbage-collected or was never registered with
         an instance reference.
 
         :param uid: The UID of the throttle to look up.
-        :return: The throttle instance, or `None`.
+        :return: The throttle instance, or None.
         """
         with self._lock:
             ref = self._throttle_refs.get(uid)
@@ -389,7 +389,7 @@ class ThrottleRegistry:
         without consuming quota.
 
         :param uid: The UID of the throttle to disable.
-        :return: `True` if the throttle was found and disabled, `False`
+        :return: True if the throttle was found and disabled, False
             if the UID is unknown or the throttle has been garbage-collected.
         """
         throttle = self.get_throttle(uid)
@@ -403,7 +403,7 @@ class ThrottleRegistry:
         Re-enable the throttle registered under *uid*.
 
         :param uid: The UID of the throttle to enable.
-        :return: `True` if the throttle was found and enabled, `False`
+        :return: True if the throttle was found and enabled, False
             if the UID is unknown or the throttle has been garbage-collected.
         """
         throttle = self.get_throttle(uid)

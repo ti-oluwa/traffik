@@ -295,7 +295,7 @@ from traffik.exceptions import ConnectionThrottled
 
 ### Custom handler for richer responses
 
-If you want to return a richer response — for example, including `Retry-After` information in the response body or a custom JSON structure — register a custom exception handler:
+If you want to return a richer response — for example, including extra information in the response body or a custom JSON structure — register a custom exception handler:
 
 ```python
 from fastapi import FastAPI, Request

@@ -8,7 +8,6 @@
 
 [Get Started](installation.md){ .md-button .md-button--primary }
 [Quick Start](quickstart.md){ .md-button }
-[GitHub](https://github.com/ti-oluwa/traffik){ .md-button }
 
 </div>
 
@@ -184,4 +183,4 @@ Throttles are callable objects that implement `__call__` with a clean, FastAPI-c
 
 </div>
 
---8<-- "includes/abbreviations.md"
+

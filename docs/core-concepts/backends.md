@@ -79,7 +79,7 @@ backend = RedisBackend(
     on_error="throttle",
     lock_type="redis",      # "redis" (default) or "redlock"
     lock_blocking=True,
-    lock_ttl=None,
+    lock_ttl=10.0, # Never set to "0" to avoide deadlocks
     lock_blocking_timeout=None,
 )
 ```
@@ -182,7 +182,7 @@ backend = MemcachedBackend(
     host="localhost",
     port=11211,
     namespace=":memcached:",
-    track_keys=True,  # enables clear() at the cost of extra writes
+    track_keys=True,  # enables `clear()` at the cost of extra writes
 )
 ```
 
@@ -190,7 +190,7 @@ backend = MemcachedBackend(
     Every `set` call writes an extra key to the tracking list. In high-throughput
     scenarios, this tracking list can become a bottleneck and may miss keys under
     concurrent writes. Only enable it if you genuinely need `clear()` to work on
-    the Memcached backend. An alternative: if Memcached is dedicated to Traffik, you
+    the Memcached backend. An alternative: if the Memcached is dedicated to Traffik, you
     can override `clear()` in a subclass to call `flush_all()` instead.
 
 ---
@@ -280,4 +280,4 @@ All three backends share the same error-handling knob:
 | `"raise"`    | Propagate the exception to your exception handler             |
 | `callable`   | Call your function `(connection, exc_info) -> wait_ms`        |
 
---8<-- "includes/abbreviations.md"
+

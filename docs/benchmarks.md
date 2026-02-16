@@ -2,7 +2,7 @@
 
 Numbers, glorious numbers. This page documents benchmark results for Traffik across a wide range of scenarios — HTTP dependencies, middleware, WebSocket, and the overhead of specific features like response headers and throttle rules.
 
-The headline: Traffik wins on **throughput** — consistently faster across scenarios, backends, and integration patterns, while both libraries achieve correct throttling when state is properly managed.
+The headline: Traffik wins on throughput in most scenarios — faster across the majority of backends and integration patterns, with both libraries achieving correct throttling when state is properly managed.
 
 !!! note "Run them yourself"
     All benchmark code lives in the `benchmarks/` directory. Every table and chart here was produced by running those scripts. Numbers will differ on your hardware — run your own suite to get figures that reflect your setup.
@@ -44,7 +44,7 @@ Traffik wins decisively on scenarios that involve throttling (high load, burst).
 
 | Scenario | Traffik (req/s) | SlowAPI (req/s) | Difference |
 | --- | --- | --- | --- |
-| Low load | 697 | 552 | **+26%** |****
+| Low load | 697 | 552 | **+26%** |
 | High load | 1,079 | 1,048 | +3% |
 | Sustained load | 1,248 | 1,138 | **+10%** |
 | Burst | 853 | 759 | **+12%** |
@@ -53,10 +53,12 @@ Traffik wins decisively on scenarios that involve throttling (high load, burst).
 
 | Scenario | Traffik (req/s) | SlowAPI (req/s) | Difference |
 | --- | --- | --- | --- |
-| Low load | 739 | 625 | **+18%** |
-| High load | 1,038 | 1,077 | −4% |
-| Sustained load | 1,209 | 1,277 | −5% |
-| Burst | 921 | 837 | **+10%** |
+| Low load | 683 | 733 | −6.9% |
+| High load | 1,044 | 1,102 | −5.2% |
+| Sustained load | 1,234 | 1,217 | **+1.4%** |
+| Burst | 940 | 873 | **+7.7%** |
+
+Traffik and SlowAPI show competitive performance on Memcached, with each winning 2 out of 4 scenarios. Traffik maintains an edge on sustained load and burst scenarios, while SlowAPI performs slightly better on low and high load tests.
 
 ### Latency Percentiles — Lower is better
 
@@ -76,7 +78,15 @@ Traffik wins decisively on scenarios that involve throttling (high load, burst).
 | P95 | 1.45ms | 1.82ms |
 | P99 | 2.99ms | 3.19ms |
 
-Traffik's tail latency (P95, P99) is consistently lower. Under load, Traffik's atomic operations reduce variance because there's no retry-on-conflict — the lock serialises, computes, and returns.
+#### Memcached — High Load (200 req, 50% throttled)
+
+| Percentile | Traffik | SlowAPI |
+| --- | --- | --- |
+| P50 | 0.72ms | 0.72ms |
+| P95 | 1.70ms | 1.86ms |
+| P99 | 3.89ms | 2.88ms |
+
+Traffik's tail latency (P95, P99) is mostly lower. Under load, Traffik's operations reduce variance because there's no retry-on-conflict — the lock serialises, computes, and returns.
 
 ---
 
@@ -242,7 +252,7 @@ Registry evaluation runs on every request when rules are configured. The overhea
 | 10 mixed rules (realistic registry) | 417 | +1.3% | 0.32ms | 1.47ms |
 | Compiled `re.Pattern` rule | 407 | −1.0% | 0.37ms | 1.62ms |
 
-Takeaway: Even a registry of 10 mixed rules adds under 1% overhead (within noise). Rules are evaluated with short-circuit logic — `BypassThrottleRule` entries are checked first, so frequently-hit exempted paths (like `/health`) are fast-pathed out before any `ThrottleRule` patterns are evaluated.
+Takeaway: Even a registry of 10 mixed rules does not add overhead due to early short-circuiting. Rules are evaluated with short-circuit logic — `BypassThrottleRule` entries are checked first, so frequently-hit exempted paths (like `/health`) are fast-pathed out before any `ThrottleRule` patterns are evaluated.
 
 Run it yourself:
 

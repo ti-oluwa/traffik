@@ -247,4 +247,4 @@ async def export_data():
 app.include_router(router)
 ```
 
---8<-- "includes/abbreviations.md"
+

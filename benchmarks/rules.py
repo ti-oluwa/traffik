@@ -255,7 +255,7 @@ async def run_benchmark(
     return results
 
 
-def aggregate(results: typing.List[ScenarioResult]) -> ScenarioResult:
+def aggregate_results(results: typing.List[ScenarioResult]) -> ScenarioResult:
     return ScenarioResult(
         name=results[0].name,
         total_requests=sum(r.total_requests for r in results),
@@ -277,7 +277,7 @@ def print_results(results: typing.Dict[str, typing.List[ScenarioResult]]) -> Non
 
     baseline_rps: typing.Optional[float] = None
     for name, scenario_results in results.items():
-        agg = aggregate(scenario_results)
+        agg = aggregate_results(scenario_results)
         if baseline_rps is None:
             baseline_rps = agg.requests_per_second
 

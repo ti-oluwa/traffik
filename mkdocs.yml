@@ -119,10 +119,6 @@ extra:
 extra_css:
   - assets/css/custom.css
 
-validation:
-  nav:
-    not_in_nav: info
-
 nav:
   - Home: index.md
   - Getting Started:

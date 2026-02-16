@@ -283,4 +283,4 @@ async def process_batch(request: Request):
     return {"processed": actual_cost, "results": results}
 ```
 
---8<-- "includes/abbreviations.md"
+

@@ -98,4 +98,4 @@ throttle = HTTPThrottle(
     costs and an identifier that returns `EXEMPTED` for admin tokens. Stack them as
     your use case demands.
 
---8<-- "includes/abbreviations.md"
+

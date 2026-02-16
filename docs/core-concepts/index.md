@@ -75,4 +75,4 @@ throttle = HTTPThrottle(
 Once you understand these four things, **Rate**, **Backend**, **Strategy**,
 **Identifier**, you understand Traffik.
 
---8<-- "includes/abbreviations.md"
+

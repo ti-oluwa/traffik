@@ -346,4 +346,4 @@ async def create_data(payload: dict):
     return {"created": True}
 ```
 
---8<-- "includes/abbreviations.md"
+

@@ -280,4 +280,4 @@ All three backends share the same error-handling knob:
 | `"raise"`    | Propagate the exception to your exception handler             |
 | `callable`   | Call your function `(connection, exc_info) -> wait_ms`        |
 
---8<-- "includes/abbreviations.md"
+

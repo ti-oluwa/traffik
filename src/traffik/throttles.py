@@ -182,7 +182,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             "throttle_name:purpose" (e.g., "login_attempts:ip") to ensure uniqueness
             and clarity of the throttle's intent.
 
-        :param rate: Rate limit definition. This can be provided as a Rate object
+        :param rate: Rate limit definition. This can be provided as a `Rate` object
             or as a string in the format "limit/period" (e.g., "100/m" for 100 requests
             per minute).
 
@@ -1375,7 +1375,7 @@ class HTTPThrottle(Throttle[Request]):
             It also allows for persistent storage of throttle state across application
             restarts or deployments.
 
-        :param rate: Rate limit definition. This can be provided as a Rate object
+        :param rate: Rate limit definition. This can be provided as a `Rate` object
             or as a string in the format "limit/period" (e.g., "100/m" for 100 requests
             per minute).
 

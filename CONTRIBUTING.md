@@ -53,7 +53,7 @@ By participating in this project, you agree to abide by our Code of Conduct. We 
    curl -LsSf https://astral.sh/uv/install.sh | sh
 
    # Install development dependencies
-   uv sync --extra dev --extra test
+   uv sync --group dev
    ```
 
    Or using pip:
@@ -64,7 +64,7 @@ By participating in this project, you agree to abide by our Code of Conduct. We 
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
    # Install in development mode with all dependencies
-   pip install -e ".[dev]"
+   pip install --group dev
    ```
 
 3. **Verify Installation**
@@ -291,7 +291,7 @@ bandit -r src/
 
 ```bash
 # Install documentation dependencies
-pip install -e ".[docs]"
+pip install --group docs
 
 # Serve docs locally
 mkdocs serve

@@ -198,7 +198,7 @@ MANY_HEADERS = Headers(
         "X-Custom-1": Header("bench-value-1", when="always"),
         "X-Custom-2": Header("bench-value-2", when="always"),
         "X-Custom-3": Header("bench-value-3", when="always"),
-        "X-Throttled-At": Header.RESET_SECONDS(when="throttled"),
+        "X-Throttled-Until": Header.RESET_SECONDS(when="throttled"),
     }
 )
 

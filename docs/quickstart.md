@@ -104,7 +104,7 @@ Both styles work identically. The first (`dependencies=[...]`) is cleaner when y
 Stack throttles to enforce multiple limits simultaneously, for example, a per-minute burst limit and a per-hour sustained limit:
 
 ```python
-burst_throttle    = HTTPThrottle("uploads:burst",     rate="10/min")
+burst_throttle = HTTPThrottle("uploads:burst", rate="10/min")
 sustained_throttle = HTTPThrottle("uploads:sustained", rate="100/hour")
 
 @app.post("/upload", dependencies=[Depends(burst_throttle), Depends(sustained_throttle)])
@@ -149,7 +149,7 @@ from traffik.decorators import throttled  # FastAPI-specific import
 backend = InMemoryBackend(namespace="myapp")
 app = FastAPI(lifespan=backend.lifespan)
 
-burst     = HTTPThrottle("search:burst",     rate="5/min")
+burst = HTTPThrottle("search:burst", rate="5/min")
 sustained = HTTPThrottle("search:sustained", rate="50/hour")
 
 @app.get("/search")

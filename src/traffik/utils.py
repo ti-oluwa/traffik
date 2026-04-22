@@ -57,7 +57,7 @@ def _add_parameter_to_signature(
     """
     Adds a parameter to the function's signature at the specified index.
 
-    This may be useful when you need to modify the signature of a function
+    Useful when you need to modify the signature of a function
     dynamically, such as when adding a new parameter to a function (via a decorator/wrapper).
 
     :param func: The function to update.
@@ -129,7 +129,7 @@ def _add_parameter_to_signature(
     return func
 
 
-# Borrowed from Starlette's is_async_callable utility
+# Borrowed from Starlette's `is_async_callable` utility
 @typing.overload
 def is_async_callable(obj: AwaitableCallable[T]) -> TypeGuard[AwaitableCallable[T]]: ...
 
@@ -180,7 +180,7 @@ MsgPackDecodeError = msgpack.exceptions.UnpackException
 
 def time() -> float:
     """
-    Return the current event loop time in seconds.
+    Return the running/current event loop time in seconds.
 
     Preferable to `time.time()` for duration calculations in async code.
     """

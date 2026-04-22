@@ -186,7 +186,7 @@ WebSocket throttle checks are sub-millisecond at P50 and under 2ms at P99 even w
 Different strategies have different CPU and memory profiles. All figures are InMemory backend, FixedWindow strategy baseline, 200 requests (100 allowed, 100 throttled).
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"xyChart": {"plotColorPalette": "#ff5722"}}}}%%
+%%{init: {"theme": "base", "themeVariables": {"xyChart": {"plotColorPalette": "gray"}}}}%%
 xychart-beta
     title "Strategy Throughput (InMemory, High Load, req/s)"
     x-axis ["FixedWindow", "SlidingCounter", "SlidingLog", "TokenBucket", "TokenBucketDebt", "LeakyBucket", "GCRA"]

@@ -272,7 +272,7 @@ class _AsyncRedLock:
 
     Uses the `redlock` algorithm for distributed locking via the `pottery.AIORedlock` API.
 
-    This is useful when utilizing redis clusters or multiple Redis instances and is most likely
+    This is useful when utilizing redis clusters or multiple Redis instances and is mostly
     overkill for single Redis instance deployments. There will be noticeable performance overhead
     when compared to `_AsyncRedisLock` due to the multiple Redis connections and network roundtrips
     involved in acquiring and releasing the lock.

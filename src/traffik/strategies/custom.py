@@ -1640,7 +1640,7 @@ class DistributedFairnessStrategy:
     Ensures fair distribution of rate limit across multiple application instances.
     Prevents any single instance from hogging the shared rate limit.
 
-    **Use case:** Multi-instance deployments with shared Redis backend
+    **Use case:** Multi-instance deployments with shared backend
 
     **How it works:**
     - Each app instance gets equal share of global limit
@@ -1744,8 +1744,8 @@ class DistributedFairnessStrategy:
             # Remove stale instances (not seen in 2 windows)
             stale_threshold = now - (self.fairness_window_ms * 2)
             instances = {
-                iid: data
-                for iid, data in instances.items()
+                instance_id: data
+                for instance_id, data in instances.items()
                 if data["last_seen"] > stale_threshold
             }
             await backend.set(instances_key, dump_data(instances), expire=ttl_seconds)
@@ -1766,7 +1766,7 @@ class DistributedFairnessStrategy:
             quantum = fair_share + deficit
 
             if usage + cost <= quantum and global_usage + cost <= rate.limit:
-                # Allowed - update counters
+                # Allow and update counters
                 await backend.increment_with_ttl(
                     usage_key, amount=cost, ttl=ttl_seconds
                 )
@@ -1779,7 +1779,7 @@ class DistributedFairnessStrategy:
                 await backend.set(deficit_key, str(new_deficit), expire=ttl_seconds)
                 return 0.0
 
-            # Request denied. We calculate the wait period
+            # Deny and calculate the wait period
             time_in_window = now % self.fairness_window_ms
             wait_ms = self.fairness_window_ms - time_in_window
             return max(wait_ms, 0.0)
@@ -1898,7 +1898,7 @@ class GeographicDistributionStrategy:
             "eu-west-1": 0.2,    # 20%
             "ap-southeast-1": 0.1,  # 10%
         },
-        allow_spillover=True,  # Unused capacity → other regions
+        allow_spillover=True,  # Unused capacity get used by other regions
     )
 
     # Identifier: "region:{region}:user:{id}"

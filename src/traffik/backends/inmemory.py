@@ -251,7 +251,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         Start background task to cleanup expired keys.
 
         :param frequency: Cleanup interval in seconds.
-        :return: The created asyncio Task.
+        :return: The created `asyncio.Task`.
         """
 
         async def _cleanup_task():

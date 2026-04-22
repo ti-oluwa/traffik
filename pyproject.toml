@@ -1,7 +1,7 @@
 [project]
 name = "traffik"
 version = "1.1.0"
-description = "Asynchronous distributed rate limiting for FastAPI/Starlette applications."
+description = "Distributed rate limiting for FastAPI/Starlette applications."
 readme = "README.md"
 authors = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
@@ -12,9 +12,7 @@ maintainers = [
 license = { file = "LICENSE" }
 keywords = [
     "starlette", "fastapi", "throttling", "rate-limiting", "api", 
-    "distributed-rate-limiting", "fastapi", "starlette", "rate-limiting", 
-    "rate-limiter", "throttling", "redis", "memcached", "distributed",
-    "websocket", "async", "asyncio", "middleware",
+    "distributed-systems", "redis", "memcached", "websocket", "asyncio", "middleware",
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -49,6 +47,8 @@ Changelog = "https://github.com/ti-oluwa/traffik/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 all = ["traffik[redis]", "traffik[memcached]"]
+redis = ["pottery>=3.0.1", "redis>=5.0.0"]
+memcached = ["aiomcache>=0.8.2"]
 test = [
     "traffik[all]",
     "fastapi>=0.68.0",
@@ -59,32 +59,6 @@ test = [
     "httpx>=0.28.0",
     "anyio>=4.0.0",
     "requests>=2.32.4",
-]
-dev = [
-    "bandit>=1.7.10",
-    "mypy>=1.14.1",
-    "pytest-watch>=4.2.0",
-    "ruff>=0.12.1",
-    "traffik[test]",
-]
-benchmark = [
-    "traffik[dev]",
-    "slowapi>=0.1.4",
-    "psutil>=5.9.5",
-    "uvicorn>=0.22.0",
-    "memory-profiler>=0.61.0",
-    "line-profiler>=5.0.0",
-    "pymemcache>=4.0.0",
-]
-docs = [
-    "mkdocs-material>=9.5.0",
-    "mkdocs-minify-plugin>=0.8.0",
-    "pymdown-extensions>=10.0.0",
-    "traffik",
-]
-redis = ["pottery>=3.0.1", "redis>=5.0.0"]
-memcached = [
-    "aiomcache>=0.8.2",
 ]
 
 [build-system]
@@ -148,6 +122,15 @@ dev = [
     "pytest-watch>=4.2.0",
     "ruff>=0.12.1",
     "traffik[test]",
+    "slowapi>=0.1.4",
+    "psutil>=5.9.5",
+    "uvicorn>=0.22.0",
+    "memory-profiler>=0.61.0",
+    "line-profiler>=5.0.0",
+    "pymemcache>=4.0.0",
+]
+docs = ["zensical>=0.0.31"]
+benchmark = [
     "slowapi>=0.1.4",
     "psutil>=5.9.5",
     "uvicorn>=0.22.0",

@@ -177,9 +177,8 @@ class TokenBucketStrategy:
 
         full_key = backend.get_key(str(key))
         bucket_key = f"{full_key}:tokenbucket:{capacity}"
-        ttl_seconds = max(
-            int((refill_period_ms * 2) // 1000), 1
-        )  # 2x refill period for safety, at least 1s
+        # 2x refill period for safety, at least 1s
+        ttl_seconds = max(int((refill_period_ms * 2) // 1000), 1)
 
         async with await backend.lock(f"lock:{bucket_key}", **self.lock_config):
             old_state_json = await backend.get(bucket_key)
@@ -330,7 +329,7 @@ class TokenBucketWithDebtStrategy:
     - When occasional over-limit is acceptable
     - Development/testing environments
 
-    **When NOT to use:**
+    **When not to use:**
     - APIs with strict rate requirements
     - Third-party API proxying (must respect their limits)
     - Billing/payment systems
@@ -389,10 +388,10 @@ class TokenBucketWithDebtStrategy:
 
     def __post_init__(self) -> None:
         if self.burst_size is not None and self.burst_size < 0:
-            raise ValueError("burst_size must be non-negative")
+            raise ValueError("`burst_size` must be non-negative")
 
         if self.max_debt < 0:
-            raise ValueError("max_debt must be non-negative")
+            raise ValueError("`max_debt` must be non-negative")
 
     async def __call__(
         self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1

@@ -144,7 +144,7 @@ class _AsyncMemcachedLock:
         # Memcached has no way to generate fencing tokens natively,
         # we generate our own unique token per acquisition attempt
         # This helps prevent the "stale lock" problem but only
-        # per process, not cross-process if clocks are skewed.
+        # per process, not cross-process if clocks are skewed across processes.
         token = str(fence_token_generator.next())
         start = time()
         attempts = 0
@@ -423,7 +423,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         Get a distributed lock for the given name.
 
         :param name: Lock name.
-        :return: _AsyncMemcachedLock instance.
+        :return: `_AsyncMemcachedLock` instance.
         """
         if self.connection is None:
             raise BackendConnectionError(

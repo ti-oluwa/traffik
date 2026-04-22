@@ -1,5 +1,5 @@
 site_name: Traffik
-site_description: Asynchronous distributed rate limiting for FastAPI/Starlette applications.
+site_description: Distributed rate limiting for FastAPI/Starlette applications.
 site_author: tioluwa
 site_url: https://ti-oluwa.github.io/traffik/
 repo_url: https://github.com/ti-oluwa/traffik
@@ -14,18 +14,19 @@ theme:
   palette:
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: deep orange
+      primary: teal
       accent: amber
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: deep orange
+      primary: teal
       accent: amber
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
+
   features:
     - navigation.tabs
     - navigation.tabs.sticky
@@ -52,6 +53,10 @@ theme:
       info: octicons/info-16
       success: octicons/check-16
       example: octicons/beaker-16
+  
+  font:
+    text: Manrope
+    code: Roboto Mono
 
 plugins:
   - search:
@@ -91,6 +96,7 @@ markdown_extensions:
   - def_list
   - pymdownx.tasklist:
       custom_checkbox: true
+
 
 extra:
   social:

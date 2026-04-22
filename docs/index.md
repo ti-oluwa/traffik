@@ -4,7 +4,7 @@
 
 ## Stop the flood. Let the right traffic through
 
-**Traffik** is async-first, distributed rate limiting for FastAPI and Starlette, built for correctness under pressure, not just greenfield demos.
+**Traffik** is async-first, distributed rate limiting for FastAPI and Starlette, built for correctness under pressure.
 
 [Get Started](installation.md){ .md-button .md-button--primary }
 [Quick Start](quickstart.md){ .md-button }
@@ -17,9 +17,7 @@
 
 Rate limiting is one of those things that looks simple until it isn't. A naive counter in a dictionary works fine locally, then falls apart the moment you add a second server, a Redis timeout, or a burst of 5,000 simultaneous requests.
 
-Traffik is built to handle all of that, correctly. It's an async, distributed rate limiter for FastAPI and Starlette that gives you atomic operations, 10+ proven strategies, HTTP *and* WebSocket support, circuit breakers, and backend failover, all with an API that stays out of your way.
-
-Zero ceremony. Maximum protection.
+Traffik is built to handle all of that, correctly. It's an async, distributed rate limiter for FastAPI and Starlette that gives you atomic operations, 10+ proven strategies, HTTP *and* WebSocket support, circuit breakers, and backend failover, all with an API that is flexible and easy to use.
 
 ---
 

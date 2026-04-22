@@ -1,6 +1,6 @@
 # Traffik
 
-Asynchronous distributed rate limiting for FastAPI/Starlette applications.
+Distributed rate limiting for FastAPI/Starlette applications.
 
 [![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
 [![Code Quality](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml)
@@ -15,7 +15,7 @@ Asynchronous distributed rate limiting for FastAPI/Starlette applications.
 - **10+ Strategies**: Fixed Window, Sliding Window (Log & Counter), Token Bucket, Leaky Bucket, GCRA, and more
 - **HTTP & WebSocket**: Full-featured rate limiting for both protocols with per-message throttling support
 - **Production-Ready**: Circuit breakers, automatic retries, backend failover, and custom error handling
-- **Flexible Integration**: Dependencies, decorators, middleware, or direct calls — use what fits your architecture
+- **Flexible Integration**: Dependencies, decorators, middleware, or direct calls - use what fits your architecture
 - **Highly Extensible**: Simple, well-documented APIs for custom backends, strategies, error handlers, and identifiers
 - **Observable**: Rich error context and strategy statistics for monitoring
 - **Performance-Optimized**: Lock striping, connection pooling, script caching, and minimal memory footprint
@@ -26,7 +26,7 @@ Asynchronous distributed rate limiting for FastAPI/Starlette applications.
 
 Full documentation is available at **[https://ti-oluwa.github.io/traffik/](https://ti-oluwa.github.io/traffik/)**, covering:
 
-- [Getting Started](https://ti-oluwa.github.io/traffik/quickstart/) - up and running in minutes
+- [Getting Started](https://ti-oluwa.github.io/traffik/quickstart/) - get up and running in minutes
 - [Core Concepts](https://ti-oluwa.github.io/traffik/core-concepts/) - backends, strategies, identifiers, rate formats
 - [Integration](https://ti-oluwa.github.io/traffik/integration/) - dependencies, decorators, middleware, direct usage
 - [Advanced Features](https://ti-oluwa.github.io/traffik/advanced/) - response headers, throttle rules, quota contexts, and more
@@ -62,7 +62,7 @@ from traffik.backends.inmemory import InMemoryBackend
 backend = InMemoryBackend(namespace="myapp")
 app = FastAPI(lifespan=backend.lifespan)
 
-throttle = HTTPThrottle("api:v1", rate="100/min", backend=backend)
+throttle = HTTPThrottle("api:v1", rate="100/min")
 
 @app.get("/items", dependencies=[Depends(throttle)])
 async def list_items():
@@ -73,4 +73,4 @@ See the [Quick Start guide](https://ti-oluwa.github.io/traffik/quickstart/) for 
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE) for details.

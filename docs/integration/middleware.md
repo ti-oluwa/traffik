@@ -14,6 +14,9 @@
 
 Wrap your underlying throttle in `MiddlewareThrottle` and pass it to `ThrottleMiddleware`. The backend is typically shared via the `lifespan` context.
 
+!!! info "v1.1.0+: Using regular throttles with rules"
+    As of v1.1.0, you can pass regular `Throttle` instances directly to `ThrottleMiddleware`, thanks to the new [throttle rule API](../advanced/rules.md). `MiddlewareThrottle` is a lightweight wrapper that internally uses `ThrottleRule`, so you can replicate its functionality by attaching rules directly to a `Throttle`. See [MiddlewareThrottle as a convenience wrapper](#middlewarethrottle-as-a-convenience-wrapper) for details and an example.
+
 ```python
 from fastapi import FastAPI
 from traffik import HTTPThrottle
@@ -262,6 +265,63 @@ app.add_middleware(
 
 ---
 
+## MiddlewareThrottle as a convenience wrapper
+
+`MiddlewareThrottle` is a lightweight wrapper around `ThrottleRule` that simplifies the common case of applying path, method, and predicate filters to a throttle in middleware. Since v1.1.0, you can achieve the same result by attaching rules directly to a regular `Throttle` using the [throttle rule API](../advanced/rules.md).
+
+This example shows both approaches side-by-side:
+
+=== "Using MiddlewareThrottle (v1.0.0+)"
+
+    ```python
+    from fastapi import FastAPI
+    from traffik import HTTPThrottle
+    from traffik.backends.inmemory import InMemoryBackend
+    from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
+
+    backend = InMemoryBackend()
+    app = FastAPI(lifespan=backend.lifespan)
+
+    api_throttle = HTTPThrottle(uid="api:writes", rate="200/min")
+
+    app.add_middleware(
+        ThrottleMiddleware,
+        middleware_throttles=[
+            MiddlewareThrottle(
+                api_throttle,
+                path="/api/",
+                methods={"POST", "PUT", "DELETE"},
+            )
+        ],
+    )
+    ```
+
+=== "Using regular Throttle with rules (v1.1.0+)"
+
+    ```python
+    from fastapi import FastAPI
+    from traffik import HTTPThrottle
+    from traffik.backends.inmemory import InMemoryBackend
+    from traffik.middleware import ThrottleMiddleware
+    from traffik.registry import ThrottleRule
+
+    backend = InMemoryBackend()
+    app = FastAPI(lifespan=backend.lifespan)
+
+    # Attach rules directly to the throttle
+    rule = ThrottleRule(path="/api/", methods={"POST", "PUT", "DELETE"})
+    api_throttle = HTTPThrottle(uid="api:writes", rate="200/min", rules={rule})
+
+    app.add_middleware(
+        ThrottleMiddleware,
+        middleware_throttles=[api_throttle],  # Pass the throttle directly
+    )
+    ```
+
+Both approaches are equivalent. The first approach is more concise for middleware-only use, while the second allows you to share the same filtered throttle across middleware and route-level dependencies.
+
+---
+
 ## Using `MiddlewareThrottle` as a FastAPI dependency
 
 `MiddlewareThrottle` implements `__call__` and exposes a `__signature__` compatible with FastAPI's dependency injection. This is a niche use case, for example when you have a `MiddlewareThrottle` instance configured with path and method filters, and you also want to use the same filtered throttle as a route-level dependency.
@@ -345,5 +405,3 @@ async def get_data():
 async def create_data(payload: dict):
     return {"created": True}
 ```
-
-

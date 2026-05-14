@@ -1,9 +1,9 @@
 """Traffik utilities."""
 
-import asyncio
 import base64
 import functools
 import inspect
+import time as pytime
 import typing
 
 import msgpack  # type: ignore[import-untyped]
@@ -180,8 +180,9 @@ MsgPackDecodeError = msgpack.exceptions.UnpackException
 
 def time() -> float:
     """
-    Return the running/current event loop time in seconds.
+    Return the current UTC time as a Unix timestamp in seconds.
 
-    Preferable to `time.time()` for duration calculations in async code.
+    Uses wall-clock time (`time.time()`) to ensure window calculations
+    remain consistent across process restarts and multiple servers/processes.
     """
-    return asyncio.get_running_loop().time()
+    return pytime.time()

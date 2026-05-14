@@ -47,7 +47,8 @@ class _AsyncInMemoryLock:
         Acquire the lock.
 
         :param blocking: If False, return immediately if the lock is held.
-        :param blocking_timeout: Max time (seconds) to wait if blocking is True (Not supported).
+        :param blocking_timeout: Max time (seconds) to wait if blocking is True 
+            (Not supported as ops are in-memory and very fast).
         :return: True if the lock was acquired, False otherwise.
         """
         if not blocking:
@@ -58,47 +59,6 @@ class _AsyncInMemoryLock:
             return await self._lock.acquire()
 
         return await self._lock.acquire()
-
-        # This segment has issues
-        # if blocking_timeout is None:
-        #     # Normal blocking acquire (no timeout)
-        #     return await self._lock.acquire()
-
-        # # Check if this is a reentrant acquisition
-        # current_task = asyncio.current_task()
-        # if self._lock.is_owner(task=current_task):
-        #     # Acquire lock without timeout to avoid cancellation issues
-        #     return await self._lock.acquire()
-
-        # # Blocking with timeout. Can't use `asyncio.wait_for` as `_AsyncRLock.acquire()`
-        # # cancellation on timeout leads to a corrupted state in the lock.
-        # # Hence we use a separate timeout task.
-        # acquire_task = asyncio.create_task(self._lock.acquire())
-        # timeout_task = asyncio.create_task(asyncio.sleep(blocking_timeout))
-
-        # done, _ = await asyncio.wait(
-        #     {acquire_task, timeout_task}, return_when=asyncio.FIRST_COMPLETED
-        # )
-        # if acquire_task in done:
-        #     # Lock acquired successfully
-        #     timeout_task.cancel()
-        #     try:
-        #         await timeout_task
-        #     except asyncio.CancelledError:
-        #         pass
-        #     return True
-
-        # # Timeout occurred. Cancel the acquire task
-        # acquire_task.cancel()
-        # try:
-        #     await acquire_task
-        # except asyncio.CancelledError:
-        #     # Lock acquisition was cancelled, but it might have succeeded
-        #     # just before cancellation. Check if we got it.
-        #     if self._lock.is_owner(task=current_task):
-        #         # We got the lock right before timeout, we keep it
-        #         return True
-        # return False
 
     async def release(self) -> None:
         """Release the lock."""

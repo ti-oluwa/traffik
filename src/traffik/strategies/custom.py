@@ -3,7 +3,6 @@ Advanced Rate Limiting Strategies for Special Use Cases
 """
 
 import heapq
-import time as pytime
 import typing
 from collections import deque
 from dataclasses import dataclass, field
@@ -1180,7 +1179,7 @@ class TimeOfDayStrategy:
             return 0.0
 
         # We must use wall clock time for time-of-day calculations, not event loop time
-        now = pytime.time() * 1000
+        now = time() * 1000
         window_duration_ms = rate.expire
         current_window = int(now // window_duration_ms)
 
@@ -1221,7 +1220,7 @@ class TimeOfDayStrategy:
             )
 
         # Use wall clock time for time-of-day calculations
-        now = pytime.time() * 1000
+        now = time() * 1000
         window_duration_ms = rate.expire
         current_window = int(now // window_duration_ms)
 

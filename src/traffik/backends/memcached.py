@@ -283,11 +283,11 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 and returns an integer representing the wait period in milliseconds. Ensure this
                 function executes quickly to avoid additional latency.
         :param lock_blocking: Whether locks should block when acquiring.
-            If None, uses the global default from `traffik.utils.get_lock_blocking()`.
+            If None, uses the global default from `traffik.config.get_lock_blocking()`.
         :param lock_ttl: Default TTL for locks in seconds. If None, locks have
             no expiration unless specified during lock acquisition.
         :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
-            If None, uses the global default from `traffik.utils.get_lock_blocking_timeout()`.
+            If None, uses the global default from `traffik.config.get_lock_blocking_timeout()`.
         :param track_keys: Whether to track all keys in the namespace for clearing.
             Since Memcached doesn't support key listing like Redis, this enables
             a best-effort tracking mechanism using a special tracking key to store
@@ -418,6 +418,15 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         except ClientException:
             return False
 
+    def _assert_ready(self) -> None:
+        """
+        Raise `BackendConnectionError` if the backend has not been initialized.
+        """
+        if self.connection is None:
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
+
     async def get_lock(self, name: str) -> _AsyncMemcachedLock:
         """
         Get a distributed lock for the given name.
@@ -425,11 +434,8 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         :param name: Lock name.
         :return: `_AsyncMemcachedLock` instance.
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-        return _AsyncMemcachedLock(name, client=self.connection, ttl=self.lock_ttl)
+        self._assert_ready()
+        return _AsyncMemcachedLock(name, client=self.connection, ttl=self.lock_ttl)  # type: ignore[arg-type]
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any
@@ -440,12 +446,9 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         :param key: Key to retrieve.
         :return: Value as string, or None if not found.
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
-        value = await self.connection.get(key.encode())
+        value = await self.connection.get(key.encode())  # type: ignore[attr-defined]
         if value is None:
             return None
         return value.decode()
@@ -460,13 +463,10 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         :param value: Value to store.
         :param expire: Optional TTL in seconds.
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         exptime = int(expire) if expire is not None else 0
-        await self.connection.set(
+        await self.connection.set(  # type: ignore[attr-defined]
             key.encode(),
             str(value).encode(),
             exptime=exptime,
@@ -481,12 +481,9 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         :param key: Key to delete.
         :return: True if deleted, False if not found.
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
-        deleted = await self.connection.delete(key.encode())
+        deleted = await self.connection.delete(key.encode())  # type: ignore[attr-defined]
         if deleted and self.track_keys:
             await self._untrack_key(key)
         return deleted
@@ -501,20 +498,17 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         :param amount: Amount to increment by.
         :return: New value after increment.
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         # Try to increment existing counter
         encoded_key = key.encode()
-        new_value = await self.connection.incr(encoded_key, amount)
+        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[attr-defined]
         if new_value is not None:
             return new_value
 
         # Key doesn't exist, initialize it
         # Use add() to atomically create if not exists
-        added = await self.connection.add(
+        added = await self.connection.add(  # type: ignore[attr-defined]
             encoded_key,
             str(amount).encode(),
             exptime=0,
@@ -525,7 +519,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             return amount
 
         # Someone else created it, try increment again
-        new_value = await self.connection.incr(encoded_key, amount)
+        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[attr-defined]
         return new_value  # type: ignore[return-value]
 
     async def decrement(self, key: str, amount: int = 1) -> int:
@@ -539,20 +533,17 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         :param amount: Amount to decrement by.
         :return: New value after decrement.
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         # Try to decrement existing counter
         encoded_key = key.encode()
-        new_value = await self.connection.decr(encoded_key, amount)
+        new_value = await self.connection.decr(encoded_key, amount)  # type: ignore[attr-defined]
         if new_value is not None:
             return new_value
 
-        # Key doesn't exist, initialize it to 0 - amount
-        # Use add() to atomically create if not exists
-        added = await self.connection.add(
+        # Key doesn't exist, initialize it to `0 - amount`
+        # Use `add()` to atomically create if not exists
+        added = await self.connection.add(  # type: ignore[attr-defined]
             encoded_key,
             str(-amount).encode(),
             exptime=0,
@@ -563,7 +554,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             return -amount
 
         # Someone else created it, try decrement again
-        new_value = await self.connection.decr(encoded_key, amount)
+        new_value = await self.connection.decr(encoded_key, amount)  # type: ignore[attr-defined]
         return new_value  # type: ignore[return-value]
 
     async def expire(self, key: str, seconds: int) -> bool:
@@ -577,19 +568,16 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         :param seconds: TTL in seconds.
         :return: True if expiration was set, False if key doesn't exist.
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         # Get current value
         encoded_key = key.encode()
-        value = await self.connection.get(encoded_key)
+        value = await self.connection.get(encoded_key)  # type: ignore[attr-defined]
         if value is None:
             return False
 
         # Set with new expiration
-        is_set = await self.connection.set(
+        is_set = await self.connection.set(  # type: ignore[attr-defined]
             encoded_key,
             value,
             exptime=seconds,
@@ -608,20 +596,17 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         :param ttl: TTL in seconds (only applied on first set).
         :return: New value after increment.
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         # Try to increment existing counter
         encoded_key = key.encode()
-        new_value = await self.connection.incr(encoded_key, amount)
+        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[attr-defined]
         if new_value is not None:
             return new_value
 
         # Key doesn't exist, create with TTL
         # Atomically create with TTL
-        added = await self.connection.add(
+        added = await self.connection.add(  # type: ignore[attr-defined]
             encoded_key,
             str(amount).encode(),
             exptime=ttl,
@@ -632,7 +617,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             return amount
 
         # Someone else created it, increment
-        new_value = await self.connection.incr(encoded_key, amount)
+        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[attr-defined]
         return new_value  # type: ignore[return-value]
 
     async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
@@ -642,16 +627,12 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         :param keys: Keys to retrieve.
         :return: List of values (None for missing keys), same order as keys.
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-
+        self._assert_ready()
         if not keys:
             return []
 
         encoded_keys = [k.encode() for k in keys]
-        values = await self.connection.multi_get(*encoded_keys)
+        values = await self.connection.multi_get(*encoded_keys)  # type: ignore[attr-defined]
         results: typing.List[typing.Optional[str]] = []
         for value in values:
             if value is not None:
@@ -674,11 +655,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         :param items: Mapping of keys to values
         :param expire: Optional TTL in seconds for all keys
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-
+        self._assert_ready()
         if not items:
             return
 
@@ -718,20 +695,17 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             # No-op if not tracking keys
             return
 
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         tracking_key = self._tracking_key
-        tracked = await self.connection.get(tracking_key.encode())
+        tracked = await self.connection.get(tracking_key.encode())  # type: ignore[attr-defined]
         if tracked is None:
             return
 
         keys = tracked.decode().split("||")
         delete_tasks = []
         for key in keys:
-            delete_tasks.append(self.connection.delete(key.encode()))
+            delete_tasks.append(self.connection.delete(key.encode()))  # type: ignore[attr-defined]
 
         results = await asyncio.gather(*delete_tasks, return_exceptions=True)
         for key, result in zip(keys, results):
@@ -741,7 +715,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 ) from result
 
         # Delete the tracking key itself finally
-        await self.connection.delete(tracking_key.encode())
+        await self.connection.delete(tracking_key.encode())  # type: ignore[attr-defined]
 
     async def reset(self) -> None:
         """Reset the backend."""

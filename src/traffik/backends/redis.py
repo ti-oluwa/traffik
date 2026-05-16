@@ -519,11 +519,11 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                 and returns an integer representing the wait period in milliseconds. Ensure this
                 function executes quickly to avoid additional latency.
         :param lock_blocking: Whether locks should block when acquiring.
-            If None, uses the global default from `traffik.utils.get_lock_blocking()`.
+            If None, uses the global default from `traffik.config.get_lock_blocking()`.
         :param lock_ttl: Default TTL for locks in seconds. If None, locks have
             no expiration unless specified during lock acquisition.
         :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
-            If None, uses the global default from `traffik.utils.get_lock_blocking_timeout()`.
+            If None, uses the global default from `traffik.config.get_lock_blocking_timeout()`.
         :param lock_type: The type of Redis lock to use ("redis" or "redlock").
             - "redis": Uses a simple Redis-based lock suitable for single Redis instances.
             - "redlock": Uses the Redlock algorithm for distributed locking, suitable for
@@ -583,7 +583,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                     "Failed to initialize Redis connection."
                 ) from exc
 
-    async def _scripts_ready(self) -> bool:
+    async def _check_scripts_ready(self) -> bool:
         """Check if all required Lua scripts are registered."""
         if self.connection is None:
             return False
@@ -596,7 +596,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         if self._clear_sha is not None:
             scripts_shas.append(self._clear_sha)
 
-        # Check lock scripts if using _AsyncRedisLock
+        # Check lock scripts if using `_AsyncRedisLock`
         if not self._use_redlock and self._lock_script_shas is not None:
             scripts_shas.append(self._lock_script_shas["acquire"])
             scripts_shas.append(self._lock_script_shas["release"])
@@ -610,7 +610,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
 
         try:
             await self.connection.ping()
-            return await self._scripts_ready()
+            return await self._check_scripts_ready()
         except aioredis.RedisError:
             return False
 
@@ -636,24 +636,29 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                 release=await _AsyncRedisLock._load_release_script(self.connection),
             )
 
-    async def get_lock(self, name: str) -> typing.Union[_AsyncRedisLock, _AsyncRedLock]:
-        """Returns a distributed Redis lock for the given name."""
+    def _assert_ready(self) -> None:
+        """
+        Raise `BackendConnectionError` if the backend has not been initialized.
+        """
         if self.connection is None:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
 
+    async def get_lock(self, name: str) -> typing.Union[_AsyncRedisLock, _AsyncRedLock]:
+        """Returns a distributed Redis lock for the given name."""
+        self._assert_ready()
         if not self._use_redlock:
             return _AsyncRedisLock(
                 name,
-                redis=self.connection,
+                redis=self.connection,  # type: ignore[arg-type]
                 script_shas=self._lock_script_shas,  # type: ignore[arg-type]
                 ttl=self.lock_ttl,
                 blocking_timeout=self.lock_blocking_timeout,
             )
         return _AsyncRedLock(
             name,
-            redis=self.connection,
+            redis=self.connection,  # type: ignore[arg-type]
             ttl=self.lock_ttl,
             blocking_timeout=self.lock_blocking_timeout,
         )
@@ -662,66 +667,45 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         self, key: str, *args: typing.Any, **kwargs: typing.Any
     ) -> typing.Optional[str]:
         """Get value by key."""
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-        return await self.connection.get(key)
+        self._assert_ready()
+        return await self.connection.get(key)  # type: ignore[attr-defined]
 
     async def set(
         self, key: str, value: typing.Any, expire: typing.Optional[int] = None
     ) -> None:
         """Set value by key with optional expiration."""
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-
+        self._assert_ready()
         if expire is not None:
-            await self.connection.set(key, value, ex=expire)
+            await self.connection.set(key, value, ex=expire)  # type: ignore[attr-defined]
         else:
-            await self.connection.set(key, value)
+            await self.connection.set(key, value)  # type: ignore[attr-defined]
 
     async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
         """Delete key."""
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
-        deleted_count = await self.connection.delete(key)
+        deleted_count = await self.connection.delete(key)  # type: ignore[attr-defined]
         return deleted_count > 0
 
     async def increment(self, key: str, amount: int = 1) -> int:
         """Atomically increment using Redis INCR/INCRBY."""
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-
+        self._assert_ready()
         if amount == 1:
-            return await self.connection.incr(key)
-        return await self.connection.incrby(key, amount)
+            return await self.connection.incr(key)  # type: ignore[attr-defined]
+        return await self.connection.incrby(key, amount)  # type: ignore[attr-defined]
 
     async def decrement(self, key: str, amount: int = 1) -> int:
         """Atomically decrement using Redis DECR/DECRBY."""
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-
+        self._assert_ready()
         if amount == 1:
-            return await self.connection.decr(key)
-        return await self.connection.decrby(key, amount)
+            return await self.connection.decr(key)  # type: ignore[attr-defined]
+        return await self.connection.decrby(key, amount)  # type: ignore[attr-defined]
 
     async def expire(self, key: str, seconds: int) -> bool:
         """Set expiration using Redis EXPIRE."""
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
-        result = await self.connection.expire(key, seconds)
+        result = await self.connection.expire(key, seconds)  # type: ignore[attr-defined]
         return bool(result)
 
     async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int = 60) -> int:
@@ -740,11 +724,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         :param ttl: TTL to set if key is new (seconds)
         :return: New value after increment
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-
+        self._assert_ready()
         try:
             result = await self.connection.evalsha(  # type: ignore
                 self._increment_with_ttl_sha,  # type: ignore[arg-type]
@@ -782,14 +762,10 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         :param keys: Keys to retrieve
         :return: List of values (None for missing keys)
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-
+        self._assert_ready()
         if not keys:
             return []
-        return await self.connection.mget(keys)
+        return await self.connection.mget(keys)  # type: ignore[attr-defined]
 
     async def multi_set(
         self,
@@ -805,15 +781,11 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         :param items: Mapping of keys to values
         :param expire: Optional TTL in seconds for all keys
         """
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-
+        self._assert_ready()
         if not items:
             return
 
-        async with self.connection.pipeline(transaction=True) as pipe:
+        async with self.connection.pipeline(transaction=True) as pipe:  # type: ignore[attr-defined]
             for key, value in items.items():
                 if expire is not None:
                     pipe.set(key, value, ex=expire)
@@ -823,11 +795,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
 
     async def clear(self) -> None:
         """Clear all keys in the namespace."""
-        if self.connection is None:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-
+        self._assert_ready()
         try:
             await self.connection.evalsha(  # type: ignore
                 self._clear_sha,  # type: ignore[arg-type]

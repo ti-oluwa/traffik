@@ -129,7 +129,7 @@ dev = [
     "line-profiler>=5.0.0",
     "pymemcache>=4.0.0",
 ]
-docs = ["zensical>=0.0.31"]
+# docs = ["zensical>=0.0.31"]
 benchmark = [
     "slowapi>=0.1.4",
     "psutil>=5.9.5",

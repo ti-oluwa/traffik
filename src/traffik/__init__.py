@@ -2,8 +2,7 @@
 **Traffik** - Asynchronous Distributed Rate Limiting for Starlette and FastAPI Applications.
 """
 
-from .backends.base import *  # noqa
-from .backends.inmemory import *  # noqa
+from .backends import *  # noqa
 from .rates import Rate  # noqa
 from .throttles import *  # noqa
 from .types import *  # noqa

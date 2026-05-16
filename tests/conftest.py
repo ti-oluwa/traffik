@@ -77,11 +77,14 @@ class BackendGen:
     """Wraps a backend generator function to provide both iteration and call capabilities."""
 
     def __init__(
-        self, func: typing.Callable[[str, bool], typing.Iterator[ThrottleBackend]]
+        self,
+        func: typing.Callable[
+            [str, bool], typing.Iterator[ThrottleBackend[typing.Any, typing.Any]]
+        ],
     ) -> None:
         self._func = func
 
-    def __iter__(self) -> typing.Iterator[ThrottleBackend]:
+    def __iter__(self) -> typing.Iterator[ThrottleBackend[typing.Any, typing.Any]]:
         return iter(self())
 
     def __call__(
@@ -91,11 +94,11 @@ class BackendGen:
         persistent: bool = False,
         exclude: typing.Optional[
             typing.Union[
-                typing.Type[ThrottleBackend],
-                typing.Tuple[typing.Type[ThrottleBackend], ...],
+                typing.Type[ThrottleBackend[typing.Any, typing.Any]],
+                typing.Tuple[typing.Type[ThrottleBackend[typing.Any, typing.Any]], ...],
             ]
         ] = None,
-    ) -> typing.Generator[ThrottleBackend, None, None]:
+    ) -> typing.Generator[ThrottleBackend[typing.Any, typing.Any], None, None]:
         for backend in self._func(namespace, persistent):
             if exclude is not None and isinstance(backend, exclude):
                 continue
@@ -106,7 +109,7 @@ class BackendGen:
 def backends() -> BackendGen:
     def gen_func(
         namespace: str = "test", persistent: bool = False
-    ) -> typing.Generator[ThrottleBackend, None, None]:
+    ) -> typing.Generator[ThrottleBackend[typing.Any, typing.Any], None, None]:
         for backend_factory in BACKEND_FACTORIES:
             try:
                 backend = backend_factory(namespace, persistent)

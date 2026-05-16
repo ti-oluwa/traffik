@@ -878,7 +878,7 @@ async def test_single_backend_context_nesting(backends: BackendGen) -> None:
             # Except when explicitly set, when a backend context is nested within another,
             # by default, it should not close on exiting the context
             assert inner_context1.close_on_exit is False
-            # Since persistence is not explicitly set for the inner  context,
+            # Since persistence is not explicitly set for the inner context,
             # ensure the inner context (from the same backend) is persistent, although the backend is non-persistent
             # This behaviour prevent unexpected behaviour and ensure data integrity when nesting context's of a single backend
             assert inner_context1.persistent is True
@@ -899,7 +899,7 @@ async def test_single_backend_context_nesting(backends: BackendGen) -> None:
                     assert await backend.get(key) == "value2"
 
             assert backend.connection is None
-            # Backend should raise and error now that is connection was clsed by inner_context2
+            # Backend should raise an error now that is connection was closed by inner_context2
             with pytest.raises(BackendConnectionError):
                 await backend.get(key)
 

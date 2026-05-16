@@ -47,7 +47,7 @@ class _AsyncInMemoryLock:
         Acquire the lock.
 
         :param blocking: If False, return immediately if the lock is held.
-        :param blocking_timeout: Max time (seconds) to wait if blocking is True 
+        :param blocking_timeout: Max time (seconds) to wait if blocking is True
             (Not supported as ops are in-memory and very fast).
         :return: True if the lock was acquired, False otherwise.
         """
@@ -84,7 +84,6 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         handle_throttled: typing.Optional[
             ConnectionThrottledHandler[HTTPConnectionT, typing.Any]
         ] = None,
-        persistent: bool = False,
         on_error: typing.Union[
             typing.Literal["allow", "throttle", "raise"],
             ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
@@ -104,6 +103,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param identifier: The connected client identifier generator.
         :param handle_throttled: The handler to call when the client connection is throttled.
         :param persistent: Whether to persist throttling data across application restarts.
+            Always non-persistent even when `persisent=True`.
         :param on_error: Strategy to handle errors during throttling operations.
             - "allow": Allow the request to proceed without throttling.
             - "throttle": Throttle the request as if it exceeded the rate limit.
@@ -112,11 +112,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 and returns an integer representing the wait period in milliseconds. Ensure this
                 function executes quickly to avoid additional latency.
         :param lock_blocking: Whether locks should block when acquiring.
-            If None, uses the global default from `traffik.utils.get_lock_blocking()`.
+            If None, uses the global default from `traffik.config.get_lock_blocking()`.
         :param lock_ttl: Default TTL for locks in seconds. If None, locks have
             no expiration unless specified during lock acquisition.
         :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
-            If None, uses the global default from `traffik.utils.get_lock_blocking_timeout()`.
+            If None, uses the global default from `traffik.config.get_lock_blocking_timeout()`.
         :param number_of_shards: Number of shards to split the in-memory store into for concurrency.
         :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys. If None, no automatic cleanup is performed.
         :param kwargs: Additional keyword arguments.
@@ -126,7 +126,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             namespace=namespace,
             identifier=identifier,
             handle_throttled=handle_throttled,
-            persistent=persistent,
+            persistent=False, # Can never be persistent
             on_error=on_error,
             lock_blocking=lock_blocking,
             lock_ttl=lock_ttl,
@@ -164,9 +164,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             self._shard_stores = [OrderedDict() for _ in range(self._num_shards)]
 
         if self._cleanup_task is None and self._cleanup_frequency:
-            self._cleanup_task = await self._start_cleanup_task(
-                frequency=self._cleanup_frequency
-            )
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         self._initialized = True
 
     async def ready(self) -> bool:
@@ -191,7 +189,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 all_keys.extend(list(store.keys()))
         return all_keys
 
-    async def _cleanup_expired(self) -> None:
+    async def _cleanup(self) -> None:
         """Remove expired keys from all shards."""
         now = time()
 
@@ -206,20 +204,27 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 for key in expired:
                     del store[key]
 
-    async def _start_cleanup_task(self, frequency: float = 0.1) -> asyncio.Task[None]:
+    async def _cleanup_loop(self) -> None:
+        """Periodically reclaim expired entries. Runs as a background `asyncio.Task`."""
+        assert self._cleanup_frequency
+        while self._initialized:
+            try:
+                await asyncio.sleep(self._cleanup_frequency)
+                await self._cleanup()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                # Never crash the cleanup loop. Keep the backend alive.
+                pass
+
+    def _assert_ready(self) -> None:
         """
-        Start background task to cleanup expired keys.
-
-        :param frequency: Cleanup interval in seconds.
-        :return: The created `asyncio.Task`.
+        Raise `BackendConnectionError` if the backend has not been initialized.
         """
-
-        async def _cleanup_task():
-            while self._initialized:
-                await asyncio.sleep(frequency)  # Cleanup interval
-                await self._cleanup_expired()
-
-        return asyncio.create_task(_cleanup_task())
+        if not self._initialized:
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
 
     async def get_lock(self, name: str) -> _AsyncInMemoryLock:
         """
@@ -241,10 +246,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self, key: str, *args: typing.Any, **kwargs: typing.Any
     ) -> typing.Optional[str]:
         """Get value by key."""
-        if not self._initialized:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         _, lock, store = self._get_shard(key)
         entry = store.get(key)
@@ -263,10 +265,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self, key: str, value: str, expire: typing.Optional[float] = None
     ) -> None:
         """Set value by key."""
-        if not self._initialized:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         _, lock, store = self._get_shard(key)
         expires_at = None
@@ -278,10 +277,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
         """Delete key if exists."""
-        if not self._initialized:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         _, lock, store = self._get_shard(key)
         async with lock:
@@ -298,10 +294,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param amount: Amount to increment by
         :return: New value after increment
         """
-        if not self._initialized:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         _, lock, store = self._get_shard(key)
         async with lock:
@@ -338,10 +331,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param seconds: TTL in seconds
         :return: True if expiration was set, False if key doesn't exist
         """
-        if not self._initialized:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         _, lock, store = self._get_shard(key)
         async with lock:
@@ -363,10 +353,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param ttl: TTL to set if key is new (seconds)
         :return: New value after increment
         """
-        if not self._initialized:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         _, lock, store = self._get_shard(key)
         async with lock:
@@ -410,11 +397,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param keys: List of keys to get
         :return: List of values (None for missing keys), same order as keys
         """
-        if not self._initialized:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-
+        self._assert_ready()
         if not keys:
             return []
 
@@ -467,11 +450,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param items: Mapping of keys to values
         :param expire: Optional TTL in seconds for all keys
         """
-        if not self._initialized:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
-
+        self._assert_ready()
         if not items:
             return
 

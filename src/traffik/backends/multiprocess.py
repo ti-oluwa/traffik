@@ -6,61 +6,17 @@ with multiple workers) where Redis/Memcached is unavailable or undesirable,
 but a single `InMemoryBackend` per process would result in each worker
 maintaining independent, incorrect rate limit counters.
 
-All keys share a single unified store backed by `multiprocessing.shared_memory`.
-Each slot stores a string value (as UTF-8 bytes up to `max_value_size` bytes),
-an expiry timestamp, and an occupied flag. Counter operations (`increment`,
-`increment_with_ttl`) read and write numeric string values through the same
-slots as `get` and `set`, so a key written by `increment_with_ttl` is always
-visible to `get` and vice versa.
-
-Slot layout (fixed size per slot, default `max_value_size=512`):
-
-    [uint16 value_len][bytes value (max_value_size)][float64 expires_at][uint8 occupied]
-
-The slot size is ``2 + max_value_size + 8 + 1`` bytes, padded to an 8-byte
-boundary.
-
-Deadlock prevention
--------------------
-Deadlocks occur when two threads each hold one lock and wait for the other.
-The rules below prevent this by enforcing a **consistent acquisition order**
-across all concurrent callers. Many threads can be in-flight simultaneously —
-the rules only dictate *which lock to acquire first when more than one is needed*.
-
-The locks involved are:
-
-- ``slot_map_lock`` — guards the key→slot-index mapping and the free-slot list.
-- ``shard_locks[i]`` — guards reads and writes to slots within shard *i*.
-  There are ``number_of_shards`` of these (default 64).
-- ``named_locks[name]`` — per-name locks used by throttle strategies (e.g.
-  leaky bucket, GCRA). Entirely independent of the above two.
-
-Rules:
-
-1. **Acquire ``slot_map_lock`` before any ``shard_lock``** when you need both.
-   `_delete` is the one exception — it acquires ``shard_lock`` first because it
-   never calls `_get_or_allocate_slot` (see its docstring). These two orderings
-   cannot deadlock each other because no other path holds ``slot_map_lock`` while
-   trying to acquire the same ``shard_lock`` that `_delete` holds.
-
-2. **Never hold two ``shard_locks`` simultaneously.** `_multi_get` and `_multi_set`
-   acquire them one at a time in ascending shard-index order. All callers following
-   the same order means no two can be waiting on each other.
-
-3. **Never acquire a ``named_lock`` while holding any other lock.** Named locks
-   are the outermost lock in strategy code; shard and slot-map locks are internal
-   to the backend. Mixing them would create a dependency cycle no ordering rule
-   can resolve.
+All state lives in a single `multiprocessing.shared_memory` segment.
+Locking uses `multiprocessing.Semaphore` objects created before fork and
+inherited by all workers.
 """
 
 import asyncio
-import ctypes
+import multiprocessing
 import struct
 import typing
-from multiprocessing import Lock, Manager
-from multiprocessing.managers import SyncManager
 from multiprocessing.shared_memory import SharedMemory
-from multiprocessing.synchronize import Lock as MPLock
+from multiprocessing.synchronize import Semaphore
 from types import TracebackType
 
 from typing_extensions import Self
@@ -78,19 +34,76 @@ from traffik.utils import time
 __all__ = ["MultiProcessInMemoryBackend"]
 
 
-class _AsyncMPLock:
+# Hash table
+_HASH_TABLE_LOAD_FACTOR: float = 0.65
+_HASH_TABLE_EMPTY_STATE: int = 0
+_HASH_TABLE_OCCUPIED_STATE: int = 1
+_HASH_TABLE_TOMBSTONE_STATE: int = 2
+_KEY_MAX_BYTES: int = 200  # max UTF-8 byte length of a key
+
+# Hash table entry layout: state(1) + key_length(1) + key(200) + slot_idx(4) = 206
+_HASH_TABLE_STATE_SIZE: int = 1
+_HASH_TABLE_KEY_VALUE_LENGTH_SIZE: int = 1
+_HASH_TABLE_SLOT_IDX_SIZE: int = 4
+_HASH_TABLE_ENTRY_SIZE: int = (
+    _HASH_TABLE_STATE_SIZE
+    + _HASH_TABLE_KEY_VALUE_LENGTH_SIZE
+    + _KEY_MAX_BYTES
+    + _HASH_TABLE_SLOT_IDX_SIZE
+)
+
+# Within a hash table entry:
+_HASH_TABLE_STATE_OFFSET: int = 0
+_HASH_TABLE_KEY_LENGTH_OFFSET: int = _HASH_TABLE_STATE_SIZE
+_HASH_TABLE_KEY_OFFSET: int = _HASH_TABLE_STATE_SIZE + _HASH_TABLE_KEY_VALUE_LENGTH_SIZE
+_HASH_TABLE_SLOT_IDX_OFFSET: int = (
+    _HASH_TABLE_STATE_SIZE + _HASH_TABLE_KEY_VALUE_LENGTH_SIZE + _KEY_MAX_BYTES
+)
+
+# Header region layout: free_count(4) + free_stack(4 * max_keys)
+_HEADER_FREE_COUNT_SIZE: int = 4
+_HEADER_FREE_COUNT_OFFSET: int = 0
+
+
+# Structs (pre-compiled, class-level)
+_UINT8_STRUCT = struct.Struct("=B")  # 1 byte unsigned
+_UINT16_STRUCT = struct.Struct("=H")  # 2 bytes unsigned
+_UINT32_STRUCT = struct.Struct("=I")  # 4 bytes unsigned
+_FLOAT64_STRUCT = struct.Struct("=d")  # 8 bytes double
+_BOOL_STRUCT = struct.Struct("=?")  # 1 byte bool
+
+
+def _fnv1a_32(data: bytes) -> int:
     """
-    Wraps a `multiprocessing.Lock` to satisfy the `AsyncLock` protocol.
+    FNV-1a 32-bit hash. Deterministic across processes and platforms.
 
-    Blocking acquire is offloaded to the thread-pool executor so it never
-    stalls the event loop. Release is synchronous (non-blocking by design in
-    `multiprocessing.Lock`).
+    We use this because Python's built-in `hash()` is randomized per-process since python3.3
+    and is therefore unusable for cross-process hash table probing.
+    """
+    h = 0x811C9DC5
+    for byte in data:
+        h ^= byte
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+class _AsyncMPSemaphoreLock:
+    """
+    `AsyncLock`-compatible wrapper around a `multiprocessing.Semaphore(1)`.
+
+    Blocking acquire is dispatched to the thread-pool executor so the
+    event loop is never stalled. The semaphore itself is a POSIX futex
+    (Linux) or equivalent, hence acquire/release cost ~1-5µs with no IPC.
+
+    One instance wraps one underlying semaphore. Instances are not
+    reentrant; strategy code must not acquire the same named lock twice
+    on the same task.
     """
 
-    __slots__ = ("_lock", "_acquired")
+    __slots__ = ("_semaphore", "_acquired")
 
-    def __init__(self, lock: MPLock) -> None:
-        self._lock = lock
+    def __init__(self, semaphore: Semaphore) -> None:  # type: ignore[type-arg]
+        self._semaphore = semaphore
         self._acquired = False
 
     def locked(self) -> bool:
@@ -102,10 +115,10 @@ class _AsyncMPLock:
         blocking_timeout: typing.Optional[float] = None,
     ) -> bool:
         loop = asyncio.get_running_loop()
-
         if not blocking:
+            # Non-blocking: timeout=0 on Semaphore.acquire returns False immediately
             acquired = await loop.run_in_executor(
-                None, lambda: self._lock.acquire(block=False)
+                None, lambda: self._semaphore.acquire(block=False)
             )
             self._acquired = bool(acquired)
             return self._acquired
@@ -113,27 +126,28 @@ class _AsyncMPLock:
         if blocking_timeout is not None:
             acquired = await loop.run_in_executor(
                 None,
-                lambda: self._lock.acquire(block=True, timeout=blocking_timeout),
+                lambda: self._semaphore.acquire(block=True, timeout=blocking_timeout),
             )
             self._acquired = bool(acquired)
             return self._acquired
 
-        await loop.run_in_executor(None, self._lock.acquire)
+        # Blocking with no timeout
+        await loop.run_in_executor(None, self._semaphore.acquire)
         self._acquired = True
         return True
 
     async def release(self) -> None:
         if not self._acquired:
             raise RuntimeError(
-                "Cannot release a lock that is not acquired by this instance."
+                "Cannot release a semaphore that is not acquired by this instance."
             )
-        self._lock.release()
+        self._semaphore.release()
         self._acquired = False
 
     async def __aenter__(self) -> Self:
         acquired = await self.acquire()
         if not acquired:
-            raise LockTimeoutError("Could not acquire multiprocess lock.")
+            raise LockTimeoutError("Could not acquire multiprocess semaphore.")
         return self
 
     async def __aexit__(
@@ -149,22 +163,61 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     """
     Multi-process shared-memory throttle backend.
 
-    Safe for use across multiple OS processes on a single machine.
+    All state (key -> slot index mapping, slot data, free-slot stack) lives
+    in a single `multiprocessing.shared_memory` segment.
 
-    Instantiate **once** before forking workers and share the instance. The
-    shared memory segment and manager handles are inherited across `fork()`.
-    Do **not** instantiate inside a worker after fork.
+    Locking uses `multiprocessing.Semaphore` objects that must be created **before** fork
+    and inherited by all worker processes through the normal Unix fork mechanism.
+
+    **Usage contract**
+
+    Create one instance in your application factory *before* the server
+    forks workers, then pass it (or let it be inherited) into each worker.
+    Do **not** call `initialize()` inside a worker after fork.
+    It should be called once in the parent process.
+
+    ```
+    # pre-fork (application factory / lifespan startup)
+    backend = MultiProcessInMemoryBackend(namespace="myapp")
+    await backend.initialize()   # creates shared memory + semaphores
+
+    # gunicorn/uvicorn then forks; each worker inherits the backend
+    # and can use it immediately with no further initialization.
+    ```
+
+    **Shared memory layout**
+
+    ```
+    [header]
+        uint32 free_count
+        uint32 free_stack[max_keys]
+
+    [hash table]
+        HT_BUCKETS x HT_ENTRY_SIZE bytes
+        entry: uint8 state | uint8 key_length | bytes key[200] | uint32 slot_idx
+
+    [slot data]
+        max_keys x slot_size bytes
+        slot: uint16 value_length | bytes value[max_value_size] |
+            float64 expires_at | uint8 occupied
+        (padded to 8-byte boundary)
+    ```
+
+    **Lock ordering** (must always be respected to avoid deadlock)
+
+    - `slot_map_semaphore` before any `shard_semaphores[i]`
+    - Never hold two `shard_semaphores` simultaneously
+    - Named semaphores always outermost — never acquired while holding
+       slot_map_semaphore or shard_semaphores
     """
 
-    # Slot layout (computed from `max_value_size` in `__init__`):
-    #   [uint16 value_len][bytes value (max_value_size)][float64 expires_at][uint8 occupied]
-    # Structs that don't depend on max_value_size
-    _LEN_STRUCT: typing.ClassVar[struct.Struct] = struct.Struct("=H")  # uint16
-    _EXPIRY_STRUCT: typing.ClassVar[struct.Struct] = struct.Struct("=d")  # float64
-    _OCCUPIED_STRUCT: typing.ClassVar[struct.Struct] = struct.Struct("=?")  # uint8 bool
-    _LEN_SIZE: typing.ClassVar[int] = 2
+    # Pre-compiled structs shared across all instances
+    _VALUE_LENGTH_STRUCT: typing.ClassVar[struct.Struct] = _UINT16_STRUCT
+    _EXPIRY_STRUCT: typing.ClassVar[struct.Struct] = _FLOAT64_STRUCT
+    _OCCUPIED_FLAG_STRUCT: typing.ClassVar[struct.Struct] = _BOOL_STRUCT
+    _VALUE_LENGTH_SIZE: typing.ClassVar[int] = 2
     _EXPIRY_SIZE: typing.ClassVar[int] = 8
-    _OCCUPIED_SIZE: typing.ClassVar[int] = 1
+    _OCCUPIED_FLAG_SIZE: typing.ClassVar[int] = 1
 
     wrap_methods: typing.Tuple[str, ...] = ("clear",)
 
@@ -185,46 +238,16 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         max_keys: int = 65536,
         number_of_shards: int = 64,
         max_value_size: int = 512,
-        cleanup_frequency: typing.Optional[float] = 30.0,
+        cleanup_frequency: typing.Optional[float] = None,
         **kwargs: typing.Any,
     ) -> None:
-        """
-        Initialize the multi-process in-memory throttle backend.
-
-        :param namespace: Key prefix for all throttle keys.
-        :param identifier: Connected client identifier generator.
-        :param handle_throttled: Handler called when a connection is throttled.
-        :param on_error: Strategy for errors during throttling operations.
-            One of `"allow"`, `"throttle"`, `"raise"`, or a custom callable.
-            - "allow": Allow the request to proceed without throttling.
-            - "throttle": Throttle the request as if it exceeded the rate limit.
-            - "raise": Raise the exception encountered during throttling.
-            - A custom callable that takes the connection and the exception as parameters
-                and returns an integer representing the wait period in milliseconds. Ensure this
-                function executes quickly to avoid additional latency.
-        :param lock_blocking: Whether locks should block when acquiring.
-            If None, uses the global default from `traffik.config.get_lock_blocking()`.
-        :param lock_ttl: Default TTL for locks in seconds. If None, locks have
-            no expiration unless specified during lock acquisition.
-        :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
-            If None, uses the global default from `traffik.config.get_lock_blocking_timeout()`.
-        :param max_keys: Maximum number of distinct throttle keys. Each key occupies
-            one slot in shared memory. Default `65536`.
-        :param number_of_shards: Number of lock shards. More shards reduce contention at
-            the cost of slightly more memory. Default `64`.
-        :param max_value_size: Maximum byte length of a stored string value (UTF-8
-            encoded). If using strategies that store large msgpack blobs (e.g. sliding window logs),
-            increase this. Default `512`.
-        :param cleanup_frequency: Seconds between background expired-slot cleanup
-            passes. Set to `None` to rely on lazy expiry only. Default `30.0`.
-        :param kwargs: Additional keyword arguments passed to the base `ThrottleBackend`.
-        """
+        kwargs.pop("persistent", None)
         super().__init__(
             None,
             namespace=namespace,
             identifier=identifier,
             handle_throttled=handle_throttled,
-            persistent=False,  # Can never be persistent
+            persistent=False,
             on_error=on_error,
             lock_blocking=lock_blocking,
             lock_ttl=lock_ttl,
@@ -233,9 +256,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         )
 
         if max_keys < 1:
-            raise ValueError("`max_keys` must be at least 1.")
+            raise ValueError("`max_keys` must be at least")
         if number_of_shards < 1:
-            raise ValueError("`number_of_shards` must be at least 1.")
+            raise ValueError("`number_of_shards` must be at least")
         if max_value_size < 8:
             raise ValueError("`max_value_size` must be at least 8 bytes.")
 
@@ -244,68 +267,121 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._max_value_size = max_value_size
         self._cleanup_frequency = cleanup_frequency
 
-        # Slot size: len(uint16) + value(bytes) + expiry(float64) + occupied(uint8)
-        # Padded to 8-byte boundary
+        # Hash table capacity (next power of two above max_keys / load)
+        min_buckets = int(max_keys / _HASH_TABLE_LOAD_FACTOR) + 1
+        hash_table_capacity = 1
+        while hash_table_capacity < min_buckets:
+            hash_table_capacity <<= 1
+        self._hash_table_capacity: int = hash_table_capacity
+        self._hash_table_mask: int = hash_table_capacity - 1  # for fast modulo via &
+
+        # Slot data layout
         raw_slot_size = (
-            self._LEN_SIZE + max_value_size + self._EXPIRY_SIZE + self._OCCUPIED_SIZE
+            self._VALUE_LENGTH_SIZE
+            + max_value_size
+            + self._EXPIRY_SIZE
+            + self._OCCUPIED_FLAG_SIZE
         )
-        self._slot_size = (raw_slot_size + 7) & ~7  # round up to 8-byte boundary
+        self._slot_size: int = (raw_slot_size + 7) & ~7  # 8-byte aligned
 
         # Byte offsets within a slot
-        self._off_len = 0
-        self._off_value = self._LEN_SIZE
-        self._off_expiry = self._LEN_SIZE + max_value_size
-        self._off_occupied = self._LEN_SIZE + max_value_size + self._EXPIRY_SIZE
+        self._value_length_offset: int = 0
+        self._value_offset: int = self._VALUE_LENGTH_SIZE
+        self._expiry_offset: int = self._VALUE_LENGTH_SIZE + max_value_size
+        self._occupied_flag_offset: int = (
+            self._VALUE_LENGTH_SIZE + max_value_size + self._EXPIRY_SIZE
+        )
 
-        # All set during `initialize(...)`
+        # Shared memory region offsets
+        # Header: free_count (4) + free_stack (4 * max_keys)
+        self._header_size: int = _HEADER_FREE_COUNT_SIZE + 4 * max_keys
+        self._free_stack_offset: int = _HEADER_FREE_COUNT_SIZE
+
+        # Hash table
+        self._hash_table_offset: int = self._header_size
+        self._hash_table_size: int = hash_table_capacity * _HASH_TABLE_ENTRY_SIZE
+
+        # Slot data
+        self._slot_data_offset: int = self._hash_table_offset + self._hash_table_size
+        self._slot_data_size: int = max_keys * self._slot_size
+
+        # Total shared memory size
+        self._shared_memory_size: int = (
+            self._header_size + self._hash_table_size + self._slot_data_size
+        )
+
+        # Set during initialize()
         self._shared_memory: typing.Optional[SharedMemory] = None
-        self._shared_memory_buffer: typing.Optional[memoryview] = None
-        self._manager: typing.Optional[SyncManager] = None
-        self._slot_map: typing.Optional[typing.Dict[str, int]] = None
-        self._free_slots: typing.Optional[typing.List[int]] = None
-        self._shard_locks: typing.Optional[typing.List[MPLock]] = None
-        self._named_locks: typing.Optional[typing.Dict[str, MPLock]] = None
-        self._slot_map_lock: typing.Optional[MPLock] = None
+        self._buffer: typing.Optional[memoryview] = None
 
-        self._cleanup_task: typing.Optional[asyncio.Task] = None
-        self._initialized = False
+        # Semaphores (created before fork, inherited by workers)
+        self._slot_map_semaphore: typing.Optional[Semaphore] = None  # type: ignore[type-arg]
+        self._shard_semaphores: typing.Optional[typing.List[Semaphore]] = None  # type: ignore[type-arg]
+
+        # Named semaphores — process-local, not in shared memory.
+        # Each process builds its own dict; cross-process named locking is
+        # not needed because named locks are only used by strategies within
+        # a single asyncio event loop.
+        self._named_semaphores: typing.Dict[str, Semaphore] = {}  # type: ignore[type-arg]
+        self._named_semaphores_lock = multiprocessing.Semaphore(
+            1
+        )  # protects _named_semaphores dict creation
+
+        self._cleanup_task: typing.Optional[asyncio.Task] = None  # type: ignore[type-arg]
+        self._initialized: bool = False
 
     async def initialize(self) -> None:
         """
-        Initialize shared memory, the manager process, and shard locks.
+        Allocate shared memory and create semaphores.
 
-        Safe to call multiple times. Subsequent calls are no-ops. The first
-        call takes ~100-300 ms due to manager subprocess startup.
+        Safe to call multiple times (subsequent calls are no-ops).
+        Must be called **before** forking worker processes.
         """
         if self._initialized:
             return
 
         loop = asyncio.get_running_loop()
-        manager = await loop.run_in_executor(None, Manager)
-        self._manager = manager
 
-        shared_memory_size = self._max_keys * self._slot_size
-        self._shared_memory = SharedMemory(create=True, size=shared_memory_size)
-        self._shared_memory_buffer = memoryview(self._shared_memory.buf)  # type: ignore[arg-type]
-        ctypes.memset(self._shared_memory.buf, 0, shared_memory_size)  # type: ignore[arg-type]
+        # Create shared memory and zero it
+        shared_memory = SharedMemory(create=True, size=self._shared_memory_size)
+        buffer = memoryview(shared_memory.buf)  # type: ignore[arg-type]
+        buffer[:] = bytes(self._shared_memory_size)  # zero-initialise
 
-        def _build_shared_state() -> typing.Tuple:
-            slot_map = manager.dict()  # type: ignore[attr-defined]
-            free_slots = manager.list(range(self._max_keys))  # type: ignore[attr-defined]
-            shard_locks = manager.list(  # type: ignore[attr-defined]
-                [Lock() for _ in range(self._number_of_shards)]
+        # Create semaphores synchronously (cheap, no subprocess)
+        def _create_semaphores() -> typing.Tuple[Semaphore, typing.List[Semaphore]]:  # type: ignore[type-arg]
+            slot_map_semaphore = multiprocessing.Semaphore(1)
+            shard_semaphores = [
+                multiprocessing.Semaphore(1) for _ in range(self._number_of_shards)
+            ]
+            return slot_map_semaphore, shard_semaphores
+
+        try:
+            slot_map_semaphore, shard_semaphores = await loop.run_in_executor(
+                None, _create_semaphores
             )
-            named_locks = manager.dict()  # type: ignore[attr-defined]
-            slot_map_lock = manager.Lock()  # type: ignore[attr-defined]
-            return slot_map, free_slots, shard_locks, named_locks, slot_map_lock
+        except Exception:
+            buffer.release()
+            shared_memory.close()
+            shared_memory.unlink()
+            raise
 
-        (
-            self._slot_map,
-            self._free_slots,
-            self._shard_locks,
-            self._named_locks,
-            self._slot_map_lock,
-        ) = await loop.run_in_executor(None, _build_shared_state)
+        self._shared_memory = shared_memory
+        self._buffer = buffer
+        self._slot_map_semaphore = slot_map_semaphore
+        self._shard_semaphores = shard_semaphores
+
+        # Initialise the free-slot stack in shared memory:
+        # free_count = max_keys, free_stack = [max_keys-1, max_keys-2, ..., 0]
+        # (top of stack = index 0, popped first)
+        _UINT32_STRUCT.pack_into(buffer, _HEADER_FREE_COUNT_OFFSET, self._max_keys)
+        for i in range(self._max_keys):
+            # Stack entry i holds slot index (max_keys - 1 - i) so slot 0 is
+            # popped first (stack grows downward from max_keys-1)
+            _UINT32_STRUCT.pack_into(
+                buffer,
+                self._free_stack_offset + i * 4,
+                self._max_keys - 1 - i,
+            )
 
         if self._cleanup_frequency is not None:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -313,16 +389,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._initialized = True
 
     async def ready(self) -> bool:
-        """Return `True` if the backend is initialized and shared memory is open."""
         return self._initialized and self._shared_memory is not None
 
     async def close(self) -> None:
-        """
-        Shut down the backend.
-
-        Cancels the cleanup task, releases shared memory, and shuts down the
-        manager process.
-        """
         self._initialized = False
 
         if self._cleanup_task is not None and not self._cleanup_task.done():
@@ -336,69 +405,225 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     pass
             self._cleanup_task = None
 
-        if self._shared_memory_buffer is not None:
-            self._shared_memory_buffer.release()
-            self._shared_memory_buffer = None
+        if self._buffer is not None:
+            self._buffer.release()
+            self._buffer = None
 
         if self._shared_memory is not None:
             self._shared_memory.close()
             self._shared_memory.unlink()
             self._shared_memory = None
 
-        if self._manager is not None:
-            await asyncio.get_running_loop().run_in_executor(
-                None, self._manager.shutdown
-            )
-            self._manager = None
-
     async def reset(self) -> None:
-        """Reset the backend by clearing all throttle data."""
         if not self._initialized:
             return
         await self.clear()
 
     def _assert_ready(self) -> None:
-        """
-        Raise `BackendConnectionError` if the backend has not been initialized.
-        """
-        if not self._initialized or self._shared_memory_buffer is None:
+        if not self._initialized or self._buffer is None:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
 
-    def _slot_offset(self, slot_idx: int) -> int:
+    def _hash_table_lookup(self, buffer: memoryview, key_bytes: bytes) -> int:
         """
-        Return the byte offset of *slot_idx* in the shared memory buffer.
+        Find the bucket index for *key_bytes*.
 
-        :param slot_idx: Zero-based slot index.
-        :return: Byte offset.
+        Returns the index of the occupied bucket containing this key, OR
+        the index of the first empty/tombstone bucket where it could be
+        inserted.  The caller must check the bucket state to distinguish.
+
+        Caller must hold `_slot_map_semaphore`.
         """
-        return slot_idx * self._slot_size
+        capacity = self._hash_table_capacity
+        mask = self._hash_table_mask
+        hash_table_offset = self._hash_table_offset
+        start = _fnv1a_32(key_bytes) & mask
+        first_tombstone = -1
+
+        for i in range(capacity):
+            idx = (start + i) & mask
+            entry_offset = hash_table_offset + idx * _HASH_TABLE_ENTRY_SIZE
+            state = _UINT8_STRUCT.unpack_from(
+                buffer, entry_offset + _HASH_TABLE_STATE_OFFSET
+            )[0]
+
+            if state == _HASH_TABLE_EMPTY_STATE:
+                # Key not present; return tombstone if we passed one, else this empty bucket
+                return first_tombstone if first_tombstone != -1 else idx
+
+            if state == _HASH_TABLE_TOMBSTONE_STATE:
+                if first_tombstone == -1:
+                    first_tombstone = idx
+                continue
+
+            # state == OCCUPIED — check key match
+            key_length = _UINT8_STRUCT.unpack_from(
+                buffer, entry_offset + _HASH_TABLE_KEY_LENGTH_OFFSET
+            )[0]
+            if key_length == len(key_bytes):
+                key_start = entry_offset + _HASH_TABLE_KEY_OFFSET
+                stored = bytes(buffer[key_start : key_start + key_length])
+                if stored == key_bytes:
+                    return idx  # found
+
+        # Table is full (should never happen if load factor is respected)
+        raise BackendError("Hash table is full. This should never happen.")
+
+    def _get_hash_table_slot(
+        self, buffer: memoryview, key_bytes: bytes
+    ) -> typing.Optional[int]:
+        """
+        Return the slot_idx for *key_bytes*, or None if not present.
+        Caller must hold `_slot_map_semaphore`.
+        """
+        idx = self._hash_table_lookup(buffer, key_bytes)
+        entry_offset = self._hash_table_offset + idx * _HASH_TABLE_ENTRY_SIZE
+        state = _UINT8_STRUCT.unpack_from(
+            buffer, entry_offset + _HASH_TABLE_STATE_OFFSET
+        )[0]
+        if state != _HASH_TABLE_OCCUPIED_STATE:
+            return None
+        return _UINT32_STRUCT.unpack_from(
+            buffer, entry_offset + _HASH_TABLE_SLOT_IDX_OFFSET
+        )[0]
+
+    def _hash_table_upsert(
+        self, buffer: memoryview, key_bytes: bytes, slot_idx: int
+    ) -> None:
+        """
+        Insert or update *key_bytes* -> *slot_idx* in the hash table.
+        Caller must hold `_slot_map_semaphore`.
+        Raises `BackendError` if the key is too long or table is full.
+        """
+        if len(key_bytes) > _KEY_MAX_BYTES:
+            raise BackendError(
+                f"Key length {len(key_bytes)} exceeds maximum {_KEY_MAX_BYTES} bytes."
+            )
+        idx = self._hash_table_lookup(buffer, key_bytes)
+        entry_offset = self._hash_table_offset + idx * _HASH_TABLE_ENTRY_SIZE
+        key_length = len(key_bytes)
+        _UINT8_STRUCT.pack_into(
+            buffer, entry_offset + _HASH_TABLE_STATE_OFFSET, _HASH_TABLE_OCCUPIED_STATE
+        )
+        _UINT8_STRUCT.pack_into(
+            buffer, entry_offset + _HASH_TABLE_KEY_LENGTH_OFFSET, key_length
+        )
+        buffer[
+            entry_offset + _HASH_TABLE_KEY_OFFSET : entry_offset
+            + _HASH_TABLE_KEY_OFFSET
+            + key_length
+        ] = key_bytes
+        _UINT32_STRUCT.pack_into(
+            buffer, entry_offset + _HASH_TABLE_SLOT_IDX_OFFSET, slot_idx
+        )
+
+    def _hash_table_delete(
+        self, buffer: memoryview, key_bytes: bytes
+    ) -> typing.Optional[int]:
+        """
+        Remove *key_bytes* from the hash table.
+        Returns the freed slot_idx, or None if the key was not present.
+        Caller must hold `_slot_map_semaphore`.
+        """
+        idx = self._hash_table_lookup(buffer, key_bytes)
+        entry_offset = self._hash_table_offset + idx * _HASH_TABLE_ENTRY_SIZE
+        state = _UINT8_STRUCT.unpack_from(
+            buffer, entry_offset + _HASH_TABLE_STATE_OFFSET
+        )[0]
+        if state != _HASH_TABLE_OCCUPIED_STATE:
+            return None
+        slot_idx = _UINT32_STRUCT.unpack_from(
+            buffer, entry_offset + _HASH_TABLE_SLOT_IDX_OFFSET
+        )[0]
+        # Mark as tombstone to preserve probe chains for other keys
+        _UINT8_STRUCT.pack_into(
+            buffer, entry_offset + _HASH_TABLE_STATE_OFFSET, _HASH_TABLE_TOMBSTONE_STATE
+        )
+        return slot_idx
+
+    def _hash_table_iter_occupied(
+        self, buffer: memoryview
+    ) -> typing.Iterator[typing.Tuple[str, int]]:
+        """
+        Iterate over all occupied (key_str, slot_idx) pairs.
+        Caller is responsible for holding `_slot_map_semaphore` if needed.
+        """
+        hash_table_offset = self._hash_table_offset
+        for i in range(self._hash_table_capacity):
+            entry_offset = hash_table_offset + i * _HASH_TABLE_ENTRY_SIZE
+            state = _UINT8_STRUCT.unpack_from(
+                buffer, entry_offset + _HASH_TABLE_STATE_OFFSET
+            )[0]
+            if state != _HASH_TABLE_OCCUPIED_STATE:
+                continue
+            
+            key_length = _UINT8_STRUCT.unpack_from(
+                buffer, entry_offset + _HASH_TABLE_KEY_LENGTH_OFFSET
+            )[0]
+            key_str = bytes(
+                buffer[
+                    entry_offset + _HASH_TABLE_KEY_OFFSET : entry_offset
+                    + _HASH_TABLE_KEY_OFFSET
+                    + key_length
+                ]
+            ).decode("utf-8")
+            slot_idx = _UINT32_STRUCT.unpack_from(
+                buffer, entry_offset + _HASH_TABLE_SLOT_IDX_OFFSET
+            )[0]
+            yield key_str, slot_idx
+
+    def _free_stack_pop(self, buffer: memoryview) -> int:
+        """
+        Pop and return a free slot index.
+        Raises `BackendError` if the stack is empty (max_keys reached).
+        Caller must hold `_slot_map_semaphore`.
+        """
+        count = _UINT32_STRUCT.unpack_from(buffer, _HEADER_FREE_COUNT_OFFSET)[0]
+        if count == 0:
+            raise BackendError(
+                f"`max_keys` ({self._max_keys}) reached. "
+                "Increase `max_keys` or reduce the number of distinct throttle keys."
+            )
+        count -= 1
+        slot_idx = _UINT32_STRUCT.unpack_from(
+            buffer, self._free_stack_offset + count * 4
+        )[0]
+        _UINT32_STRUCT.pack_into(buffer, _HEADER_FREE_COUNT_OFFSET, count)
+        return slot_idx
+
+    def _free_stack_push(self, buffer: memoryview, slot_idx: int) -> None:
+        """
+        Return *slot_idx* to the free pool. Caller must hold `_slot_map_semaphore`.
+        """
+        count = _UINT32_STRUCT.unpack_from(buffer, _HEADER_FREE_COUNT_OFFSET)[0]
+        _UINT32_STRUCT.pack_into(buffer, self._free_stack_offset + count * 4, slot_idx)
+        _UINT32_STRUCT.pack_into(buffer, _HEADER_FREE_COUNT_OFFSET, count + 1)
+
+    def _slot_offset(self, slot_idx: int) -> int:
+        return self._slot_data_offset + slot_idx * self._slot_size
 
     def _read_slot(
         self, buffer: memoryview, slot_idx: int
     ) -> typing.Tuple[typing.Optional[str], float, bool]:
-        """
-        Read a slot from shared memory.
-
-        :param buffer: Shared memory memoryview.
-        :param slot_idx: Zero-based slot index.
-        :return: Tuple of `(value, expires_at, occupied)`. Value is `None` if
-            the slot is not occupied.
-        """
-        off = self._slot_offset(slot_idx)
-        occupied: bool = self._OCCUPIED_STRUCT.unpack_from(
-            buffer, off + self._off_occupied
+        """Return (value, expires_at, occupied). Value is None if not occupied."""
+        offset = self._slot_offset(slot_idx)
+        occupied: bool = self._OCCUPIED_FLAG_STRUCT.unpack_from(
+            buffer, offset + self._occupied_flag_offset
         )[0]
         if not occupied:
             return None, 0.0, False
 
-        length: int = self._LEN_STRUCT.unpack_from(buffer, off + self._off_len)[0]
+        value_length: int = self._VALUE_LENGTH_STRUCT.unpack_from(
+            buffer, offset + self._value_length_offset
+        )[0]
         value = bytes(
-            buffer[off + self._off_value : off + self._off_value + length]
+            buffer[
+                offset + self._value_offset : offset + self._value_offset + value_length
+            ]
         ).decode("utf-8")
         expires_at: float = self._EXPIRY_STRUCT.unpack_from(
-            buffer, off + self._off_expiry
+            buffer, offset + self._expiry_offset
         )[0]
         return value, expires_at, True
 
@@ -408,45 +633,31 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         slot_idx: int,
         value: str,
         expires_at: float,
-        occupied: bool,
     ) -> None:
         """
-        Write a complete slot to shared memory.
-
-        :param buffer: Shared memory memoryview.
-        :param slot_idx: Zero-based slot index.
-        :param value: String value to store.
-        :param expires_at: Unix timestamp after which the slot expires.
-            Pass `0.0` for no expiry.
-        :param occupied: `True` if the slot is in use.
-        :raises BackendError: If the encoded value exceeds `max_value_size`.
+        Write value + expires_at + occupied=True into *slot_idx*.
+        Raises `BackendError` if value exceeds max_value_size.
         """
-        off = self._slot_offset(slot_idx)
         encoded = value.encode("utf-8")
         if len(encoded) > self._max_value_size:
             raise BackendError(
                 f"Value size {len(encoded)} bytes exceeds `max_value_size` "
                 f"({self._max_value_size}). Increase `max_value_size`."
             )
-
-        self._OCCUPIED_STRUCT.pack_into(buffer, off + self._off_occupied, occupied)
-        if occupied:
-            self._LEN_STRUCT.pack_into(buffer, off + self._off_len, len(encoded))
-            buffer[off + self._off_value : off + self._off_value + len(encoded)] = (
-                encoded
-            )
-            self._EXPIRY_STRUCT.pack_into(buffer, off + self._off_expiry, expires_at)
+        offset = self._slot_offset(slot_idx)
+        self._VALUE_LENGTH_STRUCT.pack_into(
+            buffer, offset + self._value_length_offset, len(encoded)
+        )
+        buffer[
+            offset + self._value_offset : offset + self._value_offset + len(encoded)
+        ] = encoded
+        self._EXPIRY_STRUCT.pack_into(buffer, offset + self._expiry_offset, expires_at)
+        self._OCCUPIED_FLAG_STRUCT.pack_into(
+            buffer, offset + self._occupied_flag_offset, True
+        )
 
     def _write_value_only(self, buffer: memoryview, slot_idx: int, value: str) -> None:
-        """
-        Overwrite only the value in a slot, leaving expiry and occupied flag untouched.
-
-        :param buffer: Shared memory memoryview.
-        :param slot_idx: Zero-based slot index.
-        :param value: New string value.
-        :raises BackendError: If the encoded value exceeds `max_value_size`.
-        """
-        off = self._slot_offset(slot_idx)
+        """Overwrite only the value bytes, preserving expiry and occupied flag."""
         encoded = value.encode("utf-8")
         if len(encoded) > self._max_value_size:
             raise BackendError(
@@ -454,538 +665,530 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 f"({self._max_value_size}). Increase `max_value_size`."
             )
 
-        self._LEN_STRUCT.pack_into(buffer, off + self._off_len, len(encoded))
-        buffer[off + self._off_value : off + self._off_value + len(encoded)] = encoded
+        offset = self._slot_offset(slot_idx)
+        self._VALUE_LENGTH_STRUCT.pack_into(
+            buffer, offset + self._value_length_offset, len(encoded)
+        )
+        buffer[
+            offset + self._value_offset : offset + self._value_offset + len(encoded)
+        ] = encoded
 
-    def _shard_idx_for_key(self, key: str) -> int:
+    def _clear_slot(self, buffer: memoryview, slot_idx: int) -> None:
+        """Mark slot as unoccupied. No need to zero the value bytes."""
+        offset = self._slot_offset(slot_idx)
+        self._OCCUPIED_FLAG_STRUCT.pack_into(
+            buffer, offset + self._occupied_flag_offset, False
+        )
+
+    def _shard_idx(self, key: str) -> int:
+        """Deterministic shard index for *key*. Uses FNV-1a, not hash()."""
+        return _fnv1a_32(key.encode("utf-8")) % self._number_of_shards
+
+    def _get(self, key: str) -> typing.Optional[str]:
         """
-        Return the shard index for *key*.
+        Synchronous get.
 
-        :param key: The throttle key.
-        :return: Shard index in the range `[0, number_of_shards)`.
+        Lock order: slot_map_semaphore -> shard_semaphore.
+        We hold slot_map_semaphore only for the hash table lookup (minimal time),
+        then release it before acquiring the shard_semaphore for the slot read.
         """
-        return hash(key) % self._number_of_shards
-
-    def _get_or_allocate_slot(self, key: str) -> int:
-        """
-        Return the existing slot index for *key*, or allocate a new one.
-
-        Must be called with `_slot_map_lock` held.
-
-        :param key: The throttle key.
-        :return: Slot index.
-        :raises BackendError: If the key space is exhausted.
-        """
-        existing = self._slot_map.get(key, None)  # type: ignore[union-attr]
-        if existing is not None:
-            return existing
-
-        if len(self._free_slots) == 0:  # type: ignore[arg-type]
-            raise BackendError(
-                f"`max_keys` ({self._max_keys}) reached. "
-                "Increase `max_keys` or reduce the number of distinct throttle keys."
-            )
-
-        slot_idx: int = self._free_slots[-1]  # type: ignore[index]
-        del self._free_slots[-1]  # type: ignore[union-attr]
-        self._slot_map[key] = slot_idx  # type: ignore[index]
-        return slot_idx
-
-    def _release_slot(self, key: str) -> None:
-        """
-        Remove *key* from the slot map and return its slot to the free pool.
-
-        Must be called with `_slot_map_lock` held.
-
-        :param key: The throttle key to release.
-        """
-        slot_idx = self._slot_map.pop(key, None)  # type: ignore[union-attr]
-        if slot_idx is not None and self._shared_memory_buffer is not None:
-            off = self._slot_offset(slot_idx)
-            self._OCCUPIED_STRUCT.pack_into(
-                self._shared_memory_buffer, off + self._off_occupied, False
-            )
-            self._free_slots.append(slot_idx)  # type: ignore[union-attr]
-
-    def _get(
-        self, key: str, buffer: memoryview, slot_map: typing.Any, shard_lock: MPLock
-    ) -> typing.Optional[str]:
-        """
-        Synchronous implementation of `get`.
-
-        :param key: The throttle key to retrieve.
-        :param buffer: Shared memory buffer.
-        :param slot_map: Manager dict mapping keys to slot indices.
-        :param shard_lock: Shard lock for this key.
-        :return: String value, or `None` if absent or expired.
-        """
+        buffer = self._buffer
+        assert buffer is not None
         now = time()
-        with shard_lock:
-            slot_idx = slot_map.get(key, None)
-            if slot_idx is None:
-                return None
+        key_bytes = key.encode("utf-8")
+
+        # Look up slot index under slot_map_semaphore
+        self._slot_map_semaphore.acquire()  # type: ignore[union-attr]
+        try:
+            slot_idx = self._get_hash_table_slot(buffer, key_bytes)
+        finally:
+            self._slot_map_semaphore.release()  # type: ignore[union-attr]
+
+        if slot_idx is None:
+            return None
+
+        # Read slot data under shard_semaphore
+        shard_semaphore = self._shard_semaphores[self._shard_idx(key)]  # type: ignore[index]
+        shard_semaphore.acquire()
+        try:
             value, expires_at, occupied = self._read_slot(buffer, slot_idx)
             if not occupied:
                 return None
             if expires_at != 0.0 and expires_at < now:
                 return None
             return value
+        finally:
+            shard_semaphore.release()
 
-    def _set(
-        self,
-        key: str,
-        value: str,
-        expires_at: float,
-        buffer: memoryview,
-        slot_map_lock: MPLock,
-        shard_lock: MPLock,
-    ) -> None:
+    def _set(self, key: str, value: str, expire: typing.Optional[float]) -> None:
         """
-        Synchronous implementation of `set`.
+        Synchronous set.
 
-        Acquires `slot_map_lock` first to allocate the slot, then
-        `shard_lock` to write the value (normal ordering).
-
-        :param key: The throttle key.
-        :param value: String value to store.
-        :param expires_at: Unix timestamp for expiry, or `0.0` for none.
-        :param buffer: Shared memory buffer.
-        :param slot_map_lock: Lock guarding the slot map.
-        :param shard_lock: Shard lock for this key.
+        Lock order: slot_map_semaphore (for allocation) -> shard_semaphore (for write).
+        Both locks released before the next is acquired.
         """
-        with slot_map_lock:
-            slot_idx = self._get_or_allocate_slot(key)
-        with shard_lock:
-            self._write_slot(buffer, slot_idx, value, expires_at, True)
+        buffer = self._buffer
+        assert buffer is not None
+        key_bytes = key.encode("utf-8")
+        expires_at = (time() + expire) if expire is not None else 0.0
 
-    def _delete(self, key: str, slot_map_lock: MPLock, shard_lock: MPLock) -> bool:
+        # Allocate or find slot under slot_map_semaphore
+        self._slot_map_semaphore.acquire()  # type: ignore[union-attr]
+        try:
+            slot_idx = self._get_hash_table_slot(buffer, key_bytes)
+            if slot_idx is None:
+                slot_idx = self._free_stack_pop(buffer)
+                self._hash_table_upsert(buffer, key_bytes, slot_idx)
+        finally:
+            self._slot_map_semaphore.release()  # type: ignore[union-attr]
+
+        # Write slot data under shard_semaphore
+        shard_semaphore = self._shard_semaphores[self._shard_idx(key)]  # type: ignore[index]
+        shard_semaphore.acquire()
+        try:
+            self._write_slot(buffer, slot_idx, value, expires_at)
+        finally:
+            shard_semaphore.release()
+
+    def _delete(self, key: str) -> bool:
         """
-        Synchronous implementation of `delete`.
+        Synchronous delete.
 
-        Acquires `shard_lock` **before** `slot_map_lock` — the single
-        documented exception to the normal ordering rule. This is safe here
-        because `_delete` never calls `_get_or_allocate_slot`, which is
-        the only path that needs both locks in the normal order simultaneously.
+        Lock order: shard_semaphore first (to guard the slot clear), then
+        slot_map_semaphore (to remove from hash table and push to free stack).
 
-        :param key: The throttle key to delete.
-        :param slot_map_lock: Lock guarding the slot map.
-        :param shard_lock: Shard lock for this key.
-        :return: `True` if the key existed and was deleted.
+        This is the documented exception to the normal ordering rule.
+        It is safe because _delete never calls _free_stack_pop
+        (which is the only path that strictly requires slot_map_semaphore first
+        to avoid ABA on slot reuse).
+
+        We must hold shard_semaphore while clearing the slot to prevent a
+        concurrent reader seeing the slot as occupied after we've
+        returned it to the free pool.
         """
-        with shard_lock:
-            with slot_map_lock:
-                if self._slot_map.get(key, None) is None:  # type: ignore[union-attr]
+        buffer = self._buffer
+        assert buffer is not None
+        key_bytes = key.encode("utf-8")
+
+        shard_semaphore = self._shard_semaphores[self._shard_idx(key)]  # type: ignore[index]
+        shard_semaphore.acquire()
+        try:
+            self._slot_map_semaphore.acquire()  # type: ignore[union-attr]
+            try:
+                slot_idx = self._hash_table_delete(buffer, key_bytes)
+                if slot_idx is None:
                     return False
-                self._release_slot(key)
+                self._clear_slot(buffer, slot_idx)
+                self._free_stack_push(buffer, slot_idx)
                 return True
+            finally:
+                self._slot_map_semaphore.release()  # type: ignore[union-attr]
+        finally:
+            shard_semaphore.release()
 
-    def _increment(
-        self,
-        key: str,
-        amount: int,
-        buffer: memoryview,
-        slot_map_lock: MPLock,
-        shard_lock: MPLock,
-    ) -> int:
+    def _increment(self, key: str, amount: int) -> int:
         """
-        Synchronous implementation of `increment`.
+        Synchronous increment.
 
-        Reads the existing string value as an integer, increments it, and
-        writes the new value back as a string. A missing or expired key is
-        treated as zero before incrementing.
+        Lock order: slot_map_semaphore -> shard_semaphore (sequentially, not nested).
 
-        :param key: The throttle key.
-        :param amount: Amount to increment (negative for decrement).
-        :param buffer: Shared memory buffer.
-        :param slot_map_lock: Lock guarding the slot map.
-        :param shard_lock: Shard lock for this key.
-        :return: New counter value.
+        Pitfall: between releasing slot_map_semaphore and acquiring shard_semaphore,
+        another process could delete the slot and reallocate it to a
+        different key.  We detect this by re-checking the occupied flag
+        under the shard_semaphore.  If the slot was recycled, we treat it as
+        a fresh key (value = 0 before increment).
         """
+        buffer = self._buffer
+        assert buffer is not None
         now = time()
-        with slot_map_lock:
-            slot_idx = self._get_or_allocate_slot(key)
+        key_bytes = key.encode("utf-8")
 
-        with shard_lock:
+        # Allocate/find slot
+        self._slot_map_semaphore.acquire()  # type: ignore[union-attr]
+        try:
+            slot_idx = self._get_hash_table_slot(buffer, key_bytes)
+            is_new = slot_idx is None
+            if is_new:
+                slot_idx = self._free_stack_pop(buffer)
+                self._hash_table_upsert(buffer, key_bytes, slot_idx)
+        finally:
+            self._slot_map_semaphore.release()  # type: ignore[union-attr]
+
+        assert slot_idx is not None
+        # Read-modify-write under shard_semaphore
+        shard_semaphore = self._shard_semaphores[self._shard_idx(key)]  # type: ignore[index]
+        shard_semaphore.acquire()
+        try:
             value, expires_at, occupied = self._read_slot(buffer, slot_idx)
+            # Treat as zero if: newly allocated, unoccupied, or expired
             if not occupied or (expires_at != 0.0 and expires_at < now):
-                new_value = amount
-                self._write_slot(buffer, slot_idx, str(new_value), 0.0, True)
+                new_val = amount
+                self._write_slot(buffer, slot_idx, str(new_val), 0.0)
             else:
                 try:
                     current = int(value)  # type: ignore[arg-type]
                 except (ValueError, TypeError):
                     current = 0
-                new_value = current + amount
-                self._write_value_only(buffer, slot_idx, str(new_value))
-        return new_value
+                new_val = current + amount
+                self._write_value_only(buffer, slot_idx, str(new_val))
+            return new_val
+        finally:
+            shard_semaphore.release()
 
-    def _expire(
-        self,
-        key: str,
-        seconds: int,
-        buffer: memoryview,
-        slot_map: typing.Any,
-        shard_lock: MPLock,
-    ) -> bool:
+    def _expire(self, key: str, seconds: int) -> bool:
         """
-        Synchronous implementation of `expire`.
+        Synchronous expire.
 
-        :param key: The throttle key.
-        :param seconds: TTL in seconds from now.
-        :param buffer: Shared memory buffer.
-        :param slot_map: Manager dict mapping keys to slot indices.
-        :param shard_lock: Shard lock for this key.
-        :return: `True` if expiry was set, `False` if the key was absent.
+        Lock order: slot_map_semaphore -> shard_semaphore (sequentially).
+        Same recycled-slot caveat as _increment — we re-check
+        occupied under shard_semaphore.
         """
+        buffer = self._buffer
+        assert buffer is not None
         now = time()
-        with shard_lock:
-            slot_idx = slot_map.get(key, None)
-            if slot_idx is None:
-                return False
+        key_bytes = key.encode("utf-8")
 
-            __init__, expires_at, occupied = self._read_slot(buffer, slot_idx)
+        self._slot_map_semaphore.acquire()  # type: ignore[union-attr]
+        try:
+            slot_idx = self._get_hash_table_slot(buffer, key_bytes)
+        finally:
+            self._slot_map_semaphore.release()  # type: ignore[union-attr]
+
+        if slot_idx is None:
+            return False
+
+        shard_semaphore = self._shard_semaphores[self._shard_idx(key)]  # type: ignore[index]
+        shard_semaphore.acquire()
+        try:
+            _, expires_at, occupied = self._read_slot(buffer, slot_idx)
             if not occupied or (expires_at != 0.0 and expires_at < now):
                 return False
             self._EXPIRY_STRUCT.pack_into(
-                buffer, self._slot_offset(slot_idx) + self._off_expiry, now + seconds
+                buffer,
+                self._slot_offset(slot_idx) + self._expiry_offset,
+                now + seconds,
             )
             return True
+        finally:
+            shard_semaphore.release()
 
-    def _increment_with_ttl(
-        self,
-        key: str,
-        amount: int,
-        ttl: int,
-        buffer: memoryview,
-        slot_map_lock: MPLock,
-        shard_lock: MPLock,
-    ) -> int:
+    def _increment_with_ttl(self, key: str, amount: int, ttl: int) -> int:
         """
-        Synchronous hot-path implementation of `increment_with_ttl`.
+        Synchronous increment_with_ttl.
 
-        Reads the existing numeric string value, increments it, writes it back.
-        TTL is set only on first write. Acquires `slot_map_lock` and `shard_lock`
-        sequentially — never simultaneously — for minimal contention.
+        Hot path for all fixed-window and sliding-window strategies.
+        TTL is applied only on first write or after expiry.
 
-        :param key: The throttle key.
-        :param amount: Amount to increment.
-        :param ttl: TTL in seconds, applied only on first write.
-        :param buffer: Shared memory buffer.
-        :param slot_map_lock: Lock guarding the slot map.
-        :param shard_lock: Shard lock for this key.
-        :return: New counter value.
+        Lock order: slot_map_semaphore -> shard_semaphore (sequentially).
         """
+        buffer = self._buffer
+        assert buffer is not None
         now = time()
-        with slot_map_lock:
-            slot_idx = self._get_or_allocate_slot(key)
+        key_bytes = key.encode("utf-8")
 
-        with shard_lock:
+        # Allocate/find slot
+        self._slot_map_semaphore.acquire()  # type: ignore[union-attr]
+        try:
+            slot_idx = self._get_hash_table_slot(buffer, key_bytes)
+            if slot_idx is None:
+                slot_idx = self._free_stack_pop(buffer)
+                self._hash_table_upsert(buffer, key_bytes, slot_idx)
+        finally:
+            self._slot_map_semaphore.release()  # type: ignore[union-attr]
+
+        # Read-modify-write under shard_semaphore
+        shard_semaphore = self._shard_semaphores[self._shard_idx(key)]  # type: ignore[index]
+        shard_semaphore.acquire()
+        try:
             value, expires_at, occupied = self._read_slot(buffer, slot_idx)
             is_new = not occupied or (expires_at != 0.0 and expires_at < now)
             if is_new:
-                new_value = amount
-                new_expiry = now + ttl
-                self._write_slot(buffer, slot_idx, str(new_value), new_expiry, True)
+                new_val = amount
+                self._write_slot(buffer, slot_idx, str(new_val), now + ttl)
             else:
                 try:
                     current = int(value)  # type: ignore[arg-type]
                 except (ValueError, TypeError):
                     current = 0
-                new_value = current + amount
-                new_expiry = expires_at if expires_at != 0.0 else now + ttl
-                self._write_slot(buffer, slot_idx, str(new_value), new_expiry, True)
-        return new_value
+                new_val = current + amount
+                # Preserve existing TTL; only apply ttl if there was none
+                effective_expiry = expires_at if expires_at != 0.0 else now + ttl
+                self._write_slot(buffer, slot_idx, str(new_val), effective_expiry)
+            return new_val
+        finally:
+            shard_semaphore.release()
 
     def _multi_get(
         self,
         keys: typing.Tuple[str, ...],
         shard_to_keys: typing.Dict[int, typing.List[str]],
-        buffer: memoryview,
-        slot_map: typing.Any,
     ) -> typing.Dict[str, typing.Optional[str]]:
         """
-        Synchronous implementation of `multi_get`.
+        Synchronous multi_get.
 
-        Acquires shard locks in ascending shard-index order to prevent
-        deadlocks when keys span multiple shards.
+        Lock order: one slot_map_semaphore acquisition for all lookups, then
+        shard_semaphores in ascending shard-index order.
 
-        :param keys: All requested keys (used to verify ordering).
-        :param shard_to_keys: Pre-computed mapping of shard index → key list.
-        :param buffer: Shared memory buffer.
-        :param slot_map: Manager dict mapping keys to slot indices.
-        :return: Dict mapping each key to its string value or `None`.
+        We do all hash table lookups in one slot_map_semaphore hold to avoid
+        repeated acquire/release overhead.  The slot index snapshot is
+        safe because we re-check the occupied flag under each shard_semaphore.
         """
+        buffer = self._buffer
+        assert buffer is not None
         now = time()
+
+        # Look up all slot indices in one slot_map_semaphore hold
+        self._slot_map_semaphore.acquire()  # type: ignore[union-attr]
+        try:
+            slot_indices: typing.Dict[str, typing.Optional[int]] = {
+                key: self._get_hash_table_slot(buffer, key.encode("utf-8"))
+                for key in keys
+            }
+        finally:
+            self._slot_map_semaphore.release()  # type: ignore[union-attr]
+
+        # Read shard by shard in ascending order
         results: typing.Dict[str, typing.Optional[str]] = {}
         for shard_idx in sorted(shard_to_keys):
-            shard_lock = self._shard_locks[shard_idx]  # type: ignore[index]
-            with shard_lock:
+            shard_semaphore = self._shard_semaphores[shard_idx]  # type: ignore[index]
+            shard_semaphore.acquire()
+            try:
                 for key in shard_to_keys[shard_idx]:
-                    slot_idx = slot_map.get(key, None)
-                    if slot_idx is None:
+                    si = slot_indices[key]
+                    if si is None:
                         results[key] = None
                         continue
-                    value, expires_at, occupied = self._read_slot(buffer, slot_idx)
+                    value, expires_at, occupied = self._read_slot(buffer, si)
                     if not occupied or (expires_at != 0.0 and expires_at < now):
                         results[key] = None
                     else:
                         results[key] = value
+            finally:
+                shard_semaphore.release()
+
         return results
 
     def _multi_set(
         self,
         shard_to_items: typing.Dict[int, typing.List[typing.Tuple[str, str]]],
-        parsed: typing.Mapping[str, str],
-        expires_at: float,
-        buffer: memoryview,
-        slot_map_lock: MPLock,
+        all_keys: typing.List[str],
+        expire: typing.Optional[float],
     ) -> None:
         """
-        Synchronous implementation of `multi_set`.
+        Synchronous multi_set.
 
-        Allocates all slots under a single `slot_map_lock` acquisition, then
-        writes to shards in ascending shard-index order.
-
-        :param shard_to_items: Mapping of shard index → list of `(key, value)`.
-        :param parsed: All `key → value` pairs (used for slot allocation).
-        :param expires_at: Unix expiry timestamp, or `0.0` for none.
-        :param buffer: Shared memory buffer.
-        :param slot_map_lock: Lock guarding the slot map.
+        Allocate all slots in one slot_map_semaphore hold, then write to shards
+        in ascending shard-index order.
         """
-        slot_assignments: typing.Dict[str, int] = {}
-        with slot_map_lock:
-            for key in parsed:
-                slot_assignments[key] = self._get_or_allocate_slot(key)
+        buffer = self._buffer
+        assert buffer is not None
+        expires_at = (time() + expire) if expire is not None else 0.0
 
+        # Allocate all slots at once
+        self._slot_map_semaphore.acquire()  # type: ignore[union-attr]
+        try:
+            slot_assignments: typing.Dict[str, int] = {}
+            for key in all_keys:
+                key_bytes = key.encode("utf-8")
+                si = self._get_hash_table_slot(buffer, key_bytes)
+                if si is None:
+                    si = self._free_stack_pop(buffer)
+                    self._hash_table_upsert(buffer, key_bytes, si)
+                slot_assignments[key] = si
+        finally:
+            self._slot_map_semaphore.release()  # type: ignore[union-attr]
+
+        # Write in shard order
         for shard_idx in sorted(shard_to_items):
-            shard_lock = self._shard_locks[shard_idx]  # type: ignore[index]
-            with shard_lock:
+            shard_semaphore = self._shard_semaphores[shard_idx]  # type: ignore[index]
+            shard_semaphore.acquire()
+            try:
                 for key, val in shard_to_items[shard_idx]:
-                    self._write_slot(
-                        buffer, slot_assignments[key], val, expires_at, True
-                    )
+                    self._write_slot(buffer, slot_assignments[key], val, expires_at)
+            finally:
+                shard_semaphore.release()
 
-    def _clear(self, slot_map_lock: MPLock) -> None:
+    def _clear(self) -> None:
         """
-        Synchronous implementation of `clear`.
+        Remove all keys whose name starts with this backend's namespace prefix.
 
-        Removes all keys whose names begin with this backend's namespace prefix.
+        Acquires slot_map_semaphore for the full scan + delete pass. Then takes
+        each shard_semaphore briefly to clear the slot's occupied flag.
 
-        :param slot_map_lock: Lock guarding the slot map.
+        We collect (slot_idx, shard_idx) pairs under slot_map_semaphore, release
+        it, then clear the slots shard by shard.  This avoids holding
+        slot_map_semaphore + shard_semaphore simultaneously (which would violate ordering
+        if any other code path exists that holds shard_semaphore then slot_map_semaphore,
+        as _delete does).  It's safe here because we own the namespace
+        exclusively.
         """
-        prefix = f"{self.namespace}:"
-        with slot_map_lock:
-            for key in [k for k in self._slot_map.keys() if k.startswith(prefix)]:  # type: ignore[union-attr]
-                self._release_slot(key)
+        buffer = self._buffer
+        assert buffer is not None
+        prefix = f"{self.namespace}:".encode("utf-8")
+
+        # Collect and remove from hash table under slot_map_semaphore
+        to_clear: typing.List[typing.Tuple[int, int]] = []  # (slot_idx, shard_idx)
+        self._slot_map_semaphore.acquire()  # type: ignore[union-attr]
+        try:
+            for key_str, slot_idx in list(self._hash_table_iter_occupied(buffer)):
+                key_bytes = key_str.encode("utf-8")
+                if not key_bytes.startswith(prefix):
+                    continue
+                # Remove from hash table
+                self._hash_table_delete(buffer, key_bytes)
+                # Return slot to free pool immediately
+                self._free_stack_push(buffer, slot_idx)
+                to_clear.append((slot_idx, self._shard_idx(key_str)))
+        finally:
+            self._slot_map_semaphore.release()  # type: ignore[union-attr]
+
+        if not to_clear:
+            return
+
+        # Clear occupied flags in shard order (ascending to avoid deadlock)
+        by_shard: typing.Dict[int, typing.List[int]] = {}
+        for slot_idx, shard_idx in to_clear:
+            by_shard.setdefault(shard_idx, []).append(slot_idx)
+
+        for shard_idx in sorted(by_shard):
+            shard_semaphore = self._shard_semaphores[shard_idx]  # type: ignore[index]
+            shard_semaphore.acquire()
+            try:
+                for slot_idx in by_shard[shard_idx]:
+                    self._clear_slot(buffer, slot_idx)
+            finally:
+                shard_semaphore.release()
 
     def _cleanup(self) -> int:
         """
-        Synchronous expired-slot reclamation.
+        Reclaim expired slots.
 
-        Scans all occupied slots and releases those whose expiry has passed.
-        Called periodically by the background cleanup task.
+        Pass 1 (no lock): snapshot occupied entries, read expiry from slot
+        data to build a candidate list.  Racy but harmless — it's a hint.
 
-        :return: Number of slots reclaimed.
+        Pass 2 (slot_map_semaphore only): for each candidate, re-verify the key
+        still maps to the same slot and the slot is still expired before
+        freeing.  We do NOT hold shard_semaphore here to avoid the ordering
+        violation (shard_semaphore before slot_map_semaphore is only legal in
+        _delete).  The float64 expiry write is not atomic on all
+        architectures, but the worst outcome is a spurious skip (missed
+        cleanup), not a spurious free.
         """
-        buffer = self._shared_memory_buffer
+        buffer = self._buffer
         if buffer is None:
             return 0
 
         now = time()
+
+        # Pass 1: unsynchronised snapshot
+        candidates: typing.List[typing.Tuple[bytes, int]] = []
+        for key_str, slot_idx in self._hash_table_iter_occupied(buffer):
+            _, expires_at, occupied = self._read_slot(buffer, slot_idx)
+            if occupied and expires_at != 0.0 and expires_at < now:
+                candidates.append((key_str.encode("utf-8"), slot_idx))
+
+        if not candidates:
+            return 0
+
         freed = 0
-        with self._slot_map_lock:  # type: ignore[union-attr]
-            expired = [
-                key
-                for key, slot_idx in list(self._slot_map.items())  # type: ignore[union-attr]
-                if (lambda _, e, o: o and e != 0.0 and e < now)(  # type: ignore[misc]
-                    *self._read_slot(buffer, slot_idx)
-                )
-            ]
-            for key in expired:
-                self._release_slot(key)
+        # Pass 2: authoritative under slot_map_semaphore
+        self._slot_map_semaphore.acquire()  # type: ignore[union-attr]
+        try:
+            for key_bytes, expected_slot_idx in candidates:
+                current_slot_idx = self._get_hash_table_slot(buffer, key_bytes)
+                if current_slot_idx is None or current_slot_idx != expected_slot_idx:
+                    continue  # already deleted or reallocated
+                # Re-read without shard_semaphore (see docstring)
+                _, expires_at, occupied = self._read_slot(buffer, current_slot_idx)
+                if not occupied or expires_at == 0.0 or expires_at >= now:
+                    continue  # refreshed since pass 1
+                self._hash_table_delete(buffer, key_bytes)
+                self._free_stack_push(buffer, current_slot_idx)
+                self._clear_slot(buffer, current_slot_idx)
                 freed += 1
+        finally:
+            self._slot_map_semaphore.release()  # type: ignore[union-attr]
+
         return freed
 
-    def _get_or_create_named_lock(
-        self,
-        name: str,
-        slot_map_lock: MPLock,
-    ) -> MPLock:
+    def _get_or_create_named_semaphore(self, name: str) -> Semaphore:  # type: ignore[type-arg]
         """
-        Return an existing named lock or create and register a new one.
+        Return an existing named semaphore or create a new one.
 
-        Uses `slot_map_lock` to serialise creation so that two concurrent
-        callers cannot register duplicate `MPLock` objects for the same name.
+        Named semaphores are process-local (not in shared memory). They are
+        used by throttle strategies within a single event loop and do not
+        need to be visible to other processes.  Each process builds its own
+        dict independently.
 
-        :param name: Lock name.
-        :param slot_map_lock: Lock used to serialise named-lock creation.
-        :return: The `multiprocessing.Lock` registered under *name*.
+        Double-checked locking under _named_semaphores_lock.
         """
-        existing = self._named_locks.get(name, None)  # type: ignore[union-attr]
+        existing = self._named_semaphores.get(name)
         if existing is not None:
             return existing
 
-        with slot_map_lock:
-            existing = self._named_locks.get(name, None)  # type: ignore[union-attr]
+        self._named_semaphores_lock.acquire()
+        try:
+            existing = self._named_semaphores.get(name)
             if existing is not None:
                 return existing
-            new_lock: MPLock = Lock()
-            self._named_locks[name] = new_lock  # type: ignore[index]
-            return new_lock
+
+            semaphore = multiprocessing.Semaphore(1)
+            self._named_semaphores[name] = semaphore
+            return semaphore
+        finally:
+            self._named_semaphores_lock.release()
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any
     ) -> typing.Optional[str]:
-        """
-        Return the string value stored for *key*, or `None` if absent or expired.
-
-        :param key: The throttle key to retrieve.
-        :return: String value, or `None`.
-        """
         self._assert_ready()
         return await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
-            None,
-            self._get,
-            key,
-            self._shared_memory_buffer,
-            self._slot_map,
-            self._shard_locks[self._shard_idx_for_key(key)],  # type: ignore[index]
+            None, self._get, key
         )
 
     async def set(
         self, key: str, value: str, expire: typing.Optional[float] = None
     ) -> None:
-        """
-        Store a string value for *key* with optional expiry.
-
-        :param key: The throttle key to set.
-        :param value: String value to store.
-        :param expire: TTL in seconds, or `None` for no expiry.
-        :raises BackendError: If the encoded value exceeds `max_value_size`.
-        """
         self._assert_ready()
-        expires_at = (time() + expire) if expire is not None else 0.0
         await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
-            None,
-            self._set,
-            key,
-            value,
-            expires_at,
-            self._shared_memory_buffer,
-            self._slot_map_lock,
-            self._shard_locks[self._shard_idx_for_key(key)],  # type: ignore[index]
+            None, self._set, key, value, expire
         )
 
     async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
-        """
-        Delete *key* if it exists.
-
-        :param key: The throttle key to delete.
-        :return: `True` if the key existed and was deleted, `False` otherwise.
-        """
         self._assert_ready()
         return await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
-            None,
-            self._delete,
-            key,
-            self._slot_map_lock,
-            self._shard_locks[self._shard_idx_for_key(key)],  # type: ignore[index]
+            None, self._delete, key
         )
 
     async def increment(self, key: str, amount: int = 1) -> int:
-        """
-        Atomically increment the counter for *key* and return the new value.
-
-        Reads the current string value as an integer, increments it, and writes
-        the result back as a string. Creates the key with value *amount* if it
-        does not exist or has expired. The updated value is immediately visible
-        to `get`.
-
-        :param key: The throttle key.
-        :param amount: Amount to increment by. Pass a negative value to decrement.
-        :return: New counter value.
-        """
         self._assert_ready()
         return await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
-            None,
-            self._increment,
-            key,
-            amount,
-            self._shared_memory_buffer,
-            self._slot_map_lock,
-            self._shard_locks[self._shard_idx_for_key(key)],  # type: ignore[index]
+            None, self._increment, key, amount
         )
 
     async def expire(self, key: str, seconds: int) -> bool:
-        """
-        Set expiry on an existing key without modifying its value.
-
-        :param key: The throttle key.
-        :param seconds: TTL in seconds from now.
-        :return: `True` if expiry was set, `False` if the key did not exist.
-        """
         self._assert_ready()
         return await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
-            None,
-            self._expire,
-            key,
-            seconds,
-            self._shared_memory_buffer,
-            self._slot_map,
-            self._shard_locks[self._shard_idx_for_key(key)],  # type: ignore[index]
+            None, self._expire, key, seconds
         )
 
     async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int = 60) -> int:
-        """
-        Atomically increment the counter for *key* and set its TTL on first write.
-
-        This is the hot path for all fixed-window and sliding-window strategies.
-        TTL is only applied when the key is first created or has expired —
-        existing keys preserve their original expiry. The updated value is
-        immediately visible to `get`.
-
-        :param key: The throttle key.
-        :param amount: Amount to increment by.
-        :param ttl: TTL in seconds, applied only on first write.
-        :return: New counter value.
-        """
         self._assert_ready()
         return await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
-            None,
-            self._increment_with_ttl,
-            key,
-            amount,
-            ttl,
-            self._shared_memory_buffer,
-            self._slot_map_lock,
-            self._shard_locks[self._shard_idx_for_key(key)],  # type: ignore[index]
+            None, self._increment_with_ttl, key, amount, ttl
         )
 
     async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
-        """
-        Retrieve multiple keys in a single executor call.
-
-        Shard locks are acquired in ascending shard-index order to prevent
-        deadlocks when keys span multiple shards.
-
-        :param keys: Keys to retrieve.
-        :return: List of values in the same order as *keys*.
-            Missing or expired keys produce `None`.
-        """
         self._assert_ready()
         if not keys:
             return []
+
         shard_to_keys: typing.Dict[int, typing.List[str]] = {}
         for key in keys:
-            shard_to_keys.setdefault(self._shard_idx_for_key(key), []).append(key)
+            shard_to_keys.setdefault(self._shard_idx(key), []).append(key)
 
         result_map = await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
-            None,
-            self._multi_get,
-            keys,
-            shard_to_keys,
-            self._shared_memory_buffer,
-            self._slot_map,
+            None, self._multi_get, keys, shard_to_keys
         )
         return [result_map[k] for k in keys]
 
@@ -994,74 +1197,36 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         items: typing.Mapping[str, str],
         expire: typing.Optional[int] = None,
     ) -> None:
-        """
-        Set multiple string values in a single executor call.
-
-        All slots are allocated under one `slot_map_lock` acquisition, then
-        values are written to shards in ascending shard-index order.
-
-        :param items: Mapping of key → string value.
-        :param expire: TTL in seconds for all keys, or `None` for no expiry.
-        :raises BackendError: If any value exceeds `max_value_size`.
-        """
         self._assert_ready()
         if not items:
             return
 
         shard_to_items: typing.Dict[int, typing.List[typing.Tuple[str, str]]] = {}
         for key, val in items.items():
-            shard_to_items.setdefault(self._shard_idx_for_key(key), []).append(
-                (key, val)
-            )
+            shard_to_items.setdefault(self._shard_idx(key), []).append((key, val))
 
-        expires_at = (time() + expire) if expire is not None else 0.0
         await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
             None,
             self._multi_set,
             shard_to_items,
-            items,
-            expires_at,
-            self._shared_memory_buffer,
-            self._slot_map_lock,
+            list(items.keys()),
+            expire,
         )
 
-    async def get_lock(self, name: str) -> _AsyncMPLock:
-        """
-        Return an async-compatible named lock for use by throttle strategies.
-
-        The underlying `multiprocessing.Lock` is created on first use and
-        reused on all subsequent calls with the same *name*. Named locks are
-        independent of all internal backend locks — never acquire one while
-        holding a shard or slot-map lock.
-
-        :param name: Unique lock name.
-        :return: `_AsyncMPLock` wrapping a `multiprocessing.Lock`.
-        """
+    async def get_lock(self, name: str) -> _AsyncMPSemaphoreLock:
         self._assert_ready()
-        mp_lock = await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
-            None,
-            self._get_or_create_named_lock,
-            name,
-            self._slot_map_lock,
+        sem = await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
+            None, self._get_or_create_named_semaphore, name
         )
-        return _AsyncMPLock(lock=mp_lock)
+        return _AsyncMPSemaphoreLock(sem)
 
     async def clear(self) -> None:
-        """
-        Remove all keys belonging to this backend's namespace.
-
-        Keys from other namespaces sharing the same backend instance are left
-        untouched.
-        """
         self._assert_ready()
         await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
-            None,
-            self._clear,
-            self._slot_map_lock,
+            None, self._clear
         )
 
     async def _cleanup_loop(self) -> None:
-        """Periodically reclaim expired slots. Runs as a background `asyncio.Task`."""
         assert self._cleanup_frequency is not None
         while self._initialized:
             try:
@@ -1070,5 +1235,4 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             except asyncio.CancelledError:
                 break
             except Exception:
-                # Never crash the cleanup loop. Keep the backend alive.
                 pass

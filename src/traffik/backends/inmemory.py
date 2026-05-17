@@ -72,7 +72,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     Uses shards (and hence lock striping) to improve concurrent access.
 
     Warning: Only use for development or single-process applications.
-    Does not work across multiple processes/servers.
+    This will not work across multiple threads, processes, or servers.
     """
 
     wrap_methods = ("clear",)
@@ -92,7 +92,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
         number_of_shards: int = 3,
-        cleanup_frequency: typing.Optional[float] = 10.0,
+        cleanup_frequency: typing.Optional[float] = None,
         lock_kind: typing.Literal["fair", "unfair"] = "unfair",
         **kwargs: typing.Any,
     ) -> None:
@@ -117,16 +117,17 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             no expiration unless specified during lock acquisition.
         :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
             If None, uses the global default from `traffik.config.get_lock_blocking_timeout()`.
-        :param number_of_shards: Number of shards to split the in-memory store into for concurrency.
+        :param number_of_shards: Number of shards to split the in-memory shard into for concurrency.
         :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys. If None, no automatic cleanup is performed.
         :param kwargs: Additional keyword arguments.
         """
+        kwargs.pop("persistent", None)
         super().__init__(
             None,
             namespace=namespace,
             identifier=identifier,
             handle_throttled=handle_throttled,
-            persistent=False, # Can never be persistent
+            persistent=False,  # Can never be persistent
             on_error=on_error,
             lock_blocking=lock_blocking,
             lock_ttl=lock_ttl,
@@ -136,10 +137,10 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         if number_of_shards < 1:
             raise ValueError("`number_of_shards` must be at least 1")
 
-        self._num_shards = number_of_shards
+        self._number_of_shards = number_of_shards
         self._shard_locks: typing.List[asyncio.Lock] = []
         """Locks for each shard to allow concurrent access."""
-        self._shard_stores: typing.List[OrderedDict] = []
+        self._shards: typing.List[OrderedDict[str, typing.Any]] = []
         """In-memory storage shards."""
 
         self._lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
@@ -159,9 +160,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             return
 
         if not self._shard_locks:
-            self._shard_locks = [asyncio.Lock() for _ in range(self._num_shards)]
-        if not self._shard_stores:
-            self._shard_stores = [OrderedDict() for _ in range(self._num_shards)]
+            self._shard_locks = [asyncio.Lock() for _ in range(self._number_of_shards)]
+        if not self._shards:
+            self._shards = [OrderedDict() for _ in range(self._number_of_shards)]
 
         if self._cleanup_task is None and self._cleanup_frequency:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -171,9 +172,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         return self._initialized
 
     def _get_shard(self, key: str) -> typing.Tuple[int, asyncio.Lock, OrderedDict]:
-        """Get shard index, lock, and store for a key."""
-        shard_idx = hash(key) % self._num_shards
-        return shard_idx, self._shard_locks[shard_idx], self._shard_stores[shard_idx]
+        """Get shard index, lock, and shard for a key."""
+        shard_idx = hash(key) % self._number_of_shards
+        return shard_idx, self._shard_locks[shard_idx], self._shards[shard_idx]
 
     async def keys(self) -> typing.List[str]:
         """Get all keys in the backend."""
@@ -184,9 +185,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         all_keys = []
         # Acquire all shard locks in order
-        for lock, store in zip(self._shard_locks, self._shard_stores):
+        for lock, shard in zip(self._shard_locks, self._shards):
             async with lock:
-                all_keys.extend(list(store.keys()))
+                all_keys.extend(list(shard.keys()))
         return all_keys
 
     async def _cleanup(self) -> None:
@@ -194,15 +195,15 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         now = time()
 
         # Clean each shard independently
-        for lock, store in zip(self._shard_locks, self._shard_stores):
+        for lock, shard in zip(self._shard_locks, self._shards):
             async with lock:
                 expired = [
                     key
-                    for key, (_, expires_at) in list(store.items())
+                    for key, (_, expires_at) in shard.items()
                     if expires_at is not None and expires_at < now
                 ]
                 for key in expired:
-                    del store[key]
+                    del shard[key]
 
     async def _cleanup_loop(self) -> None:
         """Periodically reclaim expired entries. Runs as a background `asyncio.Task`."""
@@ -248,8 +249,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """Get value by key."""
         self._assert_ready()
 
-        _, lock, store = self._get_shard(key)
-        entry = store.get(key)
+        _, lock, shard = self._get_shard(key)
+        entry = shard.get(key)
         if entry is None:
             return None
 
@@ -257,7 +258,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         # Check if expired
         if expires_at is not None and expires_at < time():
             async with lock:
-                del store[key]
+                del shard[key]
             return None
         return value
 
@@ -267,22 +268,22 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """Set value by key."""
         self._assert_ready()
 
-        _, lock, store = self._get_shard(key)
+        _, lock, shard = self._get_shard(key)
         expires_at = None
         if expire is not None:
             expires_at = time() + expire
 
         async with lock:
-            store[key] = (value, expires_at)
+            shard[key] = (value, expires_at)
 
     async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
         """Delete key if exists."""
         self._assert_ready()
 
-        _, lock, store = self._get_shard(key)
+        _, lock, shard = self._get_shard(key)
         async with lock:
-            if key in store:
-                del store[key]
+            if key in shard:
+                del shard[key]
                 return True
             return False
 
@@ -296,19 +297,19 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         self._assert_ready()
 
-        _, lock, store = self._get_shard(key)
+        _, lock, shard = self._get_shard(key)
         async with lock:
-            entry = store.get(key)
+            entry = shard.get(key)
             if entry is None:
                 # Key doesn't exist, initialize
-                store[key] = (str(amount), None)
+                shard[key] = (str(amount), None)
                 return amount
 
             value, expires_at = entry
             # Check if expired
             if expires_at is not None and expires_at < time():
                 # Expired, reinitialize
-                store[key] = (str(amount), None)
+                shard[key] = (str(amount), None)
                 return amount
 
             # Increment existing value
@@ -316,11 +317,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 current = int(value)
             except (ValueError, TypeError):
                 # Invalid value, reset
-                store[key] = (str(amount), expires_at)
+                shard[key] = (str(amount), expires_at)
                 return amount
 
             new_value = current + amount
-            store[key] = (str(new_value), expires_at)
+            shard[key] = (str(new_value), expires_at)
             return new_value
 
     async def expire(self, key: str, seconds: int) -> bool:
@@ -333,15 +334,15 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         self._assert_ready()
 
-        _, lock, store = self._get_shard(key)
+        _, lock, shard = self._get_shard(key)
         async with lock:
-            entry = store.get(key)
+            entry = shard.get(key)
             if entry is None:
                 return False
 
             value, _ = entry
             expires_at = time() + seconds
-            store[key] = (value, expires_at)
+            shard[key] = (value, expires_at)
             return True
 
     async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int = 60) -> int:
@@ -355,13 +356,13 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         self._assert_ready()
 
-        _, lock, store = self._get_shard(key)
+        _, lock, shard = self._get_shard(key)
         async with lock:
-            entry = store.get(key)
+            entry = shard.get(key)
             if entry is None:
                 # New key, initialize with TTL
                 expires_at = time() + ttl
-                store[key] = (str(amount), expires_at)
+                shard[key] = (str(amount), expires_at)
                 return amount
 
             value, expires_at = entry  # type: ignore[assignment]
@@ -369,7 +370,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             if expires_at is not None and expires_at < time():
                 # Expired, reinitialize with new TTL
                 expires_at = time() + ttl
-                store[key] = (str(amount), expires_at)
+                shard[key] = (str(amount), expires_at)
                 return amount
 
             # Increment existing value
@@ -378,7 +379,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             except (ValueError, TypeError):
                 # Invalid value, reset with TTL
                 expires_at = time() + ttl
-                store[key] = (str(amount), expires_at)
+                shard[key] = (str(amount), expires_at)
                 return amount
 
             new_value = current + amount
@@ -387,7 +388,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             if expires_at is None:
                 expires_at = time() + ttl
 
-            store[key] = (str(new_value), expires_at)
+            shard[key] = (str(new_value), expires_at)
             return new_value
 
     async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
@@ -418,11 +419,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         for shard_idx in sorted(shard_keys.keys()):
             lock = self._shard_locks[shard_idx]
-            store = self._shard_stores[shard_idx]
+            shard = self._shards[shard_idx]
 
             async with lock:
                 for key in shard_keys[shard_idx]:
-                    entry = store.get(key)
+                    entry = shard.get(key)
                     if entry is None:
                         results[key] = None
                         continue
@@ -431,7 +432,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     if expires_at is None or expires_at > now:
                         results[key] = value
                     else:
-                        del store[key]
+                        del shard[key]
                         results[key] = None
 
         # Return results in original key order
@@ -468,11 +469,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         # Acquire locks in sorted order to prevent deadlocks
         for shard_idx in sorted(shard_items.keys()):
             lock = self._shard_locks[shard_idx]
-            store = self._shard_stores[shard_idx]
+            shard = self._shards[shard_idx]
 
             async with lock:
                 for key, value in shard_items[shard_idx]:
-                    store[key] = (value, expires_at)
+                    shard[key] = (value, expires_at)
 
     async def clear(self) -> None:
         """Clear all keys in the namespace."""
@@ -480,15 +481,15 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             return
 
         # Acquire all shard locks in order
-        for lock, store in zip(self._shard_locks, self._shard_stores):
+        for lock, shard in zip(self._shard_locks, self._shards):
             async with lock:
                 keys_to_delete = [
                     key
-                    for key in list(store.keys())
+                    for key in list(shard.keys())
                     if key.startswith(f"{self.namespace}:")
                 ]
                 for key in keys_to_delete:
-                    del store[key]
+                    del shard[key]
 
     async def reset(self) -> None:
         """Reset the backend by clearing all data."""
@@ -496,9 +497,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             return
 
         # Acquire all shard locks in order
-        for lock, store in zip(self._shard_locks, self._shard_stores):
+        for lock, shard in zip(self._shard_locks, self._shards):
             async with lock:
-                store.clear()
+                shard.clear()
 
     async def close(self) -> None:
         """Close the backend."""

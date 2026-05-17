@@ -66,10 +66,22 @@ def get_memcached_backend(namespace: str, persistent: bool) -> ThrottleBackend:
     )
 
 
+def get_multiprocess_backend(namespace: str, persistent: bool) -> ThrottleBackend:
+    from traffik.backends.multiprocess import MultiProcessInMemoryBackend
+
+    return MultiProcessInMemoryBackend(
+        namespace=namespace,
+        number_of_shards=8,
+        max_keys=1024,
+        cleanup_frequency=2.0,
+    )
+
+
 BACKEND_FACTORIES: typing.List[typing.Callable[[str, bool], ThrottleBackend]] = [
     get_memcached_backend,
     get_redis_backend,
     get_inmemory_backend,
+    get_multiprocess_backend,
 ]
 
 
@@ -105,20 +117,21 @@ class BackendGen:
             yield backend
 
 
+def _backend_gen(
+    namespace: str = "test", persistent: bool = False
+) -> typing.Generator[ThrottleBackend[typing.Any, typing.Any], None, None]:
+    for backend_factory in BACKEND_FACTORIES:
+        try:
+            backend = backend_factory(namespace, persistent)
+        except SkipBackend as exc:
+            logging.debug(f"Skipping backend: {exc}")
+            continue
+        yield backend
+
+
 @pytest.fixture(scope="function")
 def backends() -> BackendGen:
-    def gen_func(
-        namespace: str = "test", persistent: bool = False
-    ) -> typing.Generator[ThrottleBackend[typing.Any, typing.Any], None, None]:
-        for backend_factory in BACKEND_FACTORIES:
-            try:
-                backend = backend_factory(namespace, persistent)
-            except SkipBackend as exc:
-                logging.debug(f"Skipping backend: {exc}")
-                continue
-            yield backend
-
-    return BackendGen(gen_func)
+    return BackendGen(_backend_gen)
 
 
 @pytest.fixture(scope="function")

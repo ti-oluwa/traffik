@@ -9,6 +9,7 @@ import pytest
 from tests.conftest import BackendGen
 from traffik.backends.base import get_throttle_backend
 from traffik.backends.inmemory import InMemoryBackend
+from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.exceptions import BackendConnectionError, LockTimeoutError
 
 
@@ -637,7 +638,7 @@ async def test_multithreaded_lock_synchronization(backends: BackendGen) -> None:
                 namespace="lock_multithread_test", exclude=InMemoryBackend
             ):
                 key = backend.get_key("shared_counter")
-                async with backend(persistent=True, close_on_exit=True):
+                async with backend(persistent=True, close_on_exit=False):
                     async with await backend.lock(
                         "lock:thread_counter",
                         blocking=blocking,
@@ -693,7 +694,10 @@ async def test_multithreaded_lock_synchronization(backends: BackendGen) -> None:
             f"Expected 10 results for {backend_name}, got {len(backend_results)}"
         )
 
-    for backend in backends(namespace="lock_multithread_test", exclude=InMemoryBackend):
+    for backend in backends(
+        namespace="lock_multithread_test",
+        exclude=InMemoryBackend,
+    ):
         key = backend.get_key("shared_counter")
         # Final value should be exactly 10 (no race conditions)
         async with backend(close_on_exit=True):

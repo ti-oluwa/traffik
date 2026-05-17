@@ -123,7 +123,7 @@ class _AsyncRedisLock:
         else:
             self._ttl = None  # type: ignore[assignment]
 
-    def _get_task_locks(self) -> typing.Dict[str, tuple[int, int]]:
+    def _get_task_locks(self) -> typing.Dict[str, typing.Tuple[int, int]]:
         """
         Get task-local lock storage, creating if needed.
 
@@ -132,9 +132,9 @@ class _AsyncRedisLock:
         try:
             return self._task_locks.get()
         except LookupError:
-            m: dict[str, tuple[int, int]] = {}
-            self._task_locks.set(m)
-            return m
+            task_locks: typing.Dict[str, typing.Tuple[int, int]] = {}
+            self._task_locks.set(task_locks)
+            return task_locks
 
     @classmethod
     async def _load_acquire_script(cls, redis: aioredis.Redis) -> str:
@@ -268,7 +268,7 @@ class _AsyncRedisLock:
 
 class _AsyncRedLock:
     """
-    Name-based reentrant distributed Redis (un-fair) lock implementing the `AsyncLock` protocol.
+    Name-based, task-reentrant distributed Redis (un-fair) lock implementing the `AsyncLock` protocol.
 
     Uses the `redlock` algorithm for distributed locking via the `pottery.AIORedlock` API.
 

@@ -412,7 +412,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         Atomically decrement a counter and return the NEW value.
 
-        This operation MUST be atomic (thread-safe across processes).
+        This operation must be atomic (thread-safe across processes).
         If key doesn't exist, initialize to 0 then decrement.
 
         :param key: Counter key

@@ -57,6 +57,7 @@ from types import TracebackType
 
 from typing_extensions import Self
 
+from traffik._locks import _NamedLockHandle, _NamedLockPool
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError, BackendError, LockTimeoutError
 from traffik.types import (
@@ -332,6 +333,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         lock_blocking: typing.Optional[bool] = None,
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
+        lock_pool_size: int = 50,
         max_keys: int = 65536,
         number_of_shards: int = 64,
         max_value_size: int = 512,
@@ -375,6 +377,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         if shared_memory_name is None:
             shared_memory_name = _derive_shared_memory_name(namespace)
+
         _validate_shared_memory_name(shared_memory_name)
         self._shared_memory_name: str = shared_memory_name
         self._create: bool = create
@@ -464,12 +467,15 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._slot_map_semaphore: typing.Optional[Semaphore] = None
         self._shard_semaphores: typing.Optional[typing.List[Semaphore]] = None
 
-        # Named semaphores are process-local (not in shared memory).
-        # Each process builds its own dict; cross-process named locking is
-        # unnecessary because named locks are only used by throttle strategies
-        # within a single asyncio event loop.
-        self._named_semaphores: typing.Dict[str, Semaphore] = {}
-        self._named_semaphores_lock: Semaphore = multiprocessing.Semaphore(1)
+        # `_AsyncMPSemaphoreLock` cannot be pooled directly because its not reusable
+        # across tasks. So we pool the semaphores and then provide `_AsyncMPSemaphoreLock`
+        # as a proxy to wrap it when we create a `_NamedLockHandle` in `_NamedLockPool.get`
+        self._named_lock_pool: _NamedLockPool[_AsyncMPSemaphoreLock] = _NamedLockPool(
+            factory=lambda: multiprocessing.Semaphore(1),
+            max_size=lock_pool_size,
+            threadsafe=True,
+            proxy=_AsyncMPSemaphoreLock,  # type: ignore[arg-type]
+        )
 
         self._cleanup_task: typing.Optional[asyncio.Task[None]] = None  # type: ignore[type-arg]
         self._initialized: bool = False
@@ -639,6 +645,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     self._free_stack_offset + i * 4,
                     self._max_keys - 1 - i,
                 )
+
+        # Pre-populate named lock pool
+        self._named_lock_pool.populate()
 
         if self._cleanup_frequency is not None:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -1589,33 +1598,6 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         return freed
 
-    def _get_or_create_named_semaphore(self, name: str) -> Semaphore:
-        """
-        Return an existing named semaphore or create a new one.
-
-        Named semaphores are **process-local** (not shared across processes).
-        They are used by throttle strategies within a single event loop and do
-        not need cross-process visibility. Each forked worker builds its own
-        dict independently from the inherited instance state.
-
-        Double-checked locking under `_named_semaphores_lock`.
-        """
-        existing = self._named_semaphores.get(name)
-        if existing is not None:
-            return existing
-
-        self._named_semaphores_lock.acquire()
-        try:
-            existing = self._named_semaphores.get(name)
-            if existing is not None:
-                return existing
-
-            semaphore = multiprocessing.Semaphore(1)
-            self._named_semaphores[name] = semaphore
-            return semaphore
-        finally:
-            self._named_semaphores_lock.release()
-
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any
     ) -> typing.Optional[str]:
@@ -1687,12 +1669,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             expire,
         )
 
-    async def get_lock(self, name: str) -> _AsyncMPSemaphoreLock:
+    async def get_lock(self, name: str) -> _NamedLockHandle[_AsyncMPSemaphoreLock]:
         self._assert_ready()
-        semaphore = await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
-            None, self._get_or_create_named_semaphore, name
-        )
-        return _AsyncMPSemaphoreLock(semaphore=semaphore)
+        return self._named_lock_pool.get(name)
 
     async def clear(self) -> None:
         self._assert_ready()

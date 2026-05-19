@@ -10,9 +10,9 @@ from collections import OrderedDict
 
 from traffik._locks import (
     _AsyncFairRLock,
-    _NamedLockPool,
     _AsyncRLock,
     _NamedLockHandle,
+    _NamedLockPool,
 )
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError
@@ -150,9 +150,10 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """In-memory storage shards."""
 
         lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
-        self._lock_pool = _NamedLockPool[_AsyncInMemoryLock](
+        self._named_lock_pool: _NamedLockPool[_AsyncInMemoryLock] = _NamedLockPool(
             factory=lambda: _AsyncInMemoryLock(lock=lock_cls()),
             max_size=lock_pool_size,
+            threadsafe=False,
         )
 
         self._cleanup_task: typing.Optional[asyncio.Task] = None
@@ -170,7 +171,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             self._shards = [OrderedDict() for _ in range(self._number_of_shards)]
 
         # Pre-populate named lock pool
-        self._lock_pool.populate()
+        self._named_lock_pool.populate()
 
         if self._cleanup_task is None and self._cleanup_frequency:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -238,7 +239,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         This is meant for user-requested locks (e.g., strategy locking, multi-key operations).
         """
-        return self._lock_pool.get(name)
+        self._assert_ready()
+        return self._named_lock_pool.get(name)
 
     # Note: Shard locks are not essentially needed in the `get`, `set`, `delete`,
     # `increment`, etc. methods (except in `multi_set` and `multi_get`). This because shard ops

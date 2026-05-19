@@ -12,7 +12,7 @@ from types import TracebackType
 from typing_extensions import Self
 
 from traffik.exceptions import LockTimeoutError
-from traffik.types import AsyncLock
+from traffik.types import AsyncLock, T
 
 
 class _FenceTokenGenerator:
@@ -68,11 +68,12 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
     is removed from the active mapping, making the memory reusable.
 
     When the free list is empty a new lock is created via *factory*,
-    so *max_size* is a **soft cap on the free list**, not a hard cap
+    so `max_size`is a **soft cap on the free list**, not a hard cap
     on total concurrency. Locks returned to an already-full free list are
     simply discarded.
 
-    Note: This is not thread-safe and is intended for single thread event loop use.
+    Note: This is not thread-safe by default. Pass `threadsafe=True` for additional
+    safety guards.
 
     Usage:
 
@@ -89,26 +90,38 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
     ```
     """
 
-    __slots__ = ("_factory", "_max_size", "_free", "_active", "_guard")
+    __slots__ = ("_factory", "_max_size", "_free", "_active", "_proxy", "_guard")
 
     def __init__(
         self,
-        factory: typing.Callable[[], AsyncLockT],
+        factory: typing.Callable[[], typing.Union[AsyncLockT, T]],
         max_size: int = 128,
         threadsafe: bool = False,
+        proxy: typing.Optional[
+            typing.Callable[[typing.Union[AsyncLockT, T]], AsyncLockT]
+        ] = None,
     ) -> None:
         """
         Initialize the pool
 
-        :param factory: Zero-argument callable that produces a fresh lock instance.
-        :param max_size: Maximum number of idle locks kept in the free list. Defaults to 128.
+        :param factory: Zero-argument callable that produces a fresh lock instance or an object that
+            will be wrapped by `proxy`. Called when the free list is empty and a new lock is needed.
+        :param max_size: Maximum number of idle locks kept in the free list (soft cap). Defaults to 128.
+            Locks exceeding this limit are discarded.
+        :param threadsafe: If True, uses thread-safety guards (lock) for concurrent access to the pool.
+            Defaults to False.
+        :param proxy: Optional callable that wraps the factory-returned instance retrieved from the pool.
+            Takes the instance as argument and returns the wrapped as an `AsyncLock`. Defaults to None.
         """
         self._factory = factory
         self._max_size = max_size
-        self._free: typing.List[AsyncLockT] = []
+        self._proxy = proxy
+        self._free: typing.List[typing.Union[AsyncLockT, typing.Any]] = []
         """Idle locks available for reuse."""
-        self._active: typing.Dict[str, typing.Tuple[AsyncLockT, int]] = {}
-        """Mapping of name -> (lock, refcount) for all currently referenced locks."""
+        self._active: typing.Dict[
+            str, typing.Tuple[typing.Union[AsyncLockT, typing.Any], int]
+        ] = {}
+        """Mapping of `name` to `(lock, refcount)` for all currently referenced locks."""
         self._guard = threading.Lock() if threadsafe else nullcontext()
 
     def get(self, name: str, /) -> "_NamedLockHandle[AsyncLockT]":
@@ -127,9 +140,12 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
             pool=self,
             name=name,
             lock=self._increment_ref_or_create(name),
+            proxy=self._proxy,
         )
 
-    def _increment_ref_or_create(self, name: str, /) -> AsyncLockT:
+    def _increment_ref_or_create(
+        self, name: str, /
+    ) -> typing.Union[AsyncLockT, typing.Any]:
         """
         Increment the reference count for `name` and return its lock,
         or allocate a fresh lock when `name` is not yet active.
@@ -137,16 +153,17 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         :param name: Lock name.
         :return: The lock instance associated with `name`.
         """
-        entry = self._active.get(name)
-        if entry is not None:
-            lock, count = entry
-            self._active[name] = (lock, count + 1)
-            return lock
+        with self._guard:
+            entry = self._active.get(name)
+            if entry is not None:
+                lock, count = entry
+                self._active[name] = (lock, count + 1)
+                return lock
 
-        # Allocate from free list or factory.
-        lock = self._free.pop() if self._free else self._factory()
-        self._active[name] = (lock, 1)
-        return lock
+            # Allocate from free list or factory.
+            lock = self._free.pop() if self._free else self._factory()
+            self._active[name] = (lock, 1)
+            return lock
 
     def _decrement_ref(self, name: str, lock: AsyncLockT, /) -> None:
         """
@@ -158,18 +175,19 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         :param name: Lock name whose refcount to decrement.
         :param lock: The lock instance associated with `name` (used to return it to the free list).
         """
-        entry = self._active.get(name)
-        if entry is None:
-            return  # Already cleaned up (should not happen in normal use)
+        with self._guard:
+            entry = self._active.get(name)
+            if entry is None:
+                return  # Already cleaned up (should not happen in normal use)
 
-        _, count = entry
-        if count > 1:
-            self._active[name] = (lock, count - 1)
-        else:
-            del self._active[name]
-            if len(self._free) < self._max_size:
-                self._free.append(lock)
-            # else: discard (GC will clean it up)
+            _, count = entry
+            if count > 1:
+                self._active[name] = (lock, count - 1)
+            else:
+                del self._active[name]
+                if len(self._free) < self._max_size:
+                    self._free.append(lock)
+                # else: discard (GC will clean it up)
 
     def populate(self, n: typing.Optional[int] = None, /) -> None:
         """
@@ -181,12 +199,13 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         :param n: Number of locks to pre-create. Clamped to *max_size*.
             If `None`, it defaults to `max_size` set on initialization.
         """
-        if not n:
-            n = self._max_size
-        else:
-            n = min(n, self._max_size - len(self._free))
-        for _ in range(n):
-            self._free.append(self._factory())
+        with self._guard:
+            if not n:
+                n = self._max_size
+            else:
+                n = min(n, self._max_size - len(self._free))
+            for _ in range(n):
+                self._free.append(self._factory())
 
     @property
     def active_count(self) -> int:
@@ -211,17 +230,21 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
     Instances are **not** reentrant and must not be shared across tasks.
     """
 
-    __slots__ = ("_pool", "_name", "_lock", "_acquired")
+    __slots__ = ("_pool", "_name", "_lock", "_proxied", "_acquired")
 
     def __init__(
         self,
         pool: _NamedLockPool[AsyncLockT],
         name: str,
         lock: AsyncLockT,
+        proxy: typing.Optional[
+            typing.Callable[[typing.Union[AsyncLockT, T]], AsyncLockT]
+        ] = None,
     ) -> None:
         self._pool = pool
         self._name = name
         self._lock = lock
+        self._proxied = proxy(lock) if proxy is not None else lock
         self._acquired = False
 
     def locked(self) -> bool:
@@ -239,7 +262,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         :param blocking_timeout: Maximum seconds to wait when *blocking* is True.
         :return: True if acquired, False otherwise.
         """
-        acquired = await self._lock.acquire(
+        acquired = await self._proxied.acquire(
             blocking=blocking,
             blocking_timeout=blocking_timeout,
         )
@@ -255,7 +278,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
             raise RuntimeError(
                 f"Cannot release lock '{self._name}': not acquired by this handle."
             )
-        await self._lock.release()
+        await self._proxied.release()
         self._acquired = False
         self._pool._decrement_ref(self._name, self._lock)
 

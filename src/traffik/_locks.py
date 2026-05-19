@@ -68,7 +68,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
     is removed from the active mapping, making the memory reusable.
 
     When the free list is empty a new lock is created via *factory*,
-    so `max_size`is a **soft cap on the free list**, not a hard cap
+    so `max_size` is a **soft cap on the free list**, not a hard cap
     on total concurrency. Locks returned to an already-full free list are
     simply discarded.
 
@@ -136,11 +136,16 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         :param name: The logical name identifying the lock.
         :return: A `_NamedLockHandle` wrapping the lock for `name`.
         """
+        if self._proxy:
+            return _NamedLockHandle(
+                pool=self,
+                name=name,
+                lock=self._proxy(self._increment_ref_or_create(name)),
+            )
         return _NamedLockHandle(
             pool=self,
             name=name,
             lock=self._increment_ref_or_create(name),
-            proxy=self._proxy,
         )
 
     def _increment_ref_or_create(
@@ -165,7 +170,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
             self._active[name] = (lock, 1)
             return lock
 
-    def _decrement_ref(self, name: str, lock: AsyncLockT, /) -> None:
+    def _decrement_ref(self, name: str, /) -> None:
         """
         Decrement the reference count for `name`.
 
@@ -173,21 +178,19 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         mapping and the lock is returned to the free list (if space remains) or discarded.
 
         :param name: Lock name whose refcount to decrement.
-        :param lock: The lock instance associated with `name` (used to return it to the free list).
         """
         with self._guard:
             entry = self._active.get(name)
             if entry is None:
                 return  # Already cleaned up (should not happen in normal use)
 
-            _, count = entry
+            lock, count = entry
             if count > 1:
                 self._active[name] = (lock, count - 1)
             else:
                 del self._active[name]
                 if len(self._free) < self._max_size:
                     self._free.append(lock)
-                # else: discard (GC will clean it up)
 
     def populate(self, n: typing.Optional[int] = None, /) -> None:
         """
@@ -230,21 +233,17 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
     Instances are **not** reentrant and must not be shared across tasks.
     """
 
-    __slots__ = ("_pool", "_name", "_lock", "_proxied", "_acquired")
+    __slots__ = ("_pool", "_name", "_lock", "_acquired")
 
     def __init__(
         self,
         pool: _NamedLockPool[AsyncLockT],
         name: str,
         lock: AsyncLockT,
-        proxy: typing.Optional[
-            typing.Callable[[typing.Union[AsyncLockT, T]], AsyncLockT]
-        ] = None,
     ) -> None:
         self._pool = pool
         self._name = name
         self._lock = lock
-        self._proxied = proxy(lock) if proxy is not None else lock
         self._acquired = False
 
     def locked(self) -> bool:
@@ -262,7 +261,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         :param blocking_timeout: Maximum seconds to wait when *blocking* is True.
         :return: True if acquired, False otherwise.
         """
-        acquired = await self._proxied.acquire(
+        acquired = await self._lock.acquire(
             blocking=blocking,
             blocking_timeout=blocking_timeout,
         )
@@ -278,9 +277,9 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
             raise RuntimeError(
                 f"Cannot release lock '{self._name}': not acquired by this handle."
             )
-        await self._proxied.release()
+        await self._lock.release()
         self._acquired = False
-        self._pool._decrement_ref(self._name, self._lock)
+        self._pool._decrement_ref(self._name)
 
     async def __aenter__(self) -> Self:
         await self.acquire()

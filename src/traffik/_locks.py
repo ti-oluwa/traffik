@@ -5,6 +5,7 @@ import sys
 import threading
 import typing
 from collections import deque
+from contextlib import nullcontext
 from time import time_ns
 from types import TracebackType
 
@@ -55,6 +56,220 @@ fence_token_generator = _FenceTokenGenerator()
 
 
 AsyncLockT = typing.TypeVar("AsyncLockT", bound=AsyncLock)
+
+
+class _NamedLockPool(typing.Generic[AsyncLockT]):
+    """
+    A pool of reusable named locks.
+
+    Each unique name maps to a single underlying lock instance plus a
+    reference count. When the count drops to zero (no task is waiting or
+    holding the lock) the lock is returned to the free list and the name
+    is removed from the active mapping, making the memory reusable.
+
+    When the free list is empty a new lock is created via *factory*,
+    so *max_size* is a **soft cap on the free list**, not a hard cap
+    on total concurrency. Locks returned to an already-full free list are
+    simply discarded.
+
+    Note: This is not thread-safe and is intended for single thread event loop use.
+
+    Usage:
+
+    ```python
+
+    pool = _NamedLockPool(
+        factory=lambda: _AsyncInMemoryLock(_AsyncRLock()),
+        max_size=128,
+    )
+
+    handle = pool.get("some:key")
+    async with handle:
+        ...  # exclusive section
+    ```
+    """
+
+    __slots__ = ("_factory", "_max_size", "_free", "_active", "_guard")
+
+    def __init__(
+        self,
+        factory: typing.Callable[[], AsyncLockT],
+        max_size: int = 128,
+        threadsafe: bool = False,
+    ) -> None:
+        """
+        Initialize the pool
+
+        :param factory: Zero-argument callable that produces a fresh lock instance.
+        :param max_size: Maximum number of idle locks kept in the free list. Defaults to 128.
+        """
+        self._factory = factory
+        self._max_size = max_size
+        self._free: typing.List[AsyncLockT] = []
+        """Idle locks available for reuse."""
+        self._active: typing.Dict[str, typing.Tuple[AsyncLockT, int]] = {}
+        """Mapping of name -> (lock, refcount) for all currently referenced locks."""
+        self._guard = threading.Lock() if threadsafe else nullcontext()
+
+    def get(self, name: str, /) -> "_NamedLockHandle[AsyncLockT]":
+        """
+        Return a handle for the given `name`, incrementing its reference count.
+
+        If `name` is already active the same underlying lock is reused
+        (so concurrent tasks on the same name actually contend on one lock,
+        which is the desired behaviour). If `name` is new, a lock is taken
+        from the free list or created fresh.
+
+        :param name: The logical name identifying the lock.
+        :return: A `_NamedLockHandle` wrapping the lock for `name`.
+        """
+        return _NamedLockHandle(
+            pool=self,
+            name=name,
+            lock=self._increment_ref_or_create(name),
+        )
+
+    def _increment_ref_or_create(self, name: str, /) -> AsyncLockT:
+        """
+        Increment the reference count for `name` and return its lock,
+        or allocate a fresh lock when `name` is not yet active.
+
+        :param name: Lock name.
+        :return: The lock instance associated with `name`.
+        """
+        entry = self._active.get(name)
+        if entry is not None:
+            lock, count = entry
+            self._active[name] = (lock, count + 1)
+            return lock
+
+        # Allocate from free list or factory.
+        lock = self._free.pop() if self._free else self._factory()
+        self._active[name] = (lock, 1)
+        return lock
+
+    def _decrement_ref(self, name: str, lock: AsyncLockT, /) -> None:
+        """
+        Decrement the reference count for `name`.
+
+        When the count reaches zero the name is removed from the active
+        mapping and the lock is returned to the free list (if space remains) or discarded.
+
+        :param name: Lock name whose refcount to decrement.
+        :param lock: The lock instance associated with `name` (used to return it to the free list).
+        """
+        entry = self._active.get(name)
+        if entry is None:
+            return  # Already cleaned up (should not happen in normal use)
+
+        _, count = entry
+        if count > 1:
+            self._active[name] = (lock, count - 1)
+        else:
+            del self._active[name]
+            if len(self._free) < self._max_size:
+                self._free.append(lock)
+            # else: discard (GC will clean it up)
+
+    def populate(self, n: typing.Optional[int] = None, /) -> None:
+        """
+        Pre-populate the free list with *n* lock instances.
+
+        Call this during backend initialisation to avoid factory overhead
+        on the first burst of requests.
+
+        :param n: Number of locks to pre-create. Clamped to *max_size*.
+            If `None`, it defaults to `max_size` set on initialization.
+        """
+        if not n:
+            n = self._max_size
+        else:
+            n = min(n, self._max_size - len(self._free))
+        for _ in range(n):
+            self._free.append(self._factory())
+
+    @property
+    def active_count(self) -> int:
+        """Number of names currently holding at least one reference."""
+        return len(self._active)
+
+    @property
+    def free_count(self) -> int:
+        """Number of idle locks available in the free list."""
+        return len(self._free)
+
+
+@typing.final
+class _NamedLockHandle(typing.Generic[AsyncLockT]):
+    """
+    A thin proxy returned by `_NamedLockPool.get`.
+
+    Satisfies the `AsyncLock` protocol. On release it decrements the
+    pool's reference count for the name and returns the underlying lock
+    to the free list when no other task holds a reference to it.
+
+    Instances are **not** reentrant and must not be shared across tasks.
+    """
+
+    __slots__ = ("_pool", "_name", "_lock", "_acquired")
+
+    def __init__(
+        self,
+        pool: _NamedLockPool[AsyncLockT],
+        name: str,
+        lock: AsyncLockT,
+    ) -> None:
+        self._pool = pool
+        self._name = name
+        self._lock = lock
+        self._acquired = False
+
+    def locked(self) -> bool:
+        return self._acquired
+
+    async def acquire(
+        self,
+        blocking: bool = True,
+        blocking_timeout: typing.Optional[float] = None,
+    ) -> bool:
+        """
+        Acquire the underlying lock.
+
+        :param blocking: If False, return immediately when the lock is held elsewhere.
+        :param blocking_timeout: Maximum seconds to wait when *blocking* is True.
+        :return: True if acquired, False otherwise.
+        """
+        acquired = await self._lock.acquire(
+            blocking=blocking,
+            blocking_timeout=blocking_timeout,
+        )
+        self._acquired = acquired
+        return acquired
+
+    async def release(self) -> None:
+        """
+        Release the underlying lock and return it to the pool when the
+        reference count for the name drops to zero.
+        """
+        if not self._acquired:
+            raise RuntimeError(
+                f"Cannot release lock '{self._name}': not acquired by this handle."
+            )
+        await self._lock.release()
+        self._acquired = False
+        self._pool._decrement_ref(self._name, self._lock)
+
+    async def __aenter__(self) -> Self:
+        await self.acquire()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ) -> None:
+        await self.release()
 
 
 class _AsyncLockContext(typing.Generic[AsyncLockT]):
@@ -188,7 +403,7 @@ class _AsyncFairRLock:
     __slots__ = ("_owner", "_count", "_owner_transfer", "_queue")
 
     def __init__(self) -> None:
-        self._owner: typing.Optional[asyncio.Task] = None
+        self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
         self._count = 0
         self._owner_transfer = False
         self._queue: deque[asyncio.Future[None]] = deque()
@@ -338,98 +553,3 @@ class _AsyncRLock:
         traceback: typing.Optional[TracebackType],
     ) -> None:
         self.release()
-
-
-class _AsyncLockGroup:
-    """
-    Re-entrant async lock group.
-
-    Acquires and releases a collection of `AsyncLock` atomically.
-    """
-
-    __slots__ = ("_locks", "_owner", "_counter", "_meta_lock")
-
-    def __init__(self, *locks: AsyncLock) -> None:
-        if not locks:
-            raise ValueError("At least one lock must be provided to the lock group.")
-
-        # Sort locks by id() to ensure consistent ordering and prevent deadlocks
-        self._locks = sorted(locks, key=id)
-        self._owner: typing.Optional[asyncio.Task] = None
-        self._counter = 0
-        self._meta_lock = asyncio.Lock()
-
-    def locked(self) -> bool:
-        return self._counter > 0
-
-    async def acquire(
-        self,
-        blocking: bool = True,
-        blocking_timeout: typing.Optional[float] = None,
-    ) -> bool:
-        """Acquire all locks in the group atomically."""
-        current_task = asyncio.current_task()
-        # Check for reentrant case
-        async with self._meta_lock:
-            if self._owner is current_task:
-                self._counter += 1
-                return True
-
-        # Try to acquire all locks
-        acquired: typing.List[AsyncLock] = []
-        try:
-            for lock in self._locks:
-                if await lock.acquire(
-                    blocking=blocking, blocking_timeout=blocking_timeout
-                ):
-                    acquired.append(lock)
-                else:
-                    # Failed to acquire, rollback
-                    for acquired_lock in reversed(acquired):
-                        await acquired_lock.release()
-                    return False
-
-            # Successfully acquired all locks
-            async with self._meta_lock:
-                self._owner = current_task
-                self._counter = 1
-            return True
-
-        except Exception:
-            # Rollback on any exception
-            for acquired_lock in reversed(acquired):
-                await acquired_lock.release()
-            raise
-
-    async def release(self) -> None:
-        current_task = asyncio.current_task()
-        should_release = False
-
-        async with self._meta_lock:
-            if self._owner is not current_task:
-                raise RuntimeError("Cannot release lock not owned by current task")
-
-            self._counter -= 1
-            if self._counter == 0:
-                self._owner = None
-                should_release = True
-
-        # Only release the actual locks after counter hits 0
-        if should_release:
-            # Release in reverse order (though with sorted locks, order is consistent)
-            for lock in reversed(self._locks):
-                await lock.release()
-
-    async def __aenter__(self) -> Self:
-        acquired = await self.acquire()
-        if not acquired:
-            raise LockTimeoutError("Could not acquire lock group")
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: typing.Optional[type[BaseException]],
-        exc_value: typing.Optional[BaseException],
-        traceback: typing.Optional[TracebackType],
-    ) -> None:
-        await self.release()

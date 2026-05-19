@@ -8,7 +8,12 @@ import asyncio
 import typing
 from collections import OrderedDict
 
-from traffik._locks import _AsyncFairRLock, _AsyncRLock
+from traffik._locks import (
+    _AsyncFairRLock,
+    _NamedLockPool,
+    _AsyncRLock,
+    _NamedLockHandle,
+)
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError
 from traffik.types import (
@@ -70,7 +75,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     Uses shards (and hence lock striping) to improve concurrent access.
 
-    Warning: Only use for development or single-process applications.
+    Warning: Only use for development or single-worker applications.
     This will not work across multiple threads, processes, or servers.
     """
 
@@ -93,6 +98,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         number_of_shards: int = 3,
         cleanup_frequency: typing.Optional[float] = None,
         lock_kind: typing.Literal["fair", "unfair"] = "unfair",
+        lock_pool_size: int = 50,
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -118,6 +124,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             If None, uses the global default from `traffik.config.get_lock_blocking_timeout()`.
         :param number_of_shards: Number of shards to split the in-memory shard into for concurrency.
         :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys. If None, no automatic cleanup is performed.
+        :
         :param kwargs: Additional keyword arguments.
         """
         kwargs.pop("persistent", None)
@@ -142,12 +149,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._shards: typing.List[OrderedDict[str, typing.Any]] = []
         """In-memory storage shards."""
 
-        self._lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
-        # Separate registry for user-requested named locks
-        self._named_locks: typing.Dict[str, _AsyncInMemoryLock] = {}
-        """Lock registry for named locks requested by users."""
-        self._named_locks_lock = self._lock_cls()
-        """Lock to protect access to the named locks registry."""
+        lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
+        self._lock_pool = _NamedLockPool[_AsyncInMemoryLock](
+            factory=lambda: _AsyncInMemoryLock(lock=lock_cls()),
+            max_size=lock_pool_size,
+        )
 
         self._cleanup_task: typing.Optional[asyncio.Task] = None
         self._cleanup_frequency = cleanup_frequency
@@ -162,6 +168,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             self._shard_locks = [asyncio.Lock() for _ in range(self._number_of_shards)]
         if not self._shards:
             self._shards = [OrderedDict() for _ in range(self._number_of_shards)]
+
+        # Pre-populate named lock pool
+        self._lock_pool.populate()
 
         if self._cleanup_task is None and self._cleanup_frequency:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -223,21 +232,19 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 # Never crash the cleanup loop. Keep the backend alive.
                 pass
 
-    async def get_lock(self, name: str) -> _AsyncInMemoryLock:
+    async def get_lock(self, name: str) -> _NamedLockHandle[_AsyncInMemoryLock]:
         """
         Returns a reentrant lock for the given name.
 
-        This is for user-requested locks (e.g., strategy locking, multi-key operations).
-        Internal shard locks are separate and automatic.
+        This is meant for user-requested locks (e.g., strategy locking, multi-key operations).
         """
-        named_locks = self._named_locks
-        if name in named_locks:
-            return named_locks[name]
+        return self._lock_pool.get(name)
 
-        async with self._named_locks_lock:
-            lock = _AsyncInMemoryLock(lock=self._lock_cls())
-            named_locks[name] = lock
-        return lock
+    # Note: Shard locks are not essentially needed in the `get`, `set`, `delete`,
+    # `increment`, etc. methods (except in `multi_set` and `multi_get`). This because shard ops
+    # are essentially atomic since we have no `await` statements in the code blocks
+    # We just add them for semantic clarity (to show that said block is meant to be atomic)
+    # and future proofing. The lock overhead should not be significant.
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any
@@ -514,7 +521,3 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 except asyncio.CancelledError:
                     pass
             self._cleanup_task = None
-
-        # Clear named locks
-        async with self._named_locks_lock:
-            self._named_locks.clear()

@@ -53,7 +53,6 @@ class _AsyncInMemoryLock:
         """
         if not blocking:
             current_task = asyncio.current_task()
-            # Non-blocking. Try to acquire immediately
             if self._lock.locked() and not self._lock.is_owner(task=current_task):
                 return False
             return await self._lock.acquire()
@@ -171,6 +170,15 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     async def ready(self) -> bool:
         return self._initialized
 
+    def _assert_ready(self) -> None:
+        """
+        Raise `BackendConnectionError` if the backend has not been initialized.
+        """
+        if not self._initialized:
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized."
+            )
+
     def _get_shard(self, key: str) -> typing.Tuple[int, asyncio.Lock, OrderedDict]:
         """Get shard index, lock, and shard for a key."""
         shard_idx = hash(key) % self._number_of_shards
@@ -178,10 +186,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     async def keys(self) -> typing.List[str]:
         """Get all keys in the backend."""
-        if not self._initialized:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
+        self._assert_ready()
 
         all_keys = []
         # Acquire all shard locks in order
@@ -217,15 +222,6 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             except Exception:
                 # Never crash the cleanup loop. Keep the backend alive.
                 pass
-
-    def _assert_ready(self) -> None:
-        """
-        Raise `BackendConnectionError` if the backend has not been initialized.
-        """
-        if not self._initialized:
-            raise BackendConnectionError(
-                "Connection error! Ensure backend is initialized."
-            )
 
     async def get_lock(self, name: str) -> _AsyncInMemoryLock:
         """

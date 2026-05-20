@@ -325,9 +325,6 @@ async def test_websocket_throttle(backends: BackendGen) -> None:
                         assert result[1] == 200
 
 
-# ── Throttle disable / enable ─────────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 @pytest.mark.throttle
 async def test_throttle_is_disabled_default_false(
@@ -387,7 +384,7 @@ async def test_disabled_throttle_skips_hit(inmemory_backend: InMemoryBackend) ->
                 routes=[Route("/test", lambda req: JSONResponse({"ok": True}))]
             )
         )
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(transport=transport, base_url="http://test"):
             req = Request(
                 scope={
                     "type": "http",
@@ -401,9 +398,6 @@ async def test_disabled_throttle_skips_hit(inmemory_backend: InMemoryBackend) ->
             for _ in range(5):
                 result = await throttle.hit(req)
                 assert result is req
-
-
-# ── Throttle update_* ─────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio

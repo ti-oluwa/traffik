@@ -448,7 +448,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         """
         self._assert_ready()
 
-        value = await self.connection.get(key.encode())  # type: ignore[attr-defined]
+        value = await self.connection.get(key.encode())  # type: ignore[union-attr]
         if value is None:
             return None
         return value.decode()
@@ -466,7 +466,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         self._assert_ready()
 
         exptime = int(expire) if expire is not None else 0
-        await self.connection.set(  # type: ignore[attr-defined]
+        await self.connection.set(  # type: ignore[union-attr]
             key.encode(),
             str(value).encode(),
             exptime=exptime,
@@ -483,7 +483,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         """
         self._assert_ready()
 
-        deleted = await self.connection.delete(key.encode())  # type: ignore[attr-defined]
+        deleted = await self.connection.delete(key.encode())  # type: ignore[union-attr]
         if deleted and self.track_keys:
             await self._untrack_key(key)
         return deleted
@@ -502,13 +502,13 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
 
         # Try to increment existing counter
         encoded_key = key.encode()
-        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[attr-defined]
+        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[union-attr]
         if new_value is not None:
             return new_value
 
         # Key doesn't exist, initialize it
         # Use add() to atomically create if not exists
-        added = await self.connection.add(  # type: ignore[attr-defined]
+        added = await self.connection.add(  # type: ignore[union-attr]
             encoded_key,
             str(amount).encode(),
             exptime=0,
@@ -519,7 +519,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             return amount
 
         # Someone else created it, try increment again
-        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[attr-defined]
+        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[union-attr]
         return new_value  # type: ignore[return-value]
 
     async def decrement(self, key: str, amount: int = 1) -> int:
@@ -537,13 +537,13 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
 
         # Try to decrement existing counter
         encoded_key = key.encode()
-        new_value = await self.connection.decr(encoded_key, amount)  # type: ignore[attr-defined]
+        new_value = await self.connection.decr(encoded_key, amount)  # type: ignore[union-attr]
         if new_value is not None:
             return new_value
 
         # Key doesn't exist, initialize it to `0 - amount`
         # Use `add()` to atomically create if not exists
-        added = await self.connection.add(  # type: ignore[attr-defined]
+        added = await self.connection.add(  # type: ignore[union-attr]
             encoded_key,
             str(-amount).encode(),
             exptime=0,
@@ -554,7 +554,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             return -amount
 
         # Someone else created it, try decrement again
-        new_value = await self.connection.decr(encoded_key, amount)  # type: ignore[attr-defined]
+        new_value = await self.connection.decr(encoded_key, amount)  # type: ignore[union-attr]
         return new_value  # type: ignore[return-value]
 
     async def expire(self, key: str, seconds: int) -> bool:
@@ -572,12 +572,12 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
 
         # Get current value
         encoded_key = key.encode()
-        value = await self.connection.get(encoded_key)  # type: ignore[attr-defined]
+        value = await self.connection.get(encoded_key)  # type: ignore[union-attr]
         if value is None:
             return False
 
         # Set with new expiration
-        is_set = await self.connection.set(  # type: ignore[attr-defined]
+        is_set = await self.connection.set(  # type: ignore[union-attr]
             encoded_key,
             value,
             exptime=seconds,
@@ -600,13 +600,13 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
 
         # Try to increment existing counter
         encoded_key = key.encode()
-        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[attr-defined]
+        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[union-attr]
         if new_value is not None:
             return new_value
 
         # Key doesn't exist, create with TTL
         # Atomically create with TTL
-        added = await self.connection.add(  # type: ignore[attr-defined]
+        added = await self.connection.add(  # type: ignore[union-attr]
             encoded_key,
             str(amount).encode(),
             exptime=ttl,
@@ -617,7 +617,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             return amount
 
         # Someone else created it, increment
-        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[attr-defined]
+        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[union-attr]
         return new_value  # type: ignore[return-value]
 
     async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
@@ -632,7 +632,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             return []
 
         encoded_keys = [k.encode() for k in keys]
-        values = await self.connection.multi_get(*encoded_keys)  # type: ignore[attr-defined]
+        values = await self.connection.multi_get(*encoded_keys)  # type: ignore[union-attr]
         results: typing.List[typing.Optional[str]] = []
         for value in values:
             if value is not None:
@@ -698,14 +698,14 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         self._assert_ready()
 
         tracking_key = self._tracking_key
-        tracked = await self.connection.get(tracking_key.encode())  # type: ignore[attr-defined]
+        tracked = await self.connection.get(tracking_key.encode())  # type: ignore[union-attr]
         if tracked is None:
             return
 
         keys = tracked.decode().split("||")
         delete_tasks = []
         for key in keys:
-            delete_tasks.append(self.connection.delete(key.encode()))  # type: ignore[attr-defined]
+            delete_tasks.append(self.connection.delete(key.encode()))  # type: ignore[union-attr]
 
         results = await asyncio.gather(*delete_tasks, return_exceptions=True)
         for key, result in zip(keys, results):
@@ -715,7 +715,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 ) from result
 
         # Delete the tracking key itself finally
-        await self.connection.delete(tracking_key.encode())  # type: ignore[attr-defined]
+        await self.connection.delete(tracking_key.encode())  # type: ignore[union-attr]
 
     async def reset(self) -> None:
         """Reset the backend."""

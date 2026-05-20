@@ -9,7 +9,6 @@ import pytest
 from tests.conftest import BackendGen
 from traffik.backends.base import get_throttle_backend
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.exceptions import BackendConnectionError, LockTimeoutError
 
 

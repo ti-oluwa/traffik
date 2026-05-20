@@ -143,7 +143,7 @@ def create_traffik_backend(config: BenchmarkConfig):
             track_keys=config.traffik_memcached_track_keys,
         )
 
-    return MultiProcessInMemoryBackend(
+    return InMemoryBackend(
         namespace="traffik:bench",
         identifier=custom_identifier,
         persistent=False,

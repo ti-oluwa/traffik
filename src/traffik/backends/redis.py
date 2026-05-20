@@ -668,7 +668,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     ) -> typing.Optional[str]:
         """Get value by key."""
         self._assert_ready()
-        return await self.connection.get(key)  # type: ignore[attr-defined]
+        return await self.connection.get(key)  # type: ignore[union-attr]
 
     async def set(
         self, key: str, value: typing.Any, expire: typing.Optional[int] = None
@@ -676,36 +676,36 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         """Set value by key with optional expiration."""
         self._assert_ready()
         if expire is not None:
-            await self.connection.set(key, value, ex=expire)  # type: ignore[attr-defined]
+            await self.connection.set(key, value, ex=expire)  # type: ignore[union-attr]
         else:
-            await self.connection.set(key, value)  # type: ignore[attr-defined]
+            await self.connection.set(key, value)  # type: ignore[union-attr]
 
     async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
         """Delete key."""
         self._assert_ready()
 
-        deleted_count = await self.connection.delete(key)  # type: ignore[attr-defined]
+        deleted_count = await self.connection.delete(key)  # type: ignore[union-attr]
         return deleted_count > 0
 
     async def increment(self, key: str, amount: int = 1) -> int:
         """Atomically increment using Redis INCR/INCRBY."""
         self._assert_ready()
         if amount == 1:
-            return await self.connection.incr(key)  # type: ignore[attr-defined]
-        return await self.connection.incrby(key, amount)  # type: ignore[attr-defined]
+            return await self.connection.incr(key)  # type: ignore[union-attr]
+        return await self.connection.incrby(key, amount)  # type: ignore[union-attr]
 
     async def decrement(self, key: str, amount: int = 1) -> int:
         """Atomically decrement using Redis DECR/DECRBY."""
         self._assert_ready()
         if amount == 1:
-            return await self.connection.decr(key)  # type: ignore[attr-defined]
-        return await self.connection.decrby(key, amount)  # type: ignore[attr-defined]
+            return await self.connection.decr(key)  # type: ignore[union-attr]
+        return await self.connection.decrby(key, amount)  # type: ignore[union-attr]
 
     async def expire(self, key: str, seconds: int) -> bool:
         """Set expiration using Redis EXPIRE."""
         self._assert_ready()
 
-        result = await self.connection.expire(key, seconds)  # type: ignore[attr-defined]
+        result = await self.connection.expire(key, seconds)  # type: ignore[union-attr]
         return bool(result)
 
     async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int = 60) -> int:
@@ -765,7 +765,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         self._assert_ready()
         if not keys:
             return []
-        return await self.connection.mget(keys)  # type: ignore[attr-defined]
+        return await self.connection.mget(keys)  # type: ignore[union-attr]
 
     async def multi_set(
         self,
@@ -785,7 +785,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         if not items:
             return
 
-        async with self.connection.pipeline(transaction=True) as pipe:  # type: ignore[attr-defined]
+        async with self.connection.pipeline(transaction=True) as pipe:  # type: ignore[union-attr]
             for key, value in items.items():
                 if expire is not None:
                     pipe.set(key, value, ex=expire)

@@ -98,7 +98,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         number_of_shards: int = 3,
         cleanup_frequency: typing.Optional[float] = None,
         lock_kind: typing.Literal["fair", "unfair"] = "unfair",
-        lock_pool_size: int = 50,
+        lock_pool_size: int = 128,
         **kwargs: typing.Any,
     ) -> None:
         """

@@ -997,15 +997,12 @@ def print_single_library_results(
     correctness_scenarios = [
         "Race Condition Test",
         "Distributed Correctness",
-        "Selective Throttling",
     ]
-    has_correctness = any(
-        s in results for s in ["Race Condition Test", "Distributed Correctness"]
-    )
+    has_correctness = any(s in results for s in correctness_scenarios)
     if has_correctness:
         print("\nCORRECTNESS TESTS")
         print("-" * 83)
-        for scenario in ["Race Condition Test", "Distributed Correctness"]:
+        for scenario in correctness_scenarios:
             if scenario not in results:
                 continue
             agg = aggregate_results(results[scenario])

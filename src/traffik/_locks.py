@@ -5,14 +5,13 @@ import sys
 import threading
 import typing
 from collections import deque
-from contextlib import nullcontext
 from time import time_ns
 from types import TracebackType
 
 from typing_extensions import Self
 
 from traffik.exceptions import LockTimeoutError
-from traffik.types import AsyncLock, T
+from traffik.types import AsyncLock
 
 
 class _FenceTokenGenerator:
@@ -58,182 +57,290 @@ fence_token_generator = _FenceTokenGenerator()
 AsyncLockT = typing.TypeVar("AsyncLockT", bound=AsyncLock)
 
 
+class _NoOpLock:
+    """
+    Lightweight no-op context manager.
+
+    Avoids using `contextlib.nullcontext()` for synchronization
+    semantics.
+    """
+
+    __slots__ = ()
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(
+        self,
+        exc_type: typing.Optional[type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ) -> bool:
+        return False
+
+
+@typing.final
 class _NamedLockPool(typing.Generic[AsyncLockT]):
     """
-    A pool of reusable named locks.
+    Refcounted reusable named async lock pool.
 
-    Each unique name maps to a single underlying lock instance plus a
-    reference count. When the count drops to zero (no task is waiting or
-    holding the lock) the lock is returned to the free list and the name
-    is removed from the active mapping, making the memory reusable.
+    Each unique name maps to exactly one underlying lock instance while
+    references to that name exist. Multiple callers requesting the same
+    name therefore contend on the same underlying lock instance.
 
-    When the free list is empty a new lock is created via *factory*,
-    so `max_size` is a **soft cap on the free list**, not a hard cap
-    on total concurrency. Locks returned to an already-full free list are
-    simply discarded.
+    When all references to a name are released, the lock is either:
 
-    Note: This is not thread-safe by default. Pass `threadsafe=True` for additional
-    safety guards.
+    - returned to the idle free list for reuse, or
+    - discarded if the free list is already full.
 
-    Usage:
+    The pool maintains:
 
-    ```python
+    - an active mapping (`name -> lock`)
+    - an idle reusable lock cache
+    - allocation accounting for bounded growth
 
-    pool = _NamedLockPool(
-        factory=lambda: _AsyncInMemoryLock(_AsyncRLock()),
-        max_size=128,
-    )
+    **Capacity Model**
 
-    handle = pool.get("some:key")
-    async with handle:
-        ...  # exclusive section
-    ```
+    `max_size` controls the maximum number of idle reusable locks retained.
+
+    `headroom` controls the maximum total allocations allowed:
+
+        max_capacity = max_size * headroom
+
+    This allows temporary bursts above the reusable cache size while still
+    preventing unbounded memory growth.
+
+    **Thread Safety**
+
+    Metadata operations can optionally be guarded with a thread lock by
+    passing `threadsafe=True`.
+
+    This only protects internal pool bookkeeping structures.
+    It does not make the underlying async lock implementation itself thread-safe.
     """
 
-    __slots__ = ("_factory", "_max_size", "_free", "_active", "_proxy", "_guard")
+    __slots__ = (
+        "_factory",
+        "_max_size",
+        "_headroom",
+        "_max_capacity",
+        "_allocated",
+        "_free",
+        "_active",
+        "_guard",
+    )
 
     def __init__(
         self,
-        factory: typing.Callable[[], typing.Union[AsyncLockT, T]],
+        factory: typing.Callable[[], AsyncLockT],
         max_size: int = 128,
+        headroom: int = 4,
         threadsafe: bool = False,
-        proxy: typing.Optional[
-            typing.Callable[[typing.Union[AsyncLockT, T]], AsyncLockT]
-        ] = None,
     ) -> None:
         """
-        Initialize the pool
+        Initialize the lock pool.
 
-        :param factory: Zero-argument callable that produces a fresh lock instance or an object that
-            will be wrapped by `proxy`. Called when the free list is empty and a new lock is needed.
-        :param max_size: Maximum number of idle locks kept in the free list (soft cap). Defaults to 128.
-            Locks exceeding this limit are discarded.
-        :param threadsafe: If True, uses thread-safety guards (lock) for concurrent access to the pool.
+        :param factory: Zero-argument callable producing a fresh async lock instance.
+        :param max_size: Maximum number of idle reusable locks retained in the free list.
+            Must be at least 1.
+        :param headroom: Burst multiplier controlling maximum total lock allocations.
+            Total allocation limit is: `max_capacity = max_size * headroom`.
+            Must be at least 1.
+        :param threadsafe: If True, pool metadata operations are guarded with a `threading.Lock`.
             Defaults to False.
-        :param proxy: Optional callable that wraps the factory-returned instance retrieved from the pool.
-            Takes the instance as argument and returns the wrapped as an `AsyncLock`. Defaults to None.
         """
+        if max_size < 1:
+            raise ValueError("`max_size` must be at least 1.")
+
+        if headroom < 1:
+            raise ValueError("`headroom` must be at least 1.")
+
         self._factory = factory
         self._max_size = max_size
-        self._proxy = proxy
-        self._free: typing.List[typing.Union[AsyncLockT, typing.Any]] = []
-        """Idle locks available for reuse."""
-        self._active: typing.Dict[
-            str, typing.Tuple[typing.Union[AsyncLockT, typing.Any], int]
-        ] = {}
-        """Mapping of `name` to `(lock, refcount)` for all currently referenced locks."""
-        self._guard = threading.Lock() if threadsafe else nullcontext()
+        self._headroom = headroom
+        self._max_capacity = max_size * headroom
+        self._allocated = 0
+
+        self._free: list[AsyncLockT] = []
+        """Idle reusable lock instances."""
+        self._active: dict[str, tuple[AsyncLockT, int]] = {}
+        """Mapping of name to (lock, reference_count)"""
+
+        self._guard = threading.Lock() if threadsafe else _NoOpLock()
 
     def get(self, name: str, /) -> "_NamedLockHandle[AsyncLockT]":
         """
-        Return a handle for the given `name`, incrementing its reference count.
+        Retrieve a named lock handle.
 
-        If `name` is already active the same underlying lock is reused
-        (so concurrent tasks on the same name actually contend on one lock,
-        which is the desired behaviour). If `name` is new, a lock is taken
-        from the free list or created fresh.
+        Multiple handles retrieved for the same name share the same
+        underlying lock instance.
 
-        :param name: The logical name identifying the lock.
-        :return: A `_NamedLockHandle` wrapping the lock for `name`.
+        The reference count for the name is incremented immediately.
+
+        :param name: Logical lock name.
+        :return: `_NamedLockHandle` instance.
         """
-        if self._proxy:
-            return _NamedLockHandle(
-                pool=self,
-                name=name,
-                lock=self._proxy(self._increment_ref_or_create(name)),
-            )
-        return _NamedLockHandle(
-            pool=self,
-            name=name,
-            lock=self._increment_ref_or_create(name),
-        )
+        lock = self._increment_ref_or_create(name)
+        return _NamedLockHandle(pool=self, name=name, lock=lock)
 
-    def _increment_ref_or_create(
-        self, name: str, /
-    ) -> typing.Union[AsyncLockT, typing.Any]:
+    def _increment_ref_or_create(self, name: str, /) -> AsyncLockT:
         """
-        Increment the reference count for `name` and return its lock,
-        or allocate a fresh lock when `name` is not yet active.
+        Increment the reference count for an existing name or allocate
+        a new underlying lock.
 
-        :param name: Lock name.
-        :return: The lock instance associated with `name`.
+        :param name: Logical lock name.
+        :return: Underlying async lock instance.
+        :raises RuntimeError: If the pool allocation limit is exceeded.
         """
         with self._guard:
             entry = self._active.get(name)
             if entry is not None:
-                lock, count = entry
-                self._active[name] = (lock, count + 1)
+                lock, refcount = entry
+                self._active[name] = (lock, refcount + 1)
                 return lock
 
-            # Allocate from free list or factory.
-            lock = self._free.pop() if self._free else self._factory()
+            if self._free:
+                lock = self._free.pop()
+            else:
+                if self._allocated >= self._max_capacity:
+                    raise RuntimeError("Named lock pool maximum capacity exceeded.")
+
+                lock = self._factory()
+                self._allocated += 1
+
             self._active[name] = (lock, 1)
             return lock
 
     def _decrement_ref(self, name: str, /) -> None:
         """
-        Decrement the reference count for `name`.
+        Decrement the reference count for a lock name.
 
-        When the count reaches zero the name is removed from the active
-        mapping and the lock is returned to the free list (if space remains) or discarded.
+        When the reference count reaches zero:
 
-        :param name: Lock name whose refcount to decrement.
+        - the name is removed from the active mapping
+        - the lock is recycled into the free list if space exists
+        - otherwise the lock is discarded
+
+        :param name: Logical lock name.
         """
         with self._guard:
             entry = self._active.get(name)
             if entry is None:
-                return  # Already cleaned up (should not happen in normal use)
+                return
 
-            lock, count = entry
-            if count > 1:
-                self._active[name] = (lock, count - 1)
-            else:
-                del self._active[name]
-                if len(self._free) < self._max_size:
-                    self._free.append(lock)
+            lock, refcount = entry
+            if refcount > 1:
+                self._active[name] = (lock, refcount - 1)
+                return
+
+            del self._active[name]
+
+            if hasattr(lock, "locked") and lock.locked():
+                raise RuntimeError(
+                    f"Attempted to recycle locked lock for name '{name}'."
+                )
+
+            if len(self._free) < self._max_size:
+                self._free.append(lock)
+                return
+
+            self._discard_lock(lock)
+
+    def _discard_lock(self, lock: AsyncLockT, /) -> None:
+        """
+        Permanently discard a lock instance.
+
+        If the lock exposes a `discard()` method it will be called.
+
+        Allocation accounting is updated accordingly.
+
+        :param lock: Lock instance to discard.
+        """
+        discard = getattr(lock, "discard", None)
+        if callable(discard):
+            discard()
+        self._allocated -= 1
 
     def populate(self, n: typing.Optional[int] = None, /) -> None:
         """
-        Pre-populate the free list with *n* lock instances.
+        Preallocate reusable idle locks.
 
-        Call this during backend initialisation to avoid factory overhead
-        on the first burst of requests.
+        Useful during startup to avoid allocation overhead during the first traffic burst.
 
-        :param n: Number of locks to pre-create. Clamped to *max_size*.
-            If `None`, it defaults to `max_size` set on initialization.
+        :param n: Number of locks to create. If None, fills the free list up to `max_size`.
         """
         with self._guard:
-            if not n:
-                n = self._max_size
+            if n is None:
+                n = self._max_size - len(self._free)
             else:
                 n = min(n, self._max_size - len(self._free))
+
+            remaining_capacity = self._max_capacity - self._allocated
+            n = min(n, remaining_capacity)
             for _ in range(n):
                 self._free.append(self._factory())
+                self._allocated += 1
 
     @property
-    def active_count(self) -> int:
-        """Number of names currently holding at least one reference."""
+    def max_size(self) -> int:
+        """Maximum retained idle reusable locks."""
+        return self._max_size
+
+    @property
+    def headroom(self) -> int:
+        """Burst allocation multiplier."""
+        return self._headroom
+
+    @property
+    def max_capacity(self) -> int:
+        """Maximum total allocated locks."""
+        return self._max_capacity
+
+    @property
+    def allocated_count(self) -> int:
+        """
+        Total currently allocated locks.
+
+        Includes active locks and idle reusable locks
+        """
+        return self._allocated
+
+    @property
+    def active_name_count(self) -> int:
+        """Number of currently active logical lock names."""
         return len(self._active)
 
     @property
+    def active_reference_count(self) -> int:
+        """Total active references across all names."""
+        return sum(refcount for _, refcount in self._active.values())
+
+    @property
     def free_count(self) -> int:
-        """Number of idle locks available in the free list."""
+        """Number of reusable idle locks currently cached."""
         return len(self._free)
 
 
 @typing.final
 class _NamedLockHandle(typing.Generic[AsyncLockT]):
     """
-    A thin proxy returned by `_NamedLockPool.get`.
+    Managed handle returned by `_NamedLockPool.get`.
 
-    Satisfies the `AsyncLock` protocol. On release it decrements the
-    pool's reference count for the name and returns the underlying lock
-    to the free list when no other task holds a reference to it.
+    The handle wraps a pooled underlying async lock and ensures pool
+    reference accounting is updated correctly during release.
 
-    Instances are **not** reentrant and must not be shared across tasks.
+    Handles are single-owner objects and must not be shared across tasks.
+
+    **Note:** A handle instance is not reentrant.
     """
 
-    __slots__ = ("_pool", "_name", "_lock", "_acquired")
+    __slots__ = (
+        "_pool",
+        "_name",
+        "_lock",
+        "_acquired",
+        "_released",
+    )
 
     def __init__(
         self,
@@ -241,12 +348,27 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         name: str,
         lock: AsyncLockT,
     ) -> None:
+        """
+        Initialize the lock handle.
+
+        :param pool: Owning lock pool.
+        :param name: Logical lock name.
+        :param lock: Underlying pooled lock instance.
+        """
         self._pool = pool
         self._name = name
         self._lock = lock
         self._acquired = False
+        # Flag to track release. This is to ensure that we do not try to acquire
+        # an already used (released) named lock handle. Handle are one-time use only
+        self._released = False
 
     def locked(self) -> bool:
+        """
+        Return whether **this handle** currently owns the lock.
+
+        This does not necessarily reflect the underlying lock state.
+        """
         return self._acquired
 
     async def acquire(
@@ -257,10 +379,19 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         """
         Acquire the underlying lock.
 
-        :param blocking: If False, return immediately when the lock is held elsewhere.
-        :param blocking_timeout: Maximum seconds to wait when *blocking* is True.
-        :return: True if acquired, False otherwise.
+        :param blocking: Whether to wait for lock acquisition.
+        :param blocking_timeout: Maximum time to wait when blocking.
+        :return: True if acquired, otherwise False.
+        :raises RuntimeError: If this handle was already released.
         """
+        if self._released:
+            raise RuntimeError(
+                f"Lock handle for '{self._name}' has already been released."
+            )
+
+        if self._acquired:
+            raise RuntimeError(f"Lock handle for '{self._name}' is already acquired.")
+
         acquired = await self._lock.acquire(
             blocking=blocking,
             blocking_timeout=blocking_timeout,
@@ -270,19 +401,29 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
 
     async def release(self) -> None:
         """
-        Release the underlying lock and return it to the pool when the
-        reference count for the name drops to zero.
+        Release the underlying lock and update pool reference accounting.
+
+        :raises RuntimeError: If the handle does not currently own the lock.
         """
         if not self._acquired:
             raise RuntimeError(
-                f"Cannot release lock '{self._name}': not acquired by this handle."
+                f"Cannot release lock '{self._name}': handle does not own the lock."
             )
-        await self._lock.release()
-        self._acquired = False
-        self._pool._decrement_ref(self._name)
+
+        try:
+            await self._lock.release()
+        finally:
+            self._acquired = False
+            self._released = True
+            self._pool._decrement_ref(self._name)
 
     async def __aenter__(self) -> Self:
-        await self.acquire()
+        """
+        Acquire the lock and return the handle.
+        """
+        acquired = await self.acquire()
+        if not acquired:
+            raise RuntimeError(f"Failed to acquire lock '{self._name}'.")
         return self
 
     async def __aexit__(
@@ -291,6 +432,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> None:
+        """Release the lock during async context manager exit."""
         await self.release()
 
 
@@ -400,8 +542,9 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         # Release the lock if we acquired it and haven't released it yet
         if self._acquired and not self._auto_released:
             try:
-                await self._lock.release()
+                await asyncio.shield(self._lock.release())
             except RuntimeError:
+                raise
                 # This needs to be a fast operation. Cannot use logger here as it blocks the event loop,
                 # and it may cause deadlocks if logging uses the same backend
 

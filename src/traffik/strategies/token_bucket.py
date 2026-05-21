@@ -180,7 +180,7 @@ class TokenBucketStrategy:
         # 2x refill period for safety, at least 1s
         ttl_seconds = max(int((refill_period_ms * 2) // 1000), 1)
 
-        async with await backend.lock(f"lock:{bucket_key}", **self.lock_config):
+        async with backend.lock(f"lock:{bucket_key}", **self.lock_config):
             old_state_json = await backend.get(bucket_key)
             # If state exists, load tokens and last refill time
             if old_state_json and old_state_json != "":
@@ -420,7 +420,7 @@ class TokenBucketWithDebtStrategy:
             int((refill_period_ms * 2) // 1000), 1
         )  # 2x refill period for safety, at least 1s
 
-        async with await backend.lock(f"lock:{bucket_key}", **self.lock_config):
+        async with backend.lock(f"lock:{bucket_key}", **self.lock_config):
             old_state_json = await backend.get(bucket_key)
             # If state exists, load tokens and last refill time
             if old_state_json and old_state_json != "":

@@ -545,7 +545,7 @@ async def test_lock_basic(backends: BackendGen) -> None:
         async with backend(persistent=False, close_on_exit=True):
             lock_name = "lock:test"
             # Acquire lock
-            async with await backend.lock(lock_name) as lock_context:
+            async with backend.lock(lock_name) as lock_context:
                 # Lock should be held
                 assert lock_context._lock.locked()
             # Lock should be released after exiting context
@@ -566,7 +566,7 @@ async def test_asynchronous_lock_synchronization(backends: BackendGen) -> None:
             async def increment_with_lock(
                 blocking: bool, blocking_timeout: float = 0.5
             ):
-                async with await backend.lock(
+                async with backend.lock(
                     lock_name,
                     blocking=blocking,
                     blocking_timeout=blocking_timeout,
@@ -638,7 +638,7 @@ async def test_multithreaded_lock_synchronization(backends: BackendGen) -> None:
             ):
                 key = backend.get_key("shared_counter")
                 async with backend(persistent=True, close_on_exit=False):
-                    async with await backend.lock(
+                    async with backend.lock(
                         "lock:thread_counter",
                         blocking=blocking,
                         blocking_timeout=blocking_timeout,

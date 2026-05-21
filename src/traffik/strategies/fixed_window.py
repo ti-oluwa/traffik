@@ -138,7 +138,7 @@ class FixedWindowStrategy:
         # 1 second minimum, which is not ideal, assuming the throttling supports sub-second wait times,
         # or we manually manage the window start time separately. Which is what we do here.
         window_start_key = f"{base_key}:start"
-        async with await backend.lock(f"lock:{base_key}", **self.lock_config):
+        async with backend.lock(f"lock:{base_key}", **self.lock_config):
             # Get the stored window start time
             stored_window_start = await backend.get(window_start_key)
 

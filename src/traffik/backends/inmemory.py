@@ -68,6 +68,15 @@ class _AsyncInMemoryLock:
         """Release the lock."""
         self._lock.release()
 
+    async def __aenter__(self):
+        acquired = await self.acquire()
+        if not acquired:
+            raise TimeoutError("Could not acquire inmemory lock.")
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.release()
+
 
 class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     """
@@ -233,7 +242,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 # Never crash the cleanup loop. Keep the backend alive.
                 pass
 
-    async def get_lock(self, name: str) -> _NamedLockHandle[_AsyncInMemoryLock]:
+    def get_lock(self, name: str) -> _NamedLockHandle[_AsyncInMemoryLock]:
         """
         Returns a reentrant lock for the given name.
 

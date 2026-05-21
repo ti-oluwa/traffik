@@ -153,7 +153,7 @@ class LeakyBucketStrategy:
         # TTL should be 2x window duration, with minimum of 1 second
         ttl_seconds = max(int((2 * rate.expire) / 1000), 1)
 
-        async with await backend.lock(f"lock:{state_key}", **self.lock_config):
+        async with backend.lock(f"lock:{state_key}", **self.lock_config):
             old_state_json = await backend.get(state_key)
             # If no existing state, initialize with cost as the bucket level
             if old_state_json is None or old_state_json == "":
@@ -349,7 +349,7 @@ class LeakyBucketWithQueueStrategy:
         # TTL should be 2x window duration, with minimum of 1 second
         ttl_seconds = max(int((2 * rate.expire) / 1000), 1)
 
-        async with await backend.lock(f"lock:{state_key}", **self.lock_config):
+        async with backend.lock(f"lock:{state_key}", **self.lock_config):
             old_state_json = await backend.get(state_key)
             # If no existing state, initialize queue with [timestamp, cost] entry
             if old_state_json is None or old_state_json == "":

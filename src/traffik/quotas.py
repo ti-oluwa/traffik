@@ -361,7 +361,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         if self._lock_key and self.owner and not self._nested:
             backend = self.owner.get_backend(self.connection)
             self._exit_stack = AsyncExitStack()
-            lock_ctx = await backend.lock(self._lock_key, **self.lock_config)
+            lock_ctx = backend.lock(self._lock_key, **self.lock_config)
             await self._exit_stack.enter_async_context(lock_ctx)
 
         return self

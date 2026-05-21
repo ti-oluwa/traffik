@@ -23,7 +23,6 @@ from fastapi import Depends, FastAPI, Request
 from slowapi import Limiter as SlowAPILimiter
 
 from traffik import HTTPThrottle, get_remote_address
-from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.backends.redis import RedisBackend
 from traffik.registry import ThrottleRegistry
@@ -143,7 +142,7 @@ def create_traffik_backend(config: BenchmarkConfig):
             track_keys=config.traffik_memcached_track_keys,
         )
 
-    return InMemoryBackend(
+    return MultiProcessInMemoryBackend(
         namespace="traffik:bench",
         identifier=custom_identifier,
         persistent=False,

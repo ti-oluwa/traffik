@@ -328,7 +328,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         raise NotImplementedError("`delete(...)` must be implemented by the backend.")
 
-    async def get_lock(self, name: str) -> AsyncLock:
+    def get_lock(self, name: str) -> AsyncLock:
         """
         Get a distributed lock with the given name.
 
@@ -337,7 +337,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         raise NotImplementedError("`get_lock(...)` must be implemented by the backend.")
 
-    async def lock(
+    def lock(
         self,
         name: str,
         ttl: typing.Optional[float] = None,
@@ -365,7 +365,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :return: An asynchronous context manager that acquires/releases the lock.
         """
         lock_name = self.get_key(name)
-        lock = await self.get_lock(lock_name)
+        lock = self.get_lock(lock_name)
         ttl = ttl if ttl is not None else self.lock_ttl
         blocking = blocking if blocking is not None else self.lock_blocking
         blocking_timeout = (

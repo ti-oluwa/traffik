@@ -72,7 +72,7 @@ class RollingWindowStrategy:
         ttl_seconds = max(int(rate.expire // 1000), 1)
 
         # Multi-step: need a lock to prevent races
-        async with await backend.lock(f"lock:{full_key}:rolling", **self.lock_config):
+        async with backend.lock(f"lock:{full_key}:rolling", **self.lock_config):
             window_start = await backend.get(start_key)
 
             if window_start is None:
@@ -201,7 +201,7 @@ class MyStrategy:
 Any strategy that reads and then writes needs a lock to prevent race conditions under concurrency. The lock key should be derived from the throttle key:
 
 ```python
-async with await backend.lock(f"lock:{full_key}:mystrategy", **self.lock_config):
+async with backend.lock(f"lock:{full_key}:mystrategy", **self.lock_config):
     old_value = await backend.get(some_key)
     new_value = compute(old_value)
     await backend.set(some_key, new_value, expire=ttl)
@@ -216,7 +216,7 @@ This is an atomic increment-and-set-TTL operation — much more efficient than `
 counter = await backend.increment_with_ttl(counter_key, amount=cost, ttl=ttl_seconds)
 
 # Less efficient: three operations under a lock
-async with await backend.lock(...):
+async with backend.lock(...):
     counter = await backend.increment(counter_key, cost)
     await backend.expire(counter_key, ttl_seconds)
 ```

@@ -3,8 +3,10 @@
 import asyncio
 import functools
 import math
+import random
 import sys
 import typing
+from time import monotonic
 from urllib.parse import urlparse
 
 from aiomcache import Client as MemcachedClient
@@ -22,7 +24,6 @@ from traffik.types import (
     T,
     ThrottleErrorHandler,
 )
-from traffik.utils import time
 
 
 def _on_error_return(
@@ -99,6 +100,8 @@ class _AsyncMemcachedLock:
         "_ttl",
         "_acquired",
         "_fence_token",
+        "_max_spins_before_backoff",
+        "_spin_max_delay_seconds",
     )
 
     def __init__(
@@ -106,6 +109,8 @@ class _AsyncMemcachedLock:
         name: str,
         client: MemcachedClient,
         ttl: typing.Optional[float] = None,
+        max_spins_before_backoff: int = 8,
+        spin_max_delay_seconds: float = 0.005,
     ) -> None:
         """
         Initialize the lock.
@@ -120,6 +125,8 @@ class _AsyncMemcachedLock:
         self._ttl = math.ceil(ttl) if ttl is not None else 0
         self._acquired = False
         self._fence_token: typing.Optional[str] = None
+        self._max_spins_before_backoff = max_spins_before_backoff
+        self._spin_max_delay_seconds = spin_max_delay_seconds
 
     def locked(self) -> bool:
         """Return True if this instance currently holds the lock."""
@@ -146,7 +153,7 @@ class _AsyncMemcachedLock:
         # This helps prevent the "stale lock" problem but only
         # per process, not cross-process if clocks are skewed across processes.
         token = str(fence_token_generator.next())
-        start = time()
+        start = monotonic()
         attempts = 0
         while True:
             # `add()` is atomic, as only succeeds if key doesn't exist
@@ -166,13 +173,30 @@ class _AsyncMemcachedLock:
                 return False
 
             # Check timeout
-            if blocking_timeout is not None and (time() - start) >= blocking_timeout:
+            if (
+                blocking_timeout is not None
+                and (monotonic() - start) >= blocking_timeout
+            ):
                 return False
 
             # Exponential backoff with jitter
             attempts += 1
-            delay = min(0.00001 * attempts, 0.01)
-            await asyncio.sleep(delay)
+            if attempts <= self._max_spins_before_backoff:
+                await asyncio.sleep(0)
+            else:
+                exponent = min(
+                    attempts - self._max_spins_before_backoff,
+                    6,
+                )
+                base_delay = min(
+                    0.0005 * (1 << exponent),
+                    self._spin_max_delay_seconds,
+                )
+                jitter = random.uniform(
+                    base_delay * 0.75,
+                    base_delay * 1.25,
+                )
+                await asyncio.sleep(jitter)
 
     async def release(self) -> None:
         """Release the lock."""
@@ -427,7 +451,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 "Connection error! Ensure backend is initialized."
             )
 
-    async def get_lock(self, name: str) -> _AsyncMemcachedLock:
+    def get_lock(self, name: str) -> _AsyncMemcachedLock:
         """
         Get a distributed lock for the given name.
 

@@ -9,3 +9,13 @@ profiling/
 .claude
 _examples/
 site/
+dist/
+*.egg-info/
+build/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.bak
+*.tmp
+*.swp

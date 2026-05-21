@@ -577,7 +577,7 @@ class AdaptiveThrottleStrategy:
         prev_limit_key = f"{full_key}:adaptive:{current_window - 1}:limit"
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
 
-        async with await backend.lock(f"lock:{counter_key}", **self.lock_config):
+        async with backend.lock(f"lock:{counter_key}", **self.lock_config):
             # Increment counter
             count = await backend.increment_with_ttl(
                 counter_key, amount=cost, ttl=ttl_seconds
@@ -783,7 +783,7 @@ class PriorityQueueStrategy:
         queue_key = f"{full_key}:priority:queue"
         ttl_seconds = max(int(rate.expire // 1000), 1)
 
-        async with await backend.lock(f"lock:{queue_key}", **self.lock_config):
+        async with backend.lock(f"lock:{queue_key}", **self.lock_config):
             # Get current queue
             queue_json = await backend.get(queue_key)
             if queue_json:
@@ -981,7 +981,7 @@ class QuotaWithRolloverStrategy:
         prev_used_key = f"{full_key}:quota:{current_period - 1}:used"
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
 
-        async with await backend.lock(f"lock:{used_key}", **self.lock_config):
+        async with backend.lock(f"lock:{used_key}", **self.lock_config):
             # Get current usage and rollover
             used_str, rollover_str = await backend.multi_get(used_key, rollover_key)
             used = int(used_str) if used_str else 0
@@ -1327,7 +1327,7 @@ class CostBasedTokenBucketStrategy:
         history_key = f"{full_key}:costbucket:history"
         ttl_seconds = max(int((refill_period_ms * 2) // 1000), 1)
         cost_window = self.cost_window
-        async with await backend.lock(f"lock:{state_key}", **self.lock_config):
+        async with backend.lock(f"lock:{state_key}", **self.lock_config):
             # Get bucket state and cost history
             state_json, history_json = await backend.multi_get(state_key, history_key)
             if state_json:
@@ -1549,7 +1549,7 @@ class GCRAStrategy:
         tat_key = f"{full_key}:gcra:tat"
         ttl_seconds = max(int((rate.expire * 2) // 1000), 1)
 
-        async with await backend.lock(f"lock:{tat_key}", **self.lock_config):
+        async with backend.lock(f"lock:{tat_key}", **self.lock_config):
             # Get current TAT
             tat_str = await backend.get(tat_key)
             try:
@@ -1724,7 +1724,7 @@ class DistributedFairnessStrategy:
         global_usage_key = f"{full_key}:dfq:global:{current_window}"
         ttl_seconds = max(int((self.fairness_window_ms * 2) // 1000), 1)
 
-        async with await backend.lock(f"lock:{instances_key}", **self.lock_config):
+        async with backend.lock(f"lock:{instances_key}", **self.lock_config):
             # Register this instance
             instances_json = await backend.get(instances_key)
             if instances_json:
@@ -1985,7 +1985,7 @@ class GeographicDistributionStrategy:
         spillover_key = f"{full_key}:geo:spillover:{current_window}"
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
 
-        async with await backend.lock(f"lock:{region_key}", **self.lock_config):
+        async with backend.lock(f"lock:{region_key}", **self.lock_config):
             # Increment region counter
             region_count = await backend.increment_with_ttl(
                 region_key, amount=cost, ttl=ttl_seconds

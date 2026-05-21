@@ -150,7 +150,7 @@ class SlidingWindowLogStrategy:
         log_key = f"{full_key}:slidinglog"
         ttl_seconds = max(int(window_duration_ms // 1000), 1)  # At least 1s
 
-        async with await backend.lock(f"lock:{log_key}", **self.lock_config):
+        async with backend.lock(f"lock:{log_key}", **self.lock_config):
             old_log_json = await backend.get(log_key)
             # If log exists, load and parse entries as [timestamp, cost] tuples
             if old_log_json and old_log_json != "":
@@ -366,9 +366,7 @@ class SlidingWindowCounterStrategy:
         # throughout the entire current window. Minimum 1 second for cleanup.
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
         limit = rate.limit
-        async with await backend.lock(
-            f"lock:{previous_window_key}", **self.lock_config
-        ):
+        async with backend.lock(f"lock:{previous_window_key}", **self.lock_config):
             # Increment current window counter by cost
             current_count = await backend.increment_with_ttl(
                 current_window_key, amount=cost, ttl=ttl_seconds

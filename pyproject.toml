@@ -62,8 +62,8 @@ test = [
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [[tool.uv.index]]
 name = "testpypi"

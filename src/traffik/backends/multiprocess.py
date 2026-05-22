@@ -64,6 +64,7 @@ import typing
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing.shared_memory import SharedMemory
 from multiprocessing.synchronize import Semaphore
+from types import TracebackType
 
 from typing_extensions import Self
 
@@ -177,13 +178,13 @@ def _validate_shared_memory_name(name: str) -> None:
 class _SharedMemoryLockBytePool:
     """
     Thread-safe allocator that hands out byte offsets within a region of
-    shared memory for use as spinlock flags.
+    shared memory for use as lock flags.
 
     The pool is backed by a simple integer free-stack protected by a
     `threading.Lock`. It lives entirely in the parent process's Python
     heap; worker processes inherit a private copy after fork and therefore
     each have their own independent allocator state because each worker independently
-    creates its own `_AsyncSharedMemorySpinLock` instances via `_NamedLockPool`.
+    creates its own `_AsyncSharedMemoryLock` instances via `_NamedLockPool`.
     """
 
     __slots__ = ("_base", "_size", "_free", "_lock")
@@ -196,7 +197,7 @@ class _SharedMemoryLockBytePool:
             region begins. The caller is responsible for reserving
             `size` bytes at this offset in the shared memory layout.
         :param size: Total number of lock bytes available. Must be >= the peak
-            number of simultaneously live `_AsyncSharedMemorySpinLock` instances
+            number of simultaneously live `_AsyncSharedMemoryLock` instances
             (i.e. >= `lock_pool_size` plus headroom for over-limit
             instances created under traffic spikes).
         """
@@ -236,9 +237,9 @@ class _SharedMemoryLockBytePool:
             return len(self._free)
 
 
-class _AsyncSharedMemorySpinLock:
+class _AsyncSharedMemoryLock:
     """
-    Cross-process, asyncio-cooperative spinlock backed by a single byte
+    Cross-process, asyncio-cooperative backed by a single byte
     in a `multiprocessing.SharedMemory` segment.
 
     **Acquisition algorithm**:
@@ -273,7 +274,7 @@ class _AsyncSharedMemorySpinLock:
         spin_max_delay_seconds: float = 0.005,
     ) -> None:
         """
-        Initialize the spinlock.
+        Initialize the lock.
 
         :param buffer: Writable `memoryview` over the shared memory segment.
             Must remain valid for the lifetime of this instance.
@@ -300,7 +301,7 @@ class _AsyncSharedMemorySpinLock:
         blocking_timeout: typing.Optional[float] = None,
     ) -> bool:
         """
-        Acquire the spinlock.
+        Acquire the lock.
 
         :param blocking: If `False`, attempt once and return immediately.
         :param blocking_timeout: Maximum seconds to wait. `None` means wait indefinitely.
@@ -337,7 +338,7 @@ class _AsyncSharedMemorySpinLock:
 
     async def release(self) -> None:
         """
-        Release the spinlock.
+        Release the lock.
 
         :raises RuntimeError: If this instance did not acquire the lock.
         """
@@ -371,7 +372,12 @@ class _AsyncSharedMemorySpinLock:
             raise TimeoutError("Could not acquire multiprocess lock.")
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ):
         await self.release()
 
 
@@ -642,7 +648,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         # created in initialize() once we know the shared memory layout
         self._lock_byte_pool: typing.Optional[_SharedMemoryLockBytePool] = None
         self._named_lock_pool: typing.Optional[
-            _NamedLockPool[_AsyncSharedMemorySpinLock]
+            _NamedLockPool[_AsyncSharedMemoryLock]
         ] = None
 
         self._cleanup_task: typing.Optional[asyncio.Task[None]] = None
@@ -859,10 +865,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         )
         self._lock_byte_pool = byte_pool
 
-        # Create the named lock pool wired to `_AsyncSharedMemorySpinLock`
-        def _make_lock() -> _AsyncSharedMemorySpinLock:
+        # Create the named lock pool wired to `_AsyncSharedMemoryLock`
+        def _make_lock() -> _AsyncSharedMemoryLock:
             nonlocal buffer, byte_pool
-            return _AsyncSharedMemorySpinLock(
+            return _AsyncSharedMemoryLock(
                 buffer=buffer,
                 byte_pool=byte_pool,
                 max_spins_before_backoff=10,
@@ -2290,9 +2296,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             expire,
         )
 
-    def get_lock(self, name: str) -> _NamedLockHandle[_AsyncSharedMemorySpinLock]:
+    def get_lock(self, name: str) -> _NamedLockHandle[_AsyncSharedMemoryLock]:
         """
-        Return a named cross-process spinlock backed by a byte in the
+        Return a named cross-process lock backed by a byte in the
         shared memory segment.
 
         Named locks are process-local (not shared across processes). Each

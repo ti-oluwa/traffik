@@ -7,6 +7,7 @@ Note! This is not suitable for multi-process or distributed setups.
 import asyncio
 import typing
 from collections import OrderedDict
+from types import TracebackType
 
 from traffik._locks import (
     _AsyncFairRLock,
@@ -74,7 +75,12 @@ class _AsyncInMemoryLock:
             raise TimeoutError("Could not acquire inmemory lock.")
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ):
         await self.release()
 
 

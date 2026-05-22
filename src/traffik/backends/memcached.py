@@ -3,10 +3,10 @@
 import asyncio
 import functools
 import math
-import random
 import sys
 import typing
 from time import monotonic
+from types import TracebackType
 from urllib.parse import urlparse
 
 from aiomcache import Client as MemcachedClient
@@ -86,7 +86,8 @@ def _wrap_methods_with_on_error_return(
 
 class _AsyncMemcachedLock:
     """
-    Name-based, best-effort, and "instance-reentrant" distributed (un-fair) lock implementation using Memcached's add operation.
+    Name-based, best-effort, and "instance-reentrant" distributed (un-fair) lock
+    implementation using Memcached's add operation.
 
     Uses Memcached's atomic `add()` which only succeeds if key doesn't exist.
     This provides a lightweight distributed locking mechanism.
@@ -99,7 +100,7 @@ class _AsyncMemcachedLock:
         "_client",
         "_ttl",
         "_acquired",
-        "_fence_token",
+        "_token",
         "_max_spins_before_backoff",
         "_spin_max_delay_seconds",
     )
@@ -109,8 +110,8 @@ class _AsyncMemcachedLock:
         name: str,
         client: MemcachedClient,
         ttl: typing.Optional[float] = None,
-        max_spins_before_backoff: int = 8,
-        spin_max_delay_seconds: float = 0.005,
+        max_spins_before_backoff: int = 4,
+        spin_max_delay_seconds: float = 0.01,
     ) -> None:
         """
         Initialize the lock.
@@ -118,13 +119,16 @@ class _AsyncMemcachedLock:
         :param name: Unique lock name.
         :param client: `aiomcache.Client` instance.
         :param ttl: How long to hold the lock in seconds before auto-release.
-            If None, lock has no expiration. This bad practice and may lead to deadlocks.
+            If None, lock has no expiration. This is bad practice and may lead to deadlocks.
+        :param max_spins_before_backoff: Number of zero-delay yields to the event-loop during acquisition,
+            before applying exponential backoff.
+        :param spin_max_delay_seconds: Maximum delay in seconds during backoff.
         """
         self._name = name
         self._client = client
         self._ttl = math.ceil(ttl) if ttl is not None else 0
         self._acquired = False
-        self._fence_token: typing.Optional[str] = None
+        self._token: typing.Optional[str] = None
         self._max_spins_before_backoff = max_spins_before_backoff
         self._spin_max_delay_seconds = spin_max_delay_seconds
 
@@ -155,6 +159,8 @@ class _AsyncMemcachedLock:
         token = str(fence_token_generator.next())
         start = monotonic()
         attempts = 0
+        max_spins_before_backoff = self._max_spins_before_backoff
+        spin_max_delay_seconds = self._spin_max_delay_seconds
         while True:
             # `add()` is atomic, as only succeeds if key doesn't exist
             # Returns True if added, False if key already exists
@@ -165,7 +171,7 @@ class _AsyncMemcachedLock:
             )
             if added:
                 self._acquired = True
-                self._fence_token = token
+                self._token = token
                 return True
 
             # Lock is held by someone else
@@ -179,24 +185,20 @@ class _AsyncMemcachedLock:
             ):
                 return False
 
-            # Exponential backoff with jitter
             attempts += 1
-            if attempts <= self._max_spins_before_backoff:
+            if attempts <= max_spins_before_backoff:
                 await asyncio.sleep(0)
             else:
+                # Exponential backoff
                 exponent = min(
-                    attempts - self._max_spins_before_backoff,
+                    attempts - max_spins_before_backoff,
                     6,
                 )
-                base_delay = min(
+                delay = min(
                     0.0005 * (1 << exponent),
-                    self._spin_max_delay_seconds,
+                    spin_max_delay_seconds,
                 )
-                jitter = random.uniform(
-                    base_delay * 0.75,
-                    base_delay * 1.25,
-                )
-                await asyncio.sleep(jitter)
+                await asyncio.sleep(delay)
 
     async def release(self) -> None:
         """Release the lock."""
@@ -207,9 +209,9 @@ class _AsyncMemcachedLock:
 
         name = self._name
         try:
-            # Ensure we only delete if we own the lock (fence token matches)
+            # Ensure we only release/delete if we own the lock (token matches)
             current = await self._client.get(name.encode())
-            if current and current.decode() == self._fence_token:
+            if current and current.decode() == self._token:
                 await self._client.delete(name.encode())
             else:
                 sys.stderr.write(f"Warning: Lock '{name}' expired or stolen\n")
@@ -222,7 +224,7 @@ class _AsyncMemcachedLock:
         finally:
             # Reset state
             self._acquired = False
-            self._fence_token = None
+            self._token = None
             sys.stderr.flush()
 
     async def __aenter__(self):
@@ -231,7 +233,12 @@ class _AsyncMemcachedLock:
             raise TimeoutError(f"Could not acquire Memcached lock '{self._name}'")
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ):
         await self.release()
 
 

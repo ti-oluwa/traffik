@@ -3,10 +3,10 @@
 import asyncio
 import contextvars
 import math
-import random
 import sys
 import typing
 from time import monotonic
+from types import TracebackType
 
 import redis.asyncio as aioredis
 from pottery import AIORedlock
@@ -36,7 +36,7 @@ class _LockScriptSHAs(TypedDict):
 
 class _AsyncRedisLock:
     """
-    Name-based, task-reentrant, and distributed Redis (un-fair) lock
+    Name-based, instance-reentrant, and distributed Redis (un-fair) lock
     implementing the `AsyncLock` protocol.
 
     Uses a simple Redis-based locking mechanism with:
@@ -49,11 +49,6 @@ class _AsyncRedisLock:
     Note: This lock does not implement the full Redlock algorithm and is not suitable
     for distributed Redis clusters.
     """
-
-    _task_locks: contextvars.ContextVar[typing.Dict[str, typing.Tuple[int, int]]] = (
-        contextvars.ContextVar("_task_locks")
-    )
-    """Per-task storage of lock lease-ownership tokens and reentrancy counts."""
 
     _RELEASE_SCRIPT = """
     if redis.call("get", KEYS[1]) == ARGV[1] then
@@ -98,6 +93,8 @@ class _AsyncRedisLock:
     __slots__ = (
         "_name",
         "_redis",
+        "_acquired",
+        "_token",
         "_blocking_timeout",
         "_ttl",
         "_script_shas",
@@ -130,6 +127,8 @@ class _AsyncRedisLock:
         """
         self._name = name
         self._redis = redis
+        self._acquired = False
+        self._token: typing.Optional[int] = None
         self._script_shas = script_shas
         self._blocking_timeout = blocking_timeout
         self._max_spins_before_backoff = max_spins_before_backoff
@@ -139,22 +138,9 @@ class _AsyncRedisLock:
             self._ttl = ttl
         elif blocking_timeout is not None:
             # Add 1 second buffer to blocking timeout
-            self._ttl = blocking_timeout + 1
+            self._ttl = blocking_timeout
         else:
             self._ttl = None  # type: ignore[assignment]
-
-    def _get_task_locks(self) -> typing.Dict[str, typing.Tuple[int, int]]:
-        """
-        Get task-local lock storage, creating if needed.
-
-        :return: Dictionary mapping lock names to (lease-ownership token, reentrancy count).
-        """
-        try:
-            return self._task_locks.get()
-        except LookupError:
-            task_locks: typing.Dict[str, typing.Tuple[int, int]] = {}
-            self._task_locks.set(task_locks)
-            return task_locks
 
     @classmethod
     async def _load_acquire_script(cls, redis: aioredis.Redis) -> str:
@@ -167,31 +153,28 @@ class _AsyncRedisLock:
         return await redis.script_load(cls._RELEASE_SCRIPT)
 
     def locked(self) -> bool:
-        locks = self._get_task_locks()
-        return self._name in locks and locks[self._name][1] > 0
+        return self._acquired
 
     async def acquire(
         self,
         blocking: bool = True,
         blocking_timeout: typing.Optional[float] = None,
     ) -> bool:
-        locks = self._get_task_locks()
-        name = self._name
-
-        # Re-entrant fast-path
-        if name in locks:
-            token, count = locks[name]
-            locks[name] = (token, count + 1)
+        if self._acquired:
+            # Already acquired by this instance
             return True
 
+        name = self._name
         blocking_timeout = (
             self._blocking_timeout if blocking_timeout is None else blocking_timeout
         )
 
         start = monotonic()
         attempts = 0
+        max_spins_before_backoff = self._max_spins_before_backoff
+        spin_max_delay_seconds = self._spin_max_delay_seconds
         while True:
-            token = None
+            token: typing.Optional[int] = None
             try:
                 token = await self._redis.evalsha(  # type: ignore
                     self._script_shas["acquire"],  # type: ignore[arg-type]
@@ -208,22 +191,19 @@ class _AsyncRedisLock:
                     self._script_shas["acquire"] = await self._redis.script_load(  # type: ignore
                         type(self)._ACQUIRE_SCRIPT
                     )
-                    try:
-                        token = await self._redis.evalsha(  # type: ignore
-                            self._script_shas["acquire"],  # type: ignore[arg-type]
-                            2,  # KEYS
-                            name,  # KEYS[1]
-                            f"{name}:fence",  # KEYS[2]
-                            str(self._ttl or 0),
-                        )
-                    except aioredis.ResponseError:
-                        # If retry also fails with ResponseError, continue loop to retry
-                        token = None
+                    token = await self._redis.evalsha(  # type: ignore
+                        self._script_shas["acquire"],  # type: ignore[arg-type]
+                        2,  # KEYS
+                        name,  # KEYS[1]
+                        f"{name}:fence",  # KEYS[2]
+                        str(self._ttl or 0),
+                    )
                 else:
                     raise
 
             if token:
-                locks[name] = (token, 1)  # type: ignore[assignment]
+                self._acquired = True
+                self._token = token
                 return True
 
             if not blocking:
@@ -235,48 +215,41 @@ class _AsyncRedisLock:
             ):
                 return False
 
-            # Exponential backoff with jitter
             attempts += 1
-            if attempts <= self._max_spins_before_backoff:
+            if attempts <= max_spins_before_backoff:
                 await asyncio.sleep(0)
             else:
+                # Exponential backoff
                 exponent = min(
-                    attempts - self._max_spins_before_backoff,
+                    attempts - max_spins_before_backoff,
                     6,
                 )
-                base_delay = min(
+                delay = min(
                     0.0005 * (1 << exponent),
-                    self._spin_max_delay_seconds,
+                    spin_max_delay_seconds,
                 )
-                jitter = random.uniform(
-                    base_delay * 0.75,
-                    base_delay * 1.25,
-                )
-                await asyncio.sleep(jitter)
+                await asyncio.sleep(delay)
 
     async def release(self) -> None:
-        locks = self._get_task_locks()
+        if not self._acquired:
+            raise RuntimeError(
+                f"Cannot release lock '{self._name}'. Lock not owned by this instance"
+            )
+
+        token = str(self._token)
         name = self._name
-
-        if name not in locks:
-            raise RuntimeError(f"Cannot release lock '{name}'. Lock not owned by task.")
-
-        token, count = locks[name]
-        # If reentrancy count > 1, just decrement
-        if count > 1:
-            locks[name] = (token, count - 1)
-            return
-
-        # If count == 1, fully release the lock
         try:
-            await asyncio.shield(
-                self._redis.evalsha(  # type: ignore
+            # Ensure we only release if we own the lock (token matches)
+            current: str = await self._redis.get(name)
+            if current and current == token:
+                await self._redis.evalsha(  # type: ignore
                     self._script_shas["release"],  # type: ignore[arg-type]
                     1,  # num keys
                     name,  # KEYS[1]
-                    str(token),  # ARGV[1]
+                    token,  # ARGV[1]
                 )
-            )
+            else:
+                sys.stderr.write(f"Warning: Lock '{name}' expired or stolen\n")
         except aioredis.ResponseError as exc:
             if "NOSCRIPT" in str(exc):
                 # Script was flushed from Redis cache, re-register and retry
@@ -288,12 +261,22 @@ class _AsyncRedisLock:
                     self._script_shas["release"],  # type: ignore[arg-type]
                     1,  # num keys
                     name,  # KEYS[1]
-                    str(token),  # ARGV[1]
+                    token,  # ARGV[1]
                 )
             else:
                 raise
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # nosec
+            # Lock might have expired or been released already
+            # Log and ignore release errors to avoid deadlocks
+            sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
         finally:
-            del locks[name]
+            # Reset state
+            self._acquired = False
+            self._token = None
+            sys.stderr.flush()
 
     async def __aenter__(self):
         acquired = await self.acquire()
@@ -301,7 +284,12 @@ class _AsyncRedisLock:
             raise TimeoutError(f"Could not acquire Redis lock '{self._name}'")
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ):
         await self.release()
 
 
@@ -468,12 +456,11 @@ class _AsyncRedLock:
         await self.release()
 
 
-# TODO: Check if these stores would without any (substantial) change needed:
+# TODO: Check if these stores would work without any (substantial) change needed:
 # - Valkey
 # - KeyDB
 # - DragonflyDB (probably)
 # - Redis Stack
-# These should work but I still need to test
 
 
 class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):

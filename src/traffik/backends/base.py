@@ -364,6 +364,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :param blocking_timeout: Maximum time in seconds to wait for the lock if blocking is True. None means wait indefinitely.
         :return: An asynchronous context manager that acquires/releases the lock.
         """
+        # Ensure to use a namespaced lock key so reset on backend clears locks too
         lock_name = self.get_key(name)
         lock = self.get_lock(lock_name)
         ttl = ttl if ttl is not None else self.lock_ttl

@@ -133,7 +133,7 @@ def _derive_shared_memory_name(namespace: str) -> str:
 
     Replaces characters outside `[A-Za-z0-9_-]` with underscores, appends
     an 8-character FNV-1a hex suffix for collision-resistance, and prefixes
-    with `traffik_`. The result is truncated to
+    with `_SHARED_MEMORY_NAME_PREFIX`. The result is truncated to
     `_SHARED_MEMORY_NAME_MAX_LENGTH` characters.
 
     :param namespace: The backend namespace string.
@@ -245,7 +245,7 @@ class _AsyncSharedMemoryLock:
     **Acquisition algorithm**:
 
     1. Call `test_and_set_byte` (atomic XCHG).
-    2. If old value was 0 → lock acquired, return `True`.
+    2. If old value was 0, that means we acquired the lock, return `True`.
     3. Otherwise yield to the event loop via `asyncio.sleep(0)`
        (first `max_spins_before_backoff` attempts) or with an
        exponentially increasing delay up to `spin_max_delay_seconds`.
@@ -309,7 +309,8 @@ class _AsyncSharedMemoryLock:
         """
         start = time()
         attempts = 0
-
+        max_spins = self._max_spins_before_backoff
+        spin_max_delay = self._spin_max_delay_seconds
         while True:
             if test_and_set_byte(self._buffer, self._byte_index) == 0:
                 # Old value was 0. We already atomically set it to 1 and own the lock
@@ -322,16 +323,13 @@ class _AsyncSharedMemoryLock:
             if blocking_timeout is not None and (time() - start) >= blocking_timeout:
                 return False
 
-            if attempts < self._max_spins_before_backoff:
+            if attempts < max_spins:
                 # Yield back to event loop to give other tasks a chance to run
                 await asyncio.sleep(0)
             else:
                 # Backoff to avoid starving the event loop under sustained contention.
-                # Capped at `spin_max_delay_seconds`.
-                delay = min(
-                    0.0001 * (1 << min(attempts, 10)),
-                    self._spin_max_delay_seconds,
-                )
+                # Capped at `spin_max_delay`.
+                delay = min(0.0001 * (1 << min(attempts, 10)), spin_max_delay)
                 await asyncio.sleep(delay)
 
             attempts += 1
@@ -2031,8 +2029,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
 
         raise BackendError(
-            f"ABA race on keys {aba_keys!r} not resolved after "
-            f"{self._max_aba_retries} retries."
+            f"ABA race on keys {aba_keys!r} not resolved after {self._max_aba_retries} retries."
         )
 
     def _clear(self) -> None:

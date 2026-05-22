@@ -1,4 +1,3 @@
-
 def test_and_set_byte(buffer: memoryview, offset: int, /) -> int:
     """
     Atomic test-and-set operation on a single byte within a writable buffer.

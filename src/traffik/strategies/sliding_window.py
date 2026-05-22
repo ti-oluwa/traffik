@@ -1,5 +1,6 @@
 """Sliding Window Rate Limiting Strategies"""
 
+import asyncio
 import typing
 from dataclasses import dataclass, field
 
@@ -367,13 +368,13 @@ class SlidingWindowCounterStrategy:
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
         limit = rate.limit
         async with backend.lock(f"lock:{previous_window_key}", **self.lock_config):
-            # Increment current window counter by cost
-            current_count = await backend.increment_with_ttl(
-                current_window_key, amount=cost, ttl=ttl_seconds
+            # Increment current window counter by cost and get previous window counter
+            current_count, previous_count_str = await asyncio.gather(
+                backend.increment_with_ttl(
+                    current_window_key, amount=cost, ttl=ttl_seconds
+                ),
+                backend.get(previous_window_key),
             )
-
-            # Get previous window counter
-            previous_count_str = await backend.get(previous_window_key)
             if previous_count_str and previous_count_str != "":
                 try:
                     previous_count = int(previous_count_str)

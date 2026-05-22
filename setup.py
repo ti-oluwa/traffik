@@ -4,7 +4,7 @@ setup(
     ext_modules=[
         Extension(
             "traffik._atomic_byte_ops",
-            sources=["src/traffik/ext/atomic_byte_ops.c"],
+            sources=["src/traffik/_ext/atomic_byte_ops.c"],
             extra_compile_args=["-O2"],
         )
     ]

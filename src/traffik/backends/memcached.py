@@ -1,7 +1,6 @@
-"""Memcached implementation of a throttle backend using `aiomcache`."""
+"""Memcached implementation of a throttle backend using `emcache`."""
 
 import asyncio
-import functools
 import math
 import sys
 import typing
@@ -9,8 +8,7 @@ from time import monotonic
 from types import TracebackType
 from urllib.parse import urlparse
 
-from aiomcache import Client as MemcachedClient
-from aiomcache import ClientException
+import emcache
 
 from traffik._locks import fence_token_generator
 from traffik.backends.base import ThrottleBackend
@@ -19,80 +17,76 @@ from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
-    P,
-    R,
-    T,
     ThrottleErrorHandler,
 )
 
 
-def _on_error_return(
-    func: typing.Callable[P, typing.Awaitable[R]],
-    return_value: typing.Optional[T] = None,
-    predicate: typing.Optional[typing.Callable[[Exception], bool]] = None,
-) -> typing.Callable[P, typing.Awaitable[typing.Union[R, T, None]]]:
+def _parse_memcached_url(url: str) -> typing.Dict[str, typing.Any]:
     """
-    Decorator to catch `aiomcache.ClientException` and return a specified value.
-    Used for handling transient Memcached errors gracefully.
+    Parse Memcached URL into connection parameters.
 
-    :param func: Async function to wrap.
-    :param return_value: Value to return on exception (default None).
-    :param predicate: Optional callable to check if the exception should be suppressed.
-    It takes the exception as input and returns a boolean.
-        If provided, the exception is only suppressed and `return_value` is returned if `predicate(exc)`
-        returns True. Otherwise, the exception is re-raised. This allows for more fine-grained control
-        over which exceptions to suppress, such as only suppressing certain error codes or messages.
-        e.g. `predicate(exc) -> bool`. Else, the exception is re-raised.
-    :param log: Whether to log the exception (default False).
+    :param url: Memcached URL (e.g. memcached://host:port).
+    :return: Dictionary of connection parameters.
     """
+    parsed = urlparse(url)
+    if not parsed.scheme.startswith("memcached"):
+        raise ValueError("Invalid Memcached URL scheme")
 
-    @functools.wraps(func)
-    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> typing.Union[R, T, None]:
-        try:
-            return await func(*args, **kwargs)
-        except ClientException as exc:
-            if predicate and not predicate(exc):
-                raise
-            return return_value
-
-    return wrapper
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 11211
+    return {"host": host, "port": port}
 
 
-def _wrap_methods_with_on_error_return(
-    obj: typing.Any,
-    methods: typing.Iterable[str],
-    return_value: typing.Optional[T] = None,
-    predicate: typing.Optional[typing.Callable[[Exception], bool]] = None,
-) -> None:
+def _parse_memcached_nodes(
+    nodes: typing.Sequence[typing.Union[str, typing.Tuple[str, int]]],
+) -> typing.List[emcache.MemcachedHostAddress]:
     """
-    Wrap specified methods of the object with `_on_error_return` decorator.
+    Parse a sequence of node specifiers into `emcache.MemcachedHostAddress` objects.
 
-    :param obj: Object whose methods to wrap.
-    :param methods: Iterable of method names to wrap.
-    :param return_value: Value to return on exception (default None).
-    :param predicate: Optional callable to check if the exception should be suppressed.
-        See `_on_error_return` for details.
+    Each element may be:
+
+    - A `(host, port)` tuple.
+    - A URL string such as `"memcached://host:port"`.
+    - A bare `"host:port"` string.
+
+    :param nodes: Sequence of node specifiers.
+    :return: List of `emcache.MemcachedHostAddress` instances.
+    :raises ValueError: If a specifier cannot be parsed.
     """
-    for method_name in methods:
-        if hasattr(obj, method_name):
-            original_method = getattr(obj, method_name)
-            wrapped_method = _on_error_return(
-                original_method,
-                return_value=return_value,
-                predicate=predicate,
+    result: typing.List[emcache.MemcachedHostAddress] = []
+    for node in nodes:
+        if isinstance(node, tuple):
+            host, port = node
+            result.append(emcache.MemcachedHostAddress(host, port))
+        elif isinstance(node, str):
+            if node.startswith("memcached://"):
+                parsed = _parse_memcached_url(node)
+                result.append(
+                    emcache.MemcachedHostAddress(parsed["host"], parsed["port"])
+                )
+            elif ":" in node:
+                host, port_str = node.rsplit(":", 1)
+                result.append(emcache.MemcachedHostAddress(host, int(port_str)))
+            else:
+                result.append(emcache.MemcachedHostAddress(node, 11211))
+        else:
+            raise ValueError(
+                f"Cannot parse Memcached node specifier: {node!r}. "
+                "Expected a (host, port) tuple, a 'memcached://host:port' URL, "
+                "or a 'host:port' string."
             )
-            setattr(obj, method_name, wrapped_method)
+    return result
 
 
 class _AsyncMemcachedLock:
     """
     Name-based, best-effort, and "instance-reentrant" distributed (un-fair) lock
-    implementation using Memcached's add operation.
+    implementation using Memcached's `add` operation via `emcache`.
 
-    Uses Memcached's atomic `add()` which only succeeds if key doesn't exist.
-    This provides a lightweight distributed locking mechanism.
+    Uses Memcached's atomic `add()` which only succeeds if the key does not
+    exist, providing a lightweight distributed locking mechanism.
 
-    Suitable for single Memcached instance deployments where low-latency locking is required.
+    Suitable for Memcached deployments where low-latency locking is required.
     """
 
     __slots__ = (
@@ -108,7 +102,7 @@ class _AsyncMemcachedLock:
     def __init__(
         self,
         name: str,
-        client: MemcachedClient,
+        client: emcache.Client,
         ttl: typing.Optional[float] = None,
         max_spins_before_backoff: int = 4,
         spin_max_delay_seconds: float = 0.01,
@@ -117,11 +111,12 @@ class _AsyncMemcachedLock:
         Initialize the lock.
 
         :param name: Unique lock name.
-        :param client: `aiomcache.Client` instance.
+        :param client: `emcache.Client` instance.
         :param ttl: How long to hold the lock in seconds before auto-release.
-            If None, lock has no expiration. This is bad practice and may lead to deadlocks.
-        :param max_spins_before_backoff: Number of zero-delay yields to the event-loop during acquisition,
-            before applying exponential backoff.
+            If None, lock has no expiration. This is bad practice and may lead
+            to deadlocks.
+        :param max_spins_before_backoff: Number of zero-delay yields to the
+            event-loop during acquisition before applying exponential backoff.
         :param spin_max_delay_seconds: Maximum delay in seconds during backoff.
         """
         self._name = name
@@ -149,36 +144,46 @@ class _AsyncMemcachedLock:
         :return: True if lock acquired, False otherwise.
         """
         if self._acquired:
-            # Already acquired by this instance
+            # Already acquired by this instance (reentrancy guard).
             return True
 
-        # Memcached has no way to generate fencing tokens natively,
-        # we generate our own unique token per acquisition attempt
-        # This helps prevent the "stale lock" problem but only
-        # per process, not cross-process if clocks are skewed across processes.
+        # We generate our own fencing token per acquisition attempt.
+        # This helps prevent the "stale lock" problem per-process.
         token = str(fence_token_generator.next())
+        name_bytes = self._name.encode()
+        token_bytes = token.encode()
         start = monotonic()
         attempts = 0
-        max_spins_before_backoff = self._max_spins_before_backoff
-        spin_max_delay_seconds = self._spin_max_delay_seconds
+        max_spins = self._max_spins_before_backoff
+        spin_max_delay = self._spin_max_delay_seconds
+
         while True:
-            # `add()` is atomic, as only succeeds if key doesn't exist
-            # Returns True if added, False if key already exists
-            added = await self._client.add(
-                self._name.encode(),
-                token.encode(),
-                exptime=self._ttl,
-            )
-            if added:
+            try:
+                # `add` succeeds only when the key does not yet exist,
+                # providing the atomic "set-if-not-exists" semantic we need.
+                await self._client.add(
+                    name_bytes,
+                    token_bytes,
+                    exptime=self._ttl,
+                    noreply=False,
+                )
+                # No exception means `add` succeeded — we own the lock.
                 self._acquired = True
                 self._token = token
                 return True
+            except emcache.NotStoredStorageCommandError:
+                # Key already exists; lock is held by someone else.
+                pass
+            except (emcache.CommandError, Exception) as exc:
+                # Any other Memcached error during lock acquisition.
+                sys.stderr.write(
+                    f"Warning: Error during lock acquisition for '{self._name}': {exc}\n"
+                )
+                sys.stderr.flush()
 
-            # Lock is held by someone else
             if not blocking:
                 return False
 
-            # Check timeout
             if (
                 blocking_timeout is not None
                 and (monotonic() - start) >= blocking_timeout
@@ -186,18 +191,11 @@ class _AsyncMemcachedLock:
                 return False
 
             attempts += 1
-            if attempts <= max_spins_before_backoff:
+            if attempts <= max_spins:
                 await asyncio.sleep(0)
             else:
-                # Exponential backoff
-                exponent = min(
-                    attempts - max_spins_before_backoff,
-                    6,
-                )
-                delay = min(
-                    0.0005 * (1 << exponent),
-                    spin_max_delay_seconds,
-                )
+                exponent = min(attempts - max_spins, 6)
+                delay = min(0.0005 * (1 << exponent), spin_max_delay)
                 await asyncio.sleep(delay)
 
     async def release(self) -> None:
@@ -207,27 +205,29 @@ class _AsyncMemcachedLock:
                 f"Cannot release lock '{self._name}'. Lock not owned by this instance"
             )
 
-        name = self._name
+        name_bytes = self._name.encode()
         try:
-            # Ensure we only release/delete if we own the lock (token matches)
-            current = await self._client.get(name.encode())
-            if current and current.decode() == self._token:
-                await self._client.delete(name.encode())
+            # Only delete the key if the stored token still matches ours,
+            # preventing accidental release of a lock acquired by another
+            # instance after ours expired.
+            item = await self._client.get(name_bytes)
+            if item is not None and item.value.decode() == self._token:
+                await self._client.delete(name_bytes, noreply=False)
             else:
-                sys.stderr.write(f"Warning: Lock '{name}' expired or stolen\n")
+                sys.stderr.write(f"Warning: Lock '{self._name}' expired or stolen\n")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # nosec
-            # Lock might have expired or been released already
-            # Log and ignore release errors to avoid deadlocks
-            sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
+            # Lock might have expired or been released already.
+            sys.stderr.write(
+                f"Warning: Failed to release lock '{self._name}': {str(exc)}\n"
+            )
         finally:
-            # Reset state
             self._acquired = False
             self._token = None
             sys.stderr.flush()
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_AsyncMemcachedLock":
         acquired = await self.acquire()
         if not acquired:
             raise TimeoutError(f"Could not acquire Memcached lock '{self._name}'")
@@ -238,31 +238,17 @@ class _AsyncMemcachedLock:
         exc_type: typing.Optional[type[BaseException]],
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
-    ):
+    ) -> None:
         await self.release()
 
 
-def _parse_memcached_url(url: str) -> typing.Dict[str, typing.Any]:
-    """
-    Parse Memcached URL into connection parameters.
-
-    :param url: Memcached URL (e.g. memcached://host:port).
-    :return: Dictionary of connection parameters.
-    """
-    parsed = urlparse(url)
-    if not parsed.scheme.startswith("memcached"):
-        raise ValueError("Invalid Memcached URL scheme")
-
-    host = parsed.hostname or "localhost"
-    port = parsed.port or 11211
-    return {"host": host, "port": port}
-
-
-class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
+class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
     """
     Memcached-based throttle backend with distributed locking support.
 
-    Uses `aiomcache` for async Memcached operations.
+    Uses `emcache` for high-performance async Memcached operations with
+    native support for multiple Memcached nodes via Rendezvous hashing
+    and an adaptive connection pool.
 
     Note: Memcached has a key size limit of 250 bytes.
     """
@@ -275,9 +261,13 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         host: str = "localhost",
         port: int = 11211,
         *,
-        pool_size: int = 2,
-        pool_minsize: int = 1,
-        connection_args: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        nodes: typing.Optional[
+            typing.Sequence[typing.Union[str, typing.Tuple[str, int]]]
+        ] = None,
+        max_connections: int = 2,
+        min_connections: int = 1,
+        purge_unused_connections_after: typing.Optional[float] = None,
+        connection_timeout: typing.Optional[float] = None,
         namespace: str = ":memcached:",
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
@@ -292,57 +282,115 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
         track_keys: bool = False,
+        autobatching: bool = False,
+        ssl: bool = False,
+        ssl_verify: bool = True,
+        ssl_extra_ca: typing.Optional[str] = None,
+        username: typing.Optional[str] = None,
+        password: typing.Optional[str] = None,
         **kwargs: typing.Any,
     ) -> None:
         """
         Initialize Memcached backend.
 
-        :param host: Memcached server host.
-        :param port: Memcached server port.
-        :param namespace: Key prefix namespace.
-        :param pool_size: Connection pool size.
-        :param pool_minsize: Minimum pool size.
+
+        :param url: Optional Memcached URL (e.g. `"memcached://host:port"`).
+            Mutually exclusive with explicit `host`/`port` values.
+        :param host: Memcached server host (single-node shorthand).
+        :param port: Memcached server port (single-node shorthand).
+        :param nodes: Optional sequence of node specifiers for multi-node
+            deployments. Each element may be a `(host, port)` tuple, a
+            `"memcached://host:port"` URL, or a `"host:port"` string.
+            When provided, `url`, `host`, and `port` are ignored.
+            Traffic is distributed across nodes using Rendezvous hashing.
+        :param max_connections: Maximum number of connections per node in
+            the adaptive connection pool.
+        :param min_connections: Minimum number of connections per node kept
+            alive in the pool.
+        :param purge_unused_connections_after: Seconds of inactivity after
+            which idle connections above `min_connections` are closed.
+            If None, unused connections are never purged.
+        :param connection_timeout: Seconds to wait when opening a new
+            connection to a Memcached node. If None, waits indefinitely.
         :param namespace: The namespace to be used for all throttling keys.
         :param identifier: The connected client identifier generator.
-        :param handle_throttled: The handler to call when the client connection is throttled.
-        :param persistent: Whether to persist throttling data across application restarts.
-        :param on_error: Strategy to handle errors during throttling operations.
+        :param handle_throttled: The handler to call when the client
+            connection is throttled.
+        :param persistent: Whether to persist throttling data across
+            application restarts.
+        :param on_error: Strategy to handle errors during throttling
+            operations.
             - "allow": Allow the request to proceed without throttling.
-            - "throttle": Throttle the request as if it exceeded the rate limit.
+            - "throttle": Throttle the request as if it exceeded the rate
+              limit.
             - "raise": Raise the exception encountered during throttling.
-            - A custom callable that takes the connection and the exception as parameters
-                and returns an integer representing the wait period in milliseconds. Ensure this
-                function executes quickly to avoid additional latency.
+            - A custom callable that takes the connection and the exception
+              as parameters and returns an integer representing the wait
+              period in milliseconds. Ensure this function executes quickly
+              to avoid additional latency.
         :param lock_blocking: Whether locks should block when acquiring.
-            If None, uses the global default from `traffik.config.get_lock_blocking()`.
-        :param lock_ttl: Default TTL for locks in seconds. If None, locks have
-            no expiration unless specified during lock acquisition.
-        :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
-            If None, uses the global default from `traffik.config.get_lock_blocking_timeout()`.
-        :param track_keys: Whether to track all keys in the namespace for clearing.
-            Since Memcached doesn't support key listing like Redis, this enables
-            a best-effort tracking mechanism using a special tracking key to store
-            all keys set by this backend. This allows the `clear()` method to function.
-            Note: This adds overhead to cache operations and is not 100% reliable.
-            Only use if you absolutely need the `clear()` functionality.
-            `clear()` will be no-op if this is False.
+            If None, uses the global default from
+            `traffik.config.get_lock_blocking()`.
+        :param lock_ttl: Default TTL for locks in seconds. If None, locks
+            have no expiration unless specified during lock acquisition.
+        :param lock_blocking_timeout: Default maximum time to wait for
+            acquiring locks in seconds. If None, uses the global default
+            from `traffik.config.get_lock_blocking_timeout()`.
+        :param track_keys: Whether to track all keys in the namespace for
+            clearing. Since Memcached does not support key listing natively,
+            this enables a best-effort tracking mechanism using a special
+            tracking key to store all keys set by this backend. This allows
+            the `clear()` method to function.
+            Note: This adds overhead to cache operations and is not 100%
+            reliable. Only use if you absolutely need the `clear()`
+            functionality. `clear()` will be a no-op if this is False.
+        :param autobatching: Whether to enable emcache's autobatching
+            feature. When True, multiple concurrent `get` operations are
+            transparently batched into a single Memcached `get_many`
+            command, potentially doubling throughput at the cost of a tiny
+            extra latency per individual get.
+        :param ssl: Whether to use SSL/TLS for Memcached connections.
+        :param ssl_verify: Whether to verify the server certificate when
+            using SSL/TLS.
+        :param ssl_extra_ca: Path to an extra CA certificate bundle to use
+            when verifying the server certificate.
+        :param username: SASL authentication username.  Requires a
+            Memcached server compiled with SASL support.
+        :param password: SASL authentication password.
         :param kwargs: Additional keyword arguments.
         """
-        if url and (host != "localhost" or port != 11211):
-            raise ValueError("Specify either 'url' or 'host'/'port', not both.")
+        if nodes is not None:
+            self._host_addresses = _parse_memcached_nodes(nodes)
+        else:
+            if url and (host != "localhost" or port != 11211):
+                raise ValueError("Specify either 'url' or 'host'/'port', not both.")
+            if url is not None:
+                parsed = _parse_memcached_url(url)
+                host = parsed["host"]
+                port = parsed["port"]
+            self._host_addresses = [emcache.MemcachedHostAddress(host, port)]
 
-        if url is not None:
-            parsed = _parse_memcached_url(url)
-            host = parsed["host"]
-            port = parsed["port"]
+        # Keep single-node attributes for backwards-compatible introspection.
+        if len(self._host_addresses) == 1:
+            self.host: str = self._host_addresses[0].address
+            self.port: int = self._host_addresses[0].port
+        else:
+            self.host = self._host_addresses[0].address
+            self.port = self._host_addresses[0].port
 
-        self.host = host
-        self.port = port
-        self.pool_size = pool_size
-        self.pool_minsize = pool_minsize
-        self.connection_args = connection_args
+        self.max_connections = max_connections
+        self.min_connections = min_connections
+        self.purge_unused_connections_after = purge_unused_connections_after
+        self.connection_timeout = connection_timeout
         self.track_keys = track_keys
+        self.autobatching = autobatching
+        self.ssl = ssl
+        self.ssl_verify = ssl_verify
+        self.ssl_extra_ca = ssl_extra_ca
+        self.username = username
+        self.password = password
         self._tracking_key = f"{namespace}:__tracked_keys__"
+
         super().__init__(
             None,
             namespace=namespace,
@@ -363,31 +411,31 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
 
         if "||" in key:
             sys.stderr.write(
-                f"Warning: Key '{key}' contains '||' character which is used as separator in tracking."
-                " Ensure keys do not contain this sequence.\n"
+                f"Warning: Key '{key}' contains '||' which is used as a separator "
+                "in key tracking. Ensure keys do not contain this sequence.\n"
             )
             sys.stderr.flush()
-            # There's no use tracking this key as it will break the tracking mechanism
             return
 
-        tracking_key = self._tracking_key
+        tracking_key = self._tracking_key.encode()
         try:
-            tracked = await self.connection.get(tracking_key.encode())
-            if tracked is None:
+            item = await self.connection.get(tracking_key)
+            if item is None:
                 await self.connection.set(
-                    tracking_key.encode(),
+                    tracking_key,
                     key.encode(),
                     exptime=0,
+                    noreply=False,
                 )
             else:
-                keys_set = set(tracked.decode().split("||"))
+                keys_set = set(item.value.decode().split("||"))
                 if key not in keys_set:
                     keys_set.add(key)
-                    new_tracked = "||".join(sorted(keys_set))
                     await self.connection.set(
-                        tracking_key.encode(),
-                        new_tracked.encode(),
+                        tracking_key,
+                        "||".join(sorted(keys_set)).encode(),
                         exptime=0,
+                        noreply=False,
                     )
         except Exception as exc:
             sys.stderr.write(f"Warning: Failed to track key '{key}': {exc}\n")
@@ -398,56 +446,63 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         if self.connection is None:
             return
 
-        tracking_key = self._tracking_key
+        tracking_key = self._tracking_key.encode()
         try:
-            tracked = await self.connection.get(tracking_key.encode())
-            if tracked is None:
+            item = await self.connection.get(tracking_key)
+            if item is None:
                 return
 
-            keys_set = set(tracked.decode().split("||"))
+            keys_set = set(item.value.decode().split("||"))
             if key in keys_set:
                 keys_set.remove(key)
                 if keys_set:
-                    new_tracked = "||".join(sorted(keys_set))
                     await self.connection.set(
-                        tracking_key.encode(),
-                        new_tracked.encode(),
+                        tracking_key,
+                        "||".join(sorted(keys_set)).encode(),
                         exptime=0,
+                        noreply=False,
                     )
                 else:
-                    await self.connection.delete(tracking_key.encode())
+                    await self.connection.delete(tracking_key, noreply=False)
         except Exception as exc:
             sys.stderr.write(f"Warning: Failed to untrack key '{key}': {exc}\n")
             sys.stderr.flush()
 
     async def initialize(self) -> None:
-        """Initialize the Memcached connection."""
-        if self.connection is None:
-            self.connection = MemcachedClient(
-                self.host,
-                self.port,
-                pool_size=self.pool_size,
-                pool_minsize=self.pool_minsize,
-                conn_args=self.connection_args,
+        """Initialize the Memcached connection pool via emcache."""
+        if self.connection is not None:
+            return
+
+        # Build optional kwargs for `create_client` only when values are set,
+        # so we don't pass None where `emcache` expects an absent argument.
+        create_kwargs: typing.Dict[str, typing.Any] = {
+            "max_connections": self.max_connections,
+            "min_connections": self.min_connections,
+            "autobatching": self.autobatching,
+            "ssl": self.ssl,
+            "ssl_verify": self.ssl_verify,
+        }
+        if self.purge_unused_connections_after is not None:
+            create_kwargs["purge_unused_connections_after"] = (
+                self.purge_unused_connections_after
             )
-            # If key doesn't exist, `incr` & `decr` raises a specific
-            # `ClientException`. We catch that and return None instead
-            _wrap_methods_with_on_error_return(
-                self.connection,
-                methods=["incr", "decr"],
-                predicate=lambda exc: b"NOT_FOUND" in str(exc).encode(),
-                return_value=None,
-            )
+        if self.connection_timeout is not None:
+            create_kwargs["connection_timeout"] = self.connection_timeout
+        if self.ssl_extra_ca is not None:
+            create_kwargs["ssl_extra_ca"] = self.ssl_extra_ca
+        if self.username is not None:
+            create_kwargs["username"] = self.username
+        if self.password is not None:
+            create_kwargs["password"] = self.password
+
+        self.connection = await emcache.create_client(
+            self._host_addresses,
+            **create_kwargs,
+        )
 
     async def ready(self) -> bool:
-        if self.connection is None:
-            return False
-
-        try:
-            await self.connection.version()
-            return True
-        except ClientException:
-            return False
+        """Return True if the client has been created and can serve traffic."""
+        return self.connection is not None
 
     def _assert_ready(self) -> None:
         """
@@ -479,10 +534,10 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         """
         self._assert_ready()
 
-        value = await self.connection.get(key.encode())  # type: ignore[union-attr]
-        if value is None:
+        item = await self.connection.get(key.encode())  # type: ignore[union-attr]
+        if item is None:
             return None
-        return value.decode()
+        return item.value.decode()
 
     async def set(
         self, key: str, value: str, expire: typing.Optional[float] = None
@@ -501,6 +556,7 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
             key.encode(),
             str(value).encode(),
             exptime=exptime,
+            noreply=False,
         )
         if self.track_keys:
             await self._track_key(key)
@@ -514,163 +570,187 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         """
         self._assert_ready()
 
-        deleted = await self.connection.delete(key.encode())  # type: ignore[union-attr]
-        if deleted and self.track_keys:
-            await self._untrack_key(key)
-        return deleted
+        try:
+            await self.connection.delete(key.encode(), noreply=False)  # type: ignore[union-attr]
+            if self.track_keys:
+                await self._untrack_key(key)
+            return True
+        except emcache.NotFoundCommandError:
+            return False
 
     async def increment(self, key: str, amount: int = 1) -> int:
         """
         Atomically increment counter.
 
-        Memcached's `incr` is atomic and thread-safe across all clients.
+        Memcached's `incr`/`decr` commands are atomic and thread-safe
+        across all clients. If the key does not exist it is initialised to
+        `amount` using an atomic `add`.
+
+        Note: Memcached counters are unsigned and cannot go below 0 via
+        `decr`; negative amounts are handled by initialising to
+        `amount` (which may be negative) via `add` when the key is absent.
 
         :param key: Counter key.
-        :param amount: Amount to increment by.
+        :param amount: Amount to increment by (may be negative to decrement).
         :return: New value after increment.
         """
         self._assert_ready()
 
-        # Try to increment existing counter
         encoded_key = key.encode()
-        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[union-attr]
-        if new_value is not None:
-            return new_value
 
-        # Key doesn't exist, initialize it
-        # Use add() to atomically create if not exists
-        added = await self.connection.add(  # type: ignore[union-attr]
-            encoded_key,
-            str(amount).encode(),
-            exptime=0,
-        )
-        if added:
-            if self.track_keys:
-                await self._track_key(key)
-            return amount
+        if amount >= 0:
+            # Try native INCR first (fast path for existing keys).
+            try:
+                new_value = await self.connection.increment(encoded_key, amount)  # type: ignore[union-attr]
+                if new_value is not None:
+                    return new_value
+            except (emcache.NotFoundCommandError, emcache.CommandError):
+                pass
 
-        # Someone else created it, try increment again
-        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[union-attr]
-        return new_value  # type: ignore[return-value]
+            # Key does not exist; initialise atomically.
+            try:
+                await self.connection.add(  # type: ignore[union-attr]
+                    encoded_key,
+                    str(amount).encode(),
+                    exptime=0,
+                    noreply=False,
+                )
+                if self.track_keys:
+                    await self._track_key(key)
+                return amount
+            except emcache.NotStoredStorageCommandError:
+                # Race occured. Another client created the key first; retry INCR.
+                new_value = await self.connection.increment(encoded_key, amount)  # type: ignore[union-attr]
+                return new_value  # type: ignore[return-value]
+        else:
+            # Decrement path.
+            decrement_amount = -amount
+            try:
+                new_value = await self.connection.decrement(  # type: ignore[union-attr]
+                    encoded_key, decrement_amount
+                )
+                if new_value is not None:
+                    return new_value
+            except (emcache.NotFoundCommandError, emcache.CommandError):
+                pass
+
+            # Key does not exist; initialise to a negative value via set
+            # (Memcached counters can't go negative, so we store as a plain string).
+            try:
+                await self.connection.add(  # type: ignore[union-attr]
+                    encoded_key,
+                    str(amount).encode(),  # amount is negative here
+                    exptime=0,
+                    noreply=False,
+                )
+                if self.track_keys:
+                    await self._track_key(key)
+                return amount
+            except emcache.NotStoredStorageCommandError:
+                # Race occurred. Another client created the key first; retry DECR.
+                new_value = await self.connection.decrement(  # type: ignore[union-attr]
+                    encoded_key, decrement_amount
+                )
+                return new_value  # type: ignore[return-value]
 
     async def decrement(self, key: str, amount: int = 1) -> int:
         """
         Atomically decrement counter.
 
-        Memcached's `decr` is atomic and thread-safe across all clients.
-        Note: Memcached counters cannot go below 0.
+        Delegates to `increment` with a negated amount so the semantics
+        remain consistent with the base class contract.
+
+        Note: Memcached counters cannot go below 0 via the native `decr`
+        command. When decrement produces a value that would be negative on a
+        fresh key, the key is initialised to `-amount` as a plain string
+        so that subsequent reads return the correct (negative) value.
 
         :param key: Counter key.
         :param amount: Amount to decrement by.
         :return: New value after decrement.
         """
-        self._assert_ready()
-
-        # Try to decrement existing counter
-        encoded_key = key.encode()
-        new_value = await self.connection.decr(encoded_key, amount)  # type: ignore[union-attr]
-        if new_value is not None:
-            return new_value
-
-        # Key doesn't exist, initialize it to `0 - amount`
-        # Use `add()` to atomically create if not exists
-        added = await self.connection.add(  # type: ignore[union-attr]
-            encoded_key,
-            str(-amount).encode(),
-            exptime=0,
-        )
-        if added:
-            if self.track_keys:
-                await self._track_key(key)
-            return -amount
-
-        # Someone else created it, try decrement again
-        new_value = await self.connection.decr(encoded_key, amount)  # type: ignore[union-attr]
-        return new_value  # type: ignore[return-value]
+        return await self.increment(key, -amount)
 
     async def expire(self, key: str, seconds: int) -> bool:
         """
         Set expiration on existing key.
 
-        Note: Memcached doesn't have a native "expire" command.
-        We need to get the value and set it again with new TTL.
+        Uses Memcached's native `touch` command, which updates the TTL
+        without fetching or re-storing the value.
 
         :param key: Key to set expiration on.
         :param seconds: TTL in seconds.
-        :return: True if expiration was set, False if key doesn't exist.
+        :return: True if expiration was set, False if key does not exist.
         """
         self._assert_ready()
 
-        # Get current value
-        encoded_key = key.encode()
-        value = await self.connection.get(encoded_key)  # type: ignore[union-attr]
-        if value is None:
+        try:
+            await self.connection.touch(key.encode(), seconds)  # type: ignore[union-attr]
+            return True
+        except emcache.NotFoundCommandError:
             return False
-
-        # Set with new expiration
-        is_set = await self.connection.set(  # type: ignore[union-attr]
-            encoded_key,
-            value,
-            exptime=seconds,
-        )
-        return is_set
 
     async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int = 60) -> int:
         """
-        Atomic increment with TTL.
+        Atomically increment and set a TTL only when the key is new.
 
-        For Memcached, we need to handle this specially since `incr` doesn't
-        update expiration time.
+        Uses `add` (atomic set-if-not-exists) when the key is absent so
+        the TTL is applied in a single round-trip. Subsequent increments
+        within the same window use the native `incr` command and preserve
+        the existing expiry.
 
         :param key: Counter key.
         :param amount: Amount to increment.
-        :param ttl: TTL in seconds (only applied on first set).
+        :param ttl: TTL in seconds (applied only on first creation).
         :return: New value after increment.
         """
         self._assert_ready()
 
-        # Try to increment existing counter
         encoded_key = key.encode()
-        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[union-attr]
-        if new_value is not None:
-            return new_value
 
-        # Key doesn't exist, create with TTL
-        # Atomically create with TTL
-        added = await self.connection.add(  # type: ignore[union-attr]
-            encoded_key,
-            str(amount).encode(),
-            exptime=ttl,
-        )
-        if added:
+        # Key exists, just increment (preserves existing TTL).
+        try:
+            new_value = await self.connection.increment(encoded_key, amount)  # type: ignore[union-attr]
+            if new_value is not None:
+                return new_value
+        except (emcache.NotFoundCommandError, emcache.CommandError):
+            pass
+
+        # Key does not exist, create atomically with TTL.
+        try:
+            await self.connection.add(  # type: ignore[union-attr]
+                encoded_key,
+                str(amount).encode(),
+                exptime=ttl,
+                noreply=False,
+            )
             if self.track_keys:
                 await self._track_key(key)
             return amount
-
-        # Someone else created it, increment
-        new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[union-attr]
-        return new_value  # type: ignore[return-value]
+        except emcache.NotStoredStorageCommandError:
+            # Race occurred. Another client created the key first; increment it.
+            new_value = await self.connection.increment(encoded_key, amount)  # type: ignore[union-attr]
+            return new_value  # type: ignore[return-value]
 
     async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
         """
-        Batch get multiple keys.
+        Batch get multiple keys in a single Memcached command.
 
         :param keys: Keys to retrieve.
-        :return: List of values (None for missing keys), same order as keys.
+        :return: List of values (None for missing keys) in the same order as *keys*.
         """
         self._assert_ready()
         if not keys:
             return []
 
         encoded_keys = [k.encode() for k in keys]
-        values = await self.connection.multi_get(*encoded_keys)  # type: ignore[union-attr]
-        results: typing.List[typing.Optional[str]] = []
-        for value in values:
-            if value is not None:
-                results.append(value.decode())
-            else:
-                results.append(None)
-        return results
+        items: typing.Dict[bytes, emcache.Item] = await self.connection.get_many(  # type: ignore[union-attr]
+            encoded_keys
+        )
+        return [
+            items[k.encode()].value.decode() if k.encode() in items else None
+            for k in keys
+        ]
 
     async def multi_set(
         self,
@@ -678,13 +758,13 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         expire: typing.Optional[int] = None,
     ) -> None:
         """
-        Batch set multiple keys using concurrent set operations.
+        Batch set multiple keys using concurrent `set` operations.
 
-        Memcached doesn't have native multi-set, so we use `asyncio.gather(...)`
-        to execute sets concurrently over the connection pool.
+        Memcached does not have a native multi-set command, so operations
+        are issued concurrently via `asyncio.gather`.
 
-        :param items: Mapping of keys to values
-        :param expire: Optional TTL in seconds for all keys
+        :param items: Mapping of keys to values.
+        :param expire: Optional TTL in seconds for all keys.
         """
         self._assert_ready()
         if not items:
@@ -697,25 +777,33 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
                 key.encode(),
                 value.encode(),
                 exptime=exptime,
+                noreply=False,
             )
             if self.track_keys:
                 await self._track_key(key)
 
-        await asyncio.gather(*[_set_one(k, v) for k, v in items.items()])
+        tasks = [asyncio.create_task(_set_one(k, v)) for k, v in items.items()]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception:
+            # Any exception should cancel any ongoing task.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            raise
 
     async def clear(self) -> None:
         """
         Clear all tracked keys in the namespace.
 
-        Note: This only works if `track_keys` was enabled.
-        If not enabled, this is a no-op. If the Memcached server
-        is only used for this backend, consider flushing the entire cache instead.
-        Override this method as so.
+        Note: This only works if `track_keys` was enabled at construction
+        time. If not enabled, this is a no-op. If the Memcached server is
+        dedicated to this backend, consider overriding `clear()` to call
+        `flush_all()` instead:
 
         ```python
-        ...
+
         async def clear(self) -> None:
-            # Flush entire Memcached cache, if not tracking keys
             if self.connection is not None and not self.track_keys:
                 await self.connection.flush_all()
                 return
@@ -723,37 +811,41 @@ class MemcachedBackend(ThrottleBackend[MemcachedClient, HTTPConnectionT]):
         ```
         """
         if not self.track_keys:
-            # No-op if not tracking keys
             return
 
         self._assert_ready()
 
-        tracking_key = self._tracking_key
-        tracked = await self.connection.get(tracking_key.encode())  # type: ignore[union-attr]
-        if tracked is None:
+        tracking_key = self._tracking_key.encode()
+        item = await self.connection.get(tracking_key)  # type: ignore[union-attr]
+        if item is None:
             return
 
-        keys = tracked.decode().split("||")
-        delete_tasks = []
-        for key in keys:
-            delete_tasks.append(self.connection.delete(key.encode()))  # type: ignore[union-attr]
-
-        results = await asyncio.gather(*delete_tasks, return_exceptions=True)
-        for key, result in zip(keys, results):
-            if isinstance(result, Exception):
+        raw_keys = item.value.decode().split("||")
+        tasks = [
+            asyncio.create_task(self.connection.delete(k.encode(), noreply=False))  # type: ignore[union-attr]
+            for k in raw_keys
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for key_str, result in zip(raw_keys, results):
+            if isinstance(result, Exception) and not isinstance(
+                result, emcache.NotFoundCommandError
+            ):
                 raise BackendError(
-                    f"Failed to clear key '{key}': {str(result)}"
+                    f"Failed to clear key '{key_str}': {str(result)}"
                 ) from result
 
-        # Delete the tracking key itself finally
-        await self.connection.delete(tracking_key.encode())  # type: ignore[union-attr]
+        # Remove the tracking key itself.
+        try:
+            await self.connection.delete(tracking_key, noreply=False)  # type: ignore[union-attr]
+        except emcache.NotFoundCommandError:
+            pass
 
     async def reset(self) -> None:
-        """Reset the backend."""
+        """Reset the backend by clearing all tracked namespace data."""
         await self.clear()
 
     async def close(self) -> None:
-        """Close the Memcached connection."""
+        """Close the Memcached connection pool."""
         if self.connection is not None:
             await self.connection.close()
             self.connection = None

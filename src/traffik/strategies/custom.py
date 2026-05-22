@@ -2,6 +2,7 @@
 Advanced Rate Limiting Strategies for Special Use Cases
 """
 
+import asyncio
 import heapq
 import typing
 from collections import deque
@@ -578,13 +579,12 @@ class AdaptiveThrottleStrategy:
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
 
         async with backend.lock(f"lock:{counter_key}", **self.lock_config):
-            # Increment counter
-            count = await backend.increment_with_ttl(
-                counter_key, amount=cost, ttl=ttl_seconds
+            # Increment counter and get or initialize effective limit
+            count, limit_str = await asyncio.gather(
+                backend.increment_with_ttl(counter_key, amount=cost, ttl=ttl_seconds),
+                backend.get(limit_key),
             )
 
-            # Get or initialize effective limit
-            limit_str = await backend.get(limit_key)
             if limit_str:
                 effective_limit = float(limit_str)
             else:
@@ -1889,6 +1889,7 @@ class GeographicDistributionStrategy:
     - Optional spillover to other regions
 
     **Example:**
+
     ```python
     strategy = GeographicDistributionStrategy(
         region_multipliers={

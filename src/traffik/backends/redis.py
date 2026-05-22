@@ -171,8 +171,8 @@ class _AsyncRedisLock:
 
         start = monotonic()
         attempts = 0
-        max_spins_before_backoff = self._max_spins_before_backoff
-        spin_max_delay_seconds = self._spin_max_delay_seconds
+        max_spins = self._max_spins_before_backoff
+        spin_max_delay = self._spin_max_delay_seconds
         while True:
             token: typing.Optional[int] = None
             try:
@@ -216,18 +216,15 @@ class _AsyncRedisLock:
                 return False
 
             attempts += 1
-            if attempts <= max_spins_before_backoff:
+            if attempts <= max_spins:
                 await asyncio.sleep(0)
             else:
                 # Exponential backoff
                 exponent = min(
-                    attempts - max_spins_before_backoff,
+                    attempts - max_spins,
                     6,
                 )
-                delay = min(
-                    0.0005 * (1 << exponent),
-                    spin_max_delay_seconds,
-                )
+                delay = min(0.0005 * (1 << exponent), spin_max_delay)
                 await asyncio.sleep(delay)
 
     async def release(self) -> None:
@@ -240,15 +237,13 @@ class _AsyncRedisLock:
         name = self._name
         try:
             # Ensure we only release if we own the lock (token matches)
-            current: str = await self._redis.get(name)
-            if current and current == token:
-                await self._redis.evalsha(  # type: ignore
-                    self._script_shas["release"],  # type: ignore[arg-type]
-                    1,  # num keys
-                    name,  # KEYS[1]
-                    token,  # ARGV[1]
-                )
-            else:
+            released = await self._redis.evalsha(  # type: ignore
+                self._script_shas["release"],  # type: ignore[arg-type]
+                1,  # num keys
+                name,  # KEYS[1]
+                token,  # ARGV[1]
+            )
+            if not released:
                 sys.stderr.write(f"Warning: Lock '{name}' expired or stolen\n")
         except aioredis.ResponseError as exc:
             if "NOSCRIPT" in str(exc):
@@ -586,9 +581,9 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             **kwargs,
         )
         self._increment_with_ttl_sha: typing.Optional[str] = None
-        """SHA hash of the registered Lua script for increment_with_ttl."""
+        """SHA hash of the loaded Lua script for increment_with_ttl."""
         self._clear_sha: typing.Optional[str] = None
-        """SHA hash of the registered Lua script for clear."""
+        """SHA hash of the loaded Lua script for clear."""
 
         # Why share script SHAs in a mutable dict?
         # Lock script SHAs are stored in a shared mutable dict (`_LockScriptSHAs`) rather than
@@ -602,7 +597,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         """Whether to use Redlock algorithm for distributed locking."""
 
     async def initialize(self) -> None:
-        """Ensure the Redis connection is ready and register Lua scripts."""
+        """Ensure the Redis connection is ready. Load and register Lua scripts."""
         if self.connection is None:
             self.connection = await self._get_connection()
             try:
@@ -618,7 +613,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                 ) from exc
 
     async def _check_scripts_ready(self) -> bool:
-        """Check if all required Lua scripts are registered."""
+        """Check if all required Lua scripts are loaded and registered."""
         if self.connection is None:
             return False
 
@@ -649,21 +644,21 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             return False
 
     async def _ensure_increment_with_ttl_script(self) -> None:
-        """Ensure the `increment_with_ttl` Lua script is registered."""
+        """Ensure the `increment_with_ttl` Lua script is loaded and registered."""
         if self._increment_with_ttl_sha is None:
             self._increment_with_ttl_sha = await self.connection.script_load(  # type: ignore
                 type(self)._INCREMENT_WITH_TTL_SCRIPT
             )
 
     async def _ensure_clear_script(self) -> None:
-        """Ensure the `clear` Lua script is registered."""
+        """Ensure the `clear` Lua script is loaded and registered."""
         if self._clear_sha is None:
             self._clear_sha = await self.connection.script_load(  # type: ignore
                 type(self)._CLEAR_SCRIPT
             )
 
     async def _ensure_lock_scripts_shas(self) -> None:
-        """Ensure the lock Lua scripts are registered into the shared dict."""
+        """Ensure the lock Lua scripts are loaded and registered into the shared dict."""
         if self._lock_script_shas is None and self.connection is not None:
             self._lock_script_shas = dict(  # type: ignore[assignment]
                 acquire=await _AsyncRedisLock._load_acquire_script(self.connection),
@@ -783,7 +778,6 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                     str(ttl),
                 )
                 return int(result) if result is not None else 0
-
             raise
 
     async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:

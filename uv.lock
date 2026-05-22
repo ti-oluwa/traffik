@@ -8,18 +8,6 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "aiomcache"
-version = "0.8.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/8b/0a/914d8df1002d88ca70679d192f6e16d113e6b5cbcc13c51008db9230025f/aiomcache-0.8.2.tar.gz", hash = "sha256:43b220d7f499a32a71871c4f457116eb23460fa216e69c1d32b81e3209e51359", size = 10640, upload-time = "2024-05-07T15:03:14.434Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a1/f8/78455f6377cbe85f335f4dbd40a807dafb72bd5fa05eb946f2ad0cec3d40/aiomcache-0.8.2-py3-none-any.whl", hash = "sha256:9d78d6b6e74e775df18b350b1cddfa96bd2f0a44d49ad27fa87759a3469cef5e", size = 10145, upload-time = "2024-05-07T15:03:12.003Z" },
-]
-
-[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -286,6 +274,40 @@ name = "docopt"
 version = "0.6.2"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/55/8f8cab2afd404cf578136ef2cc5dfb50baa1761b68c9da1fb1e4eed343c9/docopt-0.6.2.tar.gz", hash = "sha256:49b3a825280bd66b3aa83585ef59c4a8c82f2c8a522dbe754a8bc8d08c85c491", size = 25901, upload-time = "2014-06-16T11:18:57.406Z" }
+
+[[package]]
+name = "emcache"
+version = "1.3.3"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3d/d3/ecade36df390632cb185b2f2b1f27e443f3ca40a8d22826702c4f6a4242b/emcache-1.3.3-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:4343f510327a0b5ea4cf1b1abdac5dd2a38e84d7227e9629b01507ef8d127b89", size = 113496, upload-time = "2026-01-09T09:39:30.616Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/a8/2bbb9415249a63834fd5a6908805cd50f33b54c427168d4653cdffe915dc/emcache-1.3.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:8f24782f581d95b23284cb5e67eb1a6aab6e07cf3ffaf59de740ea5a1267d7ab", size = 74125, upload-time = "2026-01-09T13:10:04.212Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/e5/cfe20673a321b8c634b6f8a9e3be9d6240c215b623effbaa2ed35bb4081c/emcache-1.3.3-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:d02a079daef5289164c955da736ac28e2934251def63dd32c35c0995cb24c6be", size = 74096, upload-time = "2026-01-09T13:10:05.43Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/40/35f67637f2d7ba6fef2a100e5cd0374e937323d2140de016f75c26c0be71/emcache-1.3.3-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b31826e63a2808a8573255c3fd8757aee6b93782f3df1fdcc296390b7ac8b860", size = 262180, upload-time = "2026-01-09T09:39:32.459Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/5d/18a55db7134c8f528546f93688ccba9928a6661a0c9dbf9e0bdeed78426a/emcache-1.3.3-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:e7103c092e9ee76c985e9a48b5059b2e47112f99a9cb6b623549dc33c4f71204", size = 256419, upload-time = "2026-01-09T09:39:34.334Z" },
+    { url = "https://files.pythonhosted.org/packages/81/0a/49c6ba6d5bab4304838c67f6c534ff08a38dbf304d175debeb008022ca83/emcache-1.3.3-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:f14718f3d637e874652b37920bd94efcf8a29fcaa53c0279fd8f00a2293a32c9", size = 113234, upload-time = "2026-01-09T09:39:35.344Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/4e/2587b007f91fa26d7d648d4ddb2379bb0c54a08bb0600e1b61cb84097573/emcache-1.3.3-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:b3a1023503032898027c16603719cb6d45a034c4230fe2346c8c8e787172f451", size = 73961, upload-time = "2026-01-09T13:10:07.866Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/1d/ecd9756a156a9db1c46560e41594f8bf6093a181d5bd6f3c78d64852d737/emcache-1.3.3-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:ec5888c40f0e07e3f49a4dba46d93c5701f42ee783d4a0d87d6459294dbd40dc", size = 74022, upload-time = "2026-01-09T13:10:08.815Z" },
+    { url = "https://files.pythonhosted.org/packages/35/83/8930425e5ff324d142105bb59eee33fb9439875559c9a238d2fc8dd9d561/emcache-1.3.3-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e463ca3af633bb68ea0ba875f3ac7707195d722151ebd10cb4fe56a5c6ada4d0", size = 275510, upload-time = "2026-01-09T09:39:36.47Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/2f/b6a0ed34f343dc091dbdcbaa51c4d5feebf47845dabc0f489506096ba924/emcache-1.3.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:ba918ceea279180c444763bb8c5d22534ad111aec898531c40809ce9590845f0", size = 270329, upload-time = "2026-01-09T09:39:37.552Z" },
+    { url = "https://files.pythonhosted.org/packages/86/2b/71efd5c9fd8d129debf74543024ac65adb3c9e3313e1a09d7daadbb93b3b/emcache-1.3.3-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:b6c4f43745abc95c399caa22a35a89d11541b9d9037ec6da80bd91ba85648310", size = 115054, upload-time = "2026-01-09T09:39:38.653Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/3f/5d6d0eb16b419206257e399ee694e1724e4649e9946ad7b0fc98011c7db7/emcache-1.3.3-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:40b4354955b34af43f74524f593b523aadba16dd583fd4866edba0a3b6666af0", size = 75095, upload-time = "2026-01-09T13:10:10.285Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/77/da322ba5ab79187361af916a6b0ef2d10144f0383e62b9dd66380f359123/emcache-1.3.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:db9506fb274bd35f20685b9bc886f68e9c77d4a094612fbcb852039139f0dd23", size = 74605, upload-time = "2026-01-09T13:10:11.855Z" },
+    { url = "https://files.pythonhosted.org/packages/38/9e/c6a0dc935e59905f49cc60d9ac52c4d56976130653e5aabe3d5b0d9f0736/emcache-1.3.3-cp312-cp312-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:e26ebcdc4d71b1945fa4a782457b5505a3fc4519bb5e55e9aac7c801d616dad5", size = 284525, upload-time = "2026-01-09T09:39:39.619Z" },
+    { url = "https://files.pythonhosted.org/packages/69/7d/4a6e8774ea3e1aa88b87b923be654dc835c82489e22e944ece91cfb01981/emcache-1.3.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:6118fc2c846632522a549553d7c8fc29f1bd3b3c6f4684651d33cb3815e85262", size = 289663, upload-time = "2026-01-09T09:39:40.724Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/dc/0ba382866711a78974e0422738a9b4326d9bd7f131543723e660696ba3de/emcache-1.3.3-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:f7f705181314529e5e19199416cd854cd4ec622dec113af5376854c761843c58", size = 114193, upload-time = "2026-01-09T09:39:41.828Z" },
+    { url = "https://files.pythonhosted.org/packages/16/44/ea431285e8d46afe25a07b9ca3e3326dab10f38a0f6f92dd02dcd2894ace/emcache-1.3.3-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:d4f441b86a3cffbe42149b15fcd2e083da82dc61913efcc517fb64724c5eadc7", size = 74630, upload-time = "2026-01-09T13:10:13.328Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/fb/8b6c5b4a33fb86e1ca81261437712fe4158c0750f92432e458b8b7141092/emcache-1.3.3-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:f3cea8c3b7a761c5660762fd69bc656559087257c113ce6b62eb66ae9662609d", size = 74173, upload-time = "2026-01-09T13:10:14.413Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/18/1e19b79f5dec6b488ecb4d470976a3c972d2f1983b53dcf458a54ac8d548/emcache-1.3.3-cp313-cp313-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:0e11e54f9478f5a6a4c911e6f293307d52ad4f143e00b2fdcac1560e8ece52c2", size = 277884, upload-time = "2026-01-09T09:39:43.444Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/c9/58b3f6d553006ca69ac27708bdc3818de0cd0e2877ddfb7d4ad1d4f64cb0/emcache-1.3.3-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:635254f305734ef0a9439025c06fba71088efc3a7b6a43648abd015b1ece5fe0", size = 283021, upload-time = "2026-01-09T09:39:45.135Z" },
+    { url = "https://files.pythonhosted.org/packages/21/04/f22168f085fc9eb3fa0625d74037c43f1fb715d45b1d9607aa525b3eabe8/emcache-1.3.3-cp314-cp314-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:b5148b3064dcbad882e86c916f8f7c305a1780b51b2621bc951ed255d7185654", size = 274560, upload-time = "2026-01-09T09:39:49.034Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/cb/d5ffffd1c408e4e1a73bda78468f71fe9620f6685b72a5c19488e23a529b/emcache-1.3.3-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ef67736580b621bc14d8f5c90344edaf96f786c5a939f4af91b3176e3fa71924", size = 282044, upload-time = "2026-01-09T09:39:50.226Z" },
+    { url = "https://files.pythonhosted.org/packages/4a/67/4bda7135176146c9bfb219f4a239974444d809c8d84bfffb68637599bd04/emcache-1.3.3-cp39-cp39-macosx_10_9_universal2.whl", hash = "sha256:1344ae72a02e51b377fdf7c4fd84cf8c9a97af7282faf481c957f04afc0bf954", size = 114796, upload-time = "2026-01-09T09:39:54.801Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/a3/69f8e528cd1a2b145f1ca549e0e7567a9fafb2a71e0768a89b12c2ff2002/emcache-1.3.3-cp39-cp39-macosx_10_9_x86_64.whl", hash = "sha256:3616b142c18ed011bc12a093be13c9b3a422f78eebe152a612a36c79f82efc88", size = 74755, upload-time = "2026-01-09T13:10:17.862Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/93/0691c46b88fb9354e4eb42f9e075cac5669e2c23a34edf9e9283b234019d/emcache-1.3.3-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:4fc2a7bdb29be5a1c1996c223a98032da59596b84c21fb4146167557e622be9d", size = 74759, upload-time = "2026-01-09T13:10:18.771Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/81/77178a29432e19c76068bc23d01cf8209ff6b64db3ca6018b93592af6f0f/emcache-1.3.3-cp39-cp39-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:5b132196d8e0087da5a9300752c927215f60203072d5cef5d5abb34bda50a8a7", size = 262442, upload-time = "2026-01-09T09:39:55.887Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/79/da8f6e56f8a29dbb91000849672f12aa0f2f69c5404713cac8744841ef0d/emcache-1.3.3-cp39-cp39-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:938864aa13a87cbda0eecf945bae8a180da57f49bb4bfbb0397adf51932e6c12", size = 257241, upload-time = "2026-01-09T09:39:57.091Z" },
+]
 
 [[package]]
 name = "exceptiongroup"
@@ -1285,20 +1307,20 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
-    { name = "aiomcache" },
+    { name = "emcache" },
     { name = "pottery" },
     { name = "redis" },
 ]
 memcached = [
-    { name = "aiomcache" },
+    { name = "emcache" },
 ]
 redis = [
     { name = "pottery" },
     { name = "redis" },
 ]
 test = [
-    { name = "aiomcache" },
     { name = "anyio" },
+    { name = "emcache" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pottery" },
@@ -1338,9 +1360,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiomcache", marker = "extra == 'memcached'", specifier = ">=0.8.2" },
     { name = "annotated-types", specifier = ">=0.7.0" },
     { name = "anyio", marker = "extra == 'test'", specifier = ">=4.0.0" },
+    { name = "emcache", marker = "extra == 'memcached'", specifier = ">=1.3.3" },
     { name = "fastapi", marker = "extra == 'test'", specifier = ">=0.68.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.0" },
     { name = "msgpack", specifier = ">=1.1.2" },

@@ -81,7 +81,7 @@ class BenchmarkConfig:
     )
     iterations: int = 3
     concurrency: int = 50
-    num_requests: int = 500
+    request_count: int = 500
 
 
 def create_app(
@@ -114,22 +114,22 @@ def create_app(
     return app, backend
 
 
-async def _run_concurrent(
-    client: httpx.AsyncClient, num_requests: int, concurrency: int
-) -> tuple:
+async def _send_concurrent_requests(
+    client: httpx.AsyncClient, request_count: int, concurrency: int
+) -> typing.Tuple[typing.List[float], int, int]:
     """Run concurrent HTTP requests in batches and collect results."""
     latencies: typing.List[float] = []
     successful = 0
     throttled = 0
 
     async def make_request():
-        req_start = time.perf_counter()
+        start = time.perf_counter()
         response = await client.get("/test")
-        req_end = time.perf_counter()
-        return req_end - req_start, response.status_code
+        end = time.perf_counter()
+        return end - start, response.status_code
 
-    for batch_start in range(0, num_requests, concurrency):
-        batch_size = min(concurrency, num_requests - batch_start)
+    for batch_start in range(0, request_count, concurrency):
+        batch_size = min(concurrency, request_count - batch_start)
         results = await asyncio.gather(*[make_request() for _ in range(batch_size)])
         for req_time, status in results:
             latencies.append(req_time)
@@ -149,22 +149,22 @@ async def run_scenario(
     """Run a single headers scenario."""
     app, backend = create_app(headers)
 
-    start_time = time.perf_counter()
     async with contextlib.AsyncExitStack() as stack:
         await stack.enter_async_context(backend())
+        start_time = time.perf_counter()
         client = await stack.enter_async_context(
             httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             )
         )
-        latencies, successful, throttled = await _run_concurrent(
-            client, config.num_requests, config.concurrency
+        latencies, successful, throttled = await _send_concurrent_requests(
+            client, config.request_count, config.concurrency
         )
+        end_time = time.perf_counter()
 
-    end_time = time.perf_counter()
     return ScenarioResult(
         name=name,
-        total_requests=config.num_requests,
+        total_requests=config.request_count,
         successful_requests=successful,
         throttled_requests=throttled,
         total_time=end_time - start_time,
@@ -259,18 +259,18 @@ def print_results(results: typing.Dict[str, typing.List[ScenarioResult]]) -> Non
 
     baseline_rps: typing.Optional[float] = None
     for name, scenario_results in results.items():
-        agg = aggregate_results(scenario_results)
+        aggregate = aggregate_results(scenario_results)
         if baseline_rps is None:
-            baseline_rps = agg.requests_per_second
+            baseline_rps = aggregate.requests_per_second
 
         overhead = ""
         if baseline_rps and baseline_rps > 0:
-            diff = ((agg.requests_per_second - baseline_rps) / baseline_rps) * 100
+            diff = ((aggregate.requests_per_second - baseline_rps) / baseline_rps) * 100
             overhead = f"  ({diff:+.1f}%)"
 
         print(
-            f"{name:<38} {agg.requests_per_second:<12.1f}"
-            f"{agg.p50_latency:<12.2f} {agg.p95_latency:<12.2f} {agg.p99_latency:<12.2f}"
+            f"{name:<38} {aggregate.requests_per_second:<12.1f}"
+            f"{aggregate.p50_latency:<12.2f} {aggregate.p95_latency:<12.2f} {aggregate.p99_latency:<12.2f}"
             f"{overhead}"
         )
 
@@ -313,11 +313,11 @@ async def main() -> None:
         scenarios=args.scenarios.split(","),
         iterations=args.iterations,
         concurrency=args.concurrency,
-        num_requests=args.num_requests,
+        request_count=args.request_count,
     )
 
     print("Starting headers overhead benchmarks...")
-    print(f"Concurrency: {config.concurrency}, Requests/run: {config.num_requests}")
+    print(f"Concurrency: {config.concurrency}, Requests/run: {config.request_count}")
     print(f"Iterations: {config.iterations}")
     print(f"Scenarios: {', '.join(config.scenarios)}\n")
 

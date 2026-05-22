@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import statistics
 import time
+import typing
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -23,7 +24,6 @@ from fastapi import Depends, FastAPI, Request
 from slowapi import Limiter as SlowAPILimiter
 
 from traffik import HTTPThrottle, get_remote_address
-from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.backends.redis import RedisBackend
 from traffik.registry import ThrottleRegistry
@@ -143,11 +143,12 @@ def create_traffik_backend(config: BenchmarkConfig):
             track_keys=config.traffik_memcached_track_keys,
         )
 
-    return InMemoryBackend(
+    return MultiProcessInMemoryBackend(
         namespace="traffik:bench",
         identifier=custom_identifier,
         persistent=False,
         number_of_shards=5,
+        lock_pool_size=1280,
     )
 
 
@@ -275,18 +276,18 @@ def create_slowapi_app(
     return app
 
 
-async def _run_requests_sequential(
-    client: httpx.AsyncClient, num_requests: int, path: str = "/test"
-) -> tuple:
+async def _send_requests(
+    client: httpx.AsyncClient, request_count: int, path: str = "/test"
+) -> typing.Tuple[typing.List[float], int, int]:
     """Run sequential HTTP requests and collect results."""
     latencies = []
     successful = 0
     throttled = 0
-    for _ in range(num_requests):
-        req_start = time.perf_counter()
+    for _ in range(request_count):
+        start = time.perf_counter()
         response = await client.get(path)
-        req_end = time.perf_counter()
-        latencies.append(req_end - req_start)
+        end = time.perf_counter()
+        latencies.append(end - start)
         if response.status_code == 200:
             successful += 1
         elif response.status_code == 429:
@@ -294,9 +295,7 @@ async def _run_requests_sequential(
     return latencies, successful, throttled
 
 
-async def run_scenario_low_load(
-    library: str, config: BenchmarkConfig
-) -> ScenarioResult:
+async def run_low_load(library: str, config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 1: Low load - requests well within limit."""
     backend = None
     if library == "Traffik":
@@ -304,31 +303,28 @@ async def run_scenario_low_load(
     else:
         app = create_slowapi_app(limit=100, window=60, config=config)
 
-    num_requests = 50
+    request_count = 50
     latencies = []
     successful = 0
     throttled = 0
-
-    start_time = time.perf_counter()
 
     async with contextlib.AsyncExitStack() as stack:
         if backend is not None:
             await stack.enter_async_context(backend())
 
+        start_time = time.perf_counter()
         client = await stack.enter_async_context(
             httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             )
         )
-        latencies, successful, throttled = await _run_requests_sequential(
-            client, num_requests
-        )
+        latencies, successful, throttled = await _send_requests(client, request_count)
+        end_time = time.perf_counter()
 
-    end_time = time.perf_counter()
     return ScenarioResult(
         name="Low Load",
         library=library,
-        total_requests=num_requests,
+        total_requests=request_count,
         successful_requests=successful,
         throttled_requests=throttled,
         total_time=end_time - start_time,
@@ -336,9 +332,7 @@ async def run_scenario_low_load(
     )
 
 
-async def run_scenario_high_load(
-    library: str, config: BenchmarkConfig
-) -> ScenarioResult:
+async def run_high_load(library: str, config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 2: High load - requests exceeding limit."""
     backend = None
     if library == "Traffik":
@@ -346,30 +340,28 @@ async def run_scenario_high_load(
     else:
         app = create_slowapi_app(limit=100, window=60, config=config)
 
-    num_requests = 200
+    request_count = 200
     latencies = []
     successful = 0
     throttled = 0
 
-    start_time = time.perf_counter()
-
     async with contextlib.AsyncExitStack() as stack:
         if backend is not None:
             await stack.enter_async_context(backend())
+
+        start_time = time.perf_counter()
         client = await stack.enter_async_context(
             httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             )
         )
-        latencies, successful, throttled = await _run_requests_sequential(
-            client, num_requests
-        )
+        latencies, successful, throttled = await _send_requests(client, request_count)
+        end_time = time.perf_counter()
 
-    end_time = time.perf_counter()
     return ScenarioResult(
         name="High Load",
         library=library,
-        total_requests=num_requests,
+        total_requests=request_count,
         successful_requests=successful,
         throttled_requests=throttled,
         total_time=end_time - start_time,
@@ -377,9 +369,7 @@ async def run_scenario_high_load(
     )
 
 
-async def run_scenario_sustained_load(
-    library: str, config: BenchmarkConfig
-) -> ScenarioResult:
+async def run_sustained_load(library: str, config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 3: Sustained load under higher limit."""
     backend = None
     if library == "Traffik":
@@ -387,19 +377,18 @@ async def run_scenario_sustained_load(
     else:
         app = create_slowapi_app(limit=1000, window=60, config=config)
 
-    num_requests = 500
+    request_count = 500
     concurrency = 50  # 50 concurrent requests at a time
 
     latencies = []
     successful = 0
     throttled = 0
 
-    start_time = time.perf_counter()
-
     async with contextlib.AsyncExitStack() as stack:
         if backend is not None:
             await stack.enter_async_context(backend())
 
+        start_time = time.perf_counter()
         client = await stack.enter_async_context(
             httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -407,13 +396,13 @@ async def run_scenario_sustained_load(
         )
 
         async def make_request():
-            req_start = time.perf_counter()
+            start = time.perf_counter()
             response = await client.get("/test")
-            req_end = time.perf_counter()
-            return req_end - req_start, response.status_code
+            end = time.perf_counter()
+            return end - start, response.status_code
 
-        for batch_start in range(0, num_requests, concurrency):
-            batch_size = min(concurrency, num_requests - batch_start)
+        for batch_start in range(0, request_count, concurrency):
+            batch_size = min(concurrency, request_count - batch_start)
             tasks = [make_request() for _ in range(batch_size)]
 
             results = await asyncio.gather(*tasks)
@@ -425,11 +414,11 @@ async def run_scenario_sustained_load(
                 elif status == 429:
                     throttled += 1
 
-    end_time = time.perf_counter()
+        end_time = time.perf_counter()
     return ScenarioResult(
         name="Sustained Load",
         library=library,
-        total_requests=num_requests,
+        total_requests=request_count,
         successful_requests=successful,
         throttled_requests=throttled,
         total_time=end_time - start_time,
@@ -437,9 +426,7 @@ async def run_scenario_sustained_load(
     )
 
 
-async def run_scenario_burst_traffic(
-    library: str, config: BenchmarkConfig
-) -> ScenarioResult:
+async def run_burst_traffic(library: str, config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 4: Burst traffic pattern."""
     backend = None
     if library == "Traffik":
@@ -447,31 +434,28 @@ async def run_scenario_burst_traffic(
     else:
         app = create_slowapi_app(limit=50, window=60, config=config)
 
-    num_requests = 100
+    request_count = 100
     latencies = []
     successful = 0
     throttled = 0
-
-    start_time = time.perf_counter()
 
     async with contextlib.AsyncExitStack() as stack:
         if backend is not None:
             await stack.enter_async_context(backend())
 
+        start_time = time.perf_counter()
         client = await stack.enter_async_context(
             httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             )
         )
-        latencies, successful, throttled = await _run_requests_sequential(
-            client, num_requests
-        )
+        latencies, successful, throttled = await _send_requests(client, request_count)
+        end_time = time.perf_counter()
 
-    end_time = time.perf_counter()
     return ScenarioResult(
         name="Burst Load",
         library=library,
-        total_requests=num_requests,
+        total_requests=request_count,
         successful_requests=successful,
         throttled_requests=throttled,
         total_time=end_time - start_time,
@@ -479,10 +463,8 @@ async def run_scenario_burst_traffic(
     )
 
 
-async def run_scenario_race_conditions(
-    library: str, config: BenchmarkConfig
-) -> ScenarioResult:
-    """Scenario 5: Test concurrent requests for race conditions."""
+async def run_race_test(library: str, config: BenchmarkConfig) -> ScenarioResult:
+    """Scenario 5: Test concurrent requests for race."""
     backend = None
     if library == "Traffik":
         app, backend = create_traffik_app(limit=100, window=60, config=config)
@@ -494,12 +476,11 @@ async def run_scenario_race_conditions(
     successful = 0
     throttled = 0
 
-    start_time = time.perf_counter()
-
     async with contextlib.AsyncExitStack() as stack:
         if backend is not None:
             await stack.enter_async_context(backend())
 
+        start_time = time.perf_counter()
         client = await stack.enter_async_context(
             httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -507,10 +488,10 @@ async def run_scenario_race_conditions(
         )
 
         async def make_request():
-            req_start = time.perf_counter()
+            start = time.perf_counter()
             response = await client.get("/test")
-            req_end = time.perf_counter()
-            return response, req_end - req_start
+            end = time.perf_counter()
+            return response, end - start
 
         tasks = [make_request() for _ in range(num_concurrent)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -526,7 +507,7 @@ async def run_scenario_race_conditions(
             elif response.status_code == 429:
                 throttled += 1
 
-    end_time = time.perf_counter()
+        end_time = time.perf_counter()
     return ScenarioResult(
         name="Race Condition Test",
         library=library,
@@ -538,9 +519,7 @@ async def run_scenario_race_conditions(
     )
 
 
-async def run_scenario_distributed(
-    library: str, config: BenchmarkConfig
-) -> ScenarioResult:
+async def run_distributed_test(library: str, config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 6: Test distributed correctness with multiple clients."""
     backend = None
     if library == "Traffik":
@@ -555,34 +534,33 @@ async def run_scenario_distributed(
     throttled = 0
     total_requests = 0
 
-    start_time = time.perf_counter()
-
     async with contextlib.AsyncExitStack() as stack:
         if backend is not None:
             await stack.enter_async_context(backend())
 
+        start_time = time.perf_counter()
         client = await stack.enter_async_context(
             httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             )
         )
 
-        async def make_client_requests(client_id: int):
+        async def make_requests(client_id: int):
             """Make all requests for a single client."""
-            results_list = []
+            results = []
             for _ in range(requests_per_client):
-                req_start = time.perf_counter()
+                start = time.perf_counter()
                 response = await client.get(
                     "/test", headers={"X-Client-ID": f"client-{client_id}"}
                 )
-                req_end = time.perf_counter()
-                results_list.append((response, req_end - req_start))
-            return results_list
+                end = time.perf_counter()
+                results.append((response, end - start))
+            return results
 
-        client_tasks = [make_client_requests(i) for i in range(num_clients)]
-        all_client_results = await asyncio.gather(*client_tasks)
+        tasks = [make_requests(i) for i in range(num_clients)]
+        all_results = await asyncio.gather(*tasks)
 
-        for client_results in all_client_results:
+        for client_results in all_results:
             for response, latency in client_results:
                 total_requests += 1
                 latencies.append(latency)
@@ -592,7 +570,7 @@ async def run_scenario_distributed(
                 elif response.status_code == 429:
                     throttled += 1
 
-    end_time = time.perf_counter()
+        end_time = time.perf_counter()
     return ScenarioResult(
         name="Distributed Correctness",
         library=library,
@@ -621,12 +599,12 @@ async def run_benchmark_suite(
 
     results = {}
     scenario_runners = {
-        "low": ("Low Load", run_scenario_low_load),
-        "high": ("High Load", run_scenario_high_load),
-        "sustained": ("Sustained Load", run_scenario_sustained_load),
-        "burst": ("Burst Load", run_scenario_burst_traffic),
-        "race": ("Race Condition Test", run_scenario_race_conditions),
-        "distributed": ("Distributed Correctness", run_scenario_distributed),
+        "low": ("Low Load", run_low_load),
+        "high": ("High Load", run_high_load),
+        "sustained": ("Sustained Load", run_sustained_load),
+        "burst": ("Burst Load", run_burst_traffic),
+        "race": ("Race Condition Test", run_race_test),
+        "distributed": ("Distributed Correctness", run_distributed_test),
     }
 
     for scenario_key in config.scenarios:
@@ -708,14 +686,18 @@ def print_comparison(
             continue
 
         scenarios_compared += 1
-        t_agg = aggregate_results(traffik_results[scenario])
-        s_agg = aggregate_results(slowapi_results[scenario])
+        traffik_aggregate = aggregate_results(traffik_results[scenario])
+        slowapi_aggregate = aggregate_results(slowapi_results[scenario])
 
         # Requests/sec comparison
-        t_rps = t_agg.requests_per_second
-        s_rps = s_agg.requests_per_second
+        traffik_rps = traffik_aggregate.requests_per_second
+        slowapi_rps = slowapi_aggregate.requests_per_second
         rps_winner = (
-            "Traffik" if t_rps > s_rps else "SlowAPI" if s_rps > t_rps else "Tie"
+            "Traffik"
+            if traffik_rps > slowapi_rps
+            else "SlowAPI"
+            if slowapi_rps > traffik_rps
+            else "Tie"
         )
         if rps_winner == "Traffik":
             traffik_wins += 1
@@ -724,31 +706,45 @@ def print_comparison(
         else:  # Tie
             ties += 1
 
-        diff_pct = ((t_rps - s_rps) / s_rps * 100) if s_rps > 0 else 0
+        percentage_difference = (
+            ((traffik_rps - slowapi_rps) / slowapi_rps * 100) if slowapi_rps > 0 else 0
+        )
 
         print(
-            f"{scenario:<20} {'Requests/sec':<25} {t_rps:<15.2f} {s_rps:<15.2f} {rps_winner:<10}"
+            f"{scenario:<20} {'Requests/sec':<25} {traffik_rps:<15.2f} {slowapi_rps:<15.2f} {rps_winner:<10}"
         )
-        print(f"{'':<20} {'  Difference':<25} {diff_pct:+.1f}%")
+        print(f"{'':<20} {'  Difference':<25} {percentage_difference:+.1f}%")
 
         # Latency comparison
-        p50_winner = "Traffik" if t_agg.p50_latency < s_agg.p50_latency else "SlowAPI"
+        p50_winner = (
+            "Traffik"
+            if traffik_aggregate.p50_latency < slowapi_aggregate.p50_latency
+            else "SlowAPI"
+        )
         print(
-            f"{'':<20} {'P50 Latency (ms)':<25} {t_agg.p50_latency:<15.2f} {s_agg.p50_latency:<15.2f} {p50_winner:<10}"
+            f"{'':<20} {'P50 Latency (ms)':<25} {traffik_aggregate.p50_latency:<15.2f} {slowapi_aggregate.p50_latency:<15.2f} {p50_winner:<10}"
         )
 
-        p95_winner = "Traffik" if t_agg.p95_latency < s_agg.p95_latency else "SlowAPI"
+        p95_winner = (
+            "Traffik"
+            if traffik_aggregate.p95_latency < slowapi_aggregate.p95_latency
+            else "SlowAPI"
+        )
         print(
-            f"{'':<20} {'P95 Latency (ms)':<25} {t_agg.p95_latency:<15.2f} {s_agg.p95_latency:<15.2f} {p95_winner:<10}"
+            f"{'':<20} {'P95 Latency (ms)':<25} {traffik_aggregate.p95_latency:<15.2f} {slowapi_aggregate.p95_latency:<15.2f} {p95_winner:<10}"
         )
 
-        p99_winner = "Traffik" if t_agg.p99_latency < s_agg.p99_latency else "SlowAPI"
+        p99_winner = (
+            "Traffik"
+            if traffik_aggregate.p99_latency < slowapi_aggregate.p99_latency
+            else "SlowAPI"
+        )
         print(
-            f"{'':<20} {'P99 Latency (ms)':<25} {t_agg.p99_latency:<15.2f} {s_agg.p99_latency:<15.2f} {p99_winner:<10}"
+            f"{'':<20} {'P99 Latency (ms)':<25} {traffik_aggregate.p99_latency:<15.2f} {slowapi_aggregate.p99_latency:<15.2f} {p99_winner:<10}"
         )
 
         print(
-            f"{'':<20} {'Success Rate (%)':<25} {t_agg.success_rate:<15.1f} {s_agg.success_rate:<15.1f}"
+            f"{'':<20} {'Success Rate (%)':<25} {traffik_aggregate.success_rate:<15.1f} {slowapi_aggregate.success_rate:<15.1f}"
         )
         print()
 
@@ -762,34 +758,42 @@ def print_comparison(
         "Race Condition Test" in traffik_results
         and "Race Condition Test" in slowapi_results
     ):
-        t_race = aggregate_results(traffik_results["Race Condition Test"])
-        s_race = aggregate_results(slowapi_results["Race Condition Test"])
+        traffik_race_aggregate = aggregate_results(
+            traffik_results["Race Condition Test"]
+        )
+        slowapi_race_aggregate = aggregate_results(
+            slowapi_results["Race Condition Test"]
+        )
 
         # Number of iterations determines expected values
-        num_iterations = len(traffik_results["Race Condition Test"])
-        expected_success = 100 * num_iterations
-        expected_success_min = 85 * num_iterations
-        expected_success_max = 115 * num_iterations
+        iteration_count = len(traffik_results["Race Condition Test"])
+        expected_success = 100 * iteration_count
+        min_expected_success = 85 * iteration_count
+        max_expected_success = 115 * iteration_count
 
         print("Race Condition Test")
         print(
-            f"  {'Successful':<28} {t_race.successful_requests:<20} {s_race.successful_requests:<20}"
+            f"  {'Successful':<28} {traffik_race_aggregate.successful_requests:<20} {slowapi_race_aggregate.successful_requests:<20}"
         )
         print(
-            f"  {'Throttled':<28} {t_race.throttled_requests:<20} {s_race.throttled_requests:<20}"
+            f"  {'Throttled':<28} {traffik_race_aggregate.throttled_requests:<20} {slowapi_race_aggregate.throttled_requests:<20}"
         )
         print(
             f"  {'Expected Success':<28} {'~' + str(expected_success):<20} {'~' + str(expected_success):<20}"
         )
 
-        t_race_ok = (
-            expected_success_min <= t_race.successful_requests <= expected_success_max
+        traffik_race_aggregate_ok = (
+            min_expected_success
+            <= traffik_race_aggregate.successful_requests
+            <= max_expected_success
         )
-        s_race_ok = (
-            expected_success_min <= s_race.successful_requests <= expected_success_max
+        slowapi_race_aggregate_ok = (
+            min_expected_success
+            <= slowapi_race_aggregate.successful_requests
+            <= max_expected_success
         )
         print(
-            f"  {'Within Expected Range':<28} {'Yes' if t_race_ok else 'No':<20} {'Yes' if s_race_ok else 'No':<20}"
+            f"  {'Within Expected Range':<28} {'Yes' if traffik_race_aggregate_ok else 'No':<20} {'Yes' if slowapi_race_aggregate_ok else 'No':<20}"
         )
         print()
 
@@ -797,22 +801,26 @@ def print_comparison(
         "Distributed Correctness" in traffik_results
         and "Distributed Correctness" in slowapi_results
     ):
-        t_dist = aggregate_results(traffik_results["Distributed Correctness"])
-        s_dist = aggregate_results(slowapi_results["Distributed Correctness"])
+        traffik_distributed_aggregate = aggregate_results(
+            traffik_results["Distributed Correctness"]
+        )
+        slowapi_distributed_aggregate = aggregate_results(
+            slowapi_results["Distributed Correctness"]
+        )
 
         # Number of iterations determines expected values
-        num_iterations = len(traffik_results["Distributed Correctness"])
-        expected_success = 1000 * num_iterations
-        expected_throttled = 200 * num_iterations
-        expected_success_min = 850 * num_iterations
-        expected_success_max = 1150 * num_iterations
+        iteration_count = len(traffik_results["Distributed Correctness"])
+        expected_success = 1000 * iteration_count
+        expected_throttled = 200 * iteration_count
+        min_expected_success = 850 * iteration_count
+        max_expected_success = 1150 * iteration_count
 
         print("Distributed Correctness")
         print(
-            f"  {'Successful':<28} {t_dist.successful_requests:<20} {s_dist.successful_requests:<20}"
+            f"  {'Successful':<28} {traffik_distributed_aggregate.successful_requests:<20} {slowapi_distributed_aggregate.successful_requests:<20}"
         )
         print(
-            f"  {'Throttled':<28} {t_dist.throttled_requests:<20} {s_dist.throttled_requests:<20}"
+            f"  {'Throttled':<28} {traffik_distributed_aggregate.throttled_requests:<20} {slowapi_distributed_aggregate.throttled_requests:<20}"
         )
         print(
             f"  {'Expected Success':<28} {'~' + str(expected_success):<20} {'~' + str(expected_success):<20}"
@@ -821,14 +829,18 @@ def print_comparison(
             f"  {'Expected Throttled':<28} {'~' + str(expected_throttled):<20} {'~' + str(expected_throttled):<20}"
         )
 
-        t_dist_ok = (
-            expected_success_min <= t_dist.successful_requests <= expected_success_max
+        traffik_distributed_aggregate_ok = (
+            min_expected_success
+            <= traffik_distributed_aggregate.successful_requests
+            <= max_expected_success
         )
-        s_dist_ok = (
-            expected_success_min <= s_dist.successful_requests <= expected_success_max
+        slowapi_distributed_aggregate_ok = (
+            min_expected_success
+            <= slowapi_distributed_aggregate.successful_requests
+            <= max_expected_success
         )
         print(
-            f"  {'Within Expected Range':<28} {'Yes' if t_dist_ok else 'No':<20} {'Yes' if s_dist_ok else 'No':<20}"
+            f"  {'Within Expected Range':<28} {'Yes' if traffik_distributed_aggregate_ok else 'No':<20} {'Yes' if slowapi_distributed_aggregate_ok else 'No':<20}"
         )
 
     # Summary
@@ -868,10 +880,10 @@ def print_single_library_results(
     for scenario in performance_scenarios:
         if scenario not in results:
             continue
-        agg = aggregate_results(results[scenario])
+        aggregate = aggregate_results(results[scenario])
         print(
-            f"{scenario:<20} {agg.requests_per_second:<12.2f} {agg.p50_latency:<12.2f} "
-            f"{agg.p95_latency:<12.2f} {agg.p99_latency:<12.2f} {agg.success_rate:<10.1f}"
+            f"{scenario:<20} {aggregate.requests_per_second:<12.2f} {aggregate.p50_latency:<12.2f} "
+            f"{aggregate.p95_latency:<12.2f} {aggregate.p99_latency:<12.2f} {aggregate.success_rate:<10.1f}"
         )
 
     # Correctness tests
@@ -883,10 +895,10 @@ def print_single_library_results(
         for scenario in correctness_scenarios:
             if scenario not in results:
                 continue
-            agg = aggregate_results(results[scenario])
+            aggregate = aggregate_results(results[scenario])
             print(
-                f"{scenario}: {agg.successful_requests} successful, "
-                f"{agg.throttled_requests} throttled (out of {agg.total_requests})"
+                f"{scenario}: {aggregate.successful_requests} successful, "
+                f"{aggregate.throttled_requests} throttled (out of {aggregate.total_requests})"
             )
 
     print("\n" + "=" * 80 + "\n")

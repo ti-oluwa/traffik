@@ -30,6 +30,6 @@ class BenchmarkMemcachedBackend(MemcachedBackend):
     async def clear(self) -> None:
         # Flush entire Memcached cache, if not tracking keys
         if self.connection is not None and not self.track_keys:
-            await self.connection.flush_all()
+            await self.connection.flush_all(self._host_addresses[0])
             return
         await super().clear()

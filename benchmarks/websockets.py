@@ -180,18 +180,18 @@ def create_app(
     return app
 
 
-async def run_scenario_low_load(config: BenchmarkConfig) -> ScenarioResult:
+async def run_low_load(config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 1: Low load - messages well within limit."""
     app = create_app(limit=100, window=60, config=config)
 
-    num_messages = 50
+    message_count = 50
     latencies = []
     successful = 0
     throttled = 0
 
-    start_time = time.perf_counter()
     base_url = "http://test"
     running_loop = asyncio.get_running_loop()
+    start_time = time.perf_counter()
     async with (
         AsyncTestClient(
             app=app,
@@ -200,7 +200,7 @@ async def run_scenario_low_load(config: BenchmarkConfig) -> ScenarioResult:
         ) as client,
         client.websocket_connect(url="/ws", timeout=30.0) as websocket,
     ):
-        for i in range(num_messages):
+        for i in range(message_count):
             msg_start = time.perf_counter()
 
             await websocket.send_json({"message": f"test_{i}"})
@@ -214,10 +214,10 @@ async def run_scenario_low_load(config: BenchmarkConfig) -> ScenarioResult:
             else:
                 successful += 1
 
-    end_time = time.perf_counter()
+        end_time = time.perf_counter()
     return ScenarioResult(
         name="Low Load",
-        total_messages=num_messages,
+        total_messages=message_count,
         successful_messages=successful,
         throttled_messages=throttled,
         total_time=end_time - start_time,
@@ -225,19 +225,18 @@ async def run_scenario_low_load(config: BenchmarkConfig) -> ScenarioResult:
     )
 
 
-async def run_scenario_high_load(config: BenchmarkConfig) -> ScenarioResult:
+async def run_high_load(config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 2: High load - messages exceeding limit."""
     app = create_app(limit=100, window=60, config=config)
 
-    num_messages = 200
+    message_count = 200
     latencies = []
     successful = 0
     throttled = 0
 
-    start_time = time.perf_counter()
-
     base_url = "http://test"
     running_loop = asyncio.get_running_loop()
+    start_time = time.perf_counter()
     async with (
         AsyncTestClient(
             app=app,
@@ -246,7 +245,7 @@ async def run_scenario_high_load(config: BenchmarkConfig) -> ScenarioResult:
         ) as client,
         client.websocket_connect(url="/ws", timeout=30.0) as websocket,
     ):
-        for i in range(num_messages):
+        for i in range(message_count):
             msg_start = time.perf_counter()
 
             await websocket.send_json({"message": f"test_{i}"})
@@ -260,10 +259,10 @@ async def run_scenario_high_load(config: BenchmarkConfig) -> ScenarioResult:
             else:
                 successful += 1
 
-    end_time = time.perf_counter()
+        end_time = time.perf_counter()
     return ScenarioResult(
         name="High Load",
-        total_messages=num_messages,
+        total_messages=message_count,
         successful_messages=successful,
         throttled_messages=throttled,
         total_time=end_time - start_time,
@@ -271,19 +270,18 @@ async def run_scenario_high_load(config: BenchmarkConfig) -> ScenarioResult:
     )
 
 
-async def run_scenario_sustained_load(config: BenchmarkConfig) -> ScenarioResult:
+async def run_sustained_load(config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 3: Sustained load under higher limit."""
     app = create_app(limit=1000, window=60, config=config)
 
-    num_messages = 500
+    message_count = 500
     latencies = []
     successful = 0
     throttled = 0
 
-    start_time = time.perf_counter()
-
     base_url = "http://test"
     running_loop = asyncio.get_running_loop()
+    start_time = time.perf_counter()
     async with (
         AsyncTestClient(
             app=app,
@@ -292,7 +290,7 @@ async def run_scenario_sustained_load(config: BenchmarkConfig) -> ScenarioResult
         ) as client,
         client.websocket_connect(url="/ws", timeout=30.0) as websocket,
     ):
-        for i in range(num_messages):
+        for i in range(message_count):
             msg_start = time.perf_counter()
 
             await websocket.send_json({"message": f"test_{i}"})
@@ -306,10 +304,10 @@ async def run_scenario_sustained_load(config: BenchmarkConfig) -> ScenarioResult
             else:
                 successful += 1
 
-    end_time = time.perf_counter()
+        end_time = time.perf_counter()
     return ScenarioResult(
         name="Sustained Load",
-        total_messages=num_messages,
+        total_messages=message_count,
         successful_messages=successful,
         throttled_messages=throttled,
         total_time=end_time - start_time,
@@ -317,19 +315,18 @@ async def run_scenario_sustained_load(config: BenchmarkConfig) -> ScenarioResult
     )
 
 
-async def run_scenario_burst_traffic(config: BenchmarkConfig) -> ScenarioResult:
+async def run_burst_traffic(config: BenchmarkConfig) -> ScenarioResult:
     """Scenario 4: Burst traffic pattern."""
     app = create_app(limit=50, window=60, config=config)
 
-    num_messages = 100
+    message_count = 100
     latencies = []
     successful = 0
     throttled = 0
 
-    start_time = time.perf_counter()
-
     base_url = "http://test"
     running_loop = asyncio.get_running_loop()
+    start_time = time.perf_counter()
     async with (
         AsyncTestClient(
             app=app,
@@ -338,7 +335,7 @@ async def run_scenario_burst_traffic(config: BenchmarkConfig) -> ScenarioResult:
         ) as client,
         client.websocket_connect(url="/ws", timeout=30.0) as websocket,
     ):
-        for i in range(num_messages):
+        for i in range(message_count):
             msg_start = time.perf_counter()
 
             await websocket.send_json({"message": f"test_{i}"})
@@ -352,10 +349,10 @@ async def run_scenario_burst_traffic(config: BenchmarkConfig) -> ScenarioResult:
             else:
                 successful += 1
 
-    end_time = time.perf_counter()
+        end_time = time.perf_counter()
     return ScenarioResult(
         name="Burst Traffic",
-        total_messages=num_messages,
+        total_messages=message_count,
         successful_messages=successful,
         throttled_messages=throttled,
         total_time=end_time - start_time,
@@ -363,7 +360,7 @@ async def run_scenario_burst_traffic(config: BenchmarkConfig) -> ScenarioResult:
     )
 
 
-async def run_scenario_concurrent_connections(
+async def run_concurrent_connections(
     config: BenchmarkConfig,
 ) -> ScenarioResult:
     """Scenario 5: Multiple concurrent WebSocket connections."""
@@ -375,8 +372,6 @@ async def run_scenario_concurrent_connections(
     successful = 0
     throttled = 0
     total_messages = 0
-
-    start_time = time.perf_counter()
 
     async def send_messages(client_id: int):
         local_latencies = []
@@ -409,6 +404,7 @@ async def run_scenario_concurrent_connections(
 
         return local_latencies, local_successful, local_throttled
 
+    start_time = time.perf_counter()
     tasks = [send_messages(i) for i in range(num_connections)]
     results = await asyncio.gather(*tasks)
 
@@ -443,11 +439,11 @@ async def run_benchmark_suite(
     results = {}
 
     scenario_runners = {
-        "low": ("Low Load", run_scenario_low_load),
-        "high": ("High Load", run_scenario_high_load),
-        "sustained": ("Sustained Load", run_scenario_sustained_load),
-        "burst": ("Burst Traffic", run_scenario_burst_traffic),
-        "concurrent": ("Concurrent Connections", run_scenario_concurrent_connections),
+        "low": ("Low Load", run_low_load),
+        "high": ("High Load", run_high_load),
+        "sustained": ("Sustained Load", run_sustained_load),
+        "burst": ("Burst Traffic", run_burst_traffic),
+        "concurrent": ("Concurrent Connections", run_concurrent_connections),
     }
 
     for scenario_key in config.scenarios:
@@ -506,18 +502,18 @@ def print_results(results: Dict[str, List[ScenarioResult]]):
     print("-" * 80)
 
     for scenario_name, scenario_results in results.items():
-        agg = aggregate_results(scenario_results)
+        aggregate = aggregate_results(scenario_results)
 
         print(
-            f"{scenario_name:<25} {'Messages/sec':<25} {agg.messages_per_second:<15.2f}"
+            f"{scenario_name:<25} {'Messages/sec':<25} {aggregate.messages_per_second:<15.2f}"
         )
-        print(f"{'':<25} {'Success Rate (%)':<25} {agg.success_rate:<15.1f}")
-        print(f"{'':<25} {'P50 Latency (ms)':<25} {agg.p50_latency:<15.2f}")
-        print(f"{'':<25} {'P95 Latency (ms)':<25} {agg.p95_latency:<15.2f}")
-        print(f"{'':<25} {'P99 Latency (ms)':<25} {agg.p99_latency:<15.2f}")
-        print(f"{'':<25} {'Total Messages':<25} {agg.total_messages:<15}")
-        print(f"{'':<25} {'Successful':<25} {agg.successful_messages:<15}")
-        print(f"{'':<25} {'Throttled':<25} {agg.throttled_messages:<15}")
+        print(f"{'':<25} {'Success Rate (%)':<25} {aggregate.success_rate:<15.1f}")
+        print(f"{'':<25} {'P50 Latency (ms)':<25} {aggregate.p50_latency:<15.2f}")
+        print(f"{'':<25} {'P95 Latency (ms)':<25} {aggregate.p95_latency:<15.2f}")
+        print(f"{'':<25} {'P99 Latency (ms)':<25} {aggregate.p99_latency:<15.2f}")
+        print(f"{'':<25} {'Total Messages':<25} {aggregate.total_messages:<15}")
+        print(f"{'':<25} {'Successful':<25} {aggregate.successful_messages:<15}")
+        print(f"{'':<25} {'Throttled':<25} {aggregate.throttled_messages:<15}")
         print()
 
     print("=" * 80 + "\n")

@@ -1,11 +1,86 @@
 from setuptools import Extension, setup
 
 setup(
+    name="traffik",
+    version="1.2.0",
+    description="Distributed rate limiting for FastAPI/Starlette applications.",
+    readme="README.md",
+    authors=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],
+    maintainers=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],
+    license="MIT",
+    keywords=[
+        "starlette",
+        "fastapi",
+        "throttling",
+        "rate-limiting",
+        "api",
+        "distributed-systems",
+        "multiprocess",
+        "redis",
+        "memcached",
+        "websocket",
+        "asyncio",
+        "middleware",
+    ],
+    classifiers=[
+        "Development Status :: 5 - Production/Stable",
+        "Intended Audience :: Developers",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Framework :: FastAPI",
+        "Framework :: AsyncIO",
+        "Topic :: Internet :: WWW/HTTP",
+        "Topic :: Software Development :: Libraries :: Python Modules",
+        "Topic :: System :: Networking",
+    ],
+    python_requires=">=3.9",
+    install_requires=[
+        "starlette>=0.14.0",
+        "annotated-types>=0.7.0",
+        "msgpack>=1.1.2",
+    ],
+    extras_require={
+        "all": ["traffik[aioredis]", "traffik[aiomcache]", "traffik[emcache]"],
+        "aioredis": ["pottery>=3.0.1", "redis>=5.0.0"],
+        "aiomcache": ["aiomcache>=0.8.2"],
+        "emcache": [
+            "emcache>=1.3.3; sys_platform == 'linux' or sys_platform == 'darwin'"
+        ],
+        # For backwards compatibility
+        "redis": ["traffik[aioredis]"],
+        "memcached": ["traffik[aiomcache]"],
+        "test": [
+            "traffik[all]",
+            "fastapi>=0.68.0",
+            "pytest>=8.0.0",
+            "pytest-asyncio>=0.24.0",
+            "pytest-cov>=5.0.0",
+            "pytest-rerunfailures>=16.0.1",
+            "httpx>=0.28.0",
+            "anyio>=4.0.0",
+            "requests>=2.32.4",
+        ],
+    },
+    project_urls={
+        "Homepage": "https://github.com/ti-oluwa/traffik",
+        "Documentation": "https://ti-oluwa.github.io/traffik/",
+        "Repository": "https://github.com/ti-oluwa/traffik.git",
+        "Bug Tracker": "https://github.com/ti-oluwa/traffik/issues",
+        "Changelog": "https://github.com/ti-oluwa/traffik/blob/main/CHANGELOG.md",
+    },
+    package_dir={"": "src"},
+    package_data={"traffik": ["py.typed"]},
     ext_modules=[
         Extension(
-            "traffik._atomic_byte_ops",
-            sources=["src/traffik/_ext/atomic_byte_ops.c"],
+            name="traffik.backends._ext",
+            sources=["src/traffik/backends/_cext/_ext.c"],
             extra_compile_args=["-O2"],
         )
-    ]
+    ],
 )

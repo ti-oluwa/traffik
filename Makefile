@@ -160,7 +160,7 @@ async def demo(): \
     backend = InMemoryBackend(); \
     async with backend: \
         throttle = HTTPThrottle(limit=5, seconds=10); \
-        print('✅ Traffik library imported and configured successfully!'); \
+        print(f'✅ Traffik library imported and configured successfully!'); \
         print(f'   Backend: {backend.__class__.__name__}'); \
         print(f'   Throttle: {throttle.limit} requests per {throttle.expires_after}ms'); \
 asyncio.run(demo())"

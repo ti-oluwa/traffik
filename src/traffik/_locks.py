@@ -450,7 +450,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         "_ttl",
         "_blocking",
         "_blocking_timeout",
-        "_ttl_task",
+        "_timer_handle",
         "_acquired",
         "_reenterd",
         "_auto_released",
@@ -477,7 +477,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         self._ttl = ttl
         self._blocking = blocking
         self._blocking_timeout = blocking_timeout
-        self._ttl_task: typing.Optional[asyncio.Task] = None
+        self._timer_handle: typing.Optional[asyncio.TimerHandle] = None
         self._acquired = False
         self._reenterd = False
         self._auto_released = False
@@ -500,15 +500,16 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
 
         # Schedule auto-release if acquired (non-reentrant) and timeout is set
         if not reentered and acquired and self._ttl is not None:
-            self._ttl_task = asyncio.create_task(self._auto_release())
+            self._timer_handle = asyncio.get_running_loop().call_later(
+                self._ttl, self._auto_release
+            )
         return self
 
     async def _auto_release(self) -> None:
-        """Automatically releases the lock after the timeout."""
+        """Automatic lock release callback."""
         if self._ttl is None:
             return
 
-        await asyncio.sleep(self._ttl)
         # Only release if we still think we have the lock
         if self._acquired:
             try:
@@ -523,8 +524,8 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
                 # Lock might have been released already or not owned by us
                 # This can happen with reentrant locks
                 sys.stderr.write(
-                    f"Failed to auto-release lock after timeout; it may have been released already."
-                    f" This can happen with reentrant locks, and can lead to unexpected behavior.\n {exc}",
+                    f"Failed to release lock after timeout; it may have been released already.\n"
+                    f"This can happen with reentrant locks, and can lead to unexpected behavior.\n {exc}",
                 )
                 sys.stderr.flush()
 
@@ -534,18 +535,9 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> None:
-        # Ensure the lock is released and auto-release task cleaned up.
-        # Cancel the auto-release task completion if it has not run.
-        if (
-            not self._reenterd
-            and self._ttl_task is not None
-            and not self._ttl_task.done()
-        ):
-            self._ttl_task.cancel()
-            try:
-                await self._ttl_task
-            except asyncio.CancelledError:
-                pass
+        # Ensure the lock is released and auto-release timer cleaned up.
+        if not self._reenterd and self._timer_handle is not None:
+            self._timer_handle.cancel()
 
         # Release the lock if we acquired it and haven't released it yet
         if self._acquired and not self._auto_released:

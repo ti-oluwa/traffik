@@ -68,11 +68,12 @@ from types import TracebackType
 
 from typing_extensions import Self
 
-from traffik._atomic_byte_ops import (  # type: ignore[import]
+from traffik._locks import _NamedLockHandle, _NamedLockPool
+from traffik.backends._ext import (  # type: ignore[import]
     clear_byte,
+    fnv_32bit_hash,
     test_and_set_byte,
 )
-from traffik._locks import _NamedLockHandle, _NamedLockPool
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.types import (
@@ -81,7 +82,7 @@ from traffik.types import (
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
-from traffik.utils import fnv1a_32bit_hash, time
+from traffik.utils import time
 
 __all__ = ["MultiProcessInMemoryBackend"]
 
@@ -140,7 +141,7 @@ def _derive_shared_memory_name(namespace: str) -> str:
     :return: A valid POSIX shared memory segment name.
     """
     sanitized = re.sub(r"[^A-Za-z0-9_-]", "_", namespace)
-    hex_suffix = format(fnv1a_32bit_hash(namespace.encode("utf-8")), "08x")
+    hex_suffix = format(fnv_32bit_hash(namespace.encode("utf-8")), "08x")
     middle_max = (
         _SHARED_MEMORY_NAME_MAX_LENGTH
         - len(_SHARED_MEMORY_NAME_PREFIX)
@@ -510,7 +511,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             owns the shared-memory segment. When `False` it attaches to an existing segment
             created by another instance. Prefer the `create` / `attach` class methods for clarity.
         """
-        if sys.platform == "win32":
+        if sys.platform == "win32" or sys.platform == "cygwin":
             raise RuntimeError(
                 f"`{self.__class__.__name__}` is not supported on Windows. "
                 "It requires the 'fork' multiprocessing start method, which "
@@ -959,12 +960,12 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         Return the shard index for *key*.
 
         Uses FNV-1a so the result is deterministic across processes and does
-        not rely on Python'shard_idx randomised `hash()`.
+        not rely on Python's randomised `hash()`.
 
         :param key: The throttle key string.
         :return: Shard index in `[0, number_of_shards)`.
         """
-        return fnv1a_32bit_hash(key.encode("utf-8")) % self._number_of_shards
+        return fnv_32bit_hash(key.encode("utf-8")) % self._number_of_shards
 
     def _shard_base(self, shard_idx: int) -> int:
         """
@@ -999,7 +1000,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         hash_table_base = shard_base + self._shard_hash_table_base_offset
         capacity = self._shard_hash_table_capacity
         mask = self._shard_hash_table_mask
-        start = fnv1a_32bit_hash(key_bytes) & mask
+        start = fnv_32bit_hash(key_bytes) & mask
         first_tombstone = -1
 
         for i in range(capacity):

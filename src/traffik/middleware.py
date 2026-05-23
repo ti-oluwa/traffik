@@ -408,7 +408,7 @@ class ThrottleMiddleware:
         """
         self.app = app
         self.middleware_throttles = _prep_throttles(middleware_throttles, sort=sort)
-        self.backend = backend or get_throttle_backend(app)
+        self.backend = backend if backend is not None else get_throttle_backend(app)
         self.get_exception_handler = exception_handler_getter
         self.context = context
 

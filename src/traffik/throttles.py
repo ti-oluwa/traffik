@@ -371,7 +371,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         # expose `connection`, FastAPI injects the request correctly.
         self.__signature__ = self._make_signature()
 
-        # Register a finalization weakref for when the throttle is garbage-collected so its UID can be unregistered.
+        # We register a finalization weakref for when the throttle is garbage-collected so its UID can be unregistered.
         weakref.finalize(self, self.registry.unregister, uid)
 
     @property

@@ -186,18 +186,3 @@ def time() -> float:
     remain consistent across process restarts and multiple servers/processes.
     """
     return pytime.time()
-
-
-def fnv1a_32bit_hash(data: bytes) -> int:
-    """
-    FNV-1a 32-bit hash. Deterministic across processes and platforms.
-
-    We use this because Python's built-in `hash()` is randomized per-process
-    since Python 3.3 and is therefore unusable for cross-process hash table
-    probing.
-    """
-    h = 0x811C9DC5
-    for byte in data:
-        h ^= byte
-        h = (h * 0x01000193) & 0xFFFFFFFF
-    return h

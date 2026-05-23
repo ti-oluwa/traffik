@@ -8,6 +8,18 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "aiomcache"
+version = "0.8.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/0a/914d8df1002d88ca70679d192f6e16d113e6b5cbcc13c51008db9230025f/aiomcache-0.8.2.tar.gz", hash = "sha256:43b220d7f499a32a71871c4f457116eb23460fa216e69c1d32b81e3209e51359", size = 10640, upload-time = "2024-05-07T15:03:14.434Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a1/f8/78455f6377cbe85f335f4dbd40a807dafb72bd5fa05eb946f2ad0cec3d40/aiomcache-0.8.2-py3-none-any.whl", hash = "sha256:9d78d6b6e74e775df18b350b1cddfa96bd2f0a44d49ad27fa87759a3469cef5e", size = 10145, upload-time = "2024-05-07T15:03:12.003Z" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1297,7 +1309,7 @@ wheels = [
 
 [[package]]
 name = "traffik"
-version = "1.1.0"
+version = "1.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "annotated-types" },
@@ -1307,20 +1319,23 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
-    { name = "emcache" },
+    { name = "aiomcache" },
+    { name = "emcache", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pottery" },
     { name = "redis" },
 ]
 memcached = [
-    { name = "emcache" },
+    { name = "aiomcache" },
+    { name = "emcache", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 redis = [
     { name = "pottery" },
     { name = "redis" },
 ]
 test = [
+    { name = "aiomcache" },
     { name = "anyio" },
-    { name = "emcache" },
+    { name = "emcache", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pottery" },
@@ -1360,9 +1375,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiomcache", marker = "extra == 'memcached'", specifier = ">=0.8.2" },
     { name = "annotated-types", specifier = ">=0.7.0" },
     { name = "anyio", marker = "extra == 'test'", specifier = ">=4.0.0" },
-    { name = "emcache", marker = "extra == 'memcached'", specifier = ">=1.3.3" },
+    { name = "emcache", marker = "(sys_platform == 'darwin' and extra == 'memcached') or (sys_platform == 'linux' and extra == 'memcached')", specifier = ">=1.3.3" },
     { name = "fastapi", marker = "extra == 'test'", specifier = ">=0.68.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.0" },
     { name = "msgpack", specifier = ">=1.1.2" },

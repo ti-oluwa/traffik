@@ -1,4 +1,8 @@
-"""Memcached implementation of a throttle backend using `emcache`."""
+"""
+Memcached implementation of a throttle backend using `emcache`.
+
+Supports only UNIX systems (no Windows support. Use other client backends)
+"""
 
 import asyncio
 import math
@@ -6,12 +10,12 @@ import sys
 import typing
 from time import monotonic
 from types import TracebackType
-from urllib.parse import urlparse
 
 import emcache
 
 from traffik._locks import fence_token_generator
 from traffik.backends.base import ThrottleBackend
+from traffik.backends.memcached._utils import _parse_memcached_url
 from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.types import (
     ConnectionIdentifier,
@@ -19,22 +23,7 @@ from traffik.types import (
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
-
-
-def _parse_memcached_url(url: str) -> typing.Dict[str, typing.Any]:
-    """
-    Parse Memcached URL into connection parameters.
-
-    :param url: Memcached URL (e.g. memcached://host:port).
-    :return: Dictionary of connection parameters.
-    """
-    parsed = urlparse(url)
-    if not parsed.scheme.startswith("memcached"):
-        raise ValueError("Invalid Memcached URL scheme")
-
-    host = parsed.hostname or "localhost"
-    port = parsed.port or 11211
-    return {"host": host, "port": port}
+from traffik.utils import time
 
 
 def _parse_memcached_nodes(
@@ -91,6 +80,7 @@ class _AsyncMemcachedLock:
 
     __slots__ = (
         "_name",
+        "_name_bytes",
         "_client",
         "_ttl",
         "_acquired",
@@ -120,8 +110,9 @@ class _AsyncMemcachedLock:
         :param spin_max_delay_seconds: Maximum delay in seconds during backoff.
         """
         self._name = name
+        self._name_bytes = name.encode()
         self._client = client
-        self._ttl = math.ceil(ttl) if ttl is not None else 0
+        self._ttl = ttl if ttl is not None else 0
         self._acquired = False
         self._token: typing.Optional[str] = None
         self._max_spins_before_backoff = max_spins_before_backoff
@@ -150,7 +141,7 @@ class _AsyncMemcachedLock:
         # We generate our own fencing token per acquisition attempt.
         # This helps prevent the "stale lock" problem per-process.
         token = str(fence_token_generator.next())
-        name_bytes = self._name.encode()
+        name_bytes = self._name_bytes
         token_bytes = token.encode()
         start = monotonic()
         attempts = 0
@@ -159,15 +150,13 @@ class _AsyncMemcachedLock:
 
         while True:
             try:
-                # `add` succeeds only when the key does not yet exist,
-                # providing the atomic "set-if-not-exists" semantic we need.
                 await self._client.add(
                     name_bytes,
                     token_bytes,
-                    exptime=self._ttl,
+                    exptime=math.ceil(time() + self._ttl),
                     noreply=False,
                 )
-                # No exception means `add` succeeded — we own the lock.
+                # No exception means `add` succeeded and we now own the lock.
                 self._acquired = True
                 self._token = token
                 return True
@@ -205,7 +194,7 @@ class _AsyncMemcachedLock:
                 f"Cannot release lock '{self._name}'. Lock not owned by this instance"
             )
 
-        name_bytes = self._name.encode()
+        name_bytes = self._name_bytes
         try:
             # Only delete the key if the stored token still matches ours,
             # preventing accidental release of a lock acquired by another
@@ -250,7 +239,9 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
     native support for multiple Memcached nodes via Rendezvous hashing
     and an adaptive connection pool.
 
-    Note: Memcached has a key size limit of 250 bytes.
+    Note: Memcached has a key size limit of 250 bytes. Also this backend
+    is only supported on Linux and macOS due to `emcache`'s lack of Windows support.
+    Use other backends for Windows compatibility.
     """
 
     wrap_methods = ("clear",)
@@ -318,19 +309,16 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             connection is throttled.
         :param persistent: Whether to persist throttling data across
             application restarts.
-        :param on_error: Strategy to handle errors during throttling
-            operations.
+        :param on_error: Strategy to handle errors during throttling operations.
             - "allow": Allow the request to proceed without throttling.
-            - "throttle": Throttle the request as if it exceeded the rate
-              limit.
+            - "throttle": Throttle the request as if it exceeded the rate limit.
             - "raise": Raise the exception encountered during throttling.
             - A custom callable that takes the connection and the exception
-              as parameters and returns an integer representing the wait
-              period in milliseconds. Ensure this function executes quickly
-              to avoid additional latency.
+            as parameters and returns an integer representing the wait
+            period in milliseconds. Ensure this function executes quickly
+            to avoid additional latency.
         :param lock_blocking: Whether locks should block when acquiring.
-            If None, uses the global default from
-            `traffik.config.get_lock_blocking()`.
+            If None, uses the global default from `traffik.config.get_lock_blocking()`.
         :param lock_ttl: Default TTL for locks in seconds. If None, locks
             have no expiration unless specified during lock acquisition.
         :param lock_blocking_timeout: Default maximum time to wait for
@@ -350,11 +338,10 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             command, potentially doubling throughput at the cost of a tiny
             extra latency per individual get.
         :param ssl: Whether to use SSL/TLS for Memcached connections.
-        :param ssl_verify: Whether to verify the server certificate when
-            using SSL/TLS.
+        :param ssl_verify: Whether to verify the server certificate when using SSL/TLS.
         :param ssl_extra_ca: Path to an extra CA certificate bundle to use
             when verifying the server certificate.
-        :param username: SASL authentication username.  Requires a
+        :param username: SASL authentication username. Requires a
             Memcached server compiled with SASL support.
         :param password: SASL authentication password.
         :param kwargs: Additional keyword arguments.
@@ -551,7 +538,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         """
         self._assert_ready()
 
-        exptime = int(expire) if expire is not None else 0
+        exptime = int(time() + expire) if expire is not None else 0
         await self.connection.set(  # type: ignore[union-attr]
             key.encode(),
             str(value).encode(),
@@ -685,7 +672,9 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         self._assert_ready()
 
         try:
-            await self.connection.touch(key.encode(), seconds)  # type: ignore[union-attr]
+            await self.connection.touch(  # type: ignore[union-attr]
+                key.encode(), exptime=int(time() + seconds)
+            )
             return True
         except emcache.NotFoundCommandError:
             return False
@@ -721,7 +710,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             await self.connection.add(  # type: ignore[union-attr]
                 encoded_key,
                 str(amount).encode(),
-                exptime=ttl,
+                exptime=int(time() + ttl),
                 noreply=False,
             )
             if self.track_keys:
@@ -747,10 +736,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         items: typing.Dict[bytes, emcache.Item] = await self.connection.get_many(  # type: ignore[union-attr]
             encoded_keys
         )
-        return [
-            items[k.encode()].value.decode() if k.encode() in items else None
-            for k in keys
-        ]
+        return [items[k].value.decode() if k in items else None for k in encoded_keys]
 
     async def multi_set(
         self,
@@ -770,7 +756,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         if not items:
             return
 
-        exptime = int(expire) if expire is not None else 0
+        exptime = int(time() + expire) if expire is not None else 0
 
         async def _set_one(key: str, value: str) -> None:
             await self.connection.set(  # type: ignore[union-attr]
@@ -805,7 +791,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
 
         async def clear(self) -> None:
             if self.connection is not None and not self.track_keys:
-                await self.connection.flush_all()
+                await self.connection.flush_all(self._host_addresses[0]) # Or something of the sort
                 return
             await super().clear()
         ```
@@ -820,18 +806,18 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         if item is None:
             return
 
-        raw_keys = item.value.decode().split("||")
+        keys = item.value.decode().split("||")
         tasks = [
-            asyncio.create_task(self.connection.delete(k.encode(), noreply=False))  # type: ignore[union-attr]
-            for k in raw_keys
+            asyncio.create_task(self.connection.delete(key.encode(), noreply=False))  # type: ignore[union-attr]
+            for key in keys
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        for key_str, result in zip(raw_keys, results):
+        for key, result in zip(keys, results):
             if isinstance(result, Exception) and not isinstance(
                 result, emcache.NotFoundCommandError
             ):
                 raise BackendError(
-                    f"Failed to clear key '{key_str}': {str(result)}"
+                    f"Failed to clear key '{key}': {str(result)}"
                 ) from result
 
         # Remove the tracking key itself.

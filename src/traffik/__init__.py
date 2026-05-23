@@ -19,7 +19,7 @@ from .headers import *  # noqa
 from .registry import *  # noqa
 
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 
 # NOTE: All operations by `traffik` must be fast, efficient and non-blocking.

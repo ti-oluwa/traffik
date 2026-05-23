@@ -1,3 +1,5 @@
+import sys
+
 from starlette.requests import HTTPConnection
 
 from traffik import get_remote_address
@@ -30,6 +32,10 @@ class BenchmarkMemcachedBackend(MemcachedBackend):
     async def clear(self) -> None:
         # Flush entire Memcached cache, if not tracking keys
         if self.connection is not None and not self.track_keys:
-            await self.connection.flush_all(self._host_addresses[0])
+            if sys.platform == "linux" or sys.platform == "darwin":
+                # `emcache` is used for UNIX systems
+                await self.connection.flush_all(self._host_addresses[0])
+            else:
+                await self.connection.flush_all()
             return
         await super().clear()

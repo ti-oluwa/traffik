@@ -1,7 +1,6 @@
 """Redis implementation of the throttle backend using `redis.asyncio`."""
 
 import asyncio
-import contextvars
 import math
 import sys
 import typing
@@ -12,7 +11,6 @@ import redis.asyncio as aioredis
 from pottery import AIORedlock
 from typing_extensions import TypedDict
 
-from traffik._locks import token_generator
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError
 from traffik.types import (
@@ -122,16 +120,20 @@ class _LockScriptSHAs(TypedDict):
 @typing.final
 class _AsyncRedisLock:
     """
-    Name-based, non-reentrant, distributed Redis (un-fair) lock implementing the `AsyncLock` protocol.
+    Name-based, distributed Redis (un-fair) lock implementing the `AsyncLock` protocol.
 
-    Uses a simple Redis-based locking mechanism with:
+    Non-reentrant by default but optionally reentrant per task.
 
-    - SET NX EX for acquisition
-    - Redis INCR for lease ownership tokens
-    - Task-local reentrancy
+    Ownership is tracked via `asyncio.Task` identity rather than `ContextVar`,
+    which avoids false-positive `locked()` results in tasks spawned from a
+    lock-holding parent (spawned tasks inherit a copy of the parent context,
+    which would make a ContextVar-based check incorrectly report the lock as held).
 
-    This is suitable for single Redis instance deployments where low-latency locking is required.
-    Note: This lock is not suitable for distributed Redis clusters or setups. Use `_AsyncRedLock` instead.
+    Reentrancy is process-local only, i.e, the reentry counter is tracked in Python
+    and only the outermost acquire/release round-trips to Redis. This means the
+    Redis TTL governs the total hold time across all reentrant levels. If the
+    key expires while reentrant holds are active, the lock is silently lost.
+    Keep critical sections short or set a generous TTL.
     """
 
     RELEASE_SCRIPT = _RELEASE_SCRIPT
@@ -142,12 +144,15 @@ class _AsyncRedisLock:
     __slots__ = (
         "_name",
         "_client",
-        "_local",
+        "_owner_task",
+        "_token",
+        "_reentry_count",
         "_blocking_timeout",
         "_ttl",
         "_script_shas",
         "_max_spins_before_backoff",
         "_spin_max_delay_seconds",
+        "_reentrant",
     )
 
     def __init__(
@@ -159,6 +164,7 @@ class _AsyncRedisLock:
         blocking_timeout: typing.Optional[float] = None,
         max_spins_before_backoff: int = 4,
         spin_max_delay_seconds: float = 0.01,
+        reentrant: bool = False,
     ) -> None:
         """
         Initialize the Redis lock.
@@ -172,24 +178,25 @@ class _AsyncRedisLock:
         :param max_spins_before_backoff: Number of zero-delay yields to the event-loop during acquisition,
             before applying exponential backoff.
         :param spin_max_delay_seconds: Maximum delay in seconds during backoff.
+        :param reentrant: Whether the lock should be reentrant per task (default: False).
         """
         self._name = name
         self._client = client
-        self._local: contextvars.ContextVar[typing.Optional[int]] = (
-            contextvars.ContextVar(f"{name}:context_token", default=None)
-        )
+        self._owner_task: typing.Optional[asyncio.Task[typing.Any]] = None
+        self._token: typing.Optional[int] = None
+        self._reentry_count: int = 0
         self._script_shas = script_shas
         self._blocking_timeout = blocking_timeout
         self._max_spins_before_backoff = max_spins_before_backoff
         self._spin_max_delay_seconds = spin_max_delay_seconds
+        self._reentrant = reentrant
 
         if ttl is not None:
             self._ttl = ttl
         elif blocking_timeout is not None:
-            # Add 1 second buffer to blocking timeout
             self._ttl = blocking_timeout
         else:
-            self._ttl = None  # type: ignore[assignment]
+            self._ttl = None
 
     @classmethod
     async def _register_acquire_script(cls, client: aioredis.Redis) -> str:
@@ -201,18 +208,51 @@ class _AsyncRedisLock:
         """Register and return the release script SHA."""
         return await client.script_load(cls.RELEASE_SCRIPT)
 
+    def _is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool:
+        """Return True if the current task owns this lock."""
+        if task is None:
+            task = asyncio.current_task()
+        return task is not None and task is self._owner_task
+
     def locked(self) -> bool:
-        return self._local.get() is not None
+        """
+        Return True if the current task holds this lock.
+
+        Unlike a ContextVar approach, tasks spawned from a lock-holding
+        parent will correctly return False here since they have a different
+        task identity.
+        """
+        return self._is_owner()
 
     async def acquire(
         self,
         blocking: bool = True,
         blocking_timeout: typing.Optional[float] = None,
     ) -> bool:
-        if self.locked():
+        """
+        Acquire the distributed lock, reentrant per task.
+
+        :param blocking: If False, return immediately if locked elsewhere.
+            Only applicable to the initial acquire attempt, not reentrant attempts.
+        :param blocking_timeout: Max wait time when blocking (seconds).
+            Only applicable to the initial acquire attempt, not reentrant attempts.
+        :return: True if lock acquired, False otherwise.
+        """
+        current = asyncio.current_task()
+        if current is None:
             raise RuntimeError(
-                f"Lock '{self._name}' is already acquired by this task/context."
+                f"Lock '{self._name}' must be acquired from within an asyncio Task."
             )
+
+        # Reentrant. Current task already holds the lock
+        if self._is_owner(task=current):
+            if not self._reentrant:
+                raise RuntimeError(
+                    f"Lock '{self._name}' is already acquired by the current task "
+                    "and was not configured as reentrant."
+                )
+            self._reentry_count += 1
+            return True
 
         name = self._name
         blocking_timeout = (
@@ -252,7 +292,9 @@ class _AsyncRedisLock:
                     raise
 
             if token:
-                self._local.set(token)
+                self._owner_task = current
+                self._token = token
+                self._reentry_count = 1
                 return True
 
             if not blocking:
@@ -277,12 +319,26 @@ class _AsyncRedisLock:
                 await asyncio.sleep(delay)
 
     async def release(self) -> None:
-        if (token := self._local.get()) is None:
+        """
+        Release the lock once.
+
+        Only when the reentrancy count reaches zero will the underlying Redis lock actually be released.
+        """
+        if not self._is_owner():
+            current = asyncio.current_task()
             raise RuntimeError(
-                f"Cannot release lock '{self._name}'. Lock not owned by this task/context."
+                f"Cannot release lock '{self._name}': "
+                f"current task {current!r} does not own the lock "
+                f"(owner: {self._owner_task!r})."
             )
 
-        token = str(token)
+        # Reentrant inner release. Just decrement the counter
+        if self._reentry_count > 1:
+            self._reentry_count -= 1
+            return
+
+        # Outermost release. Attempt Redis release, but clear ownership regardless of Redis outcome
+        token = str(self._token)
         name = self._name
         try:
             # Ensure we only release if we own the lock (token matches)
@@ -317,7 +373,11 @@ class _AsyncRedisLock:
             # Log and ignore release errors to avoid deadlocks
             sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
         finally:
-            self._local.set(None)
+            # Clear ownership regardless of whether Redis release succeeded.
+            # If Redis release failed, the key will expire via TTL.
+            self._owner_task = None
+            self._token = None
+            self._reentry_count = 0
             sys.stderr.flush()
 
     async def __aenter__(self):
@@ -337,23 +397,32 @@ class _AsyncRedisLock:
 @typing.final
 class _AsyncRedLock:
     """
-    Name-based, non-reentrant distributed Redis (un-fair) redlock.
+    Name-based, distributed Redis (un-fair) redlock implementing the `AsyncLock` protocol.
 
-    Adapts `pottery.AIORedlock` to the `AsyncLock` protocol.
+    Non-reentrant by default but optionally reentrant per task.
 
-    This is useful when utilizing redis clusters or multiple Redis instances and is mostly
-    overkill for single Redis instance deployments. There will be noticeable performance overhead
-    when compared to `_AsyncRedisLock` due to the multiple Redis connections and network roundtrips
-    involved in acquiring and releasing the lock.
+    Adapts `pottery.AIORedlock` to the `AsyncLock` protocol. Useful when utilizing
+    Redis clusters or multiple Redis instances. There will be noticeable performance
+    overhead when compared to `_AsyncRedisLock` due to the multiple Redis connections
+    and network roundtrips involved in acquiring and releasing the lock, and is mostly
+    overkill for single Redis instance deployments.
+
+    Reentrancy is process-local only, i.e, the reentry counter is tracked in Python
+    and only the outermost acquire/release round-trips to Redis. This means the
+    Redis TTL governs the total hold time across all reentrant levels. If the
+    key expires while reentrant holds are active, the lock is silently lost.
+    Keep critical sections short or set a generous TTL.
     """
 
     __slots__ = (
         "_name",
         "_client",
         "_lock",
-        "_local",
+        "_owner_task",
+        "_reentry_count",
         "_blocking_timeout",
         "_ttl",
+        "_reentrant",
     )
 
     def __init__(
@@ -362,24 +431,29 @@ class _AsyncRedLock:
         client: aioredis.Redis,
         ttl: typing.Optional[float] = None,
         blocking_timeout: typing.Optional[float] = None,
+        reentrant: bool = False,
     ) -> None:
         """
-        Initialize the Redis lock.
+        Initialize the Redis redlock.
 
         :param name: Unique lock name shared across processes.
         :param client: An `aioredis` client.
-        :param blocking_timeout: Max time to wait when acquiring lock (default: None = wait forever).
         :param ttl: How long the lock should live in seconds (default: None) before auto-release.
             If None, the TTL is derived from the blocking_timeout + 1 second buffer. If both
-            are None, the lock has no expiration. It is not recommended to have locks without expiration
-            in distributed environments to avoid deadlocks.
+            are None, the lock has no expiration. It is not recommended to have locks without
+            expiration in distributed environments to avoid deadlocks.
+        :param blocking_timeout: Max time to wait when acquiring lock (default: None = wait forever).
+        :param reentrant: Whether to allow the same task to acquire the lock multiple times.
+            Reentrancy is process-local only: the reentry counter is tracked in Python and only
+            the outermost acquire/release round-trips to Redis. Defaults to False.
         """
         self._name = name
         self._client = client
         self._blocking_timeout = blocking_timeout
-        self._local: contextvars.ContextVar[typing.Optional[int]] = (
-            contextvars.ContextVar(f"{name}:context_token", default=None)
-        )
+        self._owner_task: typing.Optional[asyncio.Task[typing.Any]] = None
+        self._reentry_count: int = 0
+        self._reentrant = reentrant
+
         if ttl is not None:
             self._ttl = math.ceil(ttl)
         elif blocking_timeout is not None:
@@ -394,9 +468,15 @@ class _AsyncRedLock:
             auto_release_time=self._ttl,
         )
 
+    def _is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool:
+        """Return True if the current task owns this lock."""
+        if task is None:
+            task = asyncio.current_task()
+        return task is not None and task is self._owner_task
+
     def locked(self) -> bool:
-        """Return True if the current task/context holds this lock."""
-        return self._local.get() is not None
+        """Return True if the current task holds this lock."""
+        return self._is_owner()
 
     async def acquire(
         self,
@@ -407,16 +487,31 @@ class _AsyncRedLock:
         Acquire the distributed lock, reentrant per task.
 
         :param blocking: If False, return immediately if locked elsewhere.
-        :param blocking_timeout: Max wait time when blocking (seconds).
+            Only applicable to the initial acquire attempt, not reentrant attempts.
+        :param blocking_timeout: Max wait time when blocking (seconds). `None` means wait forever.
+            Only applicable to the initial acquire attempt, not reentrant attempts.
         :return: True if lock acquired, False otherwise.
         """
-        name = self._name
-        if self._local.get() is not None:
+        current = asyncio.current_task()
+        if current is None:
             raise RuntimeError(
-                f"Lock '{name}' is already acquired by this task/context."
+                f"Lock '{self._name}' must be acquired from within an asyncio Task."
             )
 
+        # Reentrant. Current task already holds the lock
+        if self._is_owner(task=current):
+            if not self._reentrant:
+                raise RuntimeError(
+                    f"Lock '{self._name}' is already acquired by the current task "
+                    "and was not configured as reentrant."
+                )
+            self._reentry_count += 1
+            return True
+
         # Determine effective timeout
+        blocking_timeout = (
+            self._blocking_timeout if blocking_timeout is None else blocking_timeout
+        )
         if not blocking:
             effective_timeout = 1e-6  # 1µs for non-blocking
         elif blocking_timeout is not None:
@@ -433,7 +528,8 @@ class _AsyncRedLock:
                 blocking=blocking, timeout=effective_timeout
             )
             if acquired:
-                self._local.set(token_generator.next())
+                self._owner_task = current
+                self._reentry_count = 1
                 return True
             return False
 
@@ -443,15 +539,26 @@ class _AsyncRedLock:
 
     async def release(self) -> None:
         """
-        Release the lock once. Only when the reentrancy count reaches zero
-        will the underlying Redis lock actually be released.
+        Release the lock once.
+
+        Only when the reentrancy count reaches zero will the underlying Redis lock
+        actually be released.
         """
-        if self._local.get() is None:
+        if not self._is_owner():
+            current = asyncio.current_task()
             raise RuntimeError(
-                f"Cannot release lock '{self._name}'. Lock not owned by this task/context."
+                f"Cannot release lock '{self._name}': "
+                f"current task {current!r} does not own the lock "
+                f"(owner: {self._owner_task!r})."
             )
 
-        # Fully release the lock
+        # Reentrant inner release. Just decrement the counter
+        if self._reentry_count > 1:
+            self._reentry_count -= 1
+            return
+
+        # Outermost release. Attempt Redis release, but clear ownership regardless of Redis outcome
+        name = self._name
         try:
             await self._lock.release()
         except asyncio.CancelledError:
@@ -459,16 +566,16 @@ class _AsyncRedLock:
         except Exception as exc:  # nosec
             # Lock might have expired or been released already
             # Log and ignore release errors to avoid deadlocks
-            sys.stderr.write(
-                f"Warning: Failed to release lock '{self._name}': {str(exc)}\n"
-            )
+            sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
             sys.stderr.flush()
         finally:
-            self._local.set(None)
+            # Clear ownership regardless of whether Redis release succeeded.
+            # If Redis release failed, the key will expire via TTL.
+            self._owner_task = None
+            self._reentry_count = 0
 
     async def __aenter__(self):
-        acquired = await self.acquire()
-        if not acquired:
+        if not await self.acquire():
             raise TimeoutError(f"Could not acquire Redis lock '{self._name}'")
         return self
 

@@ -27,6 +27,8 @@ from traffik.utils import time
 
 
 class _AsyncLock(typing.Protocol):
+    """Protocol for an underlying async lock used in the in-memory backend."""
+
     async def acquire(self) -> bool: ...
     def release(self) -> None: ...
     def is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool: ...
@@ -34,12 +36,31 @@ class _AsyncLock(typing.Protocol):
 
 
 class _AsyncInMemoryLock:
-    """`asyncio.Task` re-entrant async (un-fair) lock."""
+    """
+    Async in-memory lock implementing the `AsyncLock` protocol.
 
-    __slots__ = "_lock"
+    Non-reentrant by default but optionally reentrant per task.
 
-    def __init__(self, lock: _AsyncLock) -> None:
+    Reentrancy is delegated to the underlying lock implementation
+    (`_AsyncFairRLock` or `_AsyncRLock`), both of which are inherently
+    reentrant per task. When `reentrant=False`, re-acquisition attempts
+    by the owning task are rejected at this wrapper level before reaching
+    the underlying lock.
+    """
+
+    __slots__ = ("_lock", "_reentrant")
+
+    def __init__(self, lock: _AsyncLock, reentrant: bool = False) -> None:
+        """
+        Initialize the lock.
+
+        :param lock: The underlying async lock instance to wrap.
+        :param reentrant: Whether to allow the same task to acquire the lock
+            multiple times. When False, re-acquisition by the owning task
+            raises `RuntimeError`. Defaults to False.
+        """
         self._lock = lock
+        self._reentrant = reentrant
 
     def locked(self) -> bool:
         return self._lock.locked()
@@ -52,17 +73,29 @@ class _AsyncInMemoryLock:
         """
         Acquire the lock.
 
-        :param blocking: If False, return immediately if the lock is held.
+        :param blocking: If False, return immediately if the lock is held by another task.
+            Only applicable to the initial acquire attempt, not reentrant attempts.
         :param blocking_timeout: Max time (seconds) to wait if blocking is True
             (Not supported as ops are in-memory and very fast).
+            Only applicable to the initial acquire attempt, not reentrant attempts.
         :return: True if the lock was acquired, False otherwise.
         """
+        current_task = asyncio.current_task()
+        reentrant = self._lock.is_owner(task=current_task)
+        if reentrant and not self._reentrant:
+            raise RuntimeError(
+                "Lock is already acquired by the current task and was not configured as reentrant."
+            )
+
         if not blocking:
-            current_task = asyncio.current_task()
-            if self._lock.locked() and not self._lock.is_owner(task=current_task):
+            # If non-blocking and lock is held by another task, return False immediately
+            if not reentrant and self._lock.locked():
                 return False
+            # Else, acquire the lock (reentrant or not held).
+            # Delegate to underlying lock which handles the reentrancy too
             return await self._lock.acquire()
 
+        # Delegate to underlying lock which handles the reentrancy too
         return await self._lock.acquire()
 
     async def release(self) -> None:

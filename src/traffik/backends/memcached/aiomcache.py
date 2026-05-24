@@ -1,7 +1,6 @@
 """Memcached implementation of a throttle backend using `aiomcache`."""
 
 import asyncio
-import contextvars
 import functools
 import math
 import sys
@@ -85,22 +84,33 @@ def _wrap_methods_with_on_error_return(
             setattr(obj, method_name, wrapped_method)
 
 
+@typing.final
 class _AsyncMemcachedLock:
     """
-    Name-based, best-effort, and non-reentrant distributed (un-fair) lock
-    implementation using Memcached's add operation.
+    Name-based, best-effort, distributed (un-fair) lock implementing the `AsyncLock` protocol.
 
-    Uses Memcached's atomic `add()` which only succeeds if key doesn't exist.
-    This provides a lightweight distributed locking mechanism.
+    Non-reentrant by default but optionally reentrant per task.
+
+    Uses Memcached's atomic `add()` which only succeeds if the key does not exist,
+    providing a lightweight distributed locking mechanism.
+
+    Reentrancy is process-local only, i.e, the reentry counter is tracked in Python
+    and only the outermost acquire/release round-trips to Memcached. This means the
+    TTL governs the total hold time across all reentrant levels. If the key expires
+    while reentrant holds are active, the lock is silently lost.
+    Keep critical sections short or set a generous TTL.
     """
 
     __slots__ = (
         "_name",
         "_client",
         "_ttl",
-        "_local",
+        "_owner_task",
+        "_token",
+        "_reentry_count",
         "_max_spins_before_backoff",
         "_spin_max_delay_seconds",
+        "_reentrant",
     )
 
     def __init__(
@@ -110,6 +120,7 @@ class _AsyncMemcachedLock:
         ttl: typing.Optional[float] = None,
         max_spins_before_backoff: int = 4,
         spin_max_delay_seconds: float = 0.01,
+        reentrant: bool = False,
     ) -> None:
         """
         Initialize the lock.
@@ -121,19 +132,29 @@ class _AsyncMemcachedLock:
         :param max_spins_before_backoff: Number of zero-delay yields to the event-loop during acquisition,
             before applying exponential backoff.
         :param spin_max_delay_seconds: Maximum delay in seconds during backoff.
+        :param reentrant: Whether to allow the same task to acquire the lock multiple times.
+            Reentrancy is process-local only, i.e, the reentry counter is tracked in Python and only
+            the outermost acquire/release round-trips to Memcached. Defaults to False.
         """
         self._name = name
         self._client = client
         self._ttl = math.ceil(ttl) if ttl is not None else 0
-        self._local: contextvars.ContextVar[typing.Optional[str]] = (
-            contextvars.ContextVar(f"{name}:context_token", default=None)
-        )
+        self._owner_task: typing.Optional[asyncio.Task[typing.Any]] = None
+        self._token: typing.Optional[str] = None
+        self._reentry_count: int = 0
+        self._reentrant = reentrant
         self._max_spins_before_backoff = max_spins_before_backoff
         self._spin_max_delay_seconds = spin_max_delay_seconds
 
+    def _is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool:
+        """Return True if the current task owns this lock."""
+        if task is None:
+            task = asyncio.current_task()
+        return task is not None and task is self._owner_task
+
     def locked(self) -> bool:
-        """Return True if this task/context currently holds the lock."""
-        return self._local.get() is not None
+        """Return True if the current task holds this lock."""
+        return self._is_owner()
 
     async def acquire(
         self,
@@ -144,16 +165,29 @@ class _AsyncMemcachedLock:
         Acquire the distributed lock.
 
         :param blocking: If False, return immediately if locked elsewhere.
-        :param blocking_timeout: Max wait time when blocking.
+            Only applicable to the initial acquire attempt, not reentrant attempts.
+        :param blocking_timeout: Max wait time when blocking. `None` means wait forever.
+            Only applicable to the initial acquire attempt, not reentrant attempts.
         :return: True if lock acquired, False otherwise.
         """
-        if self.locked():
+        current = asyncio.current_task()
+        if current is None:
             raise RuntimeError(
-                f"Lock '{self._name}' is already held by this task/context"
+                f"Lock '{self._name}' must be acquired from within an asyncio Task."
             )
 
+        # Reentrant. Current task already holds the lock
+        if self._is_owner(task=current):
+            if not self._reentrant:
+                raise RuntimeError(
+                    f"Lock '{self._name}' is already acquired by the current task "
+                    "and was not configured as reentrant."
+                )
+            self._reentry_count += 1
+            return True
+
         # Memcached has no way to generate fencing tokens natively,
-        # we generate our own unique token per acquisition attempt
+        # we generate our own unique token per acquisition attempt.
         # This helps prevent the "stale lock" problem but only
         # per process, not cross-process if clocks are skewed across processes.
         token = str(token_generator.next())
@@ -170,7 +204,9 @@ class _AsyncMemcachedLock:
                 exptime=self._ttl,
             )
             if added:
-                self._local.set(token)
+                self._owner_task = current
+                self._token = token
+                self._reentry_count = 1
                 return True
 
             # Lock is held by someone else
@@ -189,21 +225,33 @@ class _AsyncMemcachedLock:
                 await asyncio.sleep(0)
             else:
                 # Exponential backoff
-                exponent = min(
-                    attempts - max_spins,
-                    6,
-                )
+                exponent = min(attempts - max_spins, 6)
                 delay = min(0.0005 * (1 << exponent), spin_max_delay)
                 await asyncio.sleep(delay)
 
     async def release(self) -> None:
-        """Release the lock."""
-        if (token := self._local.get()) is None:
+        """
+        Release the lock once.
+
+        Only when the reentrancy count reaches zero will the underlying Memcached key
+        actually be deleted.
+        """
+        if not self._is_owner():
+            current = asyncio.current_task()
             raise RuntimeError(
-                f"Cannot release lock '{self._name}'. Lock not owned by this task/context."
+                f"Cannot release lock '{self._name}': "
+                f"current task {current!r} does not own the lock "
+                f"(owner: {self._owner_task!r})."
             )
 
+        # Reentrant inner release. Just decrement the counter
+        if self._reentry_count > 1:
+            self._reentry_count -= 1
+            return
+
+        # Outermost release. Attempt Memcached release, but clear ownership regardless of outcome
         name = self._name
+        token = self._token
         try:
             # Ensure we only release/delete if we own the lock (token matches)
             current = await self._client.get(name.encode())
@@ -218,7 +266,11 @@ class _AsyncMemcachedLock:
             # Log and ignore release errors to avoid deadlocks
             sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
         finally:
-            self._local.set(None)
+            # Clear ownership regardless of whether Memcached release succeeded.
+            # If release failed, the key will expire via TTL.
+            self._owner_task = None
+            self._token = None
+            self._reentry_count = 0
             sys.stderr.flush()
 
     async def __aenter__(self):

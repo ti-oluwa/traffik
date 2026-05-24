@@ -240,19 +240,28 @@ class _SharedMemoryLockBytePool:
 
 class _AsyncSharedMemoryLock:
     """
-    Cross-process, asyncio-cooperative backed by a single byte
-    in a `multiprocessing.SharedMemory` segment.
+    Cross-process, asyncio-cooperative lock backed by a single byte in a `multiprocessing.SharedMemory` segment.
+
+    Non-reentrant by default but optionally reentrant per task.
+
+    Reentrancy is process-local only, i.e, the reentry counter is tracked
+    in Python and only the outermost acquire/release touches the shared
+    memory byte. This means if the byte is cleared externally (e.g. by
+    `close()` zeroing the lock region) while reentrant holds are active,
+    the lock is silently lost. Keep critical sections short.
 
     **Acquisition algorithm**:
 
-    1. Call `test_and_set_byte` (atomic XCHG).
-    2. If old value was 0, that means we acquired the lock, return `True`.
-    3. Otherwise yield to the event loop via `asyncio.sleep(0)`
+    1. If the current task already owns the lock and reentrancy is enabled,
+       increment the counter and return immediately.
+    2. Call `test_and_set_byte` (atomic XCHG).
+    3. If old value was 0, we acquired the lock; record task ownership and return `True`.
+    4. Otherwise yield to the event loop via `asyncio.sleep(0)`
        (first `max_spins_before_backoff` attempts) or with an
        exponentially increasing delay up to `spin_max_delay_seconds`.
-    4. Repeat until acquired, non-blocking return, or timeout.
+    5. Repeat until acquired, non-blocking return, or timeout.
 
-    The yield in step 3 is a pure cooperative handoff.
+    The yield in step 4 is a pure cooperative handoff.
     The lock holder (running in the same or a different process)
     will complete its critical section and call `clear_byte`, making
     the byte 0 again so a subsequent `test_and_set_byte` by a waiter succeeds.
@@ -262,9 +271,11 @@ class _AsyncSharedMemoryLock:
         "_buffer",
         "_byte_index",
         "_byte_pool",
-        "_acquired",
+        "_owner_task",
+        "_reentry_count",
         "_max_spins_before_backoff",
         "_spin_max_delay_seconds",
+        "_reentrant",
     )
 
     def __init__(
@@ -273,6 +284,7 @@ class _AsyncSharedMemoryLock:
         byte_pool: _SharedMemoryLockBytePool,
         max_spins_before_backoff: int = 8,
         spin_max_delay_seconds: float = 0.005,
+        reentrant: bool = False,
     ) -> None:
         """
         Initialize the lock.
@@ -284,17 +296,43 @@ class _AsyncSharedMemoryLock:
         :param max_spins_before_backoff: Number of zero-delay yields to the event-loop during acquisition,
             before applying exponential backoff.
         :param spin_max_delay_seconds: Maximum delay in seconds during backoff.
+        :param reentrant: Whether to allow the same task to acquire the lock multiple times.
+            Reentrancy is process-local only, i.e, the reentry counter is tracked in Python and only
+            the outermost acquire/release touches the shared memory byte. Defaults to False.
         """
         self._buffer = buffer
         self._byte_index = byte_pool.acquire_index()
         self._byte_pool = byte_pool
-        self._acquired = False
+        self._owner_task: typing.Optional[asyncio.Task[typing.Any]] = None
+        self._reentry_count: int = 0
+        self._reentrant = reentrant
         self._max_spins_before_backoff = max_spins_before_backoff
         self._spin_max_delay_seconds = spin_max_delay_seconds
 
+    def _is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool:
+        """Return True if the current task owns this lock."""
+        if task is None:
+            task = asyncio.current_task()
+        return task is not None and task is self._owner_task
+
+    def byte_state(self) -> int:
+        """
+        Return the raw byte state of this lock's flag byte.
+
+        Note: this may return non-zero even if `locked()` is False, if the byte is set but owned
+        by a different task or process. Use `locked()` to check for ownership.
+        """
+        return self._buffer[self._byte_index]
+
     def locked(self) -> bool:
-        """Return `True` if the lock byte is currently set."""
-        return self._buffer[self._byte_index] != 0
+        """
+        Return True if the current task holds this lock.
+
+        Note: returns False even if the shared memory byte is set but owned
+        by a different task or process. Use `self.byte_state() != 0`
+        to check raw byte state.
+        """
+        return self._is_owner()
 
     async def acquire(
         self,
@@ -305,9 +343,25 @@ class _AsyncSharedMemoryLock:
         Acquire the lock.
 
         :param blocking: If `False`, attempt once and return immediately.
+            Only applicable to the initial acquire attempt, not reentrant attempts.
         :param blocking_timeout: Maximum seconds to wait. `None` means wait indefinitely.
+            Only applicable to the initial acquire attempt, not reentrant attempts.
         :return: `True` if the lock was acquired, `False` otherwise.
         """
+        current = asyncio.current_task()
+        if current is None:
+            raise RuntimeError("Lock must be acquired from within an asyncio Task.")
+
+        # Reentrant. Current task already holds the lock
+        if self._is_owner(task=current):
+            if not self._reentrant:
+                raise RuntimeError(
+                    "Lock is already acquired by the current task "
+                    "and was not configured as reentrant."
+                )
+            self._reentry_count += 1
+            return True
+
         start = time()
         attempts = 0
         max_spins = self._max_spins_before_backoff
@@ -315,7 +369,8 @@ class _AsyncSharedMemoryLock:
         while True:
             if test_and_set_byte(self._buffer, self._byte_index) == 0:
                 # Old value was 0. We already atomically set it to 1 and own the lock
-                self._acquired = True
+                self._owner_task = current
+                self._reentry_count = 1
                 return True
 
             if not blocking:
@@ -337,17 +392,34 @@ class _AsyncSharedMemoryLock:
 
     async def release(self) -> None:
         """
-        Release the lock.
+        Release the lock once.
 
-        :raises RuntimeError: If this instance did not acquire the lock.
+        Only when the reentrancy count reaches zero will the underlying shared
+        memory byte actually be cleared.
+
+        :raises RuntimeError: If the current task does not own the lock.
         """
-        if not self._acquired:
+        if not self._is_owner():
+            current = asyncio.current_task()
             raise RuntimeError(
-                f"Cannot release {type(self).__name__}: not acquired by this handle."
+                f"Cannot release lock: current task {current!r} does not own "
+                f"the lock (owner: {self._owner_task!r})."
             )
 
-        clear_byte(self._buffer, self._byte_index)
-        self._acquired = False
+        # Reentrant inner release. Just decrement the counter
+        if self._reentry_count > 1:
+            self._reentry_count -= 1
+            return
+
+        # Outermost release. Clear the shared memory byte and ownership together
+        try:
+            clear_byte(self._buffer, self._byte_index)
+        finally:
+            # Clear ownership regardless of whether clear_byte succeeded.
+            # `clear_byte` is a C extension writing a single byte, so failure here
+            # would indicate a severe memory error, but we still clean up state.
+            self._owner_task = None
+            self._reentry_count = 0
 
     def discard(self) -> None:
         """
@@ -357,17 +429,17 @@ class _AsyncSharedMemoryLock:
         discarded rather than returned to the free list. Must not be
         called while the lock is held.
         """
-        if self._acquired:
+        if self._owner_task is not None:
             # For safety, clear the byte so we don't permanently poison
             # the shared memory flag for future lock instances that
             # receive the same byte index.
             clear_byte(self._buffer, self._byte_index)
-            self._acquired = False
+            self._owner_task = None
+            self._reentry_count = 0
         self._byte_pool.release_index(self._byte_index)
 
     async def __aenter__(self):
-        acquired = await self.acquire()
-        if not acquired:
+        if not await self.acquire():
             raise TimeoutError("Could not acquire multiprocess lock.")
         return self
 

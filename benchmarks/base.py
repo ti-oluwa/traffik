@@ -3,7 +3,11 @@ import sys
 from starlette.requests import HTTPConnection
 
 from traffik import get_remote_address
-from traffik.backends.memcached import MemcachedBackend
+
+if sys.platform == "linux" or sys.platform == "darwin":
+    from traffik.backends.memcached.emcache import MemcachedBackend
+else:
+    from traffik.backends.memcached.aiomcache import MemcachedBackend
 
 
 async def custom_identifier(connection: HTTPConnection) -> str:

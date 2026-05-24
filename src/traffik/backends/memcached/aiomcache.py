@@ -1,6 +1,7 @@
 """Memcached implementation of a throttle backend using `aiomcache`."""
 
 import asyncio
+import contextvars
 import functools
 import math
 import sys
@@ -11,7 +12,7 @@ from types import TracebackType
 import aiomcache
 from aiomcache import ClientException
 
-from traffik._locks import fence_token_generator
+from traffik._locks import token_generator
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.memcached._utils import _parse_memcached_url
 from traffik.exceptions import BackendConnectionError, BackendError
@@ -86,7 +87,7 @@ def _wrap_methods_with_on_error_return(
 
 class _AsyncMemcachedLock:
     """
-    Name-based, best-effort, and "instance-reentrant" distributed (un-fair) lock
+    Name-based, best-effort, and non-reentrant distributed (un-fair) lock
     implementation using Memcached's add operation.
 
     Uses Memcached's atomic `add()` which only succeeds if key doesn't exist.
@@ -97,8 +98,7 @@ class _AsyncMemcachedLock:
         "_name",
         "_client",
         "_ttl",
-        "_acquired",
-        "_token",
+        "_local",
         "_max_spins_before_backoff",
         "_spin_max_delay_seconds",
     )
@@ -125,14 +125,15 @@ class _AsyncMemcachedLock:
         self._name = name
         self._client = client
         self._ttl = math.ceil(ttl) if ttl is not None else 0
-        self._acquired = False
-        self._token: typing.Optional[str] = None
+        self._local: contextvars.ContextVar[typing.Optional[str]] = (
+            contextvars.ContextVar(f"{name}:context_token", default=None)
+        )
         self._max_spins_before_backoff = max_spins_before_backoff
         self._spin_max_delay_seconds = spin_max_delay_seconds
 
     def locked(self) -> bool:
-        """Return True if this instance currently holds the lock."""
-        return self._acquired
+        """Return True if this task/context currently holds the lock."""
+        return self._local.get() is not None
 
     async def acquire(
         self,
@@ -146,15 +147,16 @@ class _AsyncMemcachedLock:
         :param blocking_timeout: Max wait time when blocking.
         :return: True if lock acquired, False otherwise.
         """
-        if self._acquired:
-            # Already acquired by this instance
-            return True
+        if self.locked():
+            raise RuntimeError(
+                f"Lock '{self._name}' is already held by this task/context"
+            )
 
         # Memcached has no way to generate fencing tokens natively,
         # we generate our own unique token per acquisition attempt
         # This helps prevent the "stale lock" problem but only
         # per process, not cross-process if clocks are skewed across processes.
-        token = str(fence_token_generator.next())
+        token = str(token_generator.next())
         start = monotonic()
         attempts = 0
         max_spins = self._max_spins_before_backoff
@@ -168,8 +170,7 @@ class _AsyncMemcachedLock:
                 exptime=self._ttl,
             )
             if added:
-                self._acquired = True
-                self._token = token
+                self._local.set(token)
                 return True
 
             # Lock is held by someone else
@@ -197,16 +198,16 @@ class _AsyncMemcachedLock:
 
     async def release(self) -> None:
         """Release the lock."""
-        if not self._acquired:
+        if (token := self._local.get()) is None:
             raise RuntimeError(
-                f"Cannot release lock '{self._name}'. Lock not owned by this instance"
+                f"Cannot release lock '{self._name}'. Lock not owned by this task/context."
             )
 
         name = self._name
         try:
             # Ensure we only release/delete if we own the lock (token matches)
             current = await self._client.get(name.encode())
-            if current and current.decode() == self._token:
+            if current and current.decode() == token:
                 await self._client.delete(name.encode())
             else:
                 sys.stderr.write(f"Warning: Lock '{name}' expired or stolen\n")
@@ -217,14 +218,11 @@ class _AsyncMemcachedLock:
             # Log and ignore release errors to avoid deadlocks
             sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
         finally:
-            # Reset state
-            self._acquired = False
-            self._token = None
+            self._local.set(None)
             sys.stderr.flush()
 
     async def __aenter__(self):
-        acquired = await self.acquire()
-        if not acquired:
+        if not await self.acquire():
             raise TimeoutError(f"Could not acquire Memcached lock '{self._name}'")
         return self
 

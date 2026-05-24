@@ -14,7 +14,8 @@ from traffik.exceptions import LockTimeoutError
 from traffik.types import AsyncLock
 
 
-class _FenceTokenGenerator:
+@typing.final
+class __TokenGenerator:
     """
     A thread-safe fence token generator that produces unique, monotonically increasing integer tokens.
 
@@ -50,7 +51,7 @@ class _FenceTokenGenerator:
             return (timestamp << 16) | self._sequence_number
 
 
-fence_token_generator = _FenceTokenGenerator()
+token_generator = __TokenGenerator()
 """Global fence token generator instance."""
 
 
@@ -561,7 +562,9 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
 
 class _AsyncFairRLock:
     """
-    A fair reentrant lock for async programming. Fair means that it respects the order of acquisition.
+    A fair `asyncio.Task` reentrant lock for async programming. 
+    
+    Fair means that it respects the order of acquisition.
 
     Adapted from: https://github.com/Joshuaalbert/Fair_AsyncRLock/blob/81e0d89d64c0cbc81a91c2f45992c79471ecc3bb/fair_async_rlock/fair_async_rlock.py
     """

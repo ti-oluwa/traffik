@@ -34,7 +34,7 @@ class _AsyncLock(typing.Protocol):
 
 
 class _AsyncInMemoryLock:
-    """Re-entrant async (un-fair) lock for in-memory backend."""
+    """`asyncio.Task` re-entrant async (un-fair) lock."""
 
     __slots__ = "_lock"
 
@@ -70,8 +70,7 @@ class _AsyncInMemoryLock:
         self._lock.release()
 
     async def __aenter__(self):
-        acquired = await self.acquire()
-        if not acquired:
+        if not await self.acquire():
             raise TimeoutError("Could not acquire inmemory lock.")
         return self
 

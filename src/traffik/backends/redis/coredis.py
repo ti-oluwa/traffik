@@ -1,0 +1,637 @@
+"""
+Redis implementation of the throttle backend using `coredis`.
+
+Supports all Redis deployment topologies:
+
+- **Single node** - pass a `coredis.Redis` instance or a Redis URL string.
+- **Redis Cluster** - pass a `coredis.RedisCluster` instance or a list of
+  startup-node dicts / `TCPLocation` objects.
+- **Sentinel** - pass a `coredis.Sentinel` instance together with a
+  *service_name* so the backend can obtain a primary client.
+"""
+
+import contextvars
+import math
+import sys
+import typing
+from types import TracebackType
+
+from coredis import Redis, RedisCluster, Sentinel
+from coredis.commands import Script
+from coredis.connection import TCPLocation
+from coredis.exceptions import LockError, LockReleaseError
+from coredis.patterns.lock import Lock as CoredisLock
+from typing_extensions import Self
+
+from traffik.backends.base import ThrottleBackend
+from traffik.exceptions import BackendConnectionError
+from traffik.types import (
+    ConnectionIdentifier,
+    ConnectionThrottledHandler,
+    HTTPConnectionT,
+    ThrottleErrorHandler,
+)
+
+__all__ = ["RedisBackend"]
+
+
+_AnyRedis = typing.Union[Redis, RedisCluster]
+"""Union of the two coredis client types that share a compatible command API."""
+
+
+_INCREMENT_WITH_TTL_SCRIPT = """
+-- Atomically increment a counter and set a TTL only on first creation.
+--
+-- KEYS[1]  counter key
+-- ARGV[1]  increment amount (int string)
+-- ARGV[2]  TTL in seconds   (int string)
+--
+-- Returns the new counter value.
+
+local key    = KEYS[1]
+local amount = tonumber(ARGV[1])
+local ttl    = tonumber(ARGV[2])
+
+local exists = redis.call('EXISTS', key)
+
+if exists == 0 then
+    -- New key: set value with TTL atomically.
+    redis.call('SET', key, amount, 'EX', ttl)
+    return amount
+else
+    -- Existing key: just increment; preserve existing TTL.
+    if amount == 1 then
+        return redis.call('INCR', key)
+    else
+        return redis.call('INCRBY', key, amount)
+    end
+end
+"""
+
+_CLEAR_SCRIPT = """
+-- Scan and delete all keys matching a pattern.
+-- Uses SCAN in a loop to avoid blocking Redis on large datasets.
+--
+-- ARGV[1]  glob pattern (e.g. "namespace:*")
+--
+-- Returns the total number of keys deleted.
+
+local pattern = ARGV[1]
+local cursor  = '0'
+local deleted = 0
+
+repeat
+    local result = redis.call('SCAN', cursor, 'MATCH', pattern, 'COUNT', 1000)
+    cursor = result[1]
+    local keys = result[2]
+    if #keys > 0 then
+        deleted = deleted + redis.call('DEL', unpack(keys))
+    end
+until cursor == '0'
+
+return deleted
+"""
+
+
+class _AsyncCoredisLock:
+    """
+    Name-based, non-reentrant distributed Redis lock.
+
+    Adapts `coredis.patterns.lock.Lock` to the `AsyncLock` protocol.
+    """
+
+    __slots__ = (
+        "_lock",
+        "_local",
+        "_name",
+        "_client",
+        "_ttl",
+        "_sleep",
+        "_blocking_timeout",
+    )
+
+    def __init__(
+        self,
+        name: str,
+        client: _AnyRedis,
+        ttl: typing.Optional[float] = None,
+        blocking_timeout: typing.Optional[float] = None,
+        sleep: float = 0.05,
+    ) -> None:
+        """
+        Initialize the coredis lock adapter.
+
+        :param name: Name of the lock. Different names correspond to different locks.
+        :param client: An instance of `coredis.Redis` or `coredis.RedisCluster` to use for lock operations.
+        :param ttl: Maximum lifetime of the lock in seconds. Setting this is **strongly recommended**
+            in production to prevent deadlocks after process crashes.
+            If `None`, the lock will persist until explicitly released.
+        :param blocking_timeout: Maximum seconds to wait when acquiring the lock. `None` means block forever.
+        :param sleep: Seconds to sleep between acquisition attempts when the lock is held.
+        """
+        self._name = name
+        self._client = client
+        self._local: contextvars.ContextVar[typing.Optional[CoredisLock]] = (
+            contextvars.ContextVar(f"{name}:context_lock", default=None)
+        )
+        if ttl is not None:
+            self._ttl = math.ceil(ttl)
+        elif blocking_timeout is not None:
+            # Add 1 second buffer to blocking timeout
+            self._ttl = math.ceil(blocking_timeout) + 1
+        else:
+            self._ttl = 0  # No TTL; lock will persist until explicitly released
+        self._sleep = sleep
+        self._blocking_timeout = blocking_timeout
+
+    def locked(self) -> bool:
+        return self._local.get() is not None
+
+    async def acquire(
+        self,
+        blocking: bool = True,
+        blocking_timeout: typing.Optional[float] = None,
+    ) -> bool:
+        """
+        Acquire the lock.
+
+        :param blocking: If `False`, attempt once and return immediately.
+        :param blocking_timeout: Maximum seconds to wait when blocking.
+            `None` means wait forever.
+        :return: `True` if acquired, `False` otherwise.
+        """
+        if self.locked():
+            raise RuntimeError("Lock is already acquired by this task/context.")
+
+        blocking_timeout = (
+            self._blocking_timeout if blocking_timeout is None else blocking_timeout
+        )
+        lock = CoredisLock(
+            client=self._client,
+            name=self._name,
+            timeout=self._ttl,
+            sleep=self._sleep,
+            blocking=blocking,
+            blocking_timeout=blocking_timeout,
+        )
+        try:
+            acquired = await lock.acquire()
+            if acquired:
+                self._local.set(lock)
+        except LockError:
+            acquired = False
+        return acquired
+
+    async def release(self) -> None:
+        """Release the lock."""
+        if (lock := self._local.get()) is None:
+            raise RuntimeError(
+                "Cannot release lock. Lock was not acquired by this task/context."
+            )
+
+        try:
+            await lock.release()
+        except (LockError, LockReleaseError) as exc:
+            sys.stderr.write(f"Warning: failed to release Redis lock: {exc}\n")
+            sys.stderr.flush()
+        finally:
+            self._local.set(None)
+
+    async def __aenter__(self) -> Self:
+        if not await self.acquire():
+            raise TimeoutError("Could not acquire Redis lock.")
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ) -> None:
+        await self.release()
+
+
+class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
+    """
+    Redis throttle backend using `coredis` client.
+
+    Supports three topologies via the *connection* argument:
+
+    **Single node (default)**:
+
+    ```python
+    backend = RedisBackend("redis://localhost:6379/0", namespace="myapp")
+    ```
+
+    **Redis Cluster**:
+
+    ```python
+    from coredis import RedisCluster
+    from coredis.connection import TCPLocation
+
+    client = RedisCluster(
+        startup_nodes=[TCPLocation("127.0.0.1", 7000)],
+        decode_responses=True,
+    )
+    backend = RedisBackend(client, namespace="myapp")
+    ```
+
+    Or pass a list of startup-node dicts / `TCPLocation` objects and let the
+    backend build the cluster client for you:
+
+    ```python
+    backend = RedisBackend(
+        [TCPLocation("127.0.0.1", 7000), TCPLocation("127.0.0.1", 7001)],
+        namespace="myapp",
+    )
+    ```
+
+    **Sentinel**:
+    ```python
+    from coredis import Sentinel
+
+    sentinel = Sentinel([("sentinel-host", 26379)], stream_timeout=0.1)
+    backend = RedisBackend(
+        sentinel,
+        sentinel_service_name="myredis",
+        namespace="myapp",
+    )
+    ```
+    """
+
+    wrap_methods: typing.Tuple[str, ...] = ("clear",)
+
+    _INCREMENT_WITH_TTL_SCRIPT: typing.ClassVar[str] = _INCREMENT_WITH_TTL_SCRIPT
+    _CLEAR_SCRIPT: typing.ClassVar[str] = _CLEAR_SCRIPT
+
+    def __init__(
+        self,
+        connection: typing.Union[
+            str,
+            _AnyRedis,
+            Sentinel,
+            typing.Sequence[typing.Union[TCPLocation, typing.Dict[str, typing.Any]]],
+            typing.Callable[[], typing.Awaitable[_AnyRedis]],
+        ],
+        *,
+        namespace: str,
+        sentinel_service_name: typing.Optional[str] = None,
+        sentinel_stream_timeout: typing.Optional[float] = None,
+        cluster_kwargs: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        url_kwargs: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
+        handle_throttled: typing.Optional[
+            ConnectionThrottledHandler[HTTPConnectionT, typing.Any]
+        ] = None,
+        persistent: bool = False,
+        on_error: typing.Union[
+            typing.Literal["allow", "throttle", "raise"],
+            ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
+        ] = "throttle",
+        lock_blocking: typing.Optional[bool] = None,
+        lock_ttl: typing.Optional[float] = None,
+        lock_blocking_timeout: typing.Optional[float] = None,
+        lock_sleep: float = 0.05,
+        **kwargs: typing.Any,
+    ) -> None:
+        """
+        Initialize the coredis Redis backend.
+
+        :param connection: How to connect. One of:
+
+            - A Redis URL string (`"redis://host:port/db"` or `"rediss://..."` for TLS).
+            - A pre-built `coredis.Redis` or `coredis.RedisCluster` instance.
+                Must have `decode_responses=True`.
+            - A `coredis.Sentinel` instance (also supply `sentinel_service_name`).
+            - A list of `TCPLocation` objects or dicts with `host`/`port`
+                keys to build a `RedisCluster` automatically.
+            - An async factory callable `() -> typing.Union[Redis, RedisCluster]`.
+
+        :param namespace: Key prefix for all throttle keys.
+        :param sentinel_service_name: Required when *connection* is a `Sentinel` instance.
+            Names the Redis service to monitor.
+        :param sentinel_stream_timeout: Optional socket read timeout for Sentinel-managed connections.
+        :param cluster_kwargs: Extra keyword arguments forwarded to the
+            `RedisCluster` constructor when *connection* is a list of nodes.
+        :param url_kwargs: Extra keyword arguments forwarded to `coredis.Redis.from_url()`
+            when *connection* is a URL string.
+        :param identifier: Connected client identifier generator.
+        :param handle_throttled: Handler called when a connection is throttled.
+        :param persistent: Whether to preserve throttle data on context exit.
+        :param on_error: Error strategy - `"allow"`, `"throttle"`, `"raise"`, or a custom async callable.
+        :param lock_blocking: Default blocking mode for all distributed locks.
+        :param lock_ttl: Maximum lifetime of each distributed lock in seconds.
+            Setting this is **strongly recommended** in production to prevent
+            deadlocks after process crashes.
+        :param lock_blocking_timeout: Maximum seconds to wait when acquiring a lock.
+            `None` means block forever.
+        :param lock_sleep: Seconds to sleep between acquisition attempts when the lock is held.
+            Smaller values reduce latency but increase Redis load. Default `0.05` (50 ms).
+        :param kwargs: Additional keyword arguments forwarded to the base `ThrottleBackend`.
+        """
+        super().__init__(
+            None,
+            namespace=namespace,
+            identifier=identifier,
+            handle_throttled=handle_throttled,
+            persistent=persistent,
+            on_error=on_error,
+            lock_blocking=lock_blocking,
+            lock_ttl=lock_ttl,
+            lock_blocking_timeout=lock_blocking_timeout,
+            **kwargs,
+        )
+
+        self._raw_connection = connection
+        self._sentinel_service_name = sentinel_service_name
+        self._sentinel_stream_timeout = sentinel_stream_timeout
+        self._cluster_kwargs: typing.Dict[str, typing.Any] = dict(cluster_kwargs or {})
+        self._url_kwargs: typing.Dict[str, typing.Any] = dict(url_kwargs or {})
+        self._lock_sleep = lock_sleep
+        self._is_cluster: bool = False
+
+        # `True` when the backend is built the client itself and is therefore
+        # responsible for closing it. `False` when a pre-built client was
+        # handed in (Redis/RedisCluster instance, Sentinel primary, or async
+        # factory result). In that case, close() skips aclose() so the caller
+        # retains full control over the client lifetime.
+        self._owns_connection: bool = False
+
+        # Lua Script objects will be set during initialize()
+        self._increment_with_ttl_script: typing.Optional[Script] = None
+        self._clear_script: typing.Optional[Script] = None
+
+    def _assert_ready(self) -> None:
+        if self.connection is None:
+            raise BackendConnectionError(
+                "Connection error! Ensure backend is initialized before use."
+            )
+
+    async def _build_client(self) -> _AnyRedis:
+        """Construct and return a ready-to-use coredis client."""
+        raw = self._raw_connection
+
+        if callable(raw) and not isinstance(raw, (Redis, RedisCluster, Sentinel)):
+            self._owns_connection = True
+            return await raw()  # type: ignore[operator]
+
+        if isinstance(raw, (Redis, RedisCluster)):
+            if not getattr(raw, "decode_responses", True):
+                raise ValueError(
+                    "The coredis client must be created with decode_responses=True."
+                )
+            self._owns_connection = False
+            return raw
+
+        if isinstance(raw, Sentinel):
+            if not self._sentinel_service_name:
+                raise ValueError(
+                    "`sentinel_service_name` is required when using a `Sentinel` connection."
+                )
+
+            kwargs: typing.Dict[str, typing.Any] = {"decode_responses": True}
+            if self._sentinel_stream_timeout is not None:
+                kwargs["stream_timeout"] = self._sentinel_stream_timeout
+            self._owns_connection = False
+            return raw.primary_for(service_name=self._sentinel_service_name, **kwargs)  # type: ignore
+
+        if isinstance(raw, (list, tuple)):
+            nodes = []
+            for item in raw:
+                if isinstance(item, TCPLocation):
+                    nodes.append(item)
+                elif isinstance(item, dict):
+                    nodes.append(TCPLocation(item["host"], int(item.get("port", 6379))))
+                else:
+                    raise TypeError(
+                        f"Unsupported node specifier type: {type(item)!r}. "
+                        "Expected `TCPLocation` or dict with 'host'/'port' keys."
+                    )
+
+            self._owns_connection = True
+            return RedisCluster(
+                startup_nodes=nodes,
+                decode_responses=True,
+                **self._cluster_kwargs,
+            )
+
+        if isinstance(raw, str):
+            self._owns_connection = True
+            client = await Redis.from_url(  # type: ignore[attr-defined]
+                raw,
+                decode_responses=True,
+                **self._url_kwargs,
+            )
+            return client  # type: ignore[return-value]
+
+        raise TypeError(f"Unsupported connection argument type: {type(raw)!r}.")
+
+    async def initialize(self) -> None:
+        """
+        Create the Redis client (if not already done) and register Lua scripts.
+
+        Safe to call multiple times; subsequent calls are no-ops.
+        """
+        if self.connection is not None:
+            return
+
+        client = await self._build_client()
+        self._is_cluster = isinstance(client, RedisCluster)
+        self.connection = client
+
+        # Script object that transparently handles NOSCRIPT errors.
+        self._increment_with_ttl_script = client.register_script(
+            self._INCREMENT_WITH_TTL_SCRIPT
+        )
+        self._clear_script = client.register_script(self._CLEAR_SCRIPT)
+
+    async def ready(self) -> bool:
+        if self.connection is None:
+            return False
+        try:
+            await self.connection.ping()
+            return True
+        except Exception:
+            return False
+
+    def get_lock(self, name: str) -> _AsyncCoredisLock:
+        """
+        Return a distributed lock for the given name backed by `coredis.patterns.lock.Lock`.
+        """
+        self._assert_ready()
+        return _AsyncCoredisLock(
+            client=self.connection,  # type: ignore[arg-type]
+            name=name,
+            ttl=self.lock_ttl,
+            sleep=self._lock_sleep,  # polling interval
+            blocking_timeout=self.lock_blocking_timeout,
+        )
+
+    async def get(
+        self, key: str, *args: typing.Any, **kwargs: typing.Any
+    ) -> typing.Optional[str]:
+        """Return the string value stored at *key*, or `None` if absent."""
+        self._assert_ready()
+        value = await self.connection.get(key)  # type: ignore[union-attr]
+        return value  # type: ignore[return-value]
+
+    async def set(
+        self, key: str, value: str, expire: typing.Optional[float] = None
+    ) -> None:
+        """Set *key* to *value* with an optional expiry in seconds."""
+        self._assert_ready()
+        if expire is not None:
+            await self.connection.set(key, value, ex=int(expire))  # type: ignore[union-attr]
+        else:
+            await self.connection.set(key, value)  # type: ignore[union-attr]
+
+    async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
+        """Delete *key*. Returns `True` if the key existed."""
+        self._assert_ready()
+        deleted_count = await self.connection.delete([key])  # type: ignore[union-attr]
+        return bool(deleted_count)
+
+    async def increment(self, key: str, amount: int = 1) -> int:
+        """Atomically increment *key* by *amount* and return the new value."""
+        self._assert_ready()
+        if amount == 1:
+            return await self.connection.incr(key)  # type: ignore[union-attr]
+        if amount == -1:
+            return await self.connection.decr(key)  # type: ignore[union-attr]
+        if amount > 0:
+            return await self.connection.incrby(key, amount)  # type: ignore[union-attr]
+        # If amount < 0, we use DECRBY with the absolute value
+        return await self.connection.decrby(key, -amount)  # type: ignore[union-attr]
+
+    async def decrement(self, key: str, amount: int = 1) -> int:
+        """Atomically decrement *key* by *amount*."""
+        self._assert_ready()
+        if amount == 1:
+            return await self.connection.decr(key)  # type: ignore[union-attr]
+        return await self.connection.decrby(key, amount)  # type: ignore[union-attr]
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        """
+        Set a TTL on *key*.  Returns `True` if the key exists and TTL was set.
+        """
+        self._assert_ready()
+        result = await self.connection.expire(key, seconds)  # type: ignore[union-attr]
+        return bool(result)
+
+    async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int = 60) -> int:
+        """
+        Atomically increment *key* and set *ttl* **only when the key is new**.
+
+        Uses a Lua script so the check-and-set is performed in a single
+        server-side round-trip with no race conditions. Subsequent increments
+        within the same window preserve the original expiry.
+        """
+        self._assert_ready()
+        assert self._increment_with_ttl_script is not None
+        result = await self._increment_with_ttl_script(
+            keys=[key],
+            args=[str(amount), str(ttl)],
+        )
+        return int(result)  # type: ignore[arg-type]
+
+    async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
+        """
+        Retrieve multiple keys in a single `MGET` command.
+
+        For cluster deployments, this is best-effort as keys may reside on
+        different shards served at slightly different times.
+        """
+        self._assert_ready()
+        if not keys:
+            return []
+
+        values = await self.connection.mget(list(keys))  # type: ignore[union-attr]
+        # `coredis` mget returns a list containing None for missing keys
+        return list(values)  # type: ignore[arg-type]
+
+    async def multi_set(
+        self,
+        items: typing.Mapping[str, str],
+        expire: typing.Optional[int] = None,
+    ) -> None:
+        """
+        Set multiple keys in one operation.
+
+        **For single node**, we use `MULTI`/`EXEC` for an atomic transaction.
+        **For redis cluster**, we use a plain pipeline (no `MULTI`) because
+        cross-slot transactions are not supported in cluster mode.
+        Each individual `SET` is atomic; the batch as a whole is not.
+        """
+        self._assert_ready()
+        if not items:
+            return
+
+        if self._is_cluster:
+            # Non-transactional pipeline. `coredis` routes each command to the appropriate shard.
+            async with self.connection.pipeline(transaction=False) as pipe:  # type: ignore[union-attr]
+                pending = []
+                for key, value in items.items():
+                    if expire is not None:
+                        pending.append(pipe.set(key, value, ex=expire))
+                    else:
+                        pending.append(pipe.set(key, value))
+                # Execute the pipeline; results are awaitable after exit.
+            # We don't need the return values here; errors would propagate.
+        else:
+            # Transactional pipeline for single node / sentinel primaries.
+            async with self.connection.pipeline(transaction=True) as pipe:  # type: ignore[union-attr]
+                for key, value in items.items():
+                    if expire is not None:
+                        pipe.set(key, value, ex=expire)
+                    else:
+                        pipe.set(key, value)
+                # Pipeline executes on context exit and exceptions propagate normally.
+
+    async def clear(self) -> None:
+        """
+        Delete all keys whose name starts with `namespace:`.
+
+        Uses the `_CLEAR_SCRIPT` Lua `SCAN` loop so Redis is never blocked,
+        even for very large datasets.
+
+        On Redis Cluster, `SCAN` is routed to **each primary** automatically
+        by `coredis` and keys are deleted node-by-node.
+        """
+        self._assert_ready()
+        assert self._clear_script is not None
+        pattern = f"{self.namespace}:*"
+        await self._clear_script(keys=[], args=[pattern])
+
+    async def reset(self) -> None:
+        """Reset throttle state by clearing all namespace keys."""
+        await self.clear()
+
+    async def close(self) -> None:
+        """
+        Release resources and clean up.
+
+        If the backend built the client itself (from a URL string, a list of
+        startup nodes, or an async factory), `aclose()` is called on the
+        connection pool so sockets are returned to the OS.
+
+        If a pre-built `Redis` or `RedisCluster` instance was passed in, or
+        if the connection was obtained from a `Sentinel`, the caller retains
+        ownership and `aclose()` is **not** called. The client remains
+        usable by any other code that holds a reference to it.
+
+        After this method returns, `connection` is set to `None` and the
+        backend must be re-initialized before further use.
+        """
+        if self.connection is not None:
+            if self._owns_connection:
+                try:
+                    await self.connection.aclose()  # type: ignore[union-attr]
+                except Exception as exc:
+                    sys.stderr.write(
+                        f"Warning: error while closing coredis connection: {exc}\n"
+                    )
+                    sys.stderr.flush()
+
+            self.connection = None
+            self._increment_with_ttl_script = None
+            self._clear_script = None

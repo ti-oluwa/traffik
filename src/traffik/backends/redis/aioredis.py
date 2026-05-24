@@ -12,6 +12,7 @@ import redis.asyncio as aioredis
 from pottery import AIORedlock
 from typing_extensions import TypedDict
 
+from traffik._locks import token_generator
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError
 from traffik.types import (
@@ -20,6 +21,90 @@ from traffik.types import (
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
+
+# Lua script for atomic increment with conditional TTL
+# TTL is only set when key is created, but not on subsequent increments
+_INCREMENT_WITH_TTL_SCRIPT = """
+local key = KEYS[1]
+local amount = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+
+local exists = redis.call('EXISTS', key)
+
+if exists == 0 then
+    -- Key doesn't exist: set initial value with TTL
+    redis.call('SET', key, amount, 'EX', ttl)
+    return amount
+else
+    -- Key exists: just increment (preserve existing TTL)
+    if amount == 1 then
+        return redis.call('INCR', key)
+    else
+        return redis.call('INCRBY', key, amount)
+    end
+end
+"""
+
+# Lua script for atomic clear on single round trip with no race conditions
+# Uses SCAN instead of KEYS to avoid blocking on large datasets
+_CLEAR_SCRIPT = """
+local pattern = ARGV[1]
+local cursor = "0"
+local deleted = 0
+
+repeat
+    local result = redis.call('SCAN', cursor, 'MATCH', pattern, 'COUNT', 1000)
+    cursor = result[1]
+    local keys = result[2]
+    
+    if #keys > 0 then
+        deleted = deleted + redis.call('DEL', unpack(keys))
+    end
+until cursor == "0"
+
+return deleted
+"""
+
+
+_RELEASE_SCRIPT = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+end
+return 0
+"""
+
+_ACQUIRE_SCRIPT = """
+-- KEYS[1] = lock key
+-- KEYS[2] = fence key
+-- ARGV[1] = ttl (seconds, or 0 for no expiry)
+
+-- Try to acquire lock first (most common path when lock is held)
+local token = redis.call("INCR", KEYS[2])
+local acquired
+
+if ARGV[1] ~= "0" then
+    acquired = redis.call(
+        "SET",
+        KEYS[1],
+        token,
+        "NX",
+        "PX",
+        ARGV[1]
+    )
+else
+    acquired = redis.call(
+        "SET",
+        KEYS[1],
+        token,
+        "NX"
+    )
+end
+
+if acquired then
+    return token
+end
+return 0
+"""
 
 
 class _LockScriptSHAs(TypedDict):
@@ -34,10 +119,10 @@ class _LockScriptSHAs(TypedDict):
     release: str
 
 
+@typing.final
 class _AsyncRedisLock:
     """
-    Name-based, instance-reentrant, and distributed Redis (un-fair) lock
-    implementing the `AsyncLock` protocol.
+    Name-based, non-reentrant, distributed Redis (un-fair) lock implementing the `AsyncLock` protocol.
 
     Uses a simple Redis-based locking mechanism with:
 
@@ -46,55 +131,18 @@ class _AsyncRedisLock:
     - Task-local reentrancy
 
     This is suitable for single Redis instance deployments where low-latency locking is required.
-    Note: This lock does not implement the full Redlock algorithm and is not suitable
-    for distributed Redis clusters.
+    Note: This lock is not suitable for distributed Redis clusters or setups. Use `_AsyncRedLock` instead.
     """
 
-    _RELEASE_SCRIPT = """
-    if redis.call("get", KEYS[1]) == ARGV[1] then
-        return redis.call("del", KEYS[1])
-    end
-    return 0
-    """
-
-    _ACQUIRE_SCRIPT = """
-    -- KEYS[1] = lock key
-    -- KEYS[2] = fence key
-    -- ARGV[1] = ttl (seconds, or 0 for no expiry)
-
-    -- Try to acquire lock first (most common path when lock is held)
-    local token = redis.call("INCR", KEYS[2])
-    local acquired
-
-    if ARGV[1] ~= "0" then
-        acquired = redis.call(
-            "SET",
-            KEYS[1],
-            token,
-            "NX",
-            "PX",
-            ARGV[1]
-        )
-    else
-        acquired = redis.call(
-            "SET",
-            KEYS[1],
-            token,
-            "NX"
-        )
-    end
-
-    if acquired then
-        return token
-    end
-    return 0
-    """
+    RELEASE_SCRIPT = _RELEASE_SCRIPT
+    """Lua script for safe release"""
+    ACQUIRE_SCRIPT = _ACQUIRE_SCRIPT
+    """Lua script for safe acquire with optional TTL"""
 
     __slots__ = (
         "_name",
-        "_redis",
-        "_acquired",
-        "_token",
+        "_client",
+        "_local",
         "_blocking_timeout",
         "_ttl",
         "_script_shas",
@@ -105,7 +153,7 @@ class _AsyncRedisLock:
     def __init__(
         self,
         name: str,
-        redis: aioredis.Redis,
+        client: aioredis.Redis,
         script_shas: _LockScriptSHAs,
         ttl: typing.Optional[float] = None,
         blocking_timeout: typing.Optional[float] = None,
@@ -116,7 +164,7 @@ class _AsyncRedisLock:
         Initialize the Redis lock.
 
         :param name: Unique lock name shared across processes.
-        :param redis: An `aioredis.Redis` connection instance.
+        :param client: An `aioredis` client.
         :param script_shas: Shared mutable dict containing pre-loaded script SHAs.
             Updates to this dict propagate to the backend and other lock instances.
         :param blocking_timeout: Max time to wait when acquiring lock (default: None = wait forever).
@@ -126,9 +174,10 @@ class _AsyncRedisLock:
         :param spin_max_delay_seconds: Maximum delay in seconds during backoff.
         """
         self._name = name
-        self._redis = redis
-        self._acquired = False
-        self._token: typing.Optional[int] = None
+        self._client = client
+        self._local: contextvars.ContextVar[typing.Optional[int]] = (
+            contextvars.ContextVar(f"{name}:context_token", default=None)
+        )
         self._script_shas = script_shas
         self._blocking_timeout = blocking_timeout
         self._max_spins_before_backoff = max_spins_before_backoff
@@ -143,26 +192,27 @@ class _AsyncRedisLock:
             self._ttl = None  # type: ignore[assignment]
 
     @classmethod
-    async def _load_acquire_script(cls, redis: aioredis.Redis) -> str:
-        """Load and return the acquire script SHA."""
-        return await redis.script_load(cls._ACQUIRE_SCRIPT)
+    async def _register_acquire_script(cls, client: aioredis.Redis) -> str:
+        """Register and return the acquire script SHA."""
+        return await client.script_load(cls.ACQUIRE_SCRIPT)
 
     @classmethod
-    async def _load_release_script(cls, redis: aioredis.Redis) -> str:
-        """Load and return the release script SHA."""
-        return await redis.script_load(cls._RELEASE_SCRIPT)
+    async def _register_release_script(cls, client: aioredis.Redis) -> str:
+        """Register and return the release script SHA."""
+        return await client.script_load(cls.RELEASE_SCRIPT)
 
     def locked(self) -> bool:
-        return self._acquired
+        return self._local.get() is not None
 
     async def acquire(
         self,
         blocking: bool = True,
         blocking_timeout: typing.Optional[float] = None,
     ) -> bool:
-        if self._acquired:
-            # Already acquired by this instance
-            return True
+        if self.locked():
+            raise RuntimeError(
+                f"Lock '{self._name}' is already acquired by this task/context."
+            )
 
         name = self._name
         blocking_timeout = (
@@ -176,7 +226,7 @@ class _AsyncRedisLock:
         while True:
             token: typing.Optional[int] = None
             try:
-                token = await self._redis.evalsha(  # type: ignore
+                token = await self._client.evalsha(  # type: ignore
                     self._script_shas["acquire"],  # type: ignore[arg-type]
                     2,  # KEYS
                     name,  # KEYS[1]
@@ -188,10 +238,10 @@ class _AsyncRedisLock:
                 if "NOSCRIPT" in str(exc):
                     # Script was flushed from Redis cache, re-register and retry
                     # Update shared dict so backend and future locks see the new SHA
-                    self._script_shas["acquire"] = await self._redis.script_load(  # type: ignore
-                        type(self)._ACQUIRE_SCRIPT
+                    self._script_shas["acquire"] = await self._client.script_load(  # type: ignore
+                        self.ACQUIRE_SCRIPT
                     )
-                    token = await self._redis.evalsha(  # type: ignore
+                    token = await self._client.evalsha(  # type: ignore
                         self._script_shas["acquire"],  # type: ignore[arg-type]
                         2,  # KEYS
                         name,  # KEYS[1]
@@ -202,8 +252,7 @@ class _AsyncRedisLock:
                     raise
 
             if token:
-                self._acquired = True
-                self._token = token
+                self._local.set(token)
                 return True
 
             if not blocking:
@@ -228,16 +277,16 @@ class _AsyncRedisLock:
                 await asyncio.sleep(delay)
 
     async def release(self) -> None:
-        if not self._acquired:
+        if (token := self._local.get()) is None:
             raise RuntimeError(
-                f"Cannot release lock '{self._name}'. Lock not owned by this instance"
+                f"Cannot release lock '{self._name}'. Lock not owned by this task/context."
             )
 
-        token = str(self._token)
+        token = str(token)
         name = self._name
         try:
             # Ensure we only release if we own the lock (token matches)
-            released = await self._redis.evalsha(  # type: ignore
+            released = await self._client.evalsha(  # type: ignore
                 self._script_shas["release"],  # type: ignore[arg-type]
                 1,  # num keys
                 name,  # KEYS[1]
@@ -249,10 +298,10 @@ class _AsyncRedisLock:
             if "NOSCRIPT" in str(exc):
                 # Script was flushed from Redis cache, re-register and retry
                 # Update shared dict so backend and future locks see the new SHA
-                self._script_shas["release"] = await self._redis.script_load(  # type: ignore
-                    type(self)._RELEASE_SCRIPT
+                self._script_shas["release"] = await self._client.script_load(  # type: ignore
+                    self.RELEASE_SCRIPT
                 )
-                await self._redis.evalsha(  # type: ignore
+                await self._client.evalsha(  # type: ignore
                     self._script_shas["release"],  # type: ignore[arg-type]
                     1,  # num keys
                     name,  # KEYS[1]
@@ -268,14 +317,11 @@ class _AsyncRedisLock:
             # Log and ignore release errors to avoid deadlocks
             sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
         finally:
-            # Reset state
-            self._acquired = False
-            self._token = None
+            self._local.set(None)
             sys.stderr.flush()
 
     async def __aenter__(self):
-        acquired = await self.acquire()
-        if not acquired:
+        if not await self.acquire():
             raise TimeoutError(f"Could not acquire Redis lock '{self._name}'")
         return self
 
@@ -288,11 +334,12 @@ class _AsyncRedisLock:
         await self.release()
 
 
+@typing.final
 class _AsyncRedLock:
     """
-    Name-based, task-reentrant distributed Redis (un-fair) lock implementing the `AsyncLock` protocol.
+    Name-based, non-reentrant distributed Redis (un-fair) redlock.
 
-    Uses the `redlock` algorithm for distributed locking via the `pottery.AIORedlock` API.
+    Adapts `pottery.AIORedlock` to the `AsyncLock` protocol.
 
     This is useful when utilizing redis clusters or multiple Redis instances and is mostly
     overkill for single Redis instance deployments. There will be noticeable performance overhead
@@ -300,14 +347,11 @@ class _AsyncRedLock:
     involved in acquiring and releasing the lock.
     """
 
-    _task_locks: contextvars.ContextVar[
-        typing.Dict[str, typing.Tuple[AIORedlock, int]]
-    ] = contextvars.ContextVar("_task_locks")
-    """Per-task storage of lock objects and reentrancy counts."""
-
     __slots__ = (
         "_name",
-        "_redis",
+        "_client",
+        "_lock",
+        "_local",
         "_blocking_timeout",
         "_ttl",
     )
@@ -315,7 +359,7 @@ class _AsyncRedLock:
     def __init__(
         self,
         name: str,
-        redis: aioredis.Redis,
+        client: aioredis.Redis,
         ttl: typing.Optional[float] = None,
         blocking_timeout: typing.Optional[float] = None,
     ) -> None:
@@ -323,7 +367,7 @@ class _AsyncRedLock:
         Initialize the Redis lock.
 
         :param name: Unique lock name shared across processes.
-        :param redis: An aioredis.Redis connection instance.
+        :param client: An `aioredis` client.
         :param blocking_timeout: Max time to wait when acquiring lock (default: None = wait forever).
         :param ttl: How long the lock should live in seconds (default: None) before auto-release.
             If None, the TTL is derived from the blocking_timeout + 1 second buffer. If both
@@ -331,8 +375,11 @@ class _AsyncRedLock:
             in distributed environments to avoid deadlocks.
         """
         self._name = name
-        self._redis = redis
+        self._client = client
         self._blocking_timeout = blocking_timeout
+        self._local: contextvars.ContextVar[typing.Optional[int]] = (
+            contextvars.ContextVar(f"{name}:context_token", default=None)
+        )
         if ttl is not None:
             self._ttl = math.ceil(ttl)
         elif blocking_timeout is not None:
@@ -341,20 +388,15 @@ class _AsyncRedLock:
         else:
             self._ttl = 0
 
-    def _get_task_locks(self) -> typing.Dict[str, typing.Tuple[AIORedlock, int]]:
-        """Get task-local lock storage, creating if needed."""
-        try:
-            return self._task_locks.get()
-        except LookupError:
-            # Create new dict for this task/context
-            task_locks: typing.Dict[str, typing.Tuple[AIORedlock, int]] = {}
-            self._task_locks.set(task_locks)
-            return task_locks
+        self._lock = AIORedlock(
+            key=name,
+            masters={client},
+            auto_release_time=self._ttl,
+        )
 
     def locked(self) -> bool:
         """Return True if the current task/context holds this lock."""
-        task_locks = self._get_task_locks()
-        return self._name in task_locks and task_locks[self._name][1] > 0
+        return self._local.get() is not None
 
     async def acquire(
         self,
@@ -368,21 +410,11 @@ class _AsyncRedLock:
         :param blocking_timeout: Max wait time when blocking (seconds).
         :return: True if lock acquired, False otherwise.
         """
-        task_locks = self._get_task_locks()
-
-        # (Reentrancy) If current task already owns lock, just increment counter
         name = self._name
-        if name in task_locks:
-            redlock, count = task_locks[name]
-            task_locks[name] = (redlock, count + 1)
-            return True
-
-        # Create new `AIORedlock` instance for this acquisition
-        redlock = AIORedlock(
-            key=name,
-            masters={self._redis},
-            auto_release_time=self._ttl,
-        )
+        if self._local.get() is not None:
+            raise RuntimeError(
+                f"Lock '{name}' is already acquired by this task/context."
+            )
 
         # Determine effective timeout
         if not blocking:
@@ -397,12 +429,11 @@ class _AsyncRedLock:
 
         # Attempt to acquire the Redis lock
         try:
-            acquired = await redlock.acquire(
+            acquired = await self._lock.acquire(
                 blocking=blocking, timeout=effective_timeout
             )
             if acquired:
-                # Successfully acquired. Store lock object and count
-                task_locks[name] = (redlock, 1)
+                self._local.set(token_generator.next())
                 return True
             return False
 
@@ -415,31 +446,25 @@ class _AsyncRedLock:
         Release the lock once. Only when the reentrancy count reaches zero
         will the underlying Redis lock actually be released.
         """
-        task_locks = self._get_task_locks()
-        name = self._name
-        if name not in task_locks:
+        if self._local.get() is None:
             raise RuntimeError(
-                f"Cannot release lock '{name}'. Lock not owned by current task"
+                f"Cannot release lock '{self._name}'. Lock not owned by this task/context."
             )
-
-        redlock, count = task_locks[name]
-        if count > 1:
-            # Decrement reentrancy counter
-            task_locks[name] = (redlock, count - 1)
-            return
 
         # Fully release the lock
         try:
-            await redlock.release()
+            await self._lock.release()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # nosec
             # Lock might have expired or been released already
             # Log and ignore release errors to avoid deadlocks
-            sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
+            sys.stderr.write(
+                f"Warning: Failed to release lock '{self._name}': {str(exc)}\n"
+            )
             sys.stderr.flush()
         finally:
-            del task_locks[name]
+            self._local.set(None)
 
     async def __aenter__(self):
         acquired = await self.acquire()
@@ -467,48 +492,10 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
 
     wrap_methods = ("clear",)
 
-    # Lua script for atomic increment with conditional TTL
-    # TTL is only set when key is created, but not on subsequent increments
-    _INCREMENT_WITH_TTL_SCRIPT = """
-    local key = KEYS[1]
-    local amount = tonumber(ARGV[1])
-    local ttl = tonumber(ARGV[2])
-    
-    local exists = redis.call('EXISTS', key)
-    
-    if exists == 0 then
-        -- Key doesn't exist: set initial value with TTL
-        redis.call('SET', key, amount, 'EX', ttl)
-        return amount
-    else
-        -- Key exists: just increment (preserve existing TTL)
-        if amount == 1 then
-            return redis.call('INCR', key)
-        else
-            return redis.call('INCRBY', key, amount)
-        end
-    end
-    """
-
-    # Lua script for atomic clear on single round trip with no race conditions
-    # Uses SCAN instead of KEYS to avoid blocking on large datasets
-    _CLEAR_SCRIPT = """
-    local pattern = ARGV[1]
-    local cursor = "0"
-    local deleted = 0
-    
-    repeat
-        local result = redis.call('SCAN', cursor, 'MATCH', pattern, 'COUNT', 1000)
-        cursor = result[1]
-        local keys = result[2]
-        
-        if #keys > 0 then
-            deleted = deleted + redis.call('DEL', unpack(keys))
-        end
-    until cursor == "0"
-    
-    return deleted
-    """
+    INCREMENT_WITH_TTL_SCRIPT = _INCREMENT_WITH_TTL_SCRIPT
+    """Lua script for atomic increment with conditional TTL (set TTL only on key creation)"""
+    CLEAR_SCRIPT = _CLEAR_SCRIPT
+    """Lua script for atomic clear of keys matching a pattern"""
 
     def __init__(
         self,
@@ -644,25 +631,25 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             return False
 
     async def _ensure_increment_with_ttl_script(self) -> None:
-        """Ensure the `increment_with_ttl` Lua script is loaded and registered."""
+        """Ensure the `increment_with_ttl` Lua script is registered."""
         if self._increment_with_ttl_sha is None:
             self._increment_with_ttl_sha = await self.connection.script_load(  # type: ignore
-                type(self)._INCREMENT_WITH_TTL_SCRIPT
+                self.INCREMENT_WITH_TTL_SCRIPT
             )
 
     async def _ensure_clear_script(self) -> None:
-        """Ensure the `clear` Lua script is loaded and registered."""
+        """Ensure the `clear` Lua script is registered."""
         if self._clear_sha is None:
             self._clear_sha = await self.connection.script_load(  # type: ignore
-                type(self)._CLEAR_SCRIPT
+                self.CLEAR_SCRIPT
             )
 
     async def _ensure_lock_scripts_shas(self) -> None:
-        """Ensure the lock Lua scripts are loaded and registered into the shared dict."""
+        """Ensure the lock Lua scripts are registered and stored in the shared dict."""
         if self._lock_script_shas is None and self.connection is not None:
             self._lock_script_shas = dict(  # type: ignore[assignment]
-                acquire=await _AsyncRedisLock._load_acquire_script(self.connection),
-                release=await _AsyncRedisLock._load_release_script(self.connection),
+                acquire=await _AsyncRedisLock._register_acquire_script(self.connection),
+                release=await _AsyncRedisLock._register_release_script(self.connection),
             )
 
     def _assert_ready(self) -> None:
@@ -680,14 +667,14 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         if not self._use_redlock:
             return _AsyncRedisLock(
                 name,
-                redis=self.connection,  # type: ignore[arg-type]
+                client=self.connection,  # type: ignore[arg-type]
                 script_shas=self._lock_script_shas,  # type: ignore[arg-type]
                 ttl=self.lock_ttl,
                 blocking_timeout=self.lock_blocking_timeout,
             )
         return _AsyncRedLock(
             name,
-            redis=self.connection,  # type: ignore[arg-type]
+            client=self.connection,  # type: ignore[arg-type]
             ttl=self.lock_ttl,
             blocking_timeout=self.lock_blocking_timeout,
         )
@@ -768,7 +755,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             if "NOSCRIPT" in str(exc):
                 # Re-register the script and retry
                 self._increment_with_ttl_sha = await self.connection.script_load(  # type: ignore
-                    type(self)._INCREMENT_WITH_TTL_SCRIPT
+                    self.INCREMENT_WITH_TTL_SCRIPT
                 )
                 result = await self.connection.evalsha(  # type: ignore
                     self._increment_with_ttl_sha,  # type: ignore[arg-type]
@@ -834,7 +821,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             if "NOSCRIPT" in str(exc):
                 # Script was flushed, re-register and retry
                 self._clear_sha = await self.connection.script_load(  # type: ignore
-                    type(self)._CLEAR_SCRIPT
+                    self.CLEAR_SCRIPT
                 )
                 await self.connection.evalsha(  # type: ignore
                     self._clear_sha,  # type: ignore[arg-type]
@@ -851,5 +838,15 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     async def close(self) -> None:
         """Close the Redis connection."""
         if self.connection is not None:
-            await self.connection.aclose()
-            self.connection = None
+            try:
+                await self.connection.aclose()
+            except Exception as exc:
+                sys.stderr.write(
+                    f"Warning: error while closing redis connection: {exc}\n"
+                )
+                sys.stderr.flush()
+            finally:
+                self.connection = None
+                self._increment_with_ttl_script = None
+                self._clear_script = None
+                self._lock_script_shas = None

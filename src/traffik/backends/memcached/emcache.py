@@ -13,7 +13,7 @@ from types import TracebackType
 
 import emcache
 
-from traffik._locks import fence_token_generator
+from traffik._locks import token_generator
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.memcached._utils import _parse_memcached_url
 from traffik.exceptions import BackendConnectionError, BackendError
@@ -140,7 +140,7 @@ class _AsyncMemcachedLock:
 
         # We generate our own fencing token per acquisition attempt.
         # This helps prevent the "stale lock" problem per-process.
-        token = str(fence_token_generator.next())
+        token = str(token_generator.next())
         name_bytes = self._name_bytes
         token_bytes = token.encode()
         start = monotonic()

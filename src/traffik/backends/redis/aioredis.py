@@ -151,7 +151,6 @@ class _AsyncRedisLock:
         "_owner_task",
         "_token",
         "_reentry_count",
-        "_blocking_timeout",
         "_ttl",
         "_script_shas",
         "_max_spins_before_backoff",
@@ -165,7 +164,6 @@ class _AsyncRedisLock:
         client: aioredis.Redis,
         script_shas: _LockScriptSHAs,
         ttl: typing.Optional[float] = None,
-        blocking_timeout: typing.Optional[float] = None,
         max_spins_before_backoff: int = 4,
         spin_max_delay_seconds: float = 0.01,
         reentrant: bool = False,
@@ -177,7 +175,6 @@ class _AsyncRedisLock:
         :param client: An `aioredis` client.
         :param script_shas: Shared mutable dict containing pre-loaded script SHAs.
             Updates to this dict propagate to the backend and other lock instances.
-        :param blocking_timeout: Max time to wait when acquiring lock (default: None = wait forever).
         :param ttl: How long the lock should live in seconds (default: None = no expiration) before auto-release.
         :param max_spins_before_backoff: Number of zero-delay yields to the event-loop during acquisition,
             before applying exponential backoff.
@@ -190,17 +187,10 @@ class _AsyncRedisLock:
         self._token: typing.Optional[int] = None
         self._reentry_count: int = 0
         self._script_shas = script_shas
-        self._blocking_timeout = blocking_timeout
         self._max_spins_before_backoff = max_spins_before_backoff
         self._spin_max_delay_seconds = spin_max_delay_seconds
         self._reentrant = reentrant
-
-        if ttl is not None:
-            self._ttl = ttl
-        elif blocking_timeout is not None:
-            self._ttl = blocking_timeout
-        else:
-            self._ttl = None
+        self._ttl = ttl
 
     @classmethod
     async def _register_acquire_script(cls, client: aioredis.Redis) -> str:
@@ -249,9 +239,7 @@ class _AsyncRedisLock:
             return True
 
         name = self._name
-        blocking_timeout = (
-            self._blocking_timeout if blocking_timeout is None else blocking_timeout
-        )
+        has_blocking_timeout = blocking_timeout is not None
 
         start = monotonic()
         attempts = 0
@@ -294,10 +282,7 @@ class _AsyncRedisLock:
             if not blocking:
                 return False
 
-            if (
-                blocking_timeout is not None
-                and (monotonic() - start) >= blocking_timeout
-            ):
+            if has_blocking_timeout and (monotonic() - start) >= blocking_timeout:  # type: ignore
                 return False
 
             attempts += 1
@@ -413,7 +398,6 @@ class _AsyncRedLock:
         "_lock",
         "_owner_task",
         "_reentry_count",
-        "_blocking_timeout",
         "_ttl",
         "_reentrant",
     )
@@ -423,7 +407,6 @@ class _AsyncRedLock:
         name: str,
         client: aioredis.Redis,
         ttl: typing.Optional[float] = None,
-        blocking_timeout: typing.Optional[float] = None,
         reentrant: bool = False,
     ) -> None:
         """
@@ -435,26 +418,16 @@ class _AsyncRedLock:
             If None, the TTL is derived from the blocking_timeout + 1 second buffer. If both
             are None, the lock has no expiration. It is not recommended to have locks without
             expiration in distributed environments to avoid deadlocks.
-        :param blocking_timeout: Max time to wait when acquiring lock (default: None = wait forever).
         :param reentrant: Whether to allow the same task to acquire the lock multiple times.
             Reentrancy is process-local only: the reentry counter is tracked in Python and only
             the outermost acquire/release round-trips to Redis. Defaults to False.
         """
         self._name = name
         self._client = client
-        self._blocking_timeout = blocking_timeout
         self._owner_task: typing.Optional[asyncio.Task[typing.Any]] = None
         self._reentry_count: int = 0
         self._reentrant = reentrant
-
-        if ttl is not None:
-            self._ttl = math.ceil(ttl)
-        elif blocking_timeout is not None:
-            # Add 1 second buffer to blocking timeout
-            self._ttl = math.ceil(blocking_timeout) + 1
-        else:
-            self._ttl = 0
-
+        self._ttl = math.ceil(ttl) if ttl is not None else 0
         self._lock = AIORedlock(
             key=name,
             masters={client},
@@ -498,18 +471,12 @@ class _AsyncRedLock:
             return True
 
         # Determine effective timeout
-        blocking_timeout = (
-            self._blocking_timeout if blocking_timeout is None else blocking_timeout
-        )
         if not blocking:
-            effective_timeout = 1e-6  # 1µs for non-blocking
-        elif blocking_timeout is not None:
-            effective_timeout = blocking_timeout
+            # Since `pottery.AIORedlock` does not support a non-blocking mode, 
+            # we use a very short timeout to approximate it.
+            effective_timeout = 1e-6
         else:
-            # If blocking timeout is set to None, then effective timeout is -1 to wait forever
-            effective_timeout = (
-                self._blocking_timeout if self._blocking_timeout is not None else -1
-            )
+            effective_timeout = blocking_timeout or -1
 
         # Attempt to acquire the Redis lock
         try:
@@ -756,7 +723,9 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                 "Connection error! Ensure backend is initialized."
             )
 
-    def get_lock(self, name: str) -> typing.Union[_AsyncRedisLock, _AsyncRedLock]:
+    def get_lock(
+        self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
+    ) -> typing.Union[_AsyncRedisLock, _AsyncRedLock]:
         """Returns a distributed Redis lock for the given name."""
         self._assert_ready()
         if not self._use_redlock:
@@ -764,14 +733,14 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                 name,
                 client=self.connection,  # type: ignore[arg-type]
                 script_shas=self._lock_script_shas,  # type: ignore[arg-type]
-                ttl=self.lock_ttl,
-                blocking_timeout=self.lock_blocking_timeout,
+                ttl=ttl,
+                reentrant=reentrant,
             )
         return _AsyncRedLock(
             name,
             client=self.connection,  # type: ignore[arg-type]
-            ttl=self.lock_ttl,
-            blocking_timeout=self.lock_blocking_timeout,
+            ttl=ttl,
+            reentrant=reentrant,
         )
 
     async def get(

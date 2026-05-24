@@ -1,20 +1,23 @@
 """Locking utilities"""
 
-import contextlib
-
 import asyncio
-import sys
 import threading
 import typing
-import inspect
+import weakref
 from collections import deque
 from time import time_ns
 from types import TracebackType
 
 from typing_extensions import Self
 
-from traffik.exceptions import LockAcquisitionError, LockTimeoutError, LockReleaseError
+from traffik.exceptions import (
+    LockAcquisitionError,
+    LockError,
+    LockReleaseError,
+    LockTimeoutError,
+)
 from traffik.types import AsyncLock
+from traffik.utils import OpTimeout
 
 
 @typing.final
@@ -55,7 +58,7 @@ class __TokenGenerator:
 
 
 token_generator = __TokenGenerator()
-"""Global fence token generator instance."""
+"""Global (fence) token generator instance."""
 
 
 AsyncLockT = typing.TypeVar("AsyncLockT", bound=AsyncLock)
@@ -103,7 +106,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
     - an idle reusable lock cache
     - allocation accounting for bounded growth
 
-    **Capacity Model**
+    **Capacity Model:**
 
     `max_size` controls the maximum number of idle reusable locks retained.
 
@@ -252,6 +255,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
                 self._free.append(lock)
                 return
 
+            # Discard the lock if it can't be recycled
             self._discard_lock(lock)
 
     def _discard_lock(self, lock: AsyncLockT, /) -> None:
@@ -337,7 +341,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
     The handle wraps a pooled underlying async lock and ensures pool
     reference accounting is updated correctly during release.
 
-    Handles are single-owner objects and must not be shared across tasks.
+    Handles are single-task objects and must not be shared across tasks.
     """
 
     __slots__ = (
@@ -369,14 +373,9 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         # an already used (released) named lock handle, has we have no way of
         # tracking that reliably back in the pool. Handles are therefore one-time use only.
         self._released = False
-
-    def locked(self) -> bool:
-        """
-        Return whether **this handle** currently owns the lock.
-
-        This does not necessarily reflect the underlying lock state.
-        """
-        return self._acquired
+        # Discard the handle if it is garbage collected without being released,
+        # to prevent leaks in the pool reference accounting.
+        weakref.finalize(self, self.discard)
 
     async def acquire(
         self,
@@ -387,7 +386,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         Acquire the underlying lock.
 
         :param blocking: Whether to wait for lock acquisition.
-        :param blocking_timeout: Maximum time to wait when blocking. `None` means wait forever. 
+        :param blocking_timeout: Maximum time to wait when blocking. `None` means wait forever.
             Does not apply if `blocking` is False.
         :return: True if acquired, otherwise False.
         :raises LockAcquisitionError: If this handle was already released.
@@ -427,6 +426,19 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
             self._released = True
             self._pool._decrement_ref(self._name)
 
+    async def discard(self) -> None:
+        """
+        Discard this lock handle without releasing the underlying lock.
+        This should only be used when the lock has not been acquired.
+
+        This is useful for cleaning up handles that were retrieved but never acquired,
+        to ensure pool reference counts are updated correctly and locks are not leaked.
+        """
+        if self._released or self._acquired:
+            return
+        self._released = True
+        self._pool._decrement_ref(self._name)
+
     async def __aenter__(self) -> Self:
         """
         Acquire the lock and return the handle.
@@ -443,135 +455,6 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
     ) -> None:
         """Release the lock during async context manager exit."""
         await self.release()
-
-
-class _AsyncLockContext(typing.Generic[AsyncLockT]):
-    """
-    Asynchronous context manager for locks with optional lock TTL and blocking behavior.
-
-    Multi-threaded, multi-process or distributed safety, and reentrancy depends on the
-    underlying `AsyncLock` implementation.
-
-    Lock context instances should not be shared across tasks. Each task should create its own context instance.
-    The underlying lock may be safely shared between contexts across different tasks.
-
-    Note: Using `ttl` or `blocking_timeout` with reentrant locks may cause unexpected behavior
-    if nested contexts share the same underlying lock instance.
-    """
-
-    __slots__ = (
-        "_lock",
-        "_ttl",
-        "_blocking",
-        "_blocking_timeout",
-        "_timer_handle",
-        "_acquired",
-        "_reenterd",
-        "_auto_released",
-    )
-
-    def __init__(
-        self,
-        lock: AsyncLockT,
-        ttl: typing.Optional[float] = None,
-        blocking: bool = True,
-        blocking_timeout: typing.Optional[float] = None,
-    ) -> None:
-        """
-        Initialize the async lock context.
-
-        :param lock: The async lock instance to manage.
-        :param ttl: How long the lock should live in seconds before auto-release (default: None = no auto-release).
-        :param blocking: Whether to block when acquiring the lock (default: True).
-        :param blocking_timeout: Max time to wait when acquiring lock (default: None = wait forever).
-            Does not apply (at context level) if the lock context is re-entered. It's left to the
-            underlying lock to handle re-entrant timeout.
-        """
-        self._lock = lock
-        self._ttl = ttl
-        self._blocking = blocking
-        self._blocking_timeout = blocking_timeout
-        self._timer_handle: typing.Optional[asyncio.TimerHandle] = None
-        self._acquired = False
-        self._reenterd = False
-        self._auto_released = False
-
-    async def __aenter__(self) -> Self:
-        acquired = await self._lock.acquire(
-            blocking=self._blocking,
-            blocking_timeout=self._blocking_timeout,
-        )
-        if not acquired:
-            raise LockAcquisitionError(
-                f"Could not acquire {type(self._lock).__qualname__!r} lock"
-            )
-
-        # Check if the context was re-entered. Re-entered context should not schedule
-        # auto-release, or atleast I dont see any reason why it should as of now
-        reentered = self._acquired is True and acquired is True
-        self._acquired = acquired
-        self._reenterd = reentered
-
-        # Schedule auto-release if acquired (non-reentrant) and timeout is set
-        if not reentered and acquired and self._ttl is not None:
-            self._timer_handle = asyncio.get_running_loop().call_later(
-                self._ttl, self._auto_release
-            )
-        return self
-
-    async def _auto_release(self) -> None:
-        """Automatic lock release callback."""
-        if self._ttl is None:
-            return
-
-        # Only release if we still think we have the lock
-        if self._acquired:
-            try:
-                # We cant shield release here. It's very unsafe
-                await self._lock.release()
-                self._auto_released = True
-                self._acquired = False
-            except RuntimeError as exc:
-                # This needs to be a fast operation. Cannot use logger here as it blocks the event loop,
-                # and it may cause deadlocks if logging uses the same backend
-
-                # Lock might have been released already or not owned by us
-                # This can happen with reentrant locks
-                sys.stderr.write(
-                    f"Failed to release lock after timeout; it may have been released already.\n"
-                    f"This can happen with reentrant locks, and can lead to unexpected behavior.\n {exc}",
-                )
-                sys.stderr.flush()
-
-    async def __aexit__(
-        self,
-        exc_type: typing.Optional[type[BaseException]],
-        exc_value: typing.Optional[BaseException],
-        traceback: typing.Optional[TracebackType],
-    ) -> None:
-        # Ensure the lock is released and auto-release timer cleaned up.
-        if not self._reenterd and self._timer_handle is not None:
-            self._timer_handle.cancel()
-            self._timer_handle = None
-
-        # Release the lock if we acquired it and haven't released it yet
-        if self._acquired and not self._auto_released:
-            try:
-                # Shield release we need release to complete even if parent task is cancelled
-                # If not, there's a higher chance of having stale/deadlocks
-                await asyncio.shield(self._lock.release())
-            except RuntimeError as exc:
-                # This needs to be a fast operation. Cannot use logger here as it blocks the event loop,
-                # and it may cause deadlocks if logging uses the same backend
-
-                # Lock might have been released by timeout in a race or not owned by current task
-                sys.stderr.write(
-                    f"Failed to release lock on context exit; it may have been released already."
-                    f" This can happen with reentrant locks, and can lead to unexpected behavior.\n {exc}",
-                )
-                sys.stderr.flush()
-            finally:
-                self._acquired = False
 
 
 class _AsyncFairRLock:
@@ -736,3 +619,209 @@ class _AsyncRLock:
         traceback: typing.Optional[TracebackType],
     ) -> None:
         self.release()
+
+
+@typing.final
+class _AsyncLockContext(typing.Generic[AsyncLockT]):
+    """
+    Async context manager for `AsyncLock` with optional TTL and blocking controls.
+
+    This wrapper is (intentionally) non-reentrant per instance. Each `backend.lock(name)`
+    call creates a fresh context instance. The underlying lock (e.g. `_AsyncFairRLock`)
+    may itself be reentrant, but this wrapper only tracks one acquire/release cycle and
+    raises a `LockAcquisitionError` if entered twice.
+
+    **TTL semantics:**
+
+    When `ttl` is set, the body is cancelled if execution exceeds the
+    timeout. The lock is always released before the error propagates, ensuring the
+    distributed lock is never left dangling. `ttl` also caps the acquire wait when
+    `blocking_timeout` is not set explicitly.
+
+    Each context instance must be used by exactly one `asyncio.Task`. The underlying
+    lock implementation is responsible for cross-task safety.
+
+    **Exception priority:**
+
+    When multiple errors coincide the priority is:
+    - `LockTimeoutError` (TTL fired) always surfaces; lock is released first.
+    - Body exception only surfaces when TTL did not fire.
+    - `LockReleaseError` surfaces only when no other exception is already propagating.
+    """
+
+    __slots__ = (
+        "_lock",
+        "_ttl",
+        "_blocking",
+        "_blocking_timeout",
+        "_acquired",
+        "_op_timeout",
+    )
+
+    def __init__(
+        self,
+        lock: AsyncLockT,
+        ttl: typing.Optional[float] = None,
+        blocking: bool = True,
+        blocking_timeout: typing.Optional[float] = None,
+    ) -> None:
+        """
+        Initialize the async lock context.
+
+        :param lock: The async lock to manage.
+        :param ttl: Maximum seconds the body may run after the lock is
+            acquired. When the deadline fires the running task is cancelled
+            and `LockTimeoutError` is raised. Also used as the acquire-wait
+            upper bound when `blocking_timeout` is not set.
+
+            **Warning:** If the lock provided uses a release TTL, ensure to pass it as `ttl`
+            here. This is crucial for distributed `AsyncLock`s because if not set, the lock may have been
+            released (by TTL) on the distributed server (e.g redis server) but the client/task still thinks it's holding
+            the lock and continues executing the body until it tries to release, which may cause unsafe execution
+            without the mutual exclusion. To ensure that the TTL is is also enforced locally too, and also
+            propagated to the server if needed, pass the same TTL value here.
+
+        :param blocking: If `False`, fail immediately when the lock is busy.
+        :param blocking_timeout: Maximum seconds to wait during acquire.
+            Takes priority over `ttl` for the acquire-wait bound.
+        """
+        self._lock = lock
+        self._ttl = ttl
+        self._blocking = blocking
+        self._blocking_timeout = blocking_timeout
+        self._acquired = False
+        self._op_timeout: typing.Optional[OpTimeout] = None
+
+    def _effective_acquire_timeout(self) -> typing.Optional[float]:
+        """
+        Get the upper bound for the acquire wait.
+
+        Priority:
+        1. explicit `blocking_timeout`
+        2. `ttl` - we can't wait longer to get the lock than we plan to hold it
+        3. `None` - wait forever
+        """
+        if self._blocking_timeout is not None:
+            return self._blocking_timeout
+        return self._ttl  # may also be None
+
+    async def _acquire(self) -> None:
+        """
+        Acquire the underlying lock, respecting the effective acquire timeout.
+
+        :raises LockTimeoutError: Timed out waiting for the lock.
+        :raises LockAcquisitionError: Non-blocking acquire returned False immediately.
+        """
+        acquire_timeout = self._effective_acquire_timeout()
+        try:
+            if acquire_timeout is not None:
+                acquired = await asyncio.wait_for(
+                    self._lock.acquire(
+                        blocking=self._blocking,
+                        blocking_timeout=self._blocking_timeout,
+                    ),
+                    timeout=acquire_timeout,
+                )
+            else:
+                acquired = await self._lock.acquire(
+                    blocking=self._blocking,
+                    blocking_timeout=self._blocking_timeout,
+                )
+        except asyncio.TimeoutError as exc:
+            raise LockTimeoutError(
+                f"Timed out waiting to acquire {type(self._lock).__qualname__!r} lock after {acquire_timeout}s."
+            ) from exc
+
+        if not acquired:
+            raise LockAcquisitionError(
+                f"Could not acquire {type(self._lock).__qualname__!r} lock (non-blocking)."
+            )
+
+    async def _release(self, exc_type: typing.Optional[type[BaseException]]) -> None:
+        """
+        Release the underlying lock.
+
+        If release fails and no exception is already propagating, raises
+        `LockReleaseError`. If an exception is already in flight the
+        release error is suppressed so the original exception wins.
+        """
+        try:
+            await self._lock.release()
+        except (LockError, LockReleaseError, RuntimeError) as release_exc:
+            if exc_type is None:
+                raise LockReleaseError(
+                    f"Failed to release {type(self._lock).__qualname__!r} lock."
+                ) from release_exc
+        finally:
+            self._acquired = False
+
+    async def __aenter__(self) -> Self:
+        if self._acquired:
+            raise LockAcquisitionError(
+                f"Lock context for {type(self._lock).__qualname__!r} is already "
+                f"acquired. {self.__class__.__name__} is not re-entrant; create a new "
+                f"context instance for nested locking."
+            )
+
+        await self._acquire()
+        self._acquired = True
+
+        # Start the lock hold-time watchdog after the lock is confirmed acquired.
+        # `OpTimeout` schedules task.cancel() via `call_later`. The CancelledError
+        # that bubbles up through the body is then converted to LockTimeoutError
+        # inside `__aexit__` before the lock is released.
+        if self._ttl is not None:
+            loop = asyncio.get_running_loop()
+            self._op_timeout = OpTimeout(
+                timeout=self._ttl,
+                loop=loop,
+                error_type=LockTimeoutError,
+                error_message=(
+                    f"{type(self._lock).__qualname__!r} lock TTL of {self._ttl}s "
+                    "expired while the lock was held. The body was cancelled to "
+                    "prevent unsafe execution without mutual exclusion."
+                ),
+            )
+            await self._op_timeout.__aenter__()
+
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ) -> None:
+        # Firt and most important, we need to exit `OpTimeout`
+        # This must happen before the lock release so that:
+        # - A normal exit cancels the `call_later` handle (hence no spurious fire).
+        # - A TTL-fired exit converts `CancelledError` to `LockTimeoutError`.
+        # We then stash any `LockTimeoutError` and re-raise it after releasing.
+        timeout_exc: typing.Optional[BaseException] = None
+        if self._op_timeout is not None:
+            op_timeout = self._op_timeout
+            self._op_timeout = None
+            try:
+                await op_timeout.__aexit__(exc_type, exc_value, traceback)
+            except LockTimeoutError as ltexc:
+                # TTL watchdog fired. Stash and release first.
+                timeout_exc = ltexc
+            except BaseException as bexc:
+                print("HERE")
+                # We got and unexpected error from `OpTimeout` itself. Release then propagate.
+                if self._acquired:
+                    await self._release(exc_type=type(bexc))
+                raise
+
+        # Now we can release the lock (if it was acquired) and then surface any
+        # TTL error that may have fired during the body execution or the release.
+        if self._acquired:
+            # If the TTL fired, the active exception is `LockTimeoutError`,
+            # not whatever exc_type was when `__aexit__` was called.
+            # Pass the real active exception type so `_release` knows not to raise on top of it.
+            active_exc_type = type(timeout_exc) if timeout_exc is not None else exc_type
+            await self._release(exc_type=active_exc_type)
+
+        # Since the lock should have been released by now, we can now raise any `LockTimeoutError`.
+        if timeout_exc is not None:
+            raise timeout_exc

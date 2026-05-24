@@ -122,7 +122,6 @@ class _AsyncCoredisLock:
         "_reentry_count",
         "_ttl",
         "_sleep",
-        "_blocking_timeout",
         "_reentrant",
     )
 
@@ -131,7 +130,6 @@ class _AsyncCoredisLock:
         name: str,
         client: _AnyRedis,
         ttl: typing.Optional[float] = None,
-        blocking_timeout: typing.Optional[float] = None,
         sleep: float = 0.05,
         reentrant: bool = False,
     ) -> None:
@@ -143,7 +141,6 @@ class _AsyncCoredisLock:
         :param ttl: Maximum lifetime of the lock in seconds. Setting this is **strongly recommended**
             in production to prevent deadlocks after process crashes.
             If `None`, the lock will persist until explicitly released.
-        :param blocking_timeout: Maximum seconds to wait when acquiring the lock. `None` means block forever.
         :param sleep: Seconds to sleep between acquisition attempts when the lock is held.
         :param reentrant: Whether to allow the same task to acquire the lock multiple times.
             Reentrancy is process-local only: the reentry counter is tracked in Python and only
@@ -156,15 +153,7 @@ class _AsyncCoredisLock:
         self._reentry_count: int = 0
         self._reentrant = reentrant
         self._sleep = sleep
-        self._blocking_timeout = blocking_timeout
-
-        if ttl is not None:
-            self._ttl = math.ceil(ttl)
-        elif blocking_timeout is not None:
-            # Add 1 second buffer to blocking timeout
-            self._ttl = math.ceil(blocking_timeout) + 1
-        else:
-            self._ttl = 0  # No TTL; lock will persist until explicitly released
+        self._ttl = math.ceil(ttl) if ttl is not None else 0
 
     def _is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool:
         """Return True if the current task owns this lock."""
@@ -202,9 +191,6 @@ class _AsyncCoredisLock:
             self._reentry_count += 1
             return True
 
-        blocking_timeout = (
-            self._blocking_timeout if blocking_timeout is None else blocking_timeout
-        )
         lock = CoredisLock(
             client=self._client,
             name=self._name,
@@ -521,7 +507,9 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         except Exception:
             return False
 
-    def get_lock(self, name: str) -> _AsyncCoredisLock:
+    def get_lock(
+        self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
+    ) -> _AsyncCoredisLock:
         """
         Return a distributed lock for the given name backed by `coredis.patterns.lock.Lock`.
         """
@@ -529,9 +517,9 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         return _AsyncCoredisLock(
             client=self.connection,  # type: ignore[arg-type]
             name=name,
-            ttl=self.lock_ttl,
+            ttl=ttl,
             sleep=self._lock_sleep,  # polling interval
-            blocking_timeout=self.lock_blocking_timeout,
+            reentrant=reentrant,
         )
 
     async def get(

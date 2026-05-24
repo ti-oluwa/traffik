@@ -1612,8 +1612,6 @@ version = "1.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "annotated-types" },
-    { name = "coredis", version = "4.20.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "coredis", version = "6.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "msgpack" },
     { name = "starlette" },
 ]
@@ -1631,6 +1629,10 @@ all = [
     { name = "emcache", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pottery" },
     { name = "redis" },
+]
+coredis = [
+    { name = "coredis", version = "4.20.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "coredis", version = "6.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 docs = [
     { name = "zensical", marker = "python_full_version >= '3.10'" },
@@ -1692,7 +1694,7 @@ requires-dist = [
     { name = "aiomcache", marker = "extra == 'aiomcache'", specifier = ">=0.8.2" },
     { name = "annotated-types", specifier = ">=0.7.0" },
     { name = "anyio", marker = "extra == 'test'", specifier = ">=4.0.0" },
-    { name = "coredis", extras = ["coredis"], specifier = ">=4.20.0" },
+    { name = "coredis", marker = "extra == 'coredis'", specifier = ">=4.20.0" },
     { name = "emcache", marker = "(sys_platform == 'darwin' and extra == 'emcache') or (sys_platform == 'linux' and extra == 'emcache')", specifier = ">=1.3.3" },
     { name = "fastapi", marker = "extra == 'test'", specifier = ">=0.68.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.0" },
@@ -1713,7 +1715,7 @@ requires-dist = [
     { name = "traffik", extras = ["emcache"], marker = "extra == 'all'", editable = "." },
     { name = "zensical", marker = "python_full_version >= '3.10' and extra == 'docs'", specifier = ">=0.0.31" },
 ]
-provides-extras = ["all", "redis", "memcached", "aioredis", "aiomcache", "emcache", "test", "docs"]
+provides-extras = ["all", "redis", "memcached", "aioredis", "coredis", "aiomcache", "emcache", "test", "docs"]
 
 [package.metadata.requires-dev]
 benchmark = [

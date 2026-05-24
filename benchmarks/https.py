@@ -24,8 +24,9 @@ from fastapi import Depends, FastAPI, Request
 from slowapi import Limiter as SlowAPILimiter
 
 from traffik import HTTPThrottle, get_remote_address
+from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
-from traffik.backends.redis import RedisBackend
+from traffik.backends.redis.aioredis import RedisBackend
 from traffik.registry import ThrottleRegistry
 from traffik.strategies.custom import GCRAStrategy
 from traffik.strategies.fixed_window import FixedWindowStrategy

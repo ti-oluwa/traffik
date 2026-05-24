@@ -615,7 +615,7 @@ def test_middleware_exemption_with_predicate(inmemory_backend: InMemoryBackend) 
     """Test middleware with exemption logic using predicate."""
     throttle = HTTPThrottle(
         uid="exemption-test",
-        rate=Rate.parse("1/1s"),
+        rate=Rate.parse("1/s"),
         identifier=default_client_identifier,
         registry=ThrottleRegistry(),
     )

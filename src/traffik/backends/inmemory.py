@@ -281,7 +281,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 # Never crash the cleanup loop. Keep the backend alive.
                 pass
 
-    def get_lock(self, name: str) -> _NamedLockHandle[_AsyncInMemoryLock]:
+    def get_lock(
+        self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
+    ) -> _NamedLockHandle[_AsyncInMemoryLock]:
         """
         Returns a reentrant lock for the given name.
 

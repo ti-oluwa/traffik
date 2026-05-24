@@ -64,6 +64,7 @@ import typing
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing.shared_memory import SharedMemory
 from multiprocessing.synchronize import Semaphore
+from time import monotonic
 from types import TracebackType
 
 from typing_extensions import Self
@@ -358,10 +359,11 @@ class _AsyncSharedMemoryLock:
             self._reentry_count += 1
             return True
 
-        start = time()
+        start = monotonic()
         attempts = 0
         max_spins = self._max_spins_before_backoff
         spin_max_delay = self._spin_max_delay_seconds
+        has_blocking_timeout = blocking_timeout is not None
         while True:
             if test_and_set_byte(self._buffer, self._byte_index) == 0:
                 # Old value was 0. We already atomically set it to 1 and own the lock
@@ -372,7 +374,7 @@ class _AsyncSharedMemoryLock:
             if not blocking:
                 return False
 
-            if blocking_timeout is not None and (time() - start) >= blocking_timeout:
+            if has_blocking_timeout and (monotonic() - start) >= blocking_timeout:  # type: ignore
                 return False
 
             if attempts < max_spins:
@@ -2362,7 +2364,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             expire,
         )
 
-    def get_lock(self, name: str) -> _NamedLockHandle[_AsyncSharedMemoryLock]:
+    def get_lock(
+        self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
+    ) -> _NamedLockHandle[_AsyncSharedMemoryLock]:
         """
         Return a named cross-process lock backed by a byte in the
         shared memory segment.

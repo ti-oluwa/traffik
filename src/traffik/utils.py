@@ -7,10 +7,11 @@ import inspect
 import sys
 import time as pytime
 import typing
+from types import TracebackType
 
 import msgpack  # type: ignore[import-untyped]
 from starlette.requests import HTTPConnection
-from typing_extensions import Self, TypeGuard
+from typing_extensions import TypeGuard
 
 from traffik.config import (
     get_lock_blocking,
@@ -195,7 +196,7 @@ class OpTimeout:
     Asynchronous context manager that cancels the current task if the
     block of code inside it takes longer than a specified timeout.
 
-    Adapted from `emcache.timeout` in the `emcache` library (MIT License)
+    Adapted from `emcache.timeout` in the `emcache` library (MIT License).
     Copyright (c) 2020-2024 Pau Freixes
     """
 
@@ -247,7 +248,12 @@ class OpTimeout:
         if self._timeout is not None:
             self._timer_handler = self._loop.call_later(self._timeout, self._on_timeout)
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ):
         if self._timed_out:
             if sys.version_info[:2] >= (3, 11):
                 # Call uncancel to clear cancellation state from OpTimeout

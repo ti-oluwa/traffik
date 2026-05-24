@@ -76,7 +76,7 @@ Takes a key, a Rate object, the throttle backend, and cost, and returns the wait
 class ThrottleExceptionInfo(TypedDict):
     """TypedDict for exception handler information."""
 
-    exception: Exception
+    exception: BaseException
     """The type of exception the handler is for."""
     connection: HTTPConnection
     """The HTTP connection associated with the exception."""
@@ -792,7 +792,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
     async def _handle_error(
         self,
         connection: HTTPConnectionT,
-        exc: Exception,
+        exc: BaseException,
         cost: int,
         rate: Rate,
         backend: ThrottleBackend[typing.Any, HTTPConnectionT],
@@ -939,11 +939,11 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         key = self.get_namespaced_key(connection, connection_id, merged_context)
         try:
             wait_ms = await self.strategy(key, rate, backend, actual_cost)  # type: ignore[arg-type]
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, SystemExit, KeyboardInterrupt):
             raise
-        except Exception as exc:
+        except BaseException as exc:
             sys.stderr.write(
-                f"Warning: An error occurred while utilizing strategy '{self.strategy!r}': {exc}\n"
+                f"Warning: An error occurred while utilizing strategy '{self.strategy!r}'.\n {type(exc).__name__}: {exc}\n"
             )
             sys.stderr.flush()
             wait_ms = await self._handle_error(

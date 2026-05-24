@@ -328,11 +328,16 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         raise NotImplementedError("`delete(...)` must be implemented by the backend.")
 
-    def get_lock(self, name: str) -> AsyncLock:
+    def get_lock(
+        self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
+    ) -> AsyncLock:
         """
         Get a distributed lock with the given name.
 
         :param name: The name of the lock.
+        :param ttl: How long the lock should live in seconds before auto-release. If None, uses backend default.
+        :param reentrant: Whether the lock should be reentrant for the same task/context. If True, the same task can acquire the
+            lock multiple times without deadlocking itself. If False, acquiring the lock again in the same task will cause a deadlock.
         :return: An asynchronous lock object that implements the `traffik.types.AsyncLock` protocol.
         """
         raise NotImplementedError("`get_lock(...)` must be implemented by the backend.")
@@ -343,6 +348,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         ttl: typing.Optional[float] = None,
         blocking: typing.Optional[bool] = None,
         blocking_timeout: typing.Optional[float] = None,
+        reentrant: bool = False,
     ) -> _AsyncLockContext[AsyncLock]:
         """
         Context manager to acquire a distributed lock for the given key.
@@ -352,7 +358,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         are provided, they override the backend's defaults for this lock acquisition.
 
         `ttl` and `blocking_timeout` settings here only affect the lock context (`_AsyncLockContext`)
-        returned and do not modify the underlying lock  returned by `get_lock(...)`. This allows
+        returned and do not modify the underlying lock returned by `get_lock(...)`. This allows
         multiple lock contexts with different settings to be created from the same lock.
 
         If `get_lock(...)` needs `ttl` or `blocking_timeout` to create the lock, it should
@@ -360,13 +366,13 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
         :param name: The name of the lock.
         :param ttl: How long the lock should live in seconds before auto-release. If None, uses backend default.
+            The release TTL passed here should not be greater than backend default, as this can cause
         :param blocking: If False, do not wait for the lock if it's already held, raise a timeout error instead.
         :param blocking_timeout: Maximum time in seconds to wait for the lock if blocking is True. None means wait indefinitely.
+        :param reentrant: Whether the lock should be reentrant for the same task/context. If True, the same task can acquire the
+            lock multiple times without deadlocking itself. If False, acquiring the lock again in the same task will cause a deadlock.
         :return: An asynchronous context manager that acquires/releases the lock.
         """
-        # Ensure to use a namespaced lock key so reset on backend clears locks too
-        lock_name = self.get_key(name)
-        lock = self.get_lock(lock_name)
         ttl = ttl if ttl is not None else self.lock_ttl
         blocking = blocking if blocking is not None else self.lock_blocking
         blocking_timeout = (
@@ -374,6 +380,11 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             if blocking_timeout is not None
             else self.lock_blocking_timeout
         )
+        # Ensure to use a namespaced lock key so reset on backend clears locks too
+        lock_name = self.get_key(name)
+        # Precompute release TTL to ensure that same values used to create the lock are what
+        # is used in the context. This ensure lock usage safety especially for distributed lock types
+        lock = self.get_lock(name=lock_name, ttl=ttl, reentrant=reentrant)
         return _AsyncLockContext(
             lock,
             ttl=ttl,
@@ -472,7 +483,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :param keys: Sequence of keys to retrieve
         :return: List of values (None for missing keys), same order as keys
 
-        Note: This is different from non-atomic batch get - values should be
+        Note: This is different from non-atomic batch get. Values should be
         consistent snapshot, not interleaved with writes.
         """
         tasks = [self.get(key) for key in keys]
@@ -495,9 +506,18 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :param items: Mapping of keys to values to set
         :param expire: Optional expiration time in seconds for all keys
         """
-        tasks = [self.set(key, value, expire=expire) for key, value in items.items()]
-        await asyncio.gather(*tasks)
-        return None
+        tasks = [
+            asyncio.create_task(self.set(key, value, expire=expire))
+            for key, value in items.items()
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception:
+            # Any exception should cancel any ongoing task.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            raise
 
     async def close(self) -> None:
         """

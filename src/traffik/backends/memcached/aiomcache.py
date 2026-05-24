@@ -196,6 +196,7 @@ class _AsyncMemcachedLock:
         attempts = 0
         max_spins = self._max_spins_before_backoff
         spin_max_delay = self._spin_max_delay_seconds
+        has_blocking_timeout = blocking_timeout is not None
         while True:
             # `add()` is atomic, as only succeeds if key doesn't exist
             # Returns True if added, False if key already exists
@@ -215,10 +216,7 @@ class _AsyncMemcachedLock:
                 return False
 
             # Check timeout
-            if (
-                blocking_timeout is not None
-                and (monotonic() - start) >= blocking_timeout
-            ):
+            if has_blocking_timeout and (monotonic() - start) >= blocking_timeout:  # type: ignore
                 return False
 
             attempts += 1
@@ -275,7 +273,9 @@ class _AsyncMemcachedLock:
 
     async def __aenter__(self):
         if not await self.acquire():
-            raise LockAcquisitionError(f"Could not acquire Memcached lock '{self._name}'")
+            raise LockAcquisitionError(
+                f"Could not acquire Memcached lock '{self._name}'"
+            )
         return self
 
     async def __aexit__(
@@ -487,7 +487,9 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
                 "Connection error! Ensure backend is initialized."
             )
 
-    def get_lock(self, name: str) -> _AsyncMemcachedLock:
+    def get_lock(
+        self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
+    ) -> _AsyncMemcachedLock:
         """
         Get a distributed lock for the given name.
 
@@ -495,7 +497,12 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         :return: `_AsyncMemcachedLock` instance.
         """
         self._assert_ready()
-        return _AsyncMemcachedLock(name, client=self.connection, ttl=self.lock_ttl)  # type: ignore[arg-type]
+        return _AsyncMemcachedLock(
+            name,
+            client=self.connection,  # type: ignore[arg-type]
+            ttl=ttl,
+            reentrant=reentrant,
+        )
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any

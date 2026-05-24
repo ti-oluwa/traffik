@@ -184,7 +184,7 @@ class _AsyncMemcachedLock:
         attempts = 0
         max_spins = self._max_spins_before_backoff
         spin_max_delay = self._spin_max_delay_seconds
-
+        has_blocking_timeout = blocking_timeout is not None
         while True:
             try:
                 await self._client.add(
@@ -210,10 +210,7 @@ class _AsyncMemcachedLock:
             if not blocking:
                 return False
 
-            if (
-                blocking_timeout is not None
-                and (monotonic() - start) >= blocking_timeout
-            ):
+            if has_blocking_timeout and (monotonic() - start) >= blocking_timeout:  # type: ignore
                 return False
 
             attempts += 1
@@ -554,7 +551,9 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
                 "Connection error! Ensure backend is initialized."
             )
 
-    def get_lock(self, name: str) -> _AsyncMemcachedLock:
+    def get_lock(
+        self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
+    ) -> _AsyncMemcachedLock:
         """
         Get a distributed lock for the given name.
 
@@ -562,7 +561,12 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         :return: `_AsyncMemcachedLock` instance.
         """
         self._assert_ready()
-        return _AsyncMemcachedLock(name, client=self.connection, ttl=self.lock_ttl)  # type: ignore[arg-type]
+        return _AsyncMemcachedLock(
+            name,
+            client=self.connection,  # type: ignore[arg-type]
+            ttl=ttl,
+            reentrant=reentrant,
+        )
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any

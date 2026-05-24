@@ -12,7 +12,11 @@ from pottery import AIORedlock
 from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import BackendConnectionError
+from traffik.exceptions import (
+    BackendConnectionError,
+    LockAcquisitionError,
+    LockReleaseError,
+)
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -214,16 +218,6 @@ class _AsyncRedisLock:
             task = asyncio.current_task()
         return task is not None and task is self._owner_task
 
-    def locked(self) -> bool:
-        """
-        Return True if the current task holds this lock.
-
-        Unlike a ContextVar approach, tasks spawned from a lock-holding
-        parent will correctly return False here since they have a different
-        task identity.
-        """
-        return self._is_owner()
-
     async def acquire(
         self,
         blocking: bool = True,
@@ -240,14 +234,14 @@ class _AsyncRedisLock:
         """
         current = asyncio.current_task()
         if current is None:
-            raise RuntimeError(
+            raise LockAcquisitionError(
                 f"Lock '{self._name}' must be acquired from within an asyncio Task."
             )
 
         # Reentrant. Current task already holds the lock
         if self._is_owner(task=current):
             if not self._reentrant:
-                raise RuntimeError(
+                raise LockAcquisitionError(
                     f"Lock '{self._name}' is already acquired by the current task "
                     "and was not configured as reentrant."
                 )
@@ -289,7 +283,7 @@ class _AsyncRedisLock:
                         str(self._ttl or 0),
                     )
                 else:
-                    raise
+                    raise LockAcquisitionError(exc) from exc
 
             if token:
                 self._owner_task = current
@@ -326,7 +320,7 @@ class _AsyncRedisLock:
         """
         if not self._is_owner():
             current = asyncio.current_task()
-            raise RuntimeError(
+            raise LockReleaseError(
                 f"Cannot release lock '{self._name}': "
                 f"current task {current!r} does not own the lock "
                 f"(owner: {self._owner_task!r})."
@@ -364,14 +358,13 @@ class _AsyncRedisLock:
                     token,  # ARGV[1]
                 )
             else:
-                raise
+                raise LockReleaseError(exc) from exc
 
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # nosec
             # Lock might have expired or been released already
-            # Log and ignore release errors to avoid deadlocks
-            sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
+            raise LockReleaseError(f"Failed to release lock '{name}'") from exc
         finally:
             # Clear ownership regardless of whether Redis release succeeded.
             # If Redis release failed, the key will expire via TTL.
@@ -382,7 +375,7 @@ class _AsyncRedisLock:
 
     async def __aenter__(self):
         if not await self.acquire():
-            raise TimeoutError(f"Could not acquire Redis lock '{self._name}'")
+            raise LockAcquisitionError(f"Could not acquire Redis lock '{self._name}'")
         return self
 
     async def __aexit__(
@@ -474,10 +467,6 @@ class _AsyncRedLock:
             task = asyncio.current_task()
         return task is not None and task is self._owner_task
 
-    def locked(self) -> bool:
-        """Return True if the current task holds this lock."""
-        return self._is_owner()
-
     async def acquire(
         self,
         blocking: bool = True,
@@ -494,14 +483,14 @@ class _AsyncRedLock:
         """
         current = asyncio.current_task()
         if current is None:
-            raise RuntimeError(
+            raise LockAcquisitionError(
                 f"Lock '{self._name}' must be acquired from within an asyncio Task."
             )
 
         # Reentrant. Current task already holds the lock
         if self._is_owner(task=current):
             if not self._reentrant:
-                raise RuntimeError(
+                raise LockAcquisitionError(
                     f"Lock '{self._name}' is already acquired by the current task "
                     "and was not configured as reentrant."
                 )
@@ -527,15 +516,16 @@ class _AsyncRedLock:
             acquired = await self._lock.acquire(
                 blocking=blocking, timeout=effective_timeout
             )
-            if acquired:
-                self._owner_task = current
-                self._reentry_count = 1
-                return True
-            return False
+        except Exception as exc:  # nosec
+            raise LockAcquisitionError(
+                f"Failed to acquire lock '{self._name}'"
+            ) from exc
 
-        except (asyncio.TimeoutError, Exception):
-            # Any exception during acquisition means we didn't get the lock
-            return False
+        if acquired:
+            self._owner_task = current
+            self._reentry_count = 1
+            return True
+        return False
 
     async def release(self) -> None:
         """
@@ -546,7 +536,7 @@ class _AsyncRedLock:
         """
         if not self._is_owner():
             current = asyncio.current_task()
-            raise RuntimeError(
+            raise LockReleaseError(
                 f"Cannot release lock '{self._name}': "
                 f"current task {current!r} does not own the lock "
                 f"(owner: {self._owner_task!r})."
@@ -565,9 +555,7 @@ class _AsyncRedLock:
             raise
         except Exception as exc:  # nosec
             # Lock might have expired or been released already
-            # Log and ignore release errors to avoid deadlocks
-            sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
-            sys.stderr.flush()
+            raise LockReleaseError(f"Failed to release lock '{name}'") from exc
         finally:
             # Clear ownership regardless of whether Redis release succeeded.
             # If Redis release failed, the key will expire via TTL.
@@ -576,7 +564,7 @@ class _AsyncRedLock:
 
     async def __aenter__(self):
         if not await self.acquire():
-            raise TimeoutError(f"Could not acquire Redis lock '{self._name}'")
+            raise LockAcquisitionError(f"Could not acquire Redis lock '{self._name}'")
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

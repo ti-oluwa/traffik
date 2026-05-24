@@ -14,7 +14,12 @@ from aiomcache import ClientException
 from traffik._locks import token_generator
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.memcached._utils import _parse_memcached_url
-from traffik.exceptions import BackendConnectionError, BackendError
+from traffik.exceptions import (
+    BackendConnectionError,
+    BackendError,
+    LockAcquisitionError,
+    LockReleaseError,
+)
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -152,10 +157,6 @@ class _AsyncMemcachedLock:
             task = asyncio.current_task()
         return task is not None and task is self._owner_task
 
-    def locked(self) -> bool:
-        """Return True if the current task holds this lock."""
-        return self._is_owner()
-
     async def acquire(
         self,
         blocking: bool = True,
@@ -172,14 +173,14 @@ class _AsyncMemcachedLock:
         """
         current = asyncio.current_task()
         if current is None:
-            raise RuntimeError(
+            raise LockAcquisitionError(
                 f"Lock '{self._name}' must be acquired from within an asyncio Task."
             )
 
         # Reentrant. Current task already holds the lock
         if self._is_owner(task=current):
             if not self._reentrant:
-                raise RuntimeError(
+                raise LockAcquisitionError(
                     f"Lock '{self._name}' is already acquired by the current task "
                     "and was not configured as reentrant."
                 )
@@ -238,7 +239,7 @@ class _AsyncMemcachedLock:
         """
         if not self._is_owner():
             current = asyncio.current_task()
-            raise RuntimeError(
+            raise LockReleaseError(
                 f"Cannot release lock '{self._name}': "
                 f"current task {current!r} does not own the lock "
                 f"(owner: {self._owner_task!r})."
@@ -263,8 +264,7 @@ class _AsyncMemcachedLock:
             raise
         except Exception as exc:  # nosec
             # Lock might have expired or been released already
-            # Log and ignore release errors to avoid deadlocks
-            sys.stderr.write(f"Warning: Failed to release lock '{name}': {str(exc)}\n")
+            raise LockReleaseError(f"Failed to release lock '{name}'") from exc
         finally:
             # Clear ownership regardless of whether Memcached release succeeded.
             # If release failed, the key will expire via TTL.
@@ -275,7 +275,7 @@ class _AsyncMemcachedLock:
 
     async def __aenter__(self):
         if not await self.acquire():
-            raise TimeoutError(f"Could not acquire Memcached lock '{self._name}'")
+            raise LockAcquisitionError(f"Could not acquire Memcached lock '{self._name}'")
         return self
 
     async def __aexit__(

@@ -1,16 +1,19 @@
 """Locking utilities"""
 
+import contextlib
+
 import asyncio
 import sys
 import threading
 import typing
+import inspect
 from collections import deque
 from time import time_ns
 from types import TracebackType
 
 from typing_extensions import Self
 
-from traffik.exceptions import LockTimeoutError
+from traffik.exceptions import LockAcquisitionError, LockTimeoutError, LockReleaseError
 from traffik.types import AsyncLock
 
 
@@ -236,7 +239,11 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
 
             del self._active[name]
 
-            if hasattr(lock, "locked") and lock.locked():
+            if (
+                (locked := getattr(lock, "locked", None)) is not None
+                and callable(locked)
+                and locked()
+            ):
                 raise RuntimeError(
                     f"Attempted to recycle locked lock for name '{name}'."
                 )
@@ -380,17 +387,20 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         Acquire the underlying lock.
 
         :param blocking: Whether to wait for lock acquisition.
-        :param blocking_timeout: Maximum time to wait when blocking.
+        :param blocking_timeout: Maximum time to wait when blocking. `None` means wait forever. 
+            Does not apply if `blocking` is False.
         :return: True if acquired, otherwise False.
-        :raises RuntimeError: If this handle was already released.
+        :raises LockAcquisitionError: If this handle was already released.
         """
         if self._released:
-            raise RuntimeError(
+            raise LockAcquisitionError(
                 f"Lock handle for '{self._name}' has already been released. Lock handle cannot be reused."
             )
 
         if self._acquired:
-            raise RuntimeError(f"Lock handle for '{self._name}' is already acquired.")
+            raise LockAcquisitionError(
+                f"Lock handle for '{self._name}' is already acquired."
+            )
 
         acquired = await self._lock.acquire(
             blocking=blocking,
@@ -403,10 +413,10 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         """
         Release the underlying lock and update pool reference accounting.
 
-        :raises RuntimeError: If the handle does not currently own the lock.
+        :raises LockReleaseError: If the handle does not currently own the lock.
         """
         if not self._acquired:
-            raise RuntimeError(
+            raise LockReleaseError(
                 f"Cannot release lock '{self._name}': handle does not own the lock."
             )
 
@@ -421,9 +431,8 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         """
         Acquire the lock and return the handle.
         """
-        acquired = await self.acquire()
-        if not acquired:
-            raise RuntimeError(f"Failed to acquire lock '{self._name}'.")
+        if not await self.acquire():
+            raise LockAcquisitionError(f"Failed to acquire lock '{self._name}'.")
         return self
 
     async def __aexit__(
@@ -440,10 +449,14 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
     """
     Asynchronous context manager for locks with optional lock TTL and blocking behavior.
 
-    Multi-threaded/process or distributed safety depends on the underlying `AsyncLock` implementation.
+    Multi-threaded, multi-process or distributed safety, and reentrancy depends on the
+    underlying `AsyncLock` implementation.
 
-    Warning: Using `ttl` or `blocking_timeout` with reentrant locks may cause unexpected behavior
-    if nested contexts share the same lock instance.
+    Lock context instances should not be shared across tasks. Each task should create its own context instance.
+    The underlying lock may be safely shared between contexts across different tasks.
+
+    Note: Using `ttl` or `blocking_timeout` with reentrant locks may cause unexpected behavior
+    if nested contexts share the same underlying lock instance.
     """
 
     __slots__ = (
@@ -489,7 +502,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
             blocking_timeout=self._blocking_timeout,
         )
         if not acquired:
-            raise LockTimeoutError(
+            raise LockAcquisitionError(
                 f"Could not acquire {type(self._lock).__qualname__!r} lock"
             )
 
@@ -539,6 +552,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         # Ensure the lock is released and auto-release timer cleaned up.
         if not self._reenterd and self._timer_handle is not None:
             self._timer_handle.cancel()
+            self._timer_handle = None
 
         # Release the lock if we acquired it and haven't released it yet
         if self._acquired and not self._auto_released:
@@ -562,8 +576,8 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
 
 class _AsyncFairRLock:
     """
-    A fair `asyncio.Task` reentrant lock for async programming. 
-    
+    A fair `asyncio.Task` reentrant lock for async programming.
+
     Fair means that it respects the order of acquisition.
 
     Adapted from: https://github.com/Joshuaalbert/Fair_AsyncRLock/blob/81e0d89d64c0cbc81a91c2f45992c79471ecc3bb/fair_async_rlock/fair_async_rlock.py

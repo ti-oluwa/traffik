@@ -16,7 +16,7 @@ from traffik._locks import (
     _NamedLockPool,
 )
 from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import BackendConnectionError
+from traffik.exceptions import BackendConnectionError, LockAcquisitionError
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -63,6 +63,7 @@ class _AsyncInMemoryLock:
         self._reentrant = reentrant
 
     def locked(self) -> bool:
+        """Return True if the lock is held by any task"""
         return self._lock.locked()
 
     async def acquire(
@@ -83,7 +84,7 @@ class _AsyncInMemoryLock:
         current_task = asyncio.current_task()
         reentrant = self._lock.is_owner(task=current_task)
         if reentrant and not self._reentrant:
-            raise RuntimeError(
+            raise LockAcquisitionError(
                 "Lock is already acquired by the current task and was not configured as reentrant."
             )
 
@@ -104,7 +105,7 @@ class _AsyncInMemoryLock:
 
     async def __aenter__(self):
         if not await self.acquire():
-            raise TimeoutError("Could not acquire inmemory lock.")
+            raise LockAcquisitionError("Could not acquire inmemory lock.")
         return self
 
     async def __aexit__(

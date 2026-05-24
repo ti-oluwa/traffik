@@ -217,10 +217,6 @@ class StrategyStat(typing.Generic[MapT]):
 class AsyncLock(typing.Protocol):
     """Protocol for asynchronous lock objects."""
 
-    def locked(self) -> bool:
-        """Check if the lock is currently held."""
-        ...
-
     async def acquire(
         self, blocking: bool, blocking_timeout: typing.Optional[float]
     ) -> bool:

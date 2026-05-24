@@ -75,7 +75,12 @@ from traffik.backends._ext import (  # type: ignore[import]
     test_and_set_byte,
 )
 from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import BackendConnectionError, BackendError
+from traffik.exceptions import (
+    BackendConnectionError,
+    BackendError,
+    LockAcquisitionError,
+    LockReleaseError,
+)
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -316,23 +321,12 @@ class _AsyncSharedMemoryLock:
         return task is not None and task is self._owner_task
 
     def byte_state(self) -> int:
-        """
-        Return the raw byte state of this lock's flag byte.
-
-        Note: this may return non-zero even if `locked()` is False, if the byte is set but owned
-        by a different task or process. Use `locked()` to check for ownership.
-        """
+        """Return the raw byte state of this lock's flag byte."""
         return self._buffer[self._byte_index]
 
     def locked(self) -> bool:
-        """
-        Return True if the current task holds this lock.
-
-        Note: returns False even if the shared memory byte is set but owned
-        by a different task or process. Use `self.byte_state() != 0`
-        to check raw byte state.
-        """
-        return self._is_owner()
+        """Return True if the lock is held by any task/process"""
+        return self.byte_state() != 0
 
     async def acquire(
         self,
@@ -350,12 +344,14 @@ class _AsyncSharedMemoryLock:
         """
         current = asyncio.current_task()
         if current is None:
-            raise RuntimeError("Lock must be acquired from within an asyncio Task.")
+            raise LockAcquisitionError(
+                "Lock must be acquired from within an asyncio Task."
+            )
 
         # Reentrant. Current task already holds the lock
         if self._is_owner(task=current):
             if not self._reentrant:
-                raise RuntimeError(
+                raise LockAcquisitionError(
                     "Lock is already acquired by the current task "
                     "and was not configured as reentrant."
                 )
@@ -401,7 +397,7 @@ class _AsyncSharedMemoryLock:
         """
         if not self._is_owner():
             current = asyncio.current_task()
-            raise RuntimeError(
+            raise LockReleaseError(
                 f"Cannot release lock: current task {current!r} does not own "
                 f"the lock (owner: {self._owner_task!r})."
             )
@@ -440,7 +436,7 @@ class _AsyncSharedMemoryLock:
 
     async def __aenter__(self):
         if not await self.acquire():
-            raise TimeoutError("Could not acquire multiprocess lock.")
+            raise LockAcquisitionError("Could not acquire multiprocess lock.")
         return self
 
     async def __aexit__(

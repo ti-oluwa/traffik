@@ -11,22 +11,25 @@ Supports all Redis deployment topologies:
 """
 
 import asyncio
-
-import contextvars
 import math
 import sys
 import typing
 from types import TracebackType
 
+import coredis
+import coredis.exceptions
 from coredis import Redis, RedisCluster, Sentinel
 from coredis.commands import Script
 from coredis.connection import TCPLocation
-from coredis.exceptions import LockError, LockReleaseError
 from coredis.patterns.lock import Lock as CoredisLock
 from typing_extensions import Self
 
 from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import BackendConnectionError
+from traffik.exceptions import (
+    BackendConnectionError,
+    LockAcquisitionError,
+    LockReleaseError,
+)
 from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -169,10 +172,6 @@ class _AsyncCoredisLock:
             task = asyncio.current_task()
         return task is not None and task is self._owner_task
 
-    def locked(self) -> bool:
-        """Return True if the current task holds this lock."""
-        return self._is_owner()
-
     async def acquire(
         self,
         blocking: bool = True,
@@ -189,14 +188,14 @@ class _AsyncCoredisLock:
         """
         current = asyncio.current_task()
         if current is None:
-            raise RuntimeError(
+            raise LockAcquisitionError(
                 f"Lock '{self._name}' must be acquired from within an asyncio Task."
             )
 
         # Reentrant. Current task already holds the lock
         if self._is_owner(task=current):
             if not self._reentrant:
-                raise RuntimeError(
+                raise LockAcquisitionError(
                     f"Lock '{self._name}' is already acquired by the current task "
                     "and was not configured as reentrant."
                 )
@@ -216,12 +215,15 @@ class _AsyncCoredisLock:
         )
         try:
             acquired = await lock.acquire()
-            if acquired:
-                self._lock = lock
-                self._owner_task = current
-                self._reentry_count = 1
-        except LockError:
-            acquired = False
+        except coredis.exceptions.LockError as exc:
+            raise LockAcquisitionError(
+                f"Failed to acquire lock '{self._name}'"
+            ) from exc
+
+        if acquired:
+            self._lock = lock
+            self._owner_task = current
+            self._reentry_count = 1
         return acquired
 
     async def release(self) -> None:
@@ -233,7 +235,7 @@ class _AsyncCoredisLock:
         """
         if not self._is_owner():
             current = asyncio.current_task()
-            raise RuntimeError(
+            raise LockReleaseError(
                 f"Cannot release lock '{self._name}': "
                 f"current task {current!r} does not own the lock "
                 f"(owner: {self._owner_task!r})."
@@ -248,11 +250,13 @@ class _AsyncCoredisLock:
         lock = self._lock
         try:
             await lock.release()  # type: ignore[union-attr]
-        except (LockError, LockReleaseError) as exc:
+        except (
+            coredis.exceptions.LockError,
+            coredis.exceptions.LockReleaseError,
+        ) as exc:
             # Lock might have expired or been released already
             # Log and ignore release errors to avoid deadlocks
-            sys.stderr.write(f"Warning: failed to release Redis lock: {exc}\n")
-            sys.stderr.flush()
+            raise LockReleaseError(f"Failed to release lock '{self._name}'") from exc
         finally:
             # Clear ownership regardless of whether Redis release succeeded.
             # If Redis release failed, the key will expire via TTL.
@@ -262,7 +266,7 @@ class _AsyncCoredisLock:
 
     async def __aenter__(self) -> Self:
         if not await self.acquire():
-            raise TimeoutError(f"Could not acquire Redis lock '{self._name}'.")
+            raise LockAcquisitionError(f"Could not acquire Redis lock '{self._name}'.")
         return self
 
     async def __aexit__(

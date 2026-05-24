@@ -52,7 +52,25 @@ class BackendConnectionError(BackendError):
     pass
 
 
-class LockTimeoutError(BackendError, TimeoutError):
+class LockError(BackendError, RuntimeError):
+    """Base exception for lock-related errors, such as acquisition or release failures."""
+
+    pass
+
+
+class LockAcquisitionError(LockError):
+    """Raised when a lock cannot be acquired within the specified timeout."""
+
+    pass
+
+
+class LockReleaseError(LockError):
+    """Raised when a lock cannot be released, possibly due to ownership issues or backend errors."""
+
+    pass
+
+
+class LockTimeoutError(LockError, TimeoutError):
     """Exception raised when a lock timeout occurs"""
 
     pass

@@ -11,6 +11,7 @@ import redis.asyncio as aioredis
 from pottery import AIORedlock
 from typing_extensions import TypedDict
 
+from traffik._locks import _GatedNamedLock, _NamedGateRegistry
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import (
     BackendConnectionError,
@@ -472,7 +473,7 @@ class _AsyncRedLock:
 
         # Determine effective timeout
         if not blocking:
-            # Since `pottery.AIORedlock` does not support a non-blocking mode, 
+            # Since `pottery.AIORedlock` does not support a non-blocking mode,
             # we use a very short timeout to approximate it.
             effective_timeout = 1e-6
         else:
@@ -582,7 +583,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         **kwargs: typing.Any,
     ) -> None:
         """
-        Initialize the Redis backend.
+        Initialize the `aioredis` Redis backend.
 
         :param connection: Redis connection URL or async factory function that returns an `aioredis.Redis` instance.
         :param namespace: The namespace to be used for all throttling keys.
@@ -644,6 +645,8 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         """Shared mutable dict for lock script SHAs (see module docstring)."""
         self._use_redlock = lock_type == "redlock"
         """Whether to use Redlock algorithm for distributed locking."""
+        self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
+        """Registry for named gates used by `_GatedNamedLock` wrappers around non-reentrant locks."""
 
     async def initialize(self) -> None:
         """Ensure the Redis connection is ready. Load and register Lua scripts."""
@@ -660,6 +663,9 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                 raise BackendConnectionError(
                     "Failed to initialize Redis connection."
                 ) from exc
+
+        if self._named_gate_registry is None or self._named_gate_registry.closed:
+            self._named_gate_registry = _NamedGateRegistry(contention_threshold=1)
 
     async def _check_scripts_ready(self) -> bool:
         """Check if all required Lua scripts are loaded and registered."""
@@ -725,23 +731,36 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
-    ) -> typing.Union[_AsyncRedisLock, _AsyncRedLock]:
+    ) -> typing.Union[
+        _AsyncRedisLock,
+        _AsyncRedLock,
+        _GatedNamedLock[typing.Union[_AsyncRedisLock, _AsyncRedLock]],
+    ]:
         """Returns a distributed Redis lock for the given name."""
         self._assert_ready()
         if not self._use_redlock:
-            return _AsyncRedisLock(
+            lock = _AsyncRedisLock(
                 name,
                 client=self.connection,  # type: ignore[arg-type]
                 script_shas=self._lock_script_shas,  # type: ignore[arg-type]
                 ttl=ttl,
                 reentrant=reentrant,
             )
-        return _AsyncRedLock(
-            name,
-            client=self.connection,  # type: ignore[arg-type]
-            ttl=ttl,
-            reentrant=reentrant,
-        )
+        else:
+            lock = _AsyncRedLock(
+                name,
+                client=self.connection,  # type: ignore[arg-type]
+                ttl=ttl,
+                reentrant=reentrant,
+            )
+
+        if not reentrant:
+            return _GatedNamedLock(
+                lock=lock,
+                registry=self._named_gate_registry,  # type: ignore[arg-type]
+                name=name,
+            )
+        return lock
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any
@@ -914,3 +933,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                 self._increment_with_ttl_script = None
                 self._clear_script = None
                 self._lock_script_shas = None
+
+        if self._named_gate_registry is not None:
+            self._named_gate_registry.close()
+            self._named_gate_registry = None

@@ -197,11 +197,10 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._shards: typing.List[OrderedDict[str, typing.Any]] = []
         """In-memory storage shards."""
 
-        lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
-        self._named_lock_pool: _NamedLockPool[_AsyncInMemoryLock] = _NamedLockPool(
-            factory=lambda: _AsyncInMemoryLock(lock=lock_cls()),
-            max_size=lock_pool_size,
-            threadsafe=False,
+        self._lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
+        self._lock_pool_size = lock_pool_size
+        self._named_lock_pool: typing.Optional[_NamedLockPool[_AsyncInMemoryLock]] = (
+            None
         )
 
         self._cleanup_task: typing.Optional[asyncio.Task] = None
@@ -218,6 +217,12 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         if not self._shards:
             self._shards = [OrderedDict() for _ in range(self._number_of_shards)]
 
+        if self._named_lock_pool is None or self._named_lock_pool.closed:
+            self._named_lock_pool = _NamedLockPool(
+                factory=lambda: _AsyncInMemoryLock(lock=self._lock_cls()),
+                max_size=self._lock_pool_size,
+            )
+
         # Pre-populate named lock pool
         self._named_lock_pool.populate()
 
@@ -226,13 +231,13 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._initialized = True
 
     async def ready(self) -> bool:
-        return self._initialized
+        return self._initialized and bool(self._shards)
 
     def _assert_ready(self) -> None:
         """
         Raise `BackendConnectionError` if the backend has not been initialized.
         """
-        if not self._initialized:
+        if not self._initialized or not self._shards:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
             )
@@ -290,7 +295,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         This is meant for user-requested locks (e.g., strategy locking, multi-key operations).
         """
         self._assert_ready()
-        return self._named_lock_pool.get(name)
+        return self._named_lock_pool.get(name)  # type: ignore[union-attr]
 
     # Note: Shard locks are not essentially needed in the `get`, `set`, `delete`,
     # `increment`, etc. methods (except in `multi_set` and `multi_get`). This because shard ops
@@ -532,32 +537,33 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     async def clear(self) -> None:
         """Clear all keys in the namespace."""
-        if not self._initialized:
-            return
+        self._assert_ready()
 
         # Acquire all shard locks in order
         for lock, shard in zip(self._shard_locks, self._shards):
             async with lock:
-                keys_to_delete = [
-                    key
-                    for key in list(shard.keys())
-                    if key.startswith(f"{self.namespace}:")
-                ]
-                for key in keys_to_delete:
-                    del shard[key]
+                # All keys in the bacens shard should be in the backend's
+                # namespace already so just clear the whole shard
+                shard.clear()
 
     async def reset(self) -> None:
         """Reset the backend by clearing all data."""
+        # Just clear all data since this is an in-memory backend.
+        await self.clear()
+
+    def closed(self) -> bool:
+        """Return True if the backend is closed."""
+        return not self._initialized
+
+    async def close(self) -> None:
+        """
+        Shut down this backend instance.
+
+        Cancels the cleanup task, and closes the named lock pool.
+        """
         if not self._initialized:
             return
 
-        # Acquire all shard locks in order
-        for lock, shard in zip(self._shard_locks, self._shards):
-            async with lock:
-                shard.clear()
-
-    async def close(self) -> None:
-        """Close the backend."""
         # Clear all keys
         await self.clear()
         self._initialized = False
@@ -573,3 +579,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 except asyncio.CancelledError:
                     pass
             self._cleanup_task = None
+
+        if self._named_lock_pool is not None:
+            self._named_lock_pool.close()
+            self._named_lock_pool = None

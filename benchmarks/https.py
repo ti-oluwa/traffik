@@ -26,7 +26,7 @@ from slowapi import Limiter as SlowAPILimiter
 from traffik import HTTPThrottle, get_remote_address
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
-from traffik.backends.redis.aioredis import RedisBackend
+from traffik.backends.redis.coredis import RedisBackend
 from traffik.registry import ThrottleRegistry
 from traffik.strategies.custom import GCRAStrategy
 from traffik.strategies.fixed_window import FixedWindowStrategy
@@ -148,7 +148,7 @@ def create_traffik_backend(config: BenchmarkConfig):
         namespace="traffik:bench",
         identifier=custom_identifier,
         persistent=False,
-        number_of_shards=5,
+        number_of_shards=15,
         lock_pool_size=1280,
     )
 

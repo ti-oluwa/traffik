@@ -14,7 +14,7 @@ from types import TracebackType
 import emcache
 from typing_extensions import Self
 
-from traffik._locks import token_generator
+from traffik._locks import _GatedNamedLock, _NamedGateRegistry, token_generator
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.memcached._utils import _parse_memcached_url
 from traffik.exceptions import (
@@ -204,7 +204,7 @@ class _AsyncMemcachedLock:
             except (emcache.CommandError, Exception) as exc:
                 # Any other Memcached error during lock acquisition.
                 raise LockAcquisitionError(
-                    f"Failed to release lock '{self._name}'"
+                    f"Failed to acquire lock '{self._name}'"
                 ) from exc
 
             if not blocking:
@@ -290,7 +290,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
     native support for multiple Memcached nodes via Rendezvous hashing
     and an adaptive connection pool.
 
-    Note: Memcached has a key size limit of 250 bytes. Also this backend
+    **Note:** Memcached has a key size limit of 250 bytes. Also this backend
     is only supported on Linux and macOS due to `emcache`'s lack of Windows support.
     Use other backends for Windows compatibility.
     """
@@ -333,7 +333,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         **kwargs: typing.Any,
     ) -> None:
         """
-        Initialize Memcached backend.
+        Initialize the `emcache` Memcached backend.
 
 
         :param url: Optional Memcached URL (e.g. `"memcached://host:port"`).
@@ -428,7 +428,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         self.username = username
         self.password = password
         self._tracking_key = f"{namespace}:__tracked_keys__"
-
         super().__init__(
             None,
             namespace=namespace,
@@ -441,6 +440,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             lock_blocking_timeout=lock_blocking_timeout,
             **kwargs,
         )
+        self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
 
     async def _track_key(self, key: str) -> None:
         """Best-effort add key to tracking set."""
@@ -508,35 +508,35 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
 
     async def initialize(self) -> None:
         """Initialize the Memcached connection pool via emcache."""
-        if self.connection is not None:
-            return
+        if self.connection is None:
+            # Build optional kwargs for `create_client` only when values are set,
+            # so we don't pass None where `emcache` expects an absent argument.
+            create_kwargs: typing.Dict[str, typing.Any] = {
+                "max_connections": self.max_connections,
+                "min_connections": self.min_connections,
+                "autobatching": self.autobatching,
+                "ssl": self.ssl,
+                "ssl_verify": self.ssl_verify,
+            }
+            if self.purge_unused_connections_after is not None:
+                create_kwargs["purge_unused_connections_after"] = (
+                    self.purge_unused_connections_after
+                )
+            if self.connection_timeout is not None:
+                create_kwargs["connection_timeout"] = self.connection_timeout
+            if self.ssl_extra_ca is not None:
+                create_kwargs["ssl_extra_ca"] = self.ssl_extra_ca
+            if self.username is not None:
+                create_kwargs["username"] = self.username
+            if self.password is not None:
+                create_kwargs["password"] = self.password
 
-        # Build optional kwargs for `create_client` only when values are set,
-        # so we don't pass None where `emcache` expects an absent argument.
-        create_kwargs: typing.Dict[str, typing.Any] = {
-            "max_connections": self.max_connections,
-            "min_connections": self.min_connections,
-            "autobatching": self.autobatching,
-            "ssl": self.ssl,
-            "ssl_verify": self.ssl_verify,
-        }
-        if self.purge_unused_connections_after is not None:
-            create_kwargs["purge_unused_connections_after"] = (
-                self.purge_unused_connections_after
+            self.connection = await emcache.create_client(
+                self._host_addresses, **create_kwargs
             )
-        if self.connection_timeout is not None:
-            create_kwargs["connection_timeout"] = self.connection_timeout
-        if self.ssl_extra_ca is not None:
-            create_kwargs["ssl_extra_ca"] = self.ssl_extra_ca
-        if self.username is not None:
-            create_kwargs["username"] = self.username
-        if self.password is not None:
-            create_kwargs["password"] = self.password
 
-        self.connection = await emcache.create_client(
-            self._host_addresses,
-            **create_kwargs,
-        )
+        if self._named_gate_registry is None or self._named_gate_registry.closed:
+            self._named_gate_registry = _NamedGateRegistry(contention_threshold=1)
 
     async def ready(self) -> bool:
         """Return True if the client has been created and can serve traffic."""
@@ -553,7 +553,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
-    ) -> _AsyncMemcachedLock:
+    ) -> typing.Union[_AsyncMemcachedLock, _GatedNamedLock[_AsyncMemcachedLock]]:
         """
         Get a distributed lock for the given name.
 
@@ -561,12 +561,19 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         :return: `_AsyncMemcachedLock` instance.
         """
         self._assert_ready()
-        return _AsyncMemcachedLock(
+        lock = _AsyncMemcachedLock(
             name,
             client=self.connection,  # type: ignore[arg-type]
             ttl=ttl,
             reentrant=reentrant,
         )
+        if not reentrant:
+            return _GatedNamedLock(
+                lock=lock,
+                name=name,
+                registry=self._named_gate_registry,  # type: ignore[arg-type]
+            )
+        return lock
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any
@@ -893,3 +900,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         if self.connection is not None:
             await self.connection.close()
             self.connection = None
+
+        if self._named_gate_registry is not None:
+            self._named_gate_registry.close()
+            self._named_gate_registry = None

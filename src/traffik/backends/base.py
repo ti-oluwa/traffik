@@ -162,9 +162,16 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     The `get()`, `set()`, and `delete()` methods need explicit locking when utilized in racy conditions.
     Hence, locks should not be implemented implicitly in these methods.
 
-    Note! All backend operation must be done as fast and efficient as possible and should not block the event loop.
-    Operations like logging should not be done on critical paths to prevent deadlocks or performance issues.
-    Logging degrades performance significantly and should be avoided in backend operations.
+    **Note:** All backend operation must be done as fast and efficient as possible and should not block the event loop.
+        Operations like logging should not be done on critical paths to prevent deadlocks or performance issues.
+        Logging degrades performance significantly and should be avoided in backend operations.
+
+    **Warning:** Backend operations are not guaranteed to be thread-safe or process-safe.
+        Ensure to use locks for operations that require safety across concurrent contexts,
+        especially in multi-threaded or multi-process environments.
+        Backend initialization and connection management should also be done with care to avoid race conditions.
+        Initilization  and connection management (closing connections) should ideally be done at startup (in the ASGI lifespan event)
+        or before entering and/or after leaving a concurrent context to ensure safety and proper resource handling.
     """
 
     base_exception_type: typing.ClassVar[typing.Type[BaseException]] = BaseException
@@ -266,6 +273,19 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             else get_lock_blocking_timeout()
         )
         self.lock_ttl = lock_ttl if lock_ttl is not None else get_lock_ttl()
+
+    def closed(self) -> bool:
+        """
+        Check if the backend connection is closed.
+
+        **Note:** This only checks if the `connection` attribute is None.
+        Subclasses that manage their own connection state should override
+        this method to provide an accurate status. Ideally, `close` should set `connection`
+        to None to maintain consistency with this method.
+
+        :return: True if connection is closed, False otherwise.
+        """
+        return self.connection is None
 
     def get_key(self, key: str, *args, **kwargs) -> str:
         """
@@ -643,6 +663,8 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
         if not self.persistent:
             try:
                 await backend.reset()
+                # Should raise `BackendError` due to wrap,
+                # but catch all to prevent context exit failure
             except BaseException as exc:
                 sys.stderr.write(
                     f"Error resetting throttle backend during context exit: {exc}\n"
@@ -653,7 +675,7 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
         if self.close_on_exit:
             try:
                 await backend.close()
-            except BaseException as exc:
+            except BaseException as exc:  # Same here
                 sys.stderr.write(
                     f"Error closing throttle backend during context exit: {exc}\n"
                 )

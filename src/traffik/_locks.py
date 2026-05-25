@@ -5,6 +5,7 @@ import threading
 import typing
 import weakref
 from collections import deque
+from contextlib import asynccontextmanager, contextmanager
 from time import time_ns
 from types import TracebackType
 
@@ -117,13 +118,8 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
     This allows temporary bursts above the reusable cache size while still
     preventing unbounded memory growth.
 
-    **Thread Safety**
-
-    Metadata operations can optionally be guarded with a thread lock by
-    passing `threadsafe=True`.
-
-    This only protects internal pool bookkeeping structures.
-    It does not make the underlying async lock implementation itself thread-safe.
+    **Note:** This is not thread-safe and is designed to be used within a single `asyncio` event loop.
+        If you need thread safety, consider holding an external lock around the pool ops.
     """
 
     __slots__ = (
@@ -134,7 +130,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         "_allocated",
         "_free",
         "_active",
-        "_guard",
+        "_closed",
     )
 
     def __init__(
@@ -142,7 +138,6 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         factory: typing.Callable[[], AsyncLockT],
         max_size: int = 128,
         headroom: int = 4,
-        threadsafe: bool = False,
     ) -> None:
         """
         Initialize the lock pool.
@@ -153,8 +148,6 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         :param headroom: Burst multiplier controlling maximum total lock allocations.
             Total allocation limit is: `max_capacity = max_size * headroom`.
             Must be at least 1.
-        :param threadsafe: If True, pool metadata operations are guarded with a `threading.Lock`.
-            Defaults to False.
         """
         if max_size < 1:
             raise ValueError("`max_size` must be at least 1.")
@@ -172,8 +165,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         """Idle reusable lock instances."""
         self._active: dict[str, tuple[AsyncLockT, int]] = {}
         """Mapping of name to (lock, reference_count)"""
-
-        self._guard = threading.Lock() if threadsafe else _NoOpLock()
+        self._closed = False
 
     def get(self, name: str, /) -> "_NamedLockHandle[AsyncLockT]":
         """
@@ -184,13 +176,16 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
 
         The reference count for the name is incremented immediately.
 
-        :param name: Logical lock name.
+        :param name: Logical lock name for the handle. This is used for reference counting
+            and lock reuse, but is not exposed to the underlying lock instance.
         :return: `_NamedLockHandle` instance.
         """
-        lock = self._increment_ref_or_create(name)
-        return _NamedLockHandle(pool=self, name=name, lock=lock)
+        if self._closed:
+            raise RuntimeError("Cannot get gate handle from closed registry.")
 
-    def _increment_ref_or_create(self, name: str, /) -> AsyncLockT:
+        return _NamedLockHandle(pool=self, name=name, lock=self._get(name))
+
+    def _get(self, name: str, /) -> AsyncLockT:
         """
         Increment the reference count for an existing name or allocate
         a new underlying lock.
@@ -199,28 +194,52 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         :return: Underlying async lock instance.
         :raises RuntimeError: If the pool allocation limit is exceeded.
         """
-        with self._guard:
-            entry = self._active.get(name)
-            if entry is not None:
-                lock, refcount = entry
-                self._active[name] = (lock, refcount + 1)
-                return lock
-
-            if self._free:
-                lock = self._free.pop()
-            else:
-                if self._allocated >= self._max_capacity:
-                    raise RuntimeError("Named lock pool maximum capacity exceeded.")
-
-                lock = self._factory()
-                self._allocated += 1
-
-            self._active[name] = (lock, 1)
+        entry = self._active.get(name)
+        if entry is not None:
+            lock, refcount = entry
+            self._active[name] = (lock, refcount + 1)
             return lock
 
-    def _decrement_ref(self, name: str, /) -> None:
+        if self._free:
+            lock = self._free.pop()
+        else:
+            if self._allocated >= self._max_capacity:
+                raise RuntimeError("Named lock pool maximum capacity exceeded.")
+
+            lock = self._factory()
+            self._allocated += 1
+
+        self._active[name] = (lock, 1)
+        return lock
+
+    @asynccontextmanager
+    async def lock(
+        self, name: str
+    ) -> typing.AsyncGenerator["_NamedLockHandle[AsyncLockT]", None]:
         """
-        Decrement the reference count for a lock name.
+        Async context manager for getting and releasing a named lock handle.
+
+        This convenience context manager ensure that the lock handle is
+        always released and/or discarded on exit. This does not acquire the handle on entry.
+        You'll have to call `handle.acquire()` in the context or just get the handle
+        and use its context manager directly.
+
+        :param name: Logical lock name.
+        :return: `_NamedLockHandle` instance.
+        """
+        handle = self.get(name)
+        try:
+            yield handle
+        finally:
+            if handle._acquired:
+                await handle.release()
+            else:
+                handle.discard()
+
+    def _release(self, name: str, /) -> None:
+        """
+        Release a named lock handle, updating reference counts and
+        recycling or discarding the underlying lock as needed.
 
         When the reference count reaches zero:
 
@@ -228,35 +247,35 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         - the lock is recycled into the free list if space exists
         - otherwise the lock is discarded
 
-        :param name: Logical lock name.
+        :param name: Logical lock name for the handle being released.
         """
-        with self._guard:
-            entry = self._active.get(name)
-            if entry is None:
-                return
+        if self._closed:
+            return
 
-            lock, refcount = entry
-            if refcount > 1:
-                self._active[name] = (lock, refcount - 1)
-                return
+        entry = self._active.get(name)
+        if entry is None:
+            return
 
-            del self._active[name]
+        lock, refcount = entry
+        if refcount > 1:
+            self._active[name] = (lock, refcount - 1)
+            return
 
-            if (
-                (locked := getattr(lock, "locked", None)) is not None
-                and callable(locked)
-                and locked()
-            ):
-                raise RuntimeError(
-                    f"Attempted to recycle locked lock for name '{name}'."
-                )
+        del self._active[name]
 
-            if len(self._free) < self._max_size:
-                self._free.append(lock)
-                return
+        if (
+            (locked := getattr(lock, "locked", None)) is not None
+            and callable(locked)
+            and locked()
+        ):
+            raise RuntimeError(f"Attempted to recycle locked lock for name '{name}'.")
 
-            # Discard the lock if it can't be recycled
-            self._discard_lock(lock)
+        if len(self._free) < self._max_size:
+            self._free.append(lock)
+            return
+
+        # Discard the lock if it can't be recycled
+        self._discard_lock(lock)
 
     def _discard_lock(self, lock: AsyncLockT, /) -> None:
         """
@@ -281,17 +300,19 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
 
         :param n: Number of locks to create. If None, fills the free list up to `max_size`.
         """
-        with self._guard:
-            if n is None:
-                n = self._max_size - len(self._free)
-            else:
-                n = min(n, self._max_size - len(self._free))
+        if self._closed:
+            raise RuntimeError("Cannot populate locks in closed registry.")
 
-            remaining_capacity = self._max_capacity - self._allocated
-            n = min(n, remaining_capacity)
-            for _ in range(n):
-                self._free.append(self._factory())
-                self._allocated += 1
+        if n is None:
+            n = self._max_size - len(self._free)
+        else:
+            n = min(n, self._max_size - len(self._free))
+
+        remaining_capacity = self._max_capacity - self._allocated
+        n = min(n, remaining_capacity)
+        for _ in range(n):
+            self._free.append(self._factory())
+            self._allocated += 1
 
     @property
     def max_size(self) -> int:
@@ -332,6 +353,31 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         """Number of reusable idle locks currently cached."""
         return len(self._free)
 
+    @property
+    def closed(self) -> bool:
+        """Whether the pool is closed."""
+        return self._closed
+
+    def close(self) -> None:
+        """
+        Close the pool and release all resources.
+
+        Idempotent and safe to call multiple times.
+
+        After closing, the pool will reject new requests and all existing handles are effectively invalidated.
+        """
+        if self._closed:
+            return
+
+        self._closed = True
+        for lock, _ in self._active.values():
+            self._discard_lock(lock)
+        self._active.clear()
+
+        for lock in self._free:
+            self._discard_lock(lock)
+        self._free.clear()
+
 
 @typing.final
 class _NamedLockHandle(typing.Generic[AsyncLockT]):
@@ -350,6 +396,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         "_lock",
         "_acquired",
         "_released",
+        "__weakref__",
     )
 
     def __init__(
@@ -361,7 +408,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         """
         Initialize the lock handle.
 
-        :param pool: Owning lock pool.
+        :param pool: The `_NamedLockPool` instance that created this handle. Used for reference accounting on release.
         :param name: Logical lock name.
         :param lock: Underlying pooled lock instance.
         """
@@ -424,20 +471,19 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         finally:
             self._acquired = False
             self._released = True
-            self._pool._decrement_ref(self._name)
+            self._pool._release(self._name)
 
-    async def discard(self) -> None:
+    def discard(self) -> None:
         """
-        Discard this lock handle without releasing the underlying lock.
+        Discard this (unused) lock handle without releasing the underlying lock.
         This should only be used when the lock has not been acquired.
 
         This is useful for cleaning up handles that were retrieved but never acquired,
         to ensure pool reference counts are updated correctly and locks are not leaked.
         """
-        if self._released or self._acquired:
-            return
-        self._released = True
-        self._pool._decrement_ref(self._name)
+        if not self._acquired and not self._released:
+            self._released = True
+            self._pool._release(self._name)
 
     async def __aenter__(self) -> Self:
         """
@@ -692,19 +738,6 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         self._acquired = False
         self._op_timeout: typing.Optional[OpTimeout] = None
 
-    def _effective_acquire_timeout(self) -> typing.Optional[float]:
-        """
-        Get the upper bound for the acquire wait.
-
-        Priority:
-        1. explicit `blocking_timeout`
-        2. `ttl` - we can't wait longer to get the lock than we plan to hold it
-        3. `None` - wait forever
-        """
-        if self._blocking_timeout is not None:
-            return self._blocking_timeout
-        return self._ttl  # may also be None
-
     async def _acquire(self) -> None:
         """
         Acquire the underlying lock, respecting the effective acquire timeout.
@@ -712,25 +745,24 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         :raises LockTimeoutError: Timed out waiting for the lock.
         :raises LockAcquisitionError: Non-blocking acquire returned False immediately.
         """
-        acquire_timeout = self._effective_acquire_timeout()
-        try:
-            if acquire_timeout is not None:
+        if self._blocking_timeout is not None:
+            try:
                 acquired = await asyncio.wait_for(
                     self._lock.acquire(
                         blocking=self._blocking,
                         blocking_timeout=self._blocking_timeout,
                     ),
-                    timeout=acquire_timeout,
+                    timeout=self._blocking_timeout,
                 )
-            else:
-                acquired = await self._lock.acquire(
-                    blocking=self._blocking,
-                    blocking_timeout=self._blocking_timeout,
-                )
-        except asyncio.TimeoutError as exc:
-            raise LockTimeoutError(
-                f"Timed out waiting to acquire {type(self._lock).__qualname__!r} lock after {acquire_timeout}s."
-            ) from exc
+            except (asyncio.TimeoutError, TimeoutError) as exc:
+                raise LockTimeoutError(
+                    f"Timed out waiting to acquire {type(self._lock).__qualname__!r} lock after {self._blocking_timeout}s."
+                ) from exc
+        else:
+            acquired = await self._lock.acquire(
+                blocking=self._blocking,
+                blocking_timeout=self._blocking_timeout,
+            )
 
         if not acquired:
             raise LockAcquisitionError(
@@ -747,7 +779,13 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         """
         try:
             await self._lock.release()
-        except (LockError, LockReleaseError, RuntimeError) as release_exc:
+        except (
+            LockError,
+            LockReleaseError,
+            RuntimeError,
+            TimeoutError,
+            asyncio.TimeoutError,
+        ) as release_exc:
             if exc_type is None:
                 raise LockReleaseError(
                     f"Failed to release {type(self._lock).__qualname__!r} lock."
@@ -807,7 +845,6 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
                 # TTL watchdog fired. Stash and release first.
                 timeout_exc = ltexc
             except BaseException as bexc:
-                print("HERE")
                 # We got and unexpected error from `OpTimeout` itself. Release then propagate.
                 if self._acquired:
                     await self._release(exc_type=type(bexc))
@@ -825,3 +862,569 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         # Since the lock should have been released by now, we can now raise any `LockTimeoutError`.
         if timeout_exc is not None:
             raise timeout_exc
+
+
+@typing.final
+class _NamedGateRegistry:
+    """
+    Process-local registry of per-name asyncio gates with contention-aware
+    lazy creation and refcounting.
+
+    Gates are only created when local contention is detected. Specifically,
+    when the number of tasks currently trying to acquire the same lock name
+    reaches `contention_threshold`. Tasks below the threshold bypass the gate
+    entirely and go straight to the underlying (distributed) lock, paying zero
+    gate overhead.
+
+    This design means:
+    - Low load / diverse keys: nearly every acquire bypasses the gate.
+      Only two fast threading.Lock operations (`get` + `_release`) are paid.
+    - High load, same key: gates activate automatically when contention
+      reaches the threshold, serializing local tasks so only one races
+      on the network at a time.
+
+    **Waiter counting vs refcounting:**
+
+    `_waiters[name]` tracks how many tasks are currently inside an acquire
+    call for a given name (from `get` until the finally block in
+    `_GatedNamedLock.acquire`). This is distinct from "holding the lock" —
+    a task that won the distributed lock has already exited its acquire call
+    and decremented the waiter count. The gate only exists during the race
+    to acquire, not during the hold.
+
+    **Gate lifecycle:**
+
+    Created lazily when `_waiters[name]` first reaches `contention_threshold`.
+    Destroyed when `_waiters[name]` drops back to zero (all racing tasks
+    have finished their acquire attempts).
+
+    `get` returns a `_NamedGateHandle` when a gate is active, or `None` when
+    the caller is below the contention threshold. Every `get` call (whether
+    it returns None or a handle) increments `_waiters[name]` and must be
+    paired with exactly one decrement, which happens either via
+    `_NamedGateHandle.release` or via `_release` directly in the None path.
+    The `gate` context manager handles this automatically.
+
+    **Note:** This is not thread-safe and is designed to be used within a single `asyncio` event loop.
+        If you need thread safety, consider holding an external lock around the registry ops.
+    """
+
+    __slots__ = (
+        "_gates",
+        "_waiters",
+        "_contention_threshold",
+        "_closed",
+        "_lock_cls",
+    )
+
+    def __init__(
+        self,
+        contention_threshold: int = 1,
+        lock_type: typing.Literal["fair", "unfair"] = "unfair",
+    ) -> None:
+        """
+        Initialize the gate registry.
+
+        :param contention_threshold: Number of concurrent waiters required
+            before a gate is created for a name. Defaults to 1, meaning a
+            gate is created as soon as a second task tries to acquire the
+            same name (i.e. when `_waiters[name]` reaches 1 on a get call
+            that finds an existing waiter count of >= contention_threshold).
+
+            Increasing this allows more tasks to race on the network before
+            local serialization kicks in. Useful when the distributed lock
+            is cheap relative to the gate overhead, or when false contention
+            (tasks acquiring different logical resources that hash to the same
+            name) would cause unnecessary serialization.
+
+            Must be >= 1. Setting it to 1 (default) means any second waiter
+            triggers a gate. Setting it to N means up to N tasks race freely
+            before gating begins.
+        :param lock_type: Type of asyncio lock to use for gates. "fair" means
+            FIFO ordering is respected, while "unfair" means no ordering guarantees.
+            Fair locks may have higher overhead but can prevent starvation under high contention.
+            Defaults to "fair". Unfair locks may be more performant in low contention scenarios but
+            can lead to starvation when contention is high (but very low chance of starvation when
+            contention is just above the threshold).
+        """
+        if contention_threshold < 1:
+            raise ValueError("`contention_threshold` must be at least 1.")
+        self._contention_threshold = contention_threshold
+        self._gates: typing.Dict[str, typing.Union[_AsyncFairRLock, asyncio.Lock]] = {}
+        self._waiters: typing.Dict[str, int] = {}
+        self._closed = False
+        self._lock_cls = _AsyncFairRLock if lock_type == "fair" else asyncio.Lock
+
+    def get(self, name: str) -> typing.Optional["_NamedGateHandle"]:
+        """
+        Register a new waiter for the given name and return a gate handle
+        if local contention has reached the threshold, or None otherwise.
+
+        The waiter count for this name is incremented unconditionally.
+        A gate handle is returned only when the pre-increment count is
+        >= `contention_threshold`, meaning this task is not the first
+        (or first N) to arrive and should queue locally rather than
+        racing on the network immediately.
+
+        Every call to `get` must result in exactly one decrement of the
+        waiter count, either via `_NamedGateHandle.release()` on the
+        returned handle, or via `_release(name)` directly when None is
+        returned. The `gate` context manager handles this automatically
+        and is the preferred way to use this method.
+
+        :param name: Logical lock name to gate on.
+        :return: A `_NamedGateHandle` if this task should wait for the
+            gate before proceeding, or None if it should go straight to
+            the underlying lock.
+        """
+        if self._closed:
+            raise RuntimeError("Cannot get gate handle from closed registry.")
+
+        count = self._waiters.get(name, 0)
+        self._waiters[name] = count + 1
+
+        if count < self._contention_threshold:
+            # Below threshold. This task races on the network directly.
+            return None
+
+        # At or above threshold. Gate this task locally.
+        if name not in self._gates:
+            self._gates[name] = self._lock_cls()
+        return _NamedGateHandle(registry=self, name=name, lock=self._gates[name])
+
+    @contextmanager
+    def gate(self, name: str) -> typing.Iterator[typing.Optional["_NamedGateHandle"]]:
+        """
+        Synchronous context manager that registers a waiter, yields a gate
+        handle (or None), and guarantees the waiter count is decremented on exit.
+
+        This is the preferred way to use the registry. It ensures the waiter
+        count is always decremented regardless of exceptions or early returns,
+        and releases the gate handle if one was created.
+
+        Note: this is a synchronous context manager (`@contextmanager`, not
+        `@asynccontextmanager`) because the registry operations themselves
+        are synchronous. The yielded `_NamedGateHandle.acquire` is still async
+        and must be awaited by the caller.
+
+        Usage looks like this:
+
+        ```python
+        with self._registry.gate(name) as gate:
+            if gate is None:
+                return await self._lock.acquire(...)
+            if not await gate.acquire(timeout=...):
+                return False
+            return await self._lock.acquire(...)
+        ```
+
+        :param name: Logical lock name to gate on.
+        :yields: A `_NamedGateHandle` if contention threshold is reached,
+            or None if the caller should bypass the gate.
+        """
+        handle = self.get(name)
+        try:
+            yield handle
+        finally:
+            if handle is not None:
+                handle.release()
+            else:
+                # Release the waiter count for the None path directly,
+                # since no handle was created to do it.
+                self._release(name)
+
+    def _release(self, name: str) -> None:
+        """
+        Decrement the waiter count for the given name.
+
+        Destroys the gate when the count reaches zero, freeing the
+        lock for GC. Called by `_NamedGateHandle.release` and
+        `_NamedGateHandle.discard` for handle-based releases, and
+        directly by the `gate` context manager for the None path.
+
+        :param name: Logical gate name being released.
+        """
+        if self._closed:
+            # If the registry is closed, we can skip the release since all gates are
+            # already cleared and no new ones can be created.
+            return
+
+        count = self._waiters.get(name, 0) - 1
+        if count <= 0:
+            self._waiters.pop(name, None)
+            self._gates.pop(name, None)
+        else:
+            self._waiters[name] = count
+
+    @property
+    def contention_threshold(self) -> int:
+        """Waiter count at which gates begin to be created for a name."""
+        return self._contention_threshold
+
+    @property
+    def active_gate_count(self) -> int:
+        """Number of names currently tracked. Useful for testing."""
+        return len(self._gates)
+
+    @property
+    def closed(self) -> bool:
+        """Whether the registry is closed."""
+        return self._closed
+
+    def close(self) -> None:
+        """
+        Close all gates and clear the registry.
+
+        Idempotent and thread-safe. After this call, all existing gates are cleared
+        and any future calls to `get` will raise `RuntimeError`.
+
+        Note: Once closed, the registry cannot be used again. This is intended for cleanup.
+        """
+        if self._closed:
+            return
+
+        self._closed = True
+        self._gates.clear()
+        self._waiters.clear()
+
+
+@typing.final
+class _NamedGateHandle:
+    """
+    Single-use managed handle returned by `_NamedGateRegistry.get`.
+
+    Wraps a shared `asyncio.Lock` for one acquire/release lifecycle,
+    managing both the asyncio.Lock state and the registry waiter count.
+
+    **Single-use contract:**
+
+    Each handle represents one task's slot in the local serialization queue.
+    Once released (or discarded), the handle cannot be reused. The registry
+    creates a fresh handle for each `get` call.
+
+    **What the gate does and does not do:**
+
+    The gate serializes local tasks that are racing to acquire a distributed
+    lock. It does not represent ownership of the distributed lock itself.
+    The gate is held only during the acquire race and released immediately
+    after, whether the underlying lock was acquired or not. This means:
+
+    - A task that wins the distributed lock does not hold the gate while
+      it executes its critical section. Other local tasks may race on the
+      distributed lock during this time (the distributed lock handles mutual exclusion).
+
+    - The gate only prevents N local tasks from all hitting the network
+      simultaneously. It does not prevent a new task from going to the
+      network while another holds the distributed lock.
+
+    **Weakref finalization:**
+
+    A weakref finalizer calls `discard` if this handle is GC'd without an
+    explicit `release` call, preventing waiter count leaks. Since `discard`
+    may call `asyncio.Lock.release()` from a GC context (outside the event
+    loop), it is sync. This is safe only because a GC'd handle implies no
+    task holds a reference to it, but see the note in `discard` for the
+    caveat about waiters on the shared lock.
+    """
+
+    __slots__ = (
+        "_registry",
+        "_name",
+        "_lock",
+        "_acquired",
+        "_released",
+        "__weakref__",
+    )
+
+    def __init__(
+        self,
+        registry: _NamedGateRegistry,
+        name: str,
+        lock: typing.Union[_AsyncFairRLock, asyncio.Lock],
+    ) -> None:
+        """
+        :param registry: Registry that created this handle. Used to
+            decrement the waiter count on release.
+        :param name: Logical gate name. Used for waiter count management
+            only — not passed to the underlying asyncio.Lock.
+        :param lock: The shared asyncio.Lock for this gate name. Shared
+            across all handles with the same name that are active
+            simultaneously.
+        """
+        self._registry = registry
+        self._name = name
+        self._lock = lock
+        self._acquired = False
+        self._released = False
+        # Discard the handle if it is garbage collected without being released,
+        # to prevent leaks in the registry reference accounting.
+        weakref.finalize(self, self.discard)
+
+    def discard(self) -> None:
+        """
+        Release this handle without raising, intended for GC finalization.
+
+        If the gate was acquired, releases the asyncio.Lock (which may
+        wake a waiting local task). Always decrements the registry waiter
+        count.
+
+        **Caveat:** calling `asyncio.Lock.release()` from a GC finalizer
+        runs outside the event loop. This is technically unsafe if there
+        are other tasks waiting on this lock, since waking them requires
+        scheduling on the correct event loop. In practice, a GC'd handle
+        means the task that created it has no reference to it, which
+        typically means it completed or was cancelled. If the task was
+        cancelled after acquiring the gate but before releasing it, this
+        finalizer fires and correctly unblocks the next waiter — but the
+        scheduling may be on the wrong thread. This edge case only occurs
+        on improper usage (not using the context manager). Always use the
+        async context manager or call `release()` explicitly.
+        """
+        if not self._released:
+            if self._acquired:
+                try:
+                    self._lock.release()
+                except RuntimeError:
+                    pass
+            self._released = True
+            self._registry._release(self._name)
+
+    async def acquire(self, timeout: typing.Optional[float] = None) -> bool:
+        """
+        Attempt to acquire the gate.
+
+        Uses `asyncio.wait_for` for all finite timeouts including zero,
+        since `asyncio.Lock` has no `acquire_nowait()`. A timeout of 0
+        yields control to the event loop once; if the lock is not
+        immediately available it raises `TimeoutError` and returns False.
+
+        :param timeout: Maximum seconds to wait.
+            None: wait forever (no wait_for wrapper, lower overhead).
+            0: non-blocking; return False immediately if gate is held.
+            >0: wait up to this many seconds.
+        :return: True if the gate was acquired, False if the timeout
+            expired before the gate became available.
+        :raises LockAcquisitionError: If this handle has already been
+            released or is already in the acquired state.
+        """
+        if self._released:
+            raise LockAcquisitionError(
+                f"Gate handle for '{self._name}' has already been released "
+                "and cannot be reused."
+            )
+        if self._acquired:
+            raise LockAcquisitionError(
+                f"Gate handle for '{self._name}' is already acquired."
+            )
+
+        if timeout is None:
+            await self._lock.acquire()
+            self._acquired = True
+            return True
+
+        try:
+            await asyncio.wait_for(self._lock.acquire(), timeout=timeout)
+            self._acquired = True
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    def release(self) -> None:
+        """
+        Release the gate and decrement the registry waiter count.
+
+        Releases the asyncio.Lock if it was acquired (unblocking the next
+        local task queued behind this gate) and decrements the waiter count
+        in the registry (allowing the gate to be destroyed when no more
+        tasks are racing for this name).
+
+        Idempotent. Subsequent calls after the first are no-ops.
+        """
+        if self._released:
+            return
+
+        self._released = True
+        if self._acquired:
+            self._acquired = False
+            self._lock.release()
+        self._registry._release(self._name)
+
+    async def __aenter__(self) -> Self:
+        """Acquire the gate, raising on failure."""
+        if not await self.acquire():
+            raise LockAcquisitionError(f"Could not acquire gate '{self._name}'.")
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[typing.Type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ) -> None:
+        """Release the gate."""
+        self.release()
+
+
+@typing.final
+class _GatedNamedLock(typing.Generic[AsyncLockT]):
+    """
+    Named distributed `AsyncLock` proxy that adds process-local task
+    serialization via `_NamedGateRegistry`.
+
+    **When the gate is active (contention at or above threshold):**
+
+    Local tasks queue behind a per-name asyncio.Lock gate before racing
+    on the distributed lock. Only one task per process makes a network
+    call at a time, reducing network traffic from O(N x spins) to O(N).
+
+    **When the gate is inactive (below contention threshold):**
+
+    Tasks bypass the gate entirely and go straight to the underlying
+    distributed lock. Zero gate overhead.
+
+    **Semantics for `blocking_timeout`:**
+
+    When `blocking_timeout` is set and a gate is active, the timeout is
+    treated as a single deadline spanning both the gate wait and the
+    underlying lock acquire. This preserves the caller's expectation that
+    the total wait will not exceed `blocking_timeout` seconds:
+
+        blocking_timeout = 5.0
+        Gate wait:            3.0s  (deadline - loop.time() passed to gate)
+        Remaining for lock:   2.0s  (deadline - loop.time() after gate)
+        Total:                5.0s  Correct — the caller's deadline is respected.
+
+    Not:
+        Gate wait:            3.0s
+        Lock wait:            5.0s  (full timeout passed again)
+        Total:                8.0s  Wrong — the caller expected to wait at most 5 seconds total.
+
+    **Do not use with reentrant locks.** The gate and the underlying
+    lock's reentrant ownership state are decoupled. A reentrant acquire
+    would attempt to re-acquire the gate after it has already been
+    released following the first acquire, which would either block
+    incorrectly or allow another task through.
+    """
+
+    __slots__ = ("_lock", "_name", "_registry")
+
+    def __init__(
+        self,
+        lock: AsyncLockT,
+        name: str,
+        registry: _NamedGateRegistry,
+    ) -> None:
+        """
+        Initialize the gated named lock.
+
+        :param lock: The underlying non-reentrant (spinning / distributed) `AsyncLock` to proxy.
+        :param name: Logical lock name. Used for gate registry lookups.
+        :param registry: The per-backend gate registry instance.
+        """
+        self._lock = lock
+        self._name = name
+        self._registry = registry
+
+    async def acquire(
+        self,
+        blocking: bool = True,
+        blocking_timeout: typing.Optional[float] = None,
+    ) -> bool:
+        """
+        Acquire the gate (if contention warrants it), then acquire the
+        underlying distributed lock.
+
+        **Gate behavior:**
+
+        If the registry returns None (below contention threshold), the
+        underlying lock is acquired directly with the original blocking
+        semantics unchanged.
+
+        If the registry returns a gate handle (contention at or above
+        threshold), the gate is acquired first with a timeout derived
+        from the remaining deadline, then the underlying lock is acquired
+        with whatever time remains.
+
+        **Non-blocking behavior (`blocking=False`):**
+
+        Both the gate and the underlying lock must be immediately
+        acquirable. If the gate is held (another local task is racing),
+        returns False immediately without attempting the network call.
+        If the gate is free but the distributed lock is held, returns
+        False after one network attempt.
+
+        **Blocking with timeout (`blocking=True, blocking_timeout=N`):**
+
+        The timeout is a single deadline. Time spent waiting for the gate
+        reduces the time available for the underlying lock acquire. If the
+        deadline expires at any point — before gate acquisition, between
+        gate and lock, or during lock acquire — returns False.
+
+        **Blocking without timeout (`blocking=True, blocking_timeout=None`):**
+
+        Waits indefinitely for both gate and underlying lock.
+
+        :param blocking: If False, return immediately if either the gate
+            or the underlying lock is unavailable.
+        :param blocking_timeout: Single deadline in seconds covering the
+            entire acquire attempt including any gate wait. None means
+            wait forever. Ignored when blocking=False.
+        :return: True if the distributed lock was acquired, False otherwise.
+        """
+        loop = asyncio.get_running_loop()
+        name = self._name
+
+        with self._registry.gate(name) as gate:
+            if gate is None:
+                # Below contention threshold. No gate required.
+                return await self._lock.acquire(
+                    blocking=blocking,
+                    blocking_timeout=blocking_timeout,
+                )
+
+            if not blocking:
+                if not await gate.acquire(timeout=0):
+                    return False
+                return await self._lock.acquire(blocking=False, blocking_timeout=None)
+
+            if blocking_timeout is None:
+                if not await gate.acquire(timeout=None):
+                    return False
+                return await self._lock.acquire(
+                    blocking=True,
+                    blocking_timeout=None,
+                )
+
+            # Single deadline spanning gate wait and lock acquire.
+            deadline = loop.time() + blocking_timeout
+            gate_timeout = deadline - loop.time()
+            if gate_timeout <= 0:
+                return False
+            if not await gate.acquire(timeout=gate_timeout):
+                return False
+
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+
+            return await self._lock.acquire(
+                blocking=True,
+                blocking_timeout=remaining,
+            )
+
+    async def release(self) -> None:
+        """Release the underlying distributed lock."""
+        await self._lock.release()
+
+    async def __aenter__(self) -> Self:
+        if not await self.acquire():
+            raise LockAcquisitionError(f"Could not acquire gated lock '{self._name}'.")
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[typing.Type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ) -> None:
+        await self.release()

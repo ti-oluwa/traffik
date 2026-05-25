@@ -11,7 +11,7 @@ from types import TracebackType
 import aiomcache
 from aiomcache import ClientException
 
-from traffik._locks import token_generator
+from traffik._locks import _GatedNamedLock, _NamedGateRegistry, token_generator
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.memcached._utils import _parse_memcached_url
 from traffik.exceptions import (
@@ -324,7 +324,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         **kwargs: typing.Any,
     ) -> None:
         """
-        Initialize Memcached backend.
+        Initialize the `aiomcache` Memcached backend.
 
         :param host: Memcached server host.
         :param port: Memcached server port.
@@ -384,6 +384,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             lock_blocking_timeout=lock_blocking_timeout,
             **kwargs,
         )
+        self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
 
     async def _track_key(self, key: str) -> None:
         """Best-effort add key to tracking set."""
@@ -468,6 +469,9 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
                 return_value=None,
             )
 
+        if self._named_gate_registry is None or self._named_gate_registry.closed:
+            self._named_gate_registry = _NamedGateRegistry(contention_threshold=1)
+
     async def ready(self) -> bool:
         if self.connection is None:
             return False
@@ -489,7 +493,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
-    ) -> _AsyncMemcachedLock:
+    ) -> typing.Union[_AsyncMemcachedLock, _GatedNamedLock[_AsyncMemcachedLock]]:
         """
         Get a distributed lock for the given name.
 
@@ -497,12 +501,19 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         :return: `_AsyncMemcachedLock` instance.
         """
         self._assert_ready()
-        return _AsyncMemcachedLock(
+        lock = _AsyncMemcachedLock(
             name,
             client=self.connection,  # type: ignore[arg-type]
             ttl=ttl,
             reentrant=reentrant,
         )
+        if not reentrant:
+            return _GatedNamedLock(
+                lock=lock,
+                name=name,
+                registry=self._named_gate_registry,  # type: ignore[arg-type]
+            )
+        return lock
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any
@@ -801,3 +812,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         if self.connection is not None:
             await self.connection.close()
             self.connection = None
+
+        if self._named_gate_registry is not None:
+            self._named_gate_registry.close()
+            self._named_gate_registry = None

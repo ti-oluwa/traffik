@@ -701,7 +701,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._shard_semaphores: typing.Optional[typing.List[Semaphore]] = None
 
         self._executor = ThreadPoolExecutor(
-            max_workers=number_of_shards, thread_name_prefix=namespace
+            max_workers=max(number_of_shards, 32), thread_name_prefix=namespace
         )
         self._lock_pool_size = lock_pool_size
         self._lock_pool_headroom = lock_pool_headroom
@@ -934,22 +934,23 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         )
         self._lock_byte_pool = byte_pool
 
-        # Create the named lock pool wired to `_AsyncSharedMemoryLock`
-        def _make_lock() -> _AsyncSharedMemoryLock:
-            nonlocal buffer, byte_pool
-            return _AsyncSharedMemoryLock(
-                buffer=buffer,
-                byte_pool=byte_pool,
-                max_spins_before_backoff=10,
-                spin_max_delay_seconds=0.005,
+        if self._named_lock_pool is None or self._named_lock_pool.closed:
+            # Create the named lock pool wired to `_AsyncSharedMemoryLock`
+            def _make_lock() -> _AsyncSharedMemoryLock:
+                nonlocal buffer, byte_pool
+                return _AsyncSharedMemoryLock(
+                    buffer=buffer,
+                    byte_pool=byte_pool,
+                    max_spins_before_backoff=10,
+                    spin_max_delay_seconds=0.005,
+                )
+
+            self._named_lock_pool = _NamedLockPool(
+                factory=_make_lock,
+                max_size=self._lock_pool_size,
+                headroom=self._lock_pool_headroom,
             )
 
-        self._named_lock_pool = _NamedLockPool(
-            factory=_make_lock,
-            max_size=self._lock_pool_size,
-            headroom=self._lock_pool_headroom,
-            threadsafe=True,
-        )
         # Pre-populate named lock pool
         self._named_lock_pool.populate()
 
@@ -963,57 +964,11 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         Return `True` if the backend has been initialised and the shared
         memory segment is open.
         """
-        return self._initialized and self._shared_memory is not None
-
-    async def close(self) -> None:
-        """
-        Shut down this backend instance.
-
-        Cancels the cleanup task, releases the buffer view, and closes the
-        shared memory handle. If this instance is the creator (`create=True`),
-        the segment is also unlinked (destroyed). Attaching instances only
-        close their handle; they do not unlink.
-        """
-        self._initialized = False
-
-        if self._cleanup_task is not None and not self._cleanup_task.done():
-            try:
-                await asyncio.wait_for(self._cleanup_task, timeout=1.0)
-            except asyncio.TimeoutError:
-                self._cleanup_task.cancel()
-                try:
-                    await self._cleanup_task
-                except asyncio.CancelledError:
-                    pass
-            self._cleanup_task = None
-
-        if self._buffer is not None and self._lock_byte_pool is not None:
-            try:
-                self._buffer[
-                    self._lock_bytes_offset : self._lock_bytes_offset
-                    + self._lock_byte_pool_size
-                ] = bytes(self._lock_byte_pool_size)
-            except Exception:
-                pass
-
-        if self._buffer is not None:
-            self._buffer.release()
-            self._buffer = None
-
-        if self._shared_memory is not None:
-            self._shared_memory.close()
-            if self._create:
-                self._shared_memory.unlink()
-            self._shared_memory = None
-
-        # Close threadpool executor
-        self._executor.shutdown(wait=False)
-
-    async def reset(self) -> None:
-        """Reset the backend by clearing all throttling data."""
-        if not self._initialized:
-            return
-        await self.clear()
+        return (
+            self._initialized
+            and self._shared_memory is not None
+            and self._buffer is not None
+        )
 
     def _assert_ready(self) -> None:
         """
@@ -2125,7 +2080,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         for shard_idx in range(self._number_of_shards):
             shard_base = self._shard_base(shard_idx)
-            to_clear: typing.List[int] = []
+            candidates: typing.List[int] = []
 
             self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
             try:
@@ -2137,16 +2092,16 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
                     self._hash_table_delete(buffer, shard_base, key_str.encode("utf-8"))
                     self._free_stack_push(buffer, shard_base, slot_idx)
-                    to_clear.append(slot_idx)
+                    candidates.append(slot_idx)
             finally:
                 self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
 
-            if not to_clear:
+            if not candidates:
                 continue
 
             self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
             try:
-                for slot_idx in to_clear:
+                for slot_idx in candidates:
                     self._clear_slot(buffer, shard_base, slot_idx)
             finally:
                 self._shard_semaphores[shard_idx].release()  # type: ignore[index]
@@ -2411,3 +2366,63 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 break
             except Exception:
                 pass
+
+    async def reset(self) -> None:
+        """Reset the backend by clearing all throttling data."""
+        # Just clear all data since this is an in-memory backend.
+        await self.clear()
+
+    def closed(self) -> bool:
+        """Return `True` if the backend has been closed."""
+        return not self._initialized
+
+    async def close(self) -> None:
+        """
+        Shut down this backend instance.
+
+        Cancels the cleanup task, releases the buffer view, and closes the
+        shared memory handle. If this instance is the creator (`create=True`),
+        the segment is also unlinked (destroyed). Attaching instances only
+        close their handle; they do not unlink.
+
+        Closes the named lock pool, and shuts down the thread pool executor.
+        """
+        await self.clear()
+        self._initialized = False
+
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            try:
+                await asyncio.wait_for(self._cleanup_task, timeout=1.0)
+            except asyncio.TimeoutError:
+                self._cleanup_task.cancel()
+                try:
+                    await self._cleanup_task
+                except asyncio.CancelledError:
+                    pass
+            self._cleanup_task = None
+
+        if self._buffer is not None and self._lock_byte_pool is not None:
+            try:
+                self._buffer[
+                    self._lock_bytes_offset : self._lock_bytes_offset
+                    + self._lock_byte_pool_size
+                ] = bytes(self._lock_byte_pool_size)
+            except Exception:
+                pass
+
+        if self._buffer is not None:
+            self._buffer.release()
+            self._buffer = None
+
+        if self._shared_memory is not None:
+            self._shared_memory.close()
+            if self._create:
+                self._shared_memory.unlink()
+            self._shared_memory = None
+
+        if self._named_lock_pool is not None:
+            self._named_lock_pool.close()
+            self._named_lock_pool = None
+
+        # Close threadpool executor
+        self._executor.shutdown(wait=False)

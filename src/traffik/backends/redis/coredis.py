@@ -14,6 +14,7 @@ import asyncio
 import math
 import sys
 import typing
+from contextlib import AsyncExitStack
 from types import TracebackType
 
 import coredis
@@ -24,6 +25,7 @@ from coredis.connection import TCPLocation
 from coredis.patterns.lock import Lock as CoredisLock
 from typing_extensions import Self
 
+from traffik._locks import _GatedNamedLock, _NamedGateRegistry
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import (
     BackendConnectionError,
@@ -40,7 +42,7 @@ from traffik.types import (
 __all__ = ["RedisBackend"]
 
 
-_AnyRedis = typing.Union[Redis, RedisCluster]
+_AnyRedis = typing.Union[Redis[str], RedisCluster[str]]
 """Union of the two coredis client types that share a compatible command API."""
 
 
@@ -314,8 +316,8 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
     wrap_methods: typing.Tuple[str, ...] = ("clear",)
 
-    _INCREMENT_WITH_TTL_SCRIPT: typing.ClassVar[str] = _INCREMENT_WITH_TTL_SCRIPT
-    _CLEAR_SCRIPT: typing.ClassVar[str] = _CLEAR_SCRIPT
+    INCREMENT_WITH_TTL_SCRIPT: typing.ClassVar[str] = _INCREMENT_WITH_TTL_SCRIPT
+    CLEAR_SCRIPT: typing.ClassVar[str] = _CLEAR_SCRIPT
 
     def __init__(
         self,
@@ -348,7 +350,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         **kwargs: typing.Any,
     ) -> None:
         """
-        Initialize the coredis Redis backend.
+        Initialize the `coredis` Redis backend.
 
         :param connection: How to connect. One of:
 
@@ -413,6 +415,8 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         # Lua Script objects will be set during initialize()
         self._increment_with_ttl_script: typing.Optional[Script] = None
         self._clear_script: typing.Optional[Script] = None
+        self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
+        self._exit_stack: typing.Optional[AsyncExitStack] = None
 
     def _assert_ready(self) -> None:
         if self.connection is None:
@@ -426,7 +430,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
         if callable(raw) and not isinstance(raw, (Redis, RedisCluster, Sentinel)):
             self._owns_connection = True
-            return await raw()  # type: ignore[operator]
+            return await raw()
 
         if isinstance(raw, (Redis, RedisCluster)):
             if not getattr(raw, "decode_responses", True):
@@ -434,7 +438,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
                     "The coredis client must be created with decode_responses=True."
                 )
             self._owns_connection = False
-            return raw
+            return typing.cast(_AnyRedis, raw)
 
         if isinstance(raw, Sentinel):
             if not self._sentinel_service_name:
@@ -446,7 +450,10 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             if self._sentinel_stream_timeout is not None:
                 kwargs["stream_timeout"] = self._sentinel_stream_timeout
             self._owns_connection = False
-            return raw.primary_for(service_name=self._sentinel_service_name, **kwargs)  # type: ignore
+            return typing.cast(
+                _AnyRedis,
+                raw.primary_for(service_name=self._sentinel_service_name, **kwargs),  # type: ignore
+            )
 
         if isinstance(raw, (list, tuple)):
             nodes = []
@@ -470,12 +477,12 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
         if isinstance(raw, str):
             self._owns_connection = True
-            client = await Redis.from_url(  # type: ignore[attr-defined]
+            client = Redis.from_url(
                 raw,
                 decode_responses=True,
                 **self._url_kwargs,
             )
-            return client  # type: ignore[return-value]
+            return client
 
         raise TypeError(f"Unsupported connection argument type: {type(raw)!r}.")
 
@@ -485,18 +492,20 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
         Safe to call multiple times; subsequent calls are no-ops.
         """
-        if self.connection is not None:
-            return
+        if self.connection is None:
+            client = await self._build_client()
+            self._is_cluster = isinstance(client, RedisCluster)
+            self._exit_stack = AsyncExitStack()
+            self.connection = await self._exit_stack.enter_async_context(client)
 
-        client = await self._build_client()
-        self._is_cluster = isinstance(client, RedisCluster)
-        self.connection = client
+            # Script object that transparently handles NOSCRIPT errors.
+            self._increment_with_ttl_script = client.register_script(
+                self.INCREMENT_WITH_TTL_SCRIPT
+            )
+            self._clear_script = client.register_script(self.CLEAR_SCRIPT)
 
-        # Script object that transparently handles NOSCRIPT errors.
-        self._increment_with_ttl_script = client.register_script(
-            self._INCREMENT_WITH_TTL_SCRIPT
-        )
-        self._clear_script = client.register_script(self._CLEAR_SCRIPT)
+        if self._named_gate_registry is None or self._named_gate_registry.closed:
+            self._named_gate_registry = _NamedGateRegistry(contention_threshold=1)
 
     async def ready(self) -> bool:
         if self.connection is None:
@@ -509,18 +518,25 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
-    ) -> _AsyncCoredisLock:
+    ) -> typing.Union[_AsyncCoredisLock, _GatedNamedLock[_AsyncCoredisLock]]:
         """
         Return a distributed lock for the given name backed by `coredis.patterns.lock.Lock`.
         """
         self._assert_ready()
-        return _AsyncCoredisLock(
+        lock = _AsyncCoredisLock(
             client=self.connection,  # type: ignore[arg-type]
             name=name,
             ttl=ttl,
             sleep=self._lock_sleep,  # polling interval
             reentrant=reentrant,
         )
+        if not reentrant:
+            return _GatedNamedLock(
+                lock=lock,
+                name=name,
+                registry=self._named_gate_registry,  # type: ignore[arg-type]
+            )
+        return lock
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any
@@ -677,16 +693,26 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         After this method returns, `connection` is set to `None` and the
         backend must be re-initialized before further use.
         """
-        if self.connection is not None:
-            if self._owns_connection:
-                try:
-                    await self.connection.aclose()  # type: ignore[union-attr]
-                except Exception as exc:
-                    sys.stderr.write(
-                        f"Warning: error while closing coredis connection: {exc}\n"
-                    )
-                    sys.stderr.flush()
+        if (
+            self.connection is not None
+            and self._owns_connection
+            and self._exit_stack is not None
+        ):
+            try:
+                # Close the connection pool and all underlying sockets. Safe to call multiple times.
+                await self._exit_stack.aclose()
+            except Exception as exc:
+                sys.stderr.write(
+                    f"Warning: error while closing coredis connection: {exc}\n"
+                )
+                sys.stderr.flush()
+            finally:
+                self._exit_stack = None
 
-            self.connection = None
-            self._increment_with_ttl_script = None
-            self._clear_script = None
+        self.connection = None
+        self._increment_with_ttl_script = None
+        self._clear_script = None
+
+        if self._named_gate_registry is not None:
+            self._named_gate_registry.close()
+            self._named_gate_registry = None

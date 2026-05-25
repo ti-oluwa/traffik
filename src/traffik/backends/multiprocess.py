@@ -739,7 +739,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         lock_blocking: typing.Optional[bool] = None,
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
-        lock_pool_size: int = 50,
+        lock_pool_size: int = 128,
+        lock_pool_headroom: int = 4,
         max_keys: int = 65536,
         number_of_shards: int = 64,
         max_value_size: int = 512,
@@ -781,6 +782,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             lock_ttl=lock_ttl,
             lock_blocking_timeout=lock_blocking_timeout,
             lock_pool_size=lock_pool_size,
+            lock_pool_headroom=lock_pool_headroom,
             max_keys=max_keys,
             number_of_shards=number_of_shards,
             max_value_size=max_value_size,
@@ -806,7 +808,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         lock_blocking: typing.Optional[bool] = None,
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
-        lock_pool_size: int = 50,
+        lock_pool_size: int = 128,
+        lock_pool_headroom: int = 4,
         max_keys: int = 65536,
         number_of_shards: int = 64,
         max_value_size: int = 512,
@@ -848,6 +851,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             lock_ttl=lock_ttl,
             lock_blocking_timeout=lock_blocking_timeout,
             lock_pool_size=lock_pool_size,
+            lock_pool_headroom=lock_pool_headroom,
             max_keys=max_keys,
             number_of_shards=number_of_shards,
             max_value_size=max_value_size,
@@ -943,6 +947,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     byte_pool=byte_pool,
                     max_spins_before_backoff=10,
                     spin_max_delay_seconds=0.005,
+                    reentrant=True,
                 )
 
             self._named_lock_pool = _NamedLockPool(

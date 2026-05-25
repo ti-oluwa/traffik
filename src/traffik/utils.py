@@ -191,12 +191,12 @@ def time() -> float:
     return pytime.time()
 
 
-class OpTimeout:
+class TaskTimer:
     """
-    Asynchronous context manager that cancels the current task if the
-    block of code inside it takes longer than a specified timeout.
+    Timer and asynchronous context manager that cancels the current task if the
+    block of code after or inside it (depending on usage context), takes longer than a specified timeout.
 
-    Adapted from `emcache.timeout` in the `emcache` library (MIT License).
+    Adapted from `emcache.timeout.OpTimeout` in the `emcache` library (MIT License).
     Copyright (c) 2020-2024 Pau Freixes
     """
 
@@ -207,28 +207,28 @@ class OpTimeout:
         "_task",
         "_timer_handler",
         "_error",
+        "_done",
     )
 
     def __init__(
         self,
         timeout: typing.Optional[float],
         loop: asyncio.AbstractEventLoop,
-        error_type: typing.Optional[typing.Type[BaseException]] = None,
-        error_message: typing.Optional[str] = None,
+        error: typing.Optional[BaseException] = None,
     ):
         """
-        Initialize the context manager.
+        Initialize the timer.
 
         :param timeout: The timeout duration in seconds. If None, no timeout is applied.
         :param loop: The asyncio event loop to use for scheduling the timeout.
-        :param error_type: Optional custom exception type to raise on timeout. If None, defaults to asyncio.TimeoutError.
-        :param error_message: Optional custom error message for the timeout exception. If None, defaults to "Operation timed out".
+        :param error: Optional custom exception to raise on timeout.
+            If None, defaults to `asyncio.TimeoutError`.
         """
         self._timed_out = False
         self._timeout = timeout
         self._loop = loop
-        self._error = (error_type or asyncio.TimeoutError)(
-            error_message or "Operation timed out"
+        self._error = (
+            asyncio.TimeoutError("Operation timed out") if error is None else error
         )
         task = asyncio.current_task(loop)
         if not task:
@@ -238,15 +238,86 @@ class OpTimeout:
 
         self._task: asyncio.Task = task
         self._timer_handler: typing.Optional[asyncio.TimerHandle] = None
+        self._done = False
+
+    def timed_out(self) -> bool:
+        """Indicates whether the timeout was triggered."""
+        return self._timed_out
+
+    def done(self) -> bool:
+        """Indicates whether the timeout has been stopped or triggered."""
+        return self._done
+
+    def cancelled(self) -> bool:
+        """Indicates whether the timeout was cancelled (i.e. stopped without being triggered)."""
+        return self._done and not self._timed_out
 
     def _on_timeout(self):
         if not self._task.done():
             self._timed_out = True
             self._task.cancel()
 
-    async def __aenter__(self):
-        if self._timeout is not None:
+    def start(self):
+        """
+        Start the timer.
+
+        Calling this once will start the timer. If the timer is already running, this method does nothing.
+        """
+        if self._done or self._timed_out:
+            raise RuntimeError(
+                f"Cannot start {self.__class__.__name__}: already cancelled or timed out."
+            )
+        if self._timeout is not None and self._timer_handler is None:
             self._timer_handler = self._loop.call_later(self._timeout, self._on_timeout)
+
+    def _handle_timed_out(self, exc_type: typing.Optional[type[BaseException]]):
+        """
+        Handle the case where the timeout was triggered.
+
+        If the timeout was triggered and the current exception matches the specified type (or any type if None),
+        it will be treated as a timeout cancellation. This method will raise the timeout error and suppress
+        the context of the cancellation.
+
+        :param exc_type: The type of the current exception being handled, or None if not currently handling an exception.
+        :raises: The timeout error if the timeout was triggered and the exception type matches.
+        """
+        if sys.version_info[:2] >= (3, 11):
+            # Call uncancel to clear cancellation state from OpTimeout
+            self._task.uncancel()
+        if exc_type == asyncio.CancelledError:
+            # it's not a real cancellation, was a timeout
+            raise self._error from None  # suppress context of cancellation
+
+    def stop(self, exc_type: typing.Optional[type[BaseException]] = None):
+        """
+        Stop (and cancel) the timer, handling any timeout cancellation and propagation
+        if the timer was triggered.
+
+        Once this method is called, the timer is considered done and cannot be restarted.
+
+        :param exc_type: Optional exception type to check for cancellation.
+            If the timeout was triggered and the current exception matches this type,
+            it will be treated as a timeout cancellation. Defaults to None, which means
+            any exception will be treated as a timeout cancellation if the timeout was triggered.
+        :raises: The timeout error if the timeout was triggered and the exception type matches.
+        """
+        if self._done:
+            raise RuntimeError(
+                f"Cannot stop {self.__class__.__name__}: already cancelled or timed out."
+            )
+
+        self._done = True
+        if self._timed_out:
+            self._handle_timed_out(exc_type)
+
+        # Cancel the timer if it's still active
+        if self._timer_handler is not None and not self._timer_handler.cancelled():
+            self._timer_handler.cancel()
+            self._timer_handler = None
+
+    async def __aenter__(self):
+        self.start()
+        return self
 
     async def __aexit__(
         self,
@@ -254,13 +325,6 @@ class OpTimeout:
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ):
-        if self._timed_out:
-            if sys.version_info[:2] >= (3, 11):
-                # Call uncancel to clear cancellation state from OpTimeout
-                self._task.uncancel()
-            if exc_type == asyncio.CancelledError:
-                # it's not a real cancellation, was a timeout
-                raise self._error from None
-
-        if self._timer_handler:
-            self._timer_handler.cancel()
+        if not self._done:
+            self.stop(exc_type)
+        return False

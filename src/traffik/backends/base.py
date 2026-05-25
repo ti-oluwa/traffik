@@ -147,10 +147,11 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     - get(key): Get value for key (Must not implement implicit locking).
     - set(key, value, expire): Set value for key with optional expiration (Must not implement implicit locking).
     - delete(key): Remove key (Must not implement implicit locking).
-    - get_lock(key, timeout): Acquire a distributed lock for key
+    - get_lock(key, ttl, reentrant): Acquire a distributed lock for the given key with optional TTL and reentrancy.
     - increment(key, amount): Atomically increment counter
     - decrement(key, amount): Atomically decrement counter
     - expire(key, seconds): Set expiration on existing key
+    - close(): Close backend connection and cleanup resources
     - reset(): Clear all throttling data
 
     Optionally, backends can also override the following methods for better performance:
@@ -573,7 +574,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         same backend. This could lead to unexpected behaviour and data loss due to nested non-persistence.
 
         :param app: The ASGI application to assign the backend to.
-        :param persistent: Whether to keep the backend state across application restarts.
+        :param persistent: Whether to keep the backend state on context exit.
             This overrides the backend's persistent setting if set.
             If None, for non-nested contexts, the backend's persistence settings is used.
             For nested contexts, context is persistent if outer context's backend
@@ -628,7 +629,7 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
     Context manager for throttle backends.
     """
 
-    __slots__ = ("backend", "persistent", "close_on_exit", "_ctx_token")
+    __slots__ = ("backend", "persistent", "close_on_exit", "_token")
 
     def __init__(
         self,
@@ -636,10 +637,17 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
         persistent: bool = False,
         close_on_exit: bool = True,
     ) -> None:
+        """
+        Initialize the backend context
+
+        :param backend: The throttle backend instance to manage in this context
+        :param persistent: Whether to keep the backend state on context exit
+        :param close_on_exit: Whether to close the backend connection on context exit
+        """
         self.backend = backend
         self.persistent = persistent
         self.close_on_exit = close_on_exit
-        self._ctx_token: typing.Optional[Token[typing.Optional[ThrottleBackend]]] = None
+        self._token: typing.Optional[Token[typing.Optional[ThrottleBackend]]] = None
 
     async def __aenter__(self) -> ThrottleBackendTco:
         backend = self.backend
@@ -647,13 +655,13 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
         if not await backend.ready():
             raise BackendError("Throttle backend is not ready for operations.")
 
-        self._ctx_token = _backend_ctx.set(backend)
+        self._token = _backend_ctx.set(backend)
         return backend
 
     async def __aexit__(self, exc_type, exc_value, traceback) -> None:
-        if self._ctx_token is not None:
-            _backend_ctx.reset(self._ctx_token)
-            self._ctx_token = None
+        if self._token is not None:
+            _backend_ctx.reset(self._token)
+            self._token = None
 
         backend = self.backend
 

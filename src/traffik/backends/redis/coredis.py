@@ -317,7 +317,9 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
     wrap_methods: typing.Tuple[str, ...] = ("clear",)
 
     INCREMENT_WITH_TTL_SCRIPT: typing.ClassVar[str] = _INCREMENT_WITH_TTL_SCRIPT
+    """Lua script for atomic increment with TTL on first creation."""
     CLEAR_SCRIPT: typing.ClassVar[str] = _CLEAR_SCRIPT
+    """Lua script for non-blocking deletion of all keys matching a pattern."""
 
     def __init__(
         self,
@@ -346,7 +348,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         lock_blocking: typing.Optional[bool] = None,
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
-        lock_sleep: float = 0.05,
+        lock_sleep: float = 0.0025,
         **kwargs: typing.Any,
     ) -> None:
         """

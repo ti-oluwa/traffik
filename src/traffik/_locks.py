@@ -18,7 +18,7 @@ from traffik.exceptions import (
     LockTimeoutError,
 )
 from traffik.types import AsyncLock
-from traffik.utils import OpTimeout
+from traffik.utils import TaskTimer
 
 
 @typing.final
@@ -179,26 +179,16 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         :param name: Logical lock name for the handle. This is used for reference counting
             and lock reuse, but is not exposed to the underlying lock instance.
         :return: `_NamedLockHandle` instance.
-        """
-        if self._closed:
-            raise RuntimeError("Cannot get gate handle from closed registry.")
-
-        return _NamedLockHandle(pool=self, name=name, lock=self._get(name))
-
-    def _get(self, name: str, /) -> AsyncLockT:
-        """
-        Increment the reference count for an existing name or allocate
-        a new underlying lock.
-
-        :param name: Logical lock name.
-        :return: Underlying async lock instance.
         :raises RuntimeError: If the pool allocation limit is exceeded.
         """
+        if self._closed:
+            raise RuntimeError("Cannot get lock handle from closed pool.")
+
         entry = self._active.get(name)
         if entry is not None:
             lock, refcount = entry
             self._active[name] = (lock, refcount + 1)
-            return lock
+            return _NamedLockHandle(pool=self, name=name, lock=lock)
 
         if self._free:
             lock = self._free.pop()
@@ -210,7 +200,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
             self._allocated += 1
 
         self._active[name] = (lock, 1)
-        return lock
+        return _NamedLockHandle(pool=self, name=name, lock=lock)
 
     @asynccontextmanager
     async def lock(
@@ -387,7 +377,26 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
     The handle wraps a pooled underlying async lock and ensures pool
     reference accounting is updated correctly during release.
 
-    Handles are single-task objects and must not be shared across tasks.
+    Although the underlying lock may be reentrant, this handle is not.
+    To utilize reentrancy, get another handle to the same lock like so:
+
+    ```python
+    from contextlib import closing
+
+    pool = _NamedLockPool(factory=lambda: MyLock())
+    with closing(pool): # Auto-closes pool
+        # Get an handle for 'key'
+        async with pool.get('key'):
+            # Protected code runs...
+
+            async with pool.get("key'): # Reenter the underlying lock by getting another handle
+                # Nested code runs...
+            # Reentry release
+        # Final release
+    # Pool closed
+    ```
+
+    **Handles are single-task objects and must not be shared across tasks.**
     """
 
     __slots__ = (
@@ -701,7 +710,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         "_blocking",
         "_blocking_timeout",
         "_acquired",
-        "_op_timeout",
+        "_timer",
     )
 
     def __init__(
@@ -736,7 +745,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         self._blocking = blocking
         self._blocking_timeout = blocking_timeout
         self._acquired = False
-        self._op_timeout: typing.Optional[OpTimeout] = None
+        self._timer: typing.Optional[TaskTimer] = None
 
     async def _acquire(self) -> None:
         """
@@ -754,7 +763,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
                     ),
                     timeout=self._blocking_timeout,
                 )
-            except (asyncio.TimeoutError, TimeoutError) as exc:
+            except TimeoutError as exc:
                 raise LockTimeoutError(
                     f"Timed out waiting to acquire {type(self._lock).__qualname__!r} lock after {self._blocking_timeout}s."
                 ) from exc
@@ -779,13 +788,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         """
         try:
             await self._lock.release()
-        except (
-            LockError,
-            LockReleaseError,
-            RuntimeError,
-            TimeoutError,
-            asyncio.TimeoutError,
-        ) as release_exc:
+        except (LockError, RuntimeError, TimeoutError) as release_exc:
             if exc_type is None:
                 raise LockReleaseError(
                     f"Failed to release {type(self._lock).__qualname__!r} lock."
@@ -805,22 +808,21 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         self._acquired = True
 
         # Start the lock hold-time watchdog after the lock is confirmed acquired.
-        # `OpTimeout` schedules task.cancel() via `call_later`. The CancelledError
+        # `TaskTimer` schedules task.cancel() via `call_later`. The CancelledError
         # that bubbles up through the body is then converted to LockTimeoutError
         # inside `__aexit__` before the lock is released.
         if self._ttl is not None:
             loop = asyncio.get_running_loop()
-            self._op_timeout = OpTimeout(
+            self._timer = TaskTimer(
                 timeout=self._ttl,
                 loop=loop,
-                error_type=LockTimeoutError,
-                error_message=(
+                error=LockTimeoutError(
                     f"{type(self._lock).__qualname__!r} lock TTL of {self._ttl}s "
                     "expired while the lock was held. The body was cancelled to "
                     "prevent unsafe execution without mutual exclusion."
                 ),
             )
-            await self._op_timeout.__aenter__()
+            self._timer.start()
 
         return self
 
@@ -830,22 +832,22 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> None:
-        # Firt and most important, we need to exit `OpTimeout`
+        # Firt and most important, we need to exit `TaskTimer`
         # This must happen before the lock release so that:
         # - A normal exit cancels the `call_later` handle (hence no spurious fire).
         # - A TTL-fired exit converts `CancelledError` to `LockTimeoutError`.
         # We then stash any `LockTimeoutError` and re-raise it after releasing.
         timeout_exc: typing.Optional[BaseException] = None
-        if self._op_timeout is not None:
-            op_timeout = self._op_timeout
-            self._op_timeout = None
+        if self._timer is not None:
+            timer = self._timer
+            self._timer = None
             try:
-                await op_timeout.__aexit__(exc_type, exc_value, traceback)
+                timer.stop(exc_type)
             except LockTimeoutError as ltexc:
                 # TTL watchdog fired. Stash and release first.
                 timeout_exc = ltexc
             except BaseException as bexc:
-                # We got and unexpected error from `OpTimeout` itself. Release then propagate.
+                # We got and unexpected error from `TaskTimer` itself. Release then propagate.
                 if self._acquired:
                     await self._release(exc_type=type(bexc))
                 raise
@@ -1244,10 +1246,12 @@ class _NamedGateHandle:
             return
 
         self._released = True
-        if self._acquired:
-            self._acquired = False
-            self._lock.release()
-        self._registry._release(self._name)
+        try:
+            if self._acquired:
+                self._acquired = False
+                self._lock.release()
+        finally:
+            self._registry._release(self._name)
 
     async def __aenter__(self) -> Self:
         """Acquire the gate, raising on failure."""

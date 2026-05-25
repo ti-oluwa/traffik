@@ -400,14 +400,18 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             # Store exception to raise after lock release
             exit_exc = exc
         finally:
-            if self._exit_stack is not None:
-                await self._exit_stack.aclose()
-                self._exit_stack = None
+            await self._close_exit_stack()
 
         # Raise stored exception after lock is released. This ensures we don't
         # hold the lock while propagating exceptions.
         if exit_exc is not None:
             raise exit_exc
+
+    async def _close_exit_stack(self) -> None:
+        """Close the exit stack if it was created for locking. This effectively releases the lock if it was held."""
+        if self._exit_stack is not None:
+            await self._exit_stack.aclose()
+            self._exit_stack = None
 
     def _merge_into_parent(self, mark_as_consumed: bool = True) -> None:
         """
@@ -830,9 +834,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         self._cancelled = True
 
         # Release lock early if we're holding one
-        if self._exit_stack is not None:
-            await self._exit_stack.aclose()
-            self._exit_stack = None
+        await self._close_exit_stack()
 
     discard = cancel  # alias
 

@@ -147,6 +147,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         cleanup_frequency: typing.Optional[float] = None,
         lock_kind: typing.Literal["fair", "unfair"] = "unfair",
         lock_pool_size: int = 128,
+        lock_pool_headroom: int = 4,
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -199,6 +200,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         self._lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
         self._lock_pool_size = lock_pool_size
+        self._lock_pool_headroom = lock_pool_headroom
         self._named_lock_pool: typing.Optional[_NamedLockPool[_AsyncInMemoryLock]] = (
             None
         )
@@ -219,8 +221,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         if self._named_lock_pool is None or self._named_lock_pool.closed:
             self._named_lock_pool = _NamedLockPool(
-                factory=lambda: _AsyncInMemoryLock(lock=self._lock_cls()),
+                factory=lambda: _AsyncInMemoryLock(
+                    lock=self._lock_cls(), reentrant=True
+                ),
                 max_size=self._lock_pool_size,
+                headroom=self._lock_pool_headroom,
             )
 
         # Pre-populate named lock pool

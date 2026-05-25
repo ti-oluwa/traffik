@@ -502,6 +502,131 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     before acquiring `shard_semaphores[shard_idx]` capture the generation at lookup
     time and verify it under `shard_semaphores[shard_idx]` before reading or writing.
     A mismatch triggers a retry up to `self._max_aba_retries` times.
+
+    **Memory and Sizing Guide**
+
+    **Shared memory footprint**
+
+    Total shared memory consumed is approximately:
+
+    ```
+    number_of_shards * (
+        ceil(max_keys / number_of_shards) * (max_value_size + 37)  # slot data
+        + next_power_of_two(ceil(max_keys / number_of_shards / 0.65)) * 206  # hash table
+        + 4 * ceil(max_keys / number_of_shards) + 4  # shard header
+    ) + lock_pool_size * lock_pool_headroom  # lock byte region
+    ```
+
+    With the default parameters this is roughly **64 MB**. Verify this fits
+    comfortably within your container or host memory budget before deploying.
+    Use the table below as a quick reference:
+
+    .. list-table::
+    :header-rows: 1
+    :widths: 20 20 20 20 20
+
+    * - ``max_keys``
+        - ``number_of_shards``
+        - ``max_value_size``
+        - Approx. memory
+        - Notes
+    * - 65 536 (default)
+        - 64
+        - 512
+        - ~64 MB
+        - Default; tight for sliding-window strategies
+    * - 16 384
+        - 32
+        - 1 024
+        - ~23 MB
+        - Good general-purpose starting point
+    * - 65 536
+        - 64
+        - 2 048
+        - ~200 MB
+        - Required for large sliding-window logs
+    * - 4 096
+        - 16
+        - 512
+        - ~8 MB
+        - Low-memory / embedded deployments
+
+    **Choosing** `max_value_size`
+
+    Slots that store integer counters (fixed-window, token-bucket, GCRA, …)
+    use the native `int64` field and are unaffected by `max_value_size`.
+    Only strategies that serialise variable-length blobs into the string field
+    are constrained.
+
+    *Sliding-window log* is the most demanding: it stores one
+    `[timestamp, cost]` pair per request inside the current window.
+    Each pair serialises to roughly **25-30 bytes** after msgpack + base-85
+    encoding. A safe lower bound for `max_value_size` is therefore:
+
+        max_value_size >= ceil(rate_limit * 30)
+
+    Examples:
+
+    * 10 req / min: `max_value_size >= 300`  - default 512 is sufficient.
+    * 50 req / min: `max_value_size >= 1500` - **default is insufficient**.
+    * 100 req / min: `max_value_size >= 3000` - **default is insufficient**.
+
+    Exceeding `max_value_size` raises `traffik.exceptions.BackendError`
+    at request time, not at initialisation, so an undersized value will surface
+    as a runtime error under load rather than a startup failure.
+    Always calculate the required size before deploying
+    `traffik.strategies.SlidingWindowLogStrategy` with this backend.
+
+    Other variable-length strategies (leaky-bucket-with-queue, priority-queue,
+    cost-based token-bucket, …) store state blobs whose size grows with queue
+    depth or history length. Consult the strategy's storage-format docstring
+    and apply a similar calculation.
+
+    **Key exhaustion and** `cleanup_frequency`
+
+    Each distinct rate-limit key occupies one slot for the lifetime of its
+    current window plus any time before the background cleaner reclaims it.
+    Without a cleaner, expired slots accumulate until `max_keys` is reached,
+    at which point `traffik.exceptions.BackendError` is raised on the
+    next write to an affected shard.
+
+    Set `cleanup_frequency` in every production deployment:
+
+    ```python
+    backend = MultiProcessInMemoryBackend(
+        ...
+        cleanup_frequency=60.0,   # reclaim expired slots every 60 s
+    )
+    ```
+
+    The cleaner runs as an :mod:`asyncio` background task in the creating
+    process only. It acquires each shard's `slot_map_semaphore` briefly
+    while purging confirmed-expired entries; this introduces a small,
+    bounded pause on whichever requests happen to touch the same shard at
+    the same instant. The pause is proportional to the number of expired
+    entries found, not to `max_keys`, so a frequent cleaner (smaller
+    interval) processes fewer entries per pass and causes shorter pauses
+    than an infrequent one.
+
+    Guideline: set `cleanup_frequency` to no more than half the shortest
+    window duration used by any active strategy. For a 60-second fixed
+    window, `cleanup_frequency=30.0` ensures expired entries are reclaimed
+    within one extra window period at most.
+
+    **Shard count and contention**
+
+    Each shard owns an independent pair of semaphores, so operations on
+    different shards never block each other. More shards reduce contention
+    at the cost of higher memory overhead (each shard carries its own hash
+    table and header regardless of how many keys it actually holds).
+
+    A practical rule of thumb:
+
+        number_of_shards >= 2 * number_of_worker_processes
+
+    This ensures that, on average, each worker can find an uncontested shard
+    for most requests. The default of 64 shards is conservative and suits
+    deployments of up to ~30 workers without meaningful contention.
     """
 
     _GENERATION_STRUCT: typing.ClassVar[struct.Struct] = _UINT32_STRUCT
@@ -825,16 +950,22 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         they determine the segment layout. The segment is **not** unlinked when
         `close()` is called on an attaching instance.
 
-        :param namespace: Key prefix — must match the creator'shard_idx value.
+        :param namespace: Key prefix - must match the creator'shard_idx value.
         :param identifier: The connected client identifier generator.
         :param handle_throttled: The handler to call when the client connection
             is throttled.
         :param on_error: Strategy to handle errors during throttling. One of
             `"allow"`, `"throttle"`, `"raise"`, or a custom callable.
         :param lock_blocking: Whether named locks block on acquisition.
-        :param lock_ttl: Default TTL for named locks in seconds.
-        :param lock_blocking_timeout: Default maximum wait time for named locks.
-        :param lock_pool_size: Maximum idle named-lock semaphores in the pool.
+        :param lock_ttl: Default release TTL for named locks in seconds.
+        :param lock_blocking_timeout: Default maximum wait time for acquiring named locks.
+        :param lock_pool_size: Maximum number of idle named locks to keep in the pool for reuse.
+            When the pool is exhausted, new locks will be created on demand.
+        :param lock_pool_headroom: The headroom multiplier for the named lock pool.
+            When the number of idle locks in the pool exceeds `lock_pool_size * lock_pool_headroom`,
+            the excess locks will be closed to free up resources.
+            This allows the pool to temporarily grow under high contention while still enforcing an upper
+            bound on resource usage.
         :param max_keys: Must match the creator'shard_idx value.
         :param number_of_shards: Must match the creator'shard_idx value.
         :param max_value_size: Must match the creator'shard_idx value.
@@ -945,7 +1076,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 return _AsyncSharedMemoryLock(
                     buffer=buffer,
                     byte_pool=byte_pool,
-                    max_spins_before_backoff=10,
+                    max_spins_before_backoff=4,
                     spin_max_delay_seconds=0.005,
                     reentrant=True,
                 )
@@ -1890,7 +2021,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         ABA protection: per-key generation captured at lookup time, verified
         under `shard_semaphores[shard_idx]`. A mismatch yields `None` for that
-        key (no retry on reads — best-effort snapshot).
+        key (no retry on reads - best-effort snapshot).
 
         :param keys: All keys to retrieve.
         :param shard_to_keys: Pre-computed mapping of shard index to the list

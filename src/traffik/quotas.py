@@ -916,7 +916,6 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         apply_on_exit: bool = True,
         lock: typing.Union[bool, str, None] = None,
         lock_config: typing.Optional[LockConfig] = None,
-        reentrant_lock: bool = True,
     ) -> Self:
         """
         Create a nested child quota context.
@@ -953,8 +952,6 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 *different* resource than the parent and needs independent protection.
 
         :param lock_config: Configuration for lock acquisition (ttl, blocking, etc.).
-        :param reentrant_lock: If True, allows same lock key as parent (for re-entrant locks).
-            Else, raises an error if child lock key is the same as parent to prevent deadlocks.
         :return: A new child quota context.
 
         Example (no lock - default, safest):
@@ -984,7 +981,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         if (
             child_lock_key is not None
             and child_lock_key == self._lock_key
-            and not reentrant_lock
+            and (not lock_config or not lock_config.get("reentrant", False))
         ):
             raise QuotaError(
                 f"Nested quota context is using the same lock key as its parent "

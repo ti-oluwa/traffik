@@ -173,7 +173,15 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             If None, uses the global default from `traffik.config.get_lock_blocking_timeout()`.
         :param number_of_shards: Number of shards to split the in-memory shard into for concurrency.
         :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys. If None, no automatic cleanup is performed.
-        :
+        :param lock_kind: The type of lock to use for shard locks. "fair" uses a fair lock implementation which 
+            guarantees FIFO order for waiting tasks, while "unfair" may have better performance but does not guarantee order.
+        :param lock_pool_size: Maximum number of idle named locks to keep in the pool for reuse. 
+            When the pool is exhausted, new locks will be created on demand.
+        :param lock_pool_headroom: The headroom multiplier for the named lock pool. 
+            When the number of idle locks in the pool exceeds `lock_pool_size * lock_pool_headroom`, 
+            the excess locks will be closed to free up resources. 
+            This allows the pool to temporarily grow under high contention while still enforcing an upper
+            bound on resource usage.
         :param kwargs: Additional keyword arguments.
         """
         kwargs.pop("persistent", None)

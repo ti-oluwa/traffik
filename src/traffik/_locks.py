@@ -734,11 +734,13 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
             released (by TTL) on the distributed server (e.g redis server) but the client/task still thinks it's holding
             the lock and continues executing the body until it tries to release, which may cause unsafe execution
             without the mutual exclusion. To ensure that the TTL is is also enforced locally too, and also
-            propagated to the server if needed, pass the same TTL value here.
+            propagated to the server if needed, pass the same TTL value here, but ideally the local TTL should 
+            be slightly more conservative (smaller) than the server TTL to account for clock skew and network latency.
 
         :param blocking: If `False`, fail immediately when the lock is busy.
         :param blocking_timeout: Maximum seconds to wait during acquire.
             Takes priority over `ttl` for the acquire-wait bound.
+        :param 
         """
         self._lock = lock
         self._ttl = ttl
@@ -1058,6 +1060,18 @@ class _NamedGateRegistry:
         else:
             self._waiters[name] = count
 
+    def set_contention_threshold(self, threshold: int) -> None:
+        """
+        Update threshold at runtime.
+
+        Takes effect on next get() call.
+        Existing waiters already past the old threshold
+        continue normally — no disruption to in-flight acquires.
+        """
+        if threshold < 1:
+            raise ValueError("`contention_threshold` must be at least 1.")
+        self._contention_threshold = threshold
+
     @property
     def contention_threshold(self) -> int:
         """Waiter count at which gates begin to be created for a name."""
@@ -1274,6 +1288,15 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
     """
     Named distributed `AsyncLock` proxy that adds process-local task
     serialization via `_NamedGateRegistry`.
+
+    The idea behind the usage of this is to prevent a thundering-herd problem
+    on a distributed server (with spinning lock) when there is high/very high contention
+    on a distributed lock key.
+
+    **Warning:** For low-contention scenarios, this just staggers distributed lock acquisition
+    tries and will likely add more overhead and reduce throughput and/or increase
+    latency. The registry used should therefore use a reasonable `contention_threshold` based on
+    expected load and contention patterns (on the backend).
 
     **When the gate is active (contention at or above threshold):**
 

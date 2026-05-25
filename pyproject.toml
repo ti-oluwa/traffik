@@ -46,7 +46,7 @@ Repository = "https://github.com/ti-oluwa/traffik.git"
 Changelog = "https://github.com/ti-oluwa/traffik/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-all = ["traffik[aioredis]", "traffik[aiomcache]", "traffik[emcache]"]
+all = ["traffik[aioredis]", "traffik[coredis]", "traffik[aiomcache]", "traffik[emcache]"]
 
 # For backwards compatibility
 redis = ["traffik[aioredis]"] 

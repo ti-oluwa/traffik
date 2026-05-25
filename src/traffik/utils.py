@@ -11,7 +11,7 @@ from types import TracebackType
 
 import msgpack  # type: ignore[import-untyped]
 from starlette.requests import HTTPConnection
-from typing_extensions import TypeGuard
+from typing_extensions import TypeGuard, Self
 
 from traffik.config import (
     get_lock_blocking,
@@ -230,13 +230,8 @@ class TaskTimer:
         self._error = (
             asyncio.TimeoutError("Operation timed out") if error is None else error
         )
-        task = asyncio.current_task(loop)
-        if not task:
-            raise RuntimeError(
-                f"{self.__class__.__name__} must be used within an active asyncio task"
-            )
-
-        self._task: asyncio.Task = task
+        # Will be set to the current task when the timer is started
+        self._task: typing.Optional[asyncio.Task] = None
         self._timer_handler: typing.Optional[asyncio.TimerHandle] = None
         self._done = False
 
@@ -252,12 +247,12 @@ class TaskTimer:
         """Indicates whether the timeout was cancelled (i.e. stopped without being triggered)."""
         return self._done and not self._timed_out
 
-    def _on_timeout(self):
-        if not self._task.done():
+    def _on_timeout(self) -> None:
+        if self._task is not None and not self._task.done():
             self._timed_out = True
             self._task.cancel()
 
-    def start(self):
+    def start(self) -> None:
         """
         Start the timer.
 
@@ -268,9 +263,15 @@ class TaskTimer:
                 f"Cannot start {self.__class__.__name__}: already cancelled or timed out."
             )
         if self._timeout is not None and self._timer_handler is None:
+            task = asyncio.current_task(loop=self._loop)
+            if not task:
+                raise RuntimeError(
+                    f"{self.__class__.__name__} must be used within an active asyncio task"
+                )
+            self._task = task
             self._timer_handler = self._loop.call_later(self._timeout, self._on_timeout)
 
-    def _handle_timed_out(self, exc_type: typing.Optional[type[BaseException]]):
+    def _handle_timed_out(self, exc_type: typing.Optional[type[BaseException]]) -> None:
         """
         Handle the case where the timeout was triggered.
 
@@ -281,14 +282,14 @@ class TaskTimer:
         :param exc_type: The type of the current exception being handled, or None if not currently handling an exception.
         :raises: The timeout error if the timeout was triggered and the exception type matches.
         """
-        if sys.version_info[:2] >= (3, 11):
+        if sys.version_info[:2] >= (3, 11) and self._task is not None:
             # Call uncancel to clear cancellation state from OpTimeout
             self._task.uncancel()
         if exc_type == asyncio.CancelledError:
             # it's not a real cancellation, was a timeout
             raise self._error from None  # suppress context of cancellation
 
-    def stop(self, exc_type: typing.Optional[type[BaseException]] = None):
+    def stop(self, exc_type: typing.Optional[type[BaseException]] = None) -> None:
         """
         Stop (and cancel) the timer, handling any timeout cancellation and propagation
         if the timer was triggered.
@@ -315,7 +316,7 @@ class TaskTimer:
             self._timer_handler.cancel()
             self._timer_handler = None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         self.start()
         return self
 
@@ -324,7 +325,7 @@ class TaskTimer:
         exc_type: typing.Optional[type[BaseException]],
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
-    ):
+    ) -> bool:
         if not self._done:
             self.stop(exc_type)
         return False

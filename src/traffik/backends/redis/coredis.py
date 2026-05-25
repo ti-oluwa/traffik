@@ -349,6 +349,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
         lock_sleep: float = 0.0025,
+        lock_contention_threshold: int = 4,
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -384,6 +385,9 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             `None` means block forever.
         :param lock_sleep: Seconds to sleep between acquisition attempts when the lock is held.
             Smaller values reduce latency but increase Redis load. Default `0.05` (50 ms).
+        :param lock_contention_threshold: The threshold for the process-local contention serialization gate.
+            When the number of waiters for a lock exceeds this threshold, new acquirers will be serialized through 
+            an `asyncio.Lock` to reduce Redis connection hammering and thundering herd issues.
         :param kwargs: Additional keyword arguments forwarded to the base `ThrottleBackend`.
         """
         super().__init__(
@@ -417,6 +421,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         # Lua Script objects will be set during initialize()
         self._increment_with_ttl_script: typing.Optional[Script] = None
         self._clear_script: typing.Optional[Script] = None
+        self._lock_contention_threshold = lock_contention_threshold
         self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
         self._exit_stack: typing.Optional[AsyncExitStack] = None
 
@@ -507,7 +512,9 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             self._clear_script = client.register_script(self.CLEAR_SCRIPT)
 
         if self._named_gate_registry is None or self._named_gate_registry.closed:
-            self._named_gate_registry = _NamedGateRegistry(contention_threshold=1)
+            self._named_gate_registry = _NamedGateRegistry(
+                contention_threshold=self._lock_contention_threshold
+            )
 
     async def ready(self) -> bool:
         if self.connection is None:
@@ -517,6 +524,33 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             return True
         except Exception:
             return False
+
+    def set_lock_contention_threshold(self, threshold: int) -> None:
+        """
+        Adjust the process-local contention serialization gate threshold at runtime.
+
+        Setting threshold to a very large value (e.g. maxsize)
+        effectively disables the gate.
+        Tasks currently waiting on the gate are unaffected until
+        they complete their current acquire cycle.
+
+        :param threshold: The new contention threshold (must be at least 1).
+        """
+        if threshold < 1:
+            raise ValueError("threshold must be at least 1")
+
+        self._lock_contention_threshold = threshold
+        if self._named_gate_registry is not None:
+            self._named_gate_registry.set_contention_threshold(threshold)
+
+    def disable_lock_contention_gate(self) -> None:
+        """
+        Effectively disable the process-local lock contention
+        serialization gate by setting threshold very high.
+        Tasks currently waiting on the gate are unaffected until
+        they complete their current acquire cycle.
+        """
+        self.set_lock_contention_threshold(2**31)
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False

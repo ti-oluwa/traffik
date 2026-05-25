@@ -320,6 +320,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         lock_blocking: typing.Optional[bool] = None,
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
+        lock_contention_threshold: int = 4,
         track_keys: bool = False,
         **kwargs: typing.Any,
     ) -> None:
@@ -348,6 +349,9 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             no expiration unless specified during lock acquisition.
         :param lock_blocking_timeout: Default maximum time to wait for acquiring locks in seconds.
             If None, uses the global default from `traffik.config.get_lock_blocking_timeout()`.
+            :param lock_contention_threshold: The threshold for the process-local contention serialization gate.
+            When the number of waiters for a lock exceeds this threshold, new acquirers will be serialized through 
+            an `asyncio.Lock` to reduce Memcached connection hammering and thundering herd issues.
         :param track_keys: Whether to track all keys in the namespace for clearing.
             Since Memcached doesn't support key listing like Redis, this enables
             a best-effort tracking mechanism using a special tracking key to store
@@ -384,6 +388,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             lock_blocking_timeout=lock_blocking_timeout,
             **kwargs,
         )
+        self._lock_contention_threshold = lock_contention_threshold
         self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
 
     async def _track_key(self, key: str) -> None:
@@ -470,7 +475,9 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             )
 
         if self._named_gate_registry is None or self._named_gate_registry.closed:
-            self._named_gate_registry = _NamedGateRegistry(contention_threshold=1)
+            self._named_gate_registry = _NamedGateRegistry(
+                contention_threshold=self._lock_contention_threshold
+            )
 
     async def ready(self) -> bool:
         if self.connection is None:
@@ -481,6 +488,33 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             return True
         except ClientException:
             return False
+
+    def set_lock_contention_threshold(self, threshold: int) -> None:
+        """
+        Adjust the process-local contention serialization gate threshold at runtime.
+
+        Setting threshold to a very large value (e.g. maxsize)
+        effectively disables the gate.
+        Tasks currently waiting on the gate are unaffected until
+        they complete their current acquire cycle.
+
+        :param threshold: The new contention threshold (must be at least 1).
+        """
+        if threshold < 1:
+            raise ValueError("threshold must be at least 1")
+
+        self._lock_contention_threshold = threshold
+        if self._named_gate_registry is not None:
+            self._named_gate_registry.set_contention_threshold(threshold)
+
+    def disable_lock_contention_gate(self) -> None:
+        """
+        Effectively disable the process-local lock contention
+        serialization gate by setting threshold very high.
+        Tasks currently waiting on the gate are unaffected until
+        they complete their current acquire cycle.
+        """
+        self.set_lock_contention_threshold(2**31)
 
     def _assert_ready(self) -> None:
         """

@@ -370,6 +370,8 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         blocking: typing.Optional[bool] = None,
         blocking_timeout: typing.Optional[float] = None,
         reentrant: bool = False,
+        enforce_local_ttl: bool = False,
+        local_ttl_factor: float = 0.8,
     ) -> _AsyncLockContext[AsyncLock]:
         """
         Context manager to acquire a distributed lock for the given key.
@@ -392,6 +394,17 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :param blocking_timeout: Maximum time in seconds to wait for the lock if blocking is True. None means wait indefinitely.
         :param reentrant: Whether the lock should be reentrant for the same task/context. If True, the same task can acquire the
             lock multiple times without deadlocking itself. If False, acquiring the lock again in the same task will cause a deadlock.
+        :param enforce_local_ttl: Whether to enforce the TTL locally by cancelling the task when the TTL expires.
+            This is important to prevent unsafe execution without mutual exclusion when using distributed
+            locks with server-side TTL. Although this is not required if the (auto) release TTL is set to a high enough value
+            that exceeds the maximum expected execution time of the body, it is generally recommended to set this to `True`.
+            But this add some overhead of scheduling a local timer and cancelling the task, so it is optional to
+            allow for use cases that do not require strict local TTL enforcement.
+        :param local_ttl_factor: A factor to apply to the TTL for local enforcement when `enforce_local_ttl` is True.
+            Should be a value between 0 and 1 (boundary exclusive). This is to ensure the local TTL is slightly more conservative
+            than the server TTL to account for clock skew and network latency. For example, if the TTL is 10 seconds and the
+            factor is 0.8, then the local TTL will be 8 seconds. If the body is still running after 8 seconds, it will be cancelled,
+            even if the server lock has not yet expired.
         :return: An asynchronous context manager that acquires/releases the lock.
         """
         ttl = ttl if ttl is not None else self.lock_ttl
@@ -401,14 +414,18 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             if blocking_timeout is not None
             else self.lock_blocking_timeout
         )
+        local_ttl = None
+        if enforce_local_ttl and ttl is not None:
+            if not (0.0 < local_ttl_factor < 1.0):
+                raise ValueError("`local_ttl_factor` must be between 0 and 1 exclusive")
+            local_ttl = ttl * local_ttl_factor
+
         # Ensure to use a namespaced lock key so reset on backend clears locks too
         lock_name = self.get_key(name)
-        # Precompute release TTL to ensure that same values used to create the lock are what
-        # is used in the context. This ensure lock usage safety especially for distributed lock types
         lock = self.get_lock(name=lock_name, ttl=ttl, reentrant=reentrant)
         return _AsyncLockContext(
             lock,
-            ttl=ttl,
+            ttl=local_ttl,
             blocking=blocking,
             blocking_timeout=blocking_timeout,
         )

@@ -79,6 +79,12 @@ class LockConfig(TypedDict, total=False):
     """Whether to block when acquiring the lock."""
     blocking_timeout: typing.Optional[float]
     """Maximum time to wait for the lock in seconds."""
+    reentrant: bool
+    """Whether the lock should be reentrant (can be acquired multiple times by the same owner)."""
+    enforce_local_ttl: bool
+    """Whether to enforce the TTL locally by cancelling the task in the lock's context when the TTL expires."""
+    local_ttl_factor: float
+    """Factor to apply to the TTL for local enforcement. Should be between 0 and 1 exclusive."""
 
 
 class Stringable(typing.Protocol):

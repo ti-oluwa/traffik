@@ -1130,12 +1130,12 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             # Lock is acquired here using throttle.uid as key
 
             # Uses the owner throttle (no throttle argument needed)
-            await quota(cost=2)          # Entry 1: cost=2
-            await quota(cost=3)          # Aggregated into Entry 1: cost=5
-            await quota()                # Aggregated into Entry 1: cost=6
+            quota.consume(cost=2)          # Entry 1: cost=2
+            quota.consume(cost=3)          # Aggregated into Entry 1: cost=5
+            quota.consume()                # Aggregated into Entry 1: cost=6
 
             # Can still use other throttles
-            await quota(other_throttle, cost=1)  # Entry 2: different throttle
+            quota.consume(other_throttle, cost=1)  # Entry 2: different throttle
 
             if not await quota.check():
                 raise HTTPException(429, "Rate limit exceeded")
@@ -1143,7 +1143,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             result = await expensive_operation()  # Keep this fast!
 
         # On successful exit: quota consumed, then lock released
-        # On exception: quota NOT consumed (unless apply_on_error=True)
+        # On exception: quota **not** consumed (unless apply_on_error=True)
         ```
 
         Example with custom lock key and config:
@@ -1154,7 +1154,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             lock="user:123:api_calls",
             lock_config={"ttl": 30, "blocking_timeout": 5}
         ) as quota:
-            await quota(cost=2)
+            quota.consume(cost=2)
             await process()
         ```
 
@@ -1163,11 +1163,11 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         ```python
         async with throttle.quota(conn) as parent:
             # Lock acquired by parent
-            await parent(cost=2)
+            parent.consume(cost=2)
 
             async with parent.nested() as child:
                 # Child doesn't acquire its own lock (under parent's lock)
-                await child(cost=1)
+                child.consume(cost=1)
             # Child merges into parent's queue
 
         # Lock released after all quota consumed

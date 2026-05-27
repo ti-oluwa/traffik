@@ -266,22 +266,22 @@ class Header(typing.Generic[HTTPConnectionT]):
         return self.when("throttled")
 
     @classmethod
-    def LIMIT(cls, when: HeaderWhen[typing.Any]) -> Self:
+    def LIMIT(cls, *, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the maximum number of hits allowed in the current period."""
         return cls(lambda _, stat, __: f"{stat.rate.limit}", when=when)
 
     @classmethod
-    def REMAINING(cls, when: HeaderWhen[typing.Any]) -> Self:
+    def REMAINING(cls, *, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the number of hits remaining in the current period."""
         return cls(lambda _, stat, __: f"{stat.hits_remaining}", when=when)
 
     @classmethod
-    def RESET_MILLISECONDS(cls, when: HeaderWhen[typing.Any]) -> Self:
+    def RESET_MILLISECONDS(cls, *, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the time to wait (in milliseconds) before the next allowed request."""
         return cls(lambda _, stat, __: f"{stat.wait_ms}", when=when)
 
     @classmethod
-    def RESET_SECONDS(cls, when: HeaderWhen[typing.Any]) -> Self:
+    def RESET_SECONDS(cls, *, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the time to wait (in seconds) before the next allowed request."""
         return cls(lambda _, stat, __: f"{math.ceil(stat.wait_ms / 1000)}", when=when)
 

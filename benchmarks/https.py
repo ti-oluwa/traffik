@@ -6,6 +6,7 @@ Usage:
     python benchmarks/https.py --traffik-backend redis --traffik-strategy sliding-window-counter
     python benchmarks/https.py --scenarios low,high,burst --iterations 3
 """
+
 import argparse
 import asyncio
 import contextlib

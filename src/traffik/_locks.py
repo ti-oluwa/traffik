@@ -433,6 +433,10 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         # to prevent leaks in the pool reference accounting.
         weakref.finalize(self, self.discard)
 
+    def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
+        """Return True if the specified task (or current task if None) owns the lock."""
+        return self._lock.is_owner(task=task)
+
     async def acquire(
         self,
         blocking: bool = True,
@@ -623,10 +627,10 @@ class _AsyncRLock:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._owner: typing.Optional[asyncio.Task] = None
+        self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
         self._count: int = 0
 
-    def is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool:
+    def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
         return self._owner is (task or asyncio.current_task())
 
     def locked(self) -> bool:
@@ -729,18 +733,18 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
             and `LockTimeoutError` is raised. Also used as the acquire-wait
             upper bound when `blocking_timeout` is not set.
 
-            **Warning:** If the lock provided uses a release TTL, ensure to pass it as `ttl`
-            here. This is crucial for distributed `AsyncLock`s because if not set, the lock may have been
+            **Warning:** If the lock provided uses a release TTL, you may want to pass it as `ttl` here too.
+            This is crucial for distributed `AsyncLock`s because if not set, the lock may have been
             released (by TTL) on the distributed server (e.g redis server) but the client/task still thinks it's holding
             the lock and continues executing the body until it tries to release, which may cause unsafe execution
             without the mutual exclusion. To ensure that the TTL is is also enforced locally too, and also
-            propagated to the server if needed, pass the same TTL value here, but ideally the local TTL should 
+            propagated to the server if needed, pass the same TTL value here, but ideally the local TTL should
             be slightly more conservative (smaller) than the server TTL to account for clock skew and network latency.
 
         :param blocking: If `False`, fail immediately when the lock is busy.
         :param blocking_timeout: Maximum seconds to wait during acquire.
             Takes priority over `ttl` for the acquire-wait bound.
-        :param 
+        :param
         """
         self._lock = lock
         self._ttl = ttl
@@ -1006,10 +1010,9 @@ class _NamedGateRegistry:
         count is always decremented regardless of exceptions or early returns,
         and releases the gate handle if one was created.
 
-        Note: this is a synchronous context manager (`@contextmanager`, not
-        `@asynccontextmanager`) because the registry operations themselves
-        are synchronous. The yielded `_NamedGateHandle.acquire` is still async
-        and must be awaited by the caller.
+        **Note:** this is a synchronous context manager because the registry operations themselves
+        are synchronous. The yielded `_NamedGateHandle.acquire` is still async and must be
+        awaited by the caller.
 
         Usage looks like this:
 
@@ -1017,6 +1020,9 @@ class _NamedGateRegistry:
         with self._registry.gate(name) as gate:
             if gate is None:
                 return await self._lock.acquire(...)
+
+            # Acquire local gate first before proceeding to
+            # attempt distibuted lock acquisition
             if not await gate.acquire(timeout=...):
                 return False
             return await self._lock.acquire(...)
@@ -1161,8 +1167,7 @@ class _NamedGateHandle:
         """
         :param registry: Registry that created this handle. Used to
             decrement the waiter count on release.
-        :param name: Logical gate name. Used for waiter count management
-            only — not passed to the underlying asyncio.Lock.
+        :param name: Logical gate name. Used for waiter count management.
         :param lock: The shared asyncio.Lock for this gate name. Shared
             across all handles with the same name that are active
             simultaneously.
@@ -1325,12 +1330,6 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
         Gate wait:            3.0s
         Lock wait:            5.0s  (full timeout passed again)
         Total:                8.0s  Wrong — the caller expected to wait at most 5 seconds total.
-
-    **Do not use with reentrant locks.** The gate and the underlying
-    lock's reentrant ownership state are decoupled. A reentrant acquire
-    would attempt to re-acquire the gate after it has already been
-    released following the first acquire, which would either block
-    incorrectly or allow another task through.
     """
 
     __slots__ = ("_lock", "_name", "_registry")
@@ -1351,6 +1350,10 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
         self._lock = lock
         self._name = name
         self._registry = registry
+
+    def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
+        """Check if the current task (or provided task) owns the underlying lock."""
+        return self._lock.is_owner(task=task)
 
     async def acquire(
         self,
@@ -1400,6 +1403,17 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
         """
         loop = asyncio.get_running_loop()
         name = self._name
+
+        # If the current task already owns the underlying lock, we can skip the gate
+        # and delegate the ability to reenter the underlying lock to the underlying lock.
+        # That is, if the lock is reentrant, the task can reenter it as many times as it wants
+        # without going through the gate again. Else, the underlying lock will most likely
+        # raise on the reentrant acquire attempt.
+        if self._lock.is_owner():
+            return await self._lock.acquire(
+                blocking=blocking,
+                blocking_timeout=blocking_timeout,
+            )
 
         with self._registry.gate(name) as gate:
             if gate is None:

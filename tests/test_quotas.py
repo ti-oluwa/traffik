@@ -828,7 +828,7 @@ async def test_quota_context_nested_lock_deadlock_detection(
         async with throttle.quota(connection, lock=True) as parent:
             # Child using same lock key should raise error
             with pytest.raises(QuotaError, match="same lock key"):
-                async with parent.nested(lock=True, reentrant_lock=False):
+                async with parent.nested(lock=True):
                     pass
 
 
@@ -845,7 +845,9 @@ async def test_quota_context_nested_lock_reentrant(
 
         async with throttle.quota(connection, lock=True) as parent:
             # Should work with reentrant_lock=True
-            async with parent.nested(lock=True, reentrant_lock=True) as child:
+            async with parent.nested(
+                lock=True, lock_config={"reentrant": True}
+            ) as child:
                 await child(cost=2)
 
 

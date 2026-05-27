@@ -1,5 +1,6 @@
 """Type definitions and protocols."""
 
+import asyncio
 import typing
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -222,6 +223,15 @@ class StrategyStat(typing.Generic[MapT]):
 @typing.runtime_checkable
 class AsyncLock(typing.Protocol):
     """Protocol for asynchronous lock objects."""
+
+    def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
+        """
+        Return True if the specified task (or current task if None) owns the lock.
+
+        :param task: The task to check for ownership. If None, checks the current task.
+        :return: True if the specified task owns the lock, False otherwise.
+        """
+        ...
 
     async def acquire(
         self, blocking: bool, blocking_timeout: typing.Optional[float]

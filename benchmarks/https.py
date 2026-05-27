@@ -6,7 +6,6 @@ Usage:
     python benchmarks/https.py --traffik-backend redis --traffik-strategy sliding-window-counter
     python benchmarks/https.py --scenarios low,high,burst --iterations 3
 """
-
 import argparse
 import asyncio
 import contextlib
@@ -24,6 +23,7 @@ from fastapi import Depends, FastAPI, Request
 from slowapi import Limiter as SlowAPILimiter
 
 from traffik import HTTPThrottle, get_remote_address
+from traffik.backends.base import ThrottleBackend
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.backends.redis.coredis import RedisBackend
@@ -42,6 +42,7 @@ from traffik.strategies.token_bucket import (
     TokenBucketStrategy,
     TokenBucketWithDebtStrategy,
 )
+from traffik.throttles import ThrottleStrategy
 
 
 @dataclass
@@ -122,7 +123,7 @@ class ScenarioResult:
         return sorted_latencies[idx] * 1000
 
 
-def create_traffik_backend(config: BenchmarkConfig):
+def create_traffik_backend(config: BenchmarkConfig) -> ThrottleBackend:
     """Create Traffik backend based on configuration."""
     if config.traffik_backend == "redis":
         if not config.traffik_redis_url:
@@ -165,7 +166,7 @@ TRAFFIK_STRATEGIES = {
 }
 
 
-def create_traffik_strategy(config: BenchmarkConfig):
+def create_traffik_strategy(config: BenchmarkConfig) -> ThrottleStrategy:
     """Create Traffik strategy based on configuration."""
     strategy_cls = TRAFFIK_STRATEGIES.get(config.traffik_strategy.replace("_", "-"))
     if strategy_cls:

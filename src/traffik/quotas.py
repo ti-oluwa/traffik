@@ -187,7 +187,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
     - Retry with backoff: Configurable retry logic per quota entry
     - Context-wide locking: Lock acquired on entry, released on exit
 
-    Note:
+    **Note:** 
         When locking is enabled, the lock is held for the entire duration of the
         context. Keep operations within the context fast to avoid blocking other
         requests waiting for the same lock.
@@ -231,8 +231,6 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         "_consumed",
         "_cancelled",
         "_entered",
-        "_bound",
-        "_nested",
         "_queued_cost",
         "_applied_cost",
         "_exit_stack",
@@ -292,8 +290,6 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         self._consumed = False
         self._cancelled = False
         self._entered = False
-        self._bound = owner is not None
-        self._nested = parent is not None
 
         self._queued_cost = 0
         self._applied_cost = 0
@@ -321,12 +317,12 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
     @property
     def is_bound(self) -> bool:
         """Whether this quota context is bound to an owner throttle."""
-        return self._bound
+        return self.owner is not None
 
     @property
     def is_nested(self) -> bool:
         """Whether this quota context has a parent. Is this context nested?"""
-        return self._nested
+        return self.parent is not None
 
     @property
     def queued_cost(self) -> int:
@@ -334,7 +330,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         **Estimated** cost of all queued quota entries (including children).
 
         Note: This is an estimate since some throttles may use cost functions.
-        In those cases, we assume the throttle's defined cost or 1 as a fallback.
+        In those cases, we assume the throttle's defined cost is 1 as a fallback.
         """
         child_cost = sum(child.queued_cost for child in self._children)
         return self._queued_cost + child_cost
@@ -358,7 +354,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         self._entered = True
 
         # Acquire lock for the entire context if configured
-        if self._lock_key and self.owner and not self._nested:
+        if self._lock_key and self.owner and not self.is_nested:
             backend = self.owner.get_backend(self.connection)
             self._exit_stack = AsyncExitStack()
             lock_ctx = backend.lock(self._lock_key, **self.lock_config)
@@ -511,9 +507,9 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         improves performance.
 
         Rules for aggregation:
-        1. Both entries must use the SAME throttle instance (identity check)
-        2. Both entries must have the SAME context (exact dict equality)
-        3. Both entries must have FIXED costs (no cost functions)
+        1. Both entries must use the **same** throttle instance (identity check)
+        2. Both entries must have the **same** context (exact dict equality)
+        3. Both entries must have **fixed** costs (no cost functions)
         4. All retry configuration must match exactly:
            - `retry` count
            - `retry_on` condition (identity check for callables)
@@ -531,12 +527,11 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         :return: True if aggregation is possible, False otherwise.
         """
         # Both must be the exact same throttle instance
-        # Using `is` instead of `==` ensures we're checking identity, not equality
         if last_entry.throttle is not throttle:
             return False
 
         # Both must have identical context dictionaries
-        # Note: This checks exact equality - {"a": 1} != {"a": 1, "b": None}
+        # Note: This checks exact equality; {"a": 1} != {"a": 1, "b": None}
         if last_entry.context != context:
             return False
 
@@ -673,7 +668,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
         This performs a non-consuming check of the throttle's current state.
 
-        Note:
+        **Note:**
         This should be used as a best-effort pre-check only. The actual
         quota may change between this check and the eventual consumption
         (classic Time-of-Check to Time-of-Use issue).
@@ -775,7 +770,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             if not child._consumed:
                 child._merge_into_parent(mark_as_consumed=True)
 
-        # Apply all queued throttles
+        # Apply all queued throttles sequentially
         for entry in self._queue:
             await self._hit(entry)
 
@@ -803,7 +798,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             await quota(cost=5)
             await quota(throttle2, cost=3)
 
-            if not await validate_operation():
+            if not await some_validation():
                 await quota.cancel()  # Cancel queued quota entries
                 return error_response()
 
@@ -827,7 +822,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         self._queued_cost = 0
 
         # Detach from parent if nested
-        if self._nested and self in self.parent._children:  # type: ignore[union-attr]
+        if self.is_nested and self in self.parent._children:  # type: ignore[union-attr]
             self.parent._children.remove(self)  # type: ignore[union-attr]
 
         # Mark as discarded
@@ -941,7 +936,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 An error is raised if this is detected.
 
             2. **Lock Ordering**: If parent holds lock "A" and child acquires "B",
-                while another context holds "B" and wants "A", deadlock occurs.
+                while if child context that holds "B" wants "A", deadlock occurs.
                 Always acquire locks in a consistent order across your application.
 
             3. **Partial Atomicity**: The child releases its lock on exit, but the

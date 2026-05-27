@@ -149,7 +149,7 @@ class _AsyncRedisLock:
     __slots__ = (
         "_name",
         "_client",
-        "_owner_task",
+        "_owner",
         "_token",
         "_reentry_count",
         "_ttl",
@@ -184,7 +184,7 @@ class _AsyncRedisLock:
         """
         self._name = name
         self._client = client
-        self._owner_task: typing.Optional[asyncio.Task[typing.Any]] = None
+        self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
         self._token: typing.Optional[int] = None
         self._reentry_count: int = 0
         self._script_shas = script_shas
@@ -203,11 +203,11 @@ class _AsyncRedisLock:
         """Register and return the release script SHA."""
         return await client.script_load(cls.RELEASE_SCRIPT)
 
-    def _is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool:
+    def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
         """Return True if the current task owns this lock."""
         if task is None:
             task = asyncio.current_task()
-        return task is not None and task is self._owner_task
+        return task is not None and task is self._owner
 
     async def acquire(
         self,
@@ -230,7 +230,7 @@ class _AsyncRedisLock:
             )
 
         # Reentrant. Current task already holds the lock
-        if self._is_owner(task=current):
+        if self.is_owner(task=current):
             if not self._reentrant:
                 raise LockAcquisitionError(
                     f"Lock '{self._name}' is already acquired by the current task "
@@ -275,7 +275,7 @@ class _AsyncRedisLock:
                     raise LockAcquisitionError(exc) from exc
 
             if token:
-                self._owner_task = current
+                self._owner = current
                 self._token = token
                 self._reentry_count = 1
                 return True
@@ -304,12 +304,12 @@ class _AsyncRedisLock:
 
         Only when the reentrancy count reaches zero will the underlying Redis lock actually be released.
         """
-        if not self._is_owner():
-            current = asyncio.current_task()
+        current = asyncio.current_task()
+        if not self.is_owner(task=current):
             raise LockReleaseError(
                 f"Cannot release lock '{self._name}': "
                 f"current task {current!r} does not own the lock "
-                f"(owner: {self._owner_task!r})."
+                f"(owner: {self._owner!r})."
             )
 
         # Reentrant inner release. Just decrement the counter
@@ -354,7 +354,7 @@ class _AsyncRedisLock:
         finally:
             # Clear ownership regardless of whether Redis release succeeded.
             # If Redis release failed, the key will expire via TTL.
-            self._owner_task = None
+            self._owner = None
             self._token = None
             self._reentry_count = 0
             sys.stderr.flush()
@@ -397,7 +397,7 @@ class _AsyncRedLock:
         "_name",
         "_client",
         "_lock",
-        "_owner_task",
+        "_owner",
         "_reentry_count",
         "_ttl",
         "_reentrant",
@@ -425,7 +425,7 @@ class _AsyncRedLock:
         """
         self._name = name
         self._client = client
-        self._owner_task: typing.Optional[asyncio.Task[typing.Any]] = None
+        self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
         self._reentry_count: int = 0
         self._reentrant = reentrant
         self._ttl = math.ceil(ttl) if ttl is not None else 0
@@ -435,11 +435,11 @@ class _AsyncRedLock:
             auto_release_time=self._ttl,
         )
 
-    def _is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool:
+    def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
         """Return True if the current task owns this lock."""
         if task is None:
             task = asyncio.current_task()
-        return task is not None and task is self._owner_task
+        return task is not None and task is self._owner
 
     async def acquire(
         self,
@@ -462,7 +462,7 @@ class _AsyncRedLock:
             )
 
         # Reentrant. Current task already holds the lock
-        if self._is_owner(task=current):
+        if self.is_owner(task=current):
             if not self._reentrant:
                 raise LockAcquisitionError(
                     f"Lock '{self._name}' is already acquired by the current task "
@@ -490,7 +490,7 @@ class _AsyncRedLock:
             ) from exc
 
         if acquired:
-            self._owner_task = current
+            self._owner = current
             self._reentry_count = 1
             return True
         return False
@@ -502,12 +502,12 @@ class _AsyncRedLock:
         Only when the reentrancy count reaches zero will the underlying Redis lock
         actually be released.
         """
-        if not self._is_owner():
-            current = asyncio.current_task()
+        current = asyncio.current_task()
+        if not self.is_owner(task=current):
             raise LockReleaseError(
                 f"Cannot release lock '{self._name}': "
                 f"current task {current!r} does not own the lock "
-                f"(owner: {self._owner_task!r})."
+                f"(owner: {self._owner!r})."
             )
 
         # Reentrant inner release. Just decrement the counter
@@ -527,7 +527,7 @@ class _AsyncRedLock:
         finally:
             # Clear ownership regardless of whether Redis release succeeded.
             # If Redis release failed, the key will expire via TTL.
-            self._owner_task = None
+            self._owner = None
             self._reentry_count = 0
 
     async def __aenter__(self):
@@ -609,7 +609,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             - "redlock": Uses the Redlock algorithm for distributed locking, suitable for
               Redis clusters or multiple Redis instances.
         :param lock_contention_threshold: The threshold for the process-local contention serialization gate.
-            When the number of waiters for a lock exceeds this threshold, new acquirers will be serialized through 
+            When the number of waiters for a lock exceeds this threshold, new acquirers will be serialized through
             an `asyncio.Lock` to reduce Redis connection hammering and thundering herd issues.
         :param kwargs: Additional keyword arguments passed to the base `ThrottleBackend`.
         """
@@ -788,14 +788,11 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                 ttl=ttl,
                 reentrant=reentrant,
             )
-
-        if not reentrant:
-            return _GatedNamedLock(
-                lock=lock,
-                registry=self._named_gate_registry,  # type: ignore[arg-type]
-                name=name,
-            )
-        return lock
+        return _GatedNamedLock(
+            lock=lock,
+            registry=self._named_gate_registry,  # type: ignore[arg-type]
+            name=name,
+        )
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any

@@ -120,7 +120,7 @@ class _AsyncCoredisLock:
         "_name",
         "_client",
         "_lock",
-        "_owner_task",
+        "_owner",
         "_reentry_count",
         "_ttl",
         "_sleep",
@@ -151,17 +151,17 @@ class _AsyncCoredisLock:
         self._name = name
         self._client = client
         self._lock: typing.Optional[CoredisLock] = None
-        self._owner_task: typing.Optional[asyncio.Task[typing.Any]] = None
+        self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
         self._reentry_count: int = 0
         self._reentrant = reentrant
         self._sleep = sleep
         self._ttl = math.ceil(ttl) if ttl is not None else 0
 
-    def _is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool:
+    def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
         """Return True if the current task owns this lock."""
         if task is None:
             task = asyncio.current_task()
-        return task is not None and task is self._owner_task
+        return task is not None and task is self._owner
 
     async def acquire(
         self,
@@ -184,7 +184,7 @@ class _AsyncCoredisLock:
             )
 
         # Reentrant. Current task already holds the lock
-        if self._is_owner(task=current):
+        if self.is_owner(task=current):
             if not self._reentrant:
                 raise LockAcquisitionError(
                     f"Lock '{self._name}' is already acquired by the current task "
@@ -210,7 +210,7 @@ class _AsyncCoredisLock:
 
         if acquired:
             self._lock = lock
-            self._owner_task = current
+            self._owner = current
             self._reentry_count = 1
         return acquired
 
@@ -221,12 +221,12 @@ class _AsyncCoredisLock:
         Only when the reentrancy count reaches zero will the underlying Redis lock
         actually be released.
         """
-        if not self._is_owner():
-            current = asyncio.current_task()
+        current = asyncio.current_task()
+        if not self.is_owner(task=current):
             raise LockReleaseError(
                 f"Cannot release lock '{self._name}': "
                 f"current task {current!r} does not own the lock "
-                f"(owner: {self._owner_task!r})."
+                f"(owner: {self._owner!r})."
             )
 
         # Reentrant inner release. Just decrement the counter
@@ -243,13 +243,12 @@ class _AsyncCoredisLock:
             coredis.exceptions.LockReleaseError,
         ) as exc:
             # Lock might have expired or been released already
-            # Log and ignore release errors to avoid deadlocks
             raise LockReleaseError(f"Failed to release lock '{self._name}'") from exc
         finally:
             # Clear ownership regardless of whether Redis release succeeded.
             # If Redis release failed, the key will expire via TTL.
             self._lock = None
-            self._owner_task = None
+            self._owner = None
             self._reentry_count = 0
 
     async def __aenter__(self) -> Self:
@@ -386,7 +385,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         :param lock_sleep: Seconds to sleep between acquisition attempts when the lock is held.
             Smaller values reduce latency but increase Redis load. Default `0.05` (50 ms).
         :param lock_contention_threshold: The threshold for the process-local contention serialization gate.
-            When the number of waiters for a lock exceeds this threshold, new acquirers will be serialized through 
+            When the number of waiters for a lock exceeds this threshold, new acquirers will be serialized through
             an `asyncio.Lock` to reduce Redis connection hammering and thundering herd issues.
         :param kwargs: Additional keyword arguments forwarded to the base `ThrottleBackend`.
         """
@@ -566,13 +565,11 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             sleep=self._lock_sleep,  # polling interval
             reentrant=reentrant,
         )
-        if not reentrant:
-            return _GatedNamedLock(
-                lock=lock,
-                name=name,
-                registry=self._named_gate_registry,  # type: ignore[arg-type]
-            )
-        return lock
+        return _GatedNamedLock(
+            lock=lock,
+            name=name,
+            registry=self._named_gate_registry,  # type: ignore[arg-type]
+        )
 
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any

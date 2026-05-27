@@ -11,7 +11,7 @@ from types import TracebackType
 
 import msgpack  # type: ignore[import-untyped]
 from starlette.requests import HTTPConnection
-from typing_extensions import TypeGuard, Self
+from typing_extensions import Self, TypeGuard
 
 from traffik.config import (
     get_lock_blocking,
@@ -231,7 +231,7 @@ class TaskTimer:
             asyncio.TimeoutError("Operation timed out") if error is None else error
         )
         # Will be set to the current task when the timer is started
-        self._task: typing.Optional[asyncio.Task] = None
+        self._task: typing.Optional[asyncio.Task[typing.Any]] = None
         self._timer_handler: typing.Optional[asyncio.TimerHandle] = None
         self._done = False
 
@@ -283,7 +283,7 @@ class TaskTimer:
         :raises: The timeout error if the timeout was triggered and the exception type matches.
         """
         if sys.version_info[:2] >= (3, 11) and self._task is not None:
-            # Call uncancel to clear cancellation state from OpTimeout
+            # Call uncancel to clear cancellation state from TaskTimer
             self._task.uncancel()
         if exc_type == asyncio.CancelledError:
             # it's not a real cancellation, was a timeout

@@ -66,6 +66,10 @@ class _AsyncInMemoryLock:
         """Return True if the lock is held by any task"""
         return self._lock.locked()
 
+    def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
+        """Return True if the specified task (or current task if None) owns the lock."""
+        return self._lock.is_owner(task=task)
+
     async def acquire(
         self,
         blocking: bool = True,
@@ -76,7 +80,7 @@ class _AsyncInMemoryLock:
 
         :param blocking: If False, return immediately if the lock is held by another task.
             Only applicable to the initial acquire attempt, not reentrant attempts.
-        :param blocking_timeout: Max time (seconds) to wait if blocking is True
+        :param blocking_timeout: Maximum time (seconds) to wait if blocking is True
             (Not supported as ops are in-memory and very fast).
             Only applicable to the initial acquire attempt, not reentrant attempts.
         :return: True if the lock was acquired, False otherwise.
@@ -173,13 +177,13 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             If None, uses the global default from `traffik.config.get_lock_blocking_timeout()`.
         :param number_of_shards: Number of shards to split the in-memory shard into for concurrency.
         :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys. If None, no automatic cleanup is performed.
-        :param lock_kind: The type of lock to use for shard locks. "fair" uses a fair lock implementation which 
+        :param lock_kind: The type of lock to use for shard locks. "fair" uses a fair lock implementation which
             guarantees FIFO order for waiting tasks, while "unfair" may have better performance but does not guarantee order.
-        :param lock_pool_size: Maximum number of idle named locks to keep in the pool for reuse. 
+        :param lock_pool_size: Maximum number of idle named locks to keep in the pool for reuse.
             When the pool is exhausted, new locks will be created on demand.
-        :param lock_pool_headroom: The headroom multiplier for the named lock pool. 
-            When the number of idle locks in the pool exceeds `lock_pool_size * lock_pool_headroom`, 
-            the excess locks will be closed to free up resources. 
+        :param lock_pool_headroom: The headroom multiplier for the named lock pool.
+            When the number of idle locks in the pool exceeds `lock_pool_size * lock_pool_headroom`,
+            the excess locks will be closed to free up resources.
             This allows the pool to temporarily grow under high contention while still enforcing an upper
             bound on resource usage.
         :param kwargs: Additional keyword arguments.
@@ -303,9 +307,19 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
     ) -> _NamedLockHandle[_AsyncInMemoryLock]:
         """
-        Returns a reentrant lock for the given name.
+        Return a lock for the given name.
 
         This is meant for user-requested locks (e.g., strategy locking, multi-key operations).
+        The locks are managed in a pool to allow reuse and limit resource usage.
+
+        :param name: The name of the lock. This should be a unique identifier for the resource being locked.
+        :param ttl: Optional TTL for the lock in seconds. If specified, the lock will
+            automatically expire after the TTL if not released. If None, locks have no expiration.
+        :param reentrant: Whether the lock should allow reentrancy by the same task.
+            If True, the same task can acquire the lock multiple times without causing a deadlock.
+            If False, re-acquisition by the owning task will raise a `LockAcquisitionError`.
+            Defaults to False.
+        :return: A `_NamedLockHandle` for the requested lock.
         """
         self._assert_ready()
         return self._named_lock_pool.get(name)  # type: ignore[union-attr]

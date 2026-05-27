@@ -662,6 +662,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         lock_blocking_timeout: typing.Optional[float] = None,
         lock_pool_size: int = 128,
         lock_pool_headroom: int = 4,
+        prepopulate_lock_pool: bool = True,
         max_keys: int = 65536,
         number_of_shards: int = 64,
         max_value_size: int = 512,
@@ -689,6 +690,14 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             in seconds. `None` uses the global default.
         :param lock_pool_size: Maximum number of idle named-lock semaphores
             kept in the free pool.
+        :param lock_pool_headroom: Multiplier applied to `lock_pool_size` to
+            determine the total number of lock bytes reserved in shared memory.
+            This headroom allows for over-limit lock instances created under
+            traffic spikes to still acquire a byte index rather than raising
+            `RuntimeError` when the pool is exhausted. Total lock bytes reserved
+            is `lock_pool_size * lock_pool_headroom`.
+        :param prepopulate_lock_pool: Whether to pre-populate the named lock pool with idle locks up to `lock_pool_size` on initialization.
+             Pre-populating can reduce latency for the first few lock acquisitions at the cost of using more resources upfront.
         :param max_keys: Maximum number of distinct live keys across all shards
             at any one time.
         :param number_of_shards: Number of independent shards. Each shard gets
@@ -841,9 +850,13 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         # Byte pool is created now but the actual `_SharedMemoryLockBytePool` is
         # created in initialize() once we know the shared memory layout
         self._lock_byte_pool: typing.Optional[_SharedMemoryLockBytePool] = None
-        self._named_lock_pool: typing.Optional[
+        self._reentrant_lock_pool: typing.Optional[
             _NamedLockPool[_AsyncSharedMemoryLock]
         ] = None
+        self._non_reentrant_lock_pool: typing.Optional[
+            _NamedLockPool[_AsyncSharedMemoryLock]
+        ] = None
+        self._prepopulate_lock_pool = prepopulate_lock_pool
 
         self._cleanup_task: typing.Optional[asyncio.Task[None]] = None
         self._initialized: bool = False
@@ -1069,9 +1082,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         )
         self._lock_byte_pool = byte_pool
 
-        if self._named_lock_pool is None or self._named_lock_pool.closed:
-            # Create the named lock pool wired to `_AsyncSharedMemoryLock`
-            def _make_lock() -> _AsyncSharedMemoryLock:
+        if self._reentrant_lock_pool is None or self._reentrant_lock_pool.closed:
+
+            def _make_reentrant_lock() -> _AsyncSharedMemoryLock:
                 nonlocal buffer, byte_pool
                 return _AsyncSharedMemoryLock(
                     buffer=buffer,
@@ -1081,14 +1094,36 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     reentrant=True,
                 )
 
-            self._named_lock_pool = _NamedLockPool(
-                factory=_make_lock,
+            self._reentrant_lock_pool = _NamedLockPool(
+                factory=_make_reentrant_lock,
                 max_size=self._lock_pool_size,
                 headroom=self._lock_pool_headroom,
             )
 
-        # Pre-populate named lock pool
-        self._named_lock_pool.populate()
+        if (
+            self._non_reentrant_lock_pool is None
+            or self._non_reentrant_lock_pool.closed
+        ):
+
+            def _make_non_reentrant_lock() -> _AsyncSharedMemoryLock:
+                nonlocal buffer, byte_pool
+                return _AsyncSharedMemoryLock(
+                    buffer=buffer,
+                    byte_pool=byte_pool,
+                    max_spins_before_backoff=4,
+                    spin_max_delay_seconds=0.005,
+                    reentrant=False,
+                )
+
+            self._non_reentrant_lock_pool = _NamedLockPool(
+                factory=_make_non_reentrant_lock,
+                max_size=self._lock_pool_size,
+                headroom=self._lock_pool_headroom,
+            )
+
+        if self._prepopulate_lock_pool:
+            self._reentrant_lock_pool.populate()
+            self._non_reentrant_lock_pool.populate()
 
         if self._cleanup_frequency is not None:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -2468,10 +2503,36 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         strategies within a single asyncio event loop.
 
         :param name: The logical lock name (should be a namespaced key).
+        :param ttl:
         :return: A `_NamedLockHandle`.
         """
         self._assert_ready()
-        return self._named_lock_pool.get(name)  # type: ignore[union-attr]
+        return (
+            self._reentrant_lock_pool.get(name)  # type: ignore[union-attr]
+            if reentrant
+            else self._non_reentrant_lock_pool.get(name)  # type: ignore[union-attr]
+        )
+
+    def lock(
+        self,
+        name: str,
+        ttl: typing.Optional[float] = None,
+        blocking: typing.Optional[bool] = None,
+        blocking_timeout: typing.Optional[float] = None,
+        reentrant: bool = False,
+        # Default to True to enforce TTL locally in the backend since locks are in-memory and local.
+        enforce_ttl_locally: bool = True,
+        local_ttl_factor: float = 1.0,
+    ):
+        return super().lock(
+            name=name,
+            ttl=ttl,
+            blocking=blocking,
+            blocking_timeout=blocking_timeout,
+            reentrant=reentrant,
+            enforce_ttl_locally=enforce_ttl_locally,
+            local_ttl_factor=local_ttl_factor,
+        )
 
     async def clear(self) -> None:
         """
@@ -2556,9 +2617,13 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 self._shared_memory.unlink()
             self._shared_memory = None
 
-        if self._named_lock_pool is not None:
-            self._named_lock_pool.close()
-            self._named_lock_pool = None
+        if self._reentrant_lock_pool is not None:
+            self._reentrant_lock_pool.close()
+            self._reentrant_lock_pool = None
+
+        if self._non_reentrant_lock_pool is not None:
+            self._non_reentrant_lock_pool.close()
+            self._non_reentrant_lock_pool = None
 
         # Close threadpool executor
         self._executor.shutdown(wait=False)

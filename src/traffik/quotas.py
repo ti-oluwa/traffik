@@ -728,7 +728,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         self,
         throttle: typing.Optional[Throttle[HTTPConnectionT]] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-    ) -> typing.Optional[StrategyStat]:
+    ) -> typing.Optional[StrategyStat[typing.Any]]:
         """
         Get the current throttle strategy statistics for the connection.
 

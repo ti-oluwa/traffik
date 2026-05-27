@@ -82,7 +82,7 @@ class LockConfig(TypedDict, total=False):
     """Maximum time to wait for the lock in seconds."""
     reentrant: bool
     """Whether the lock should be reentrant (can be acquired multiple times by the same owner)."""
-    enforce_local_ttl: bool
+    enforce_ttl_locally: bool
     """Whether to enforce the TTL locally by cancelling the task in the lock's context when the TTL expires."""
     local_ttl_factor: float
     """Factor to apply to the TTL for local enforcement. Should be between 0 and 1 exclusive."""

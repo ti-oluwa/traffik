@@ -65,28 +65,6 @@ token_generator = __TokenGenerator()
 AsyncLockT = typing.TypeVar("AsyncLockT", bound=AsyncLock)
 
 
-class _NoOpLock:
-    """
-    Lightweight no-op context manager.
-
-    Avoids using `contextlib.nullcontext()` for synchronization
-    semantics.
-    """
-
-    __slots__ = ()
-
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(
-        self,
-        exc_type: typing.Optional[type[BaseException]],
-        exc_value: typing.Optional[BaseException],
-        traceback: typing.Optional[TracebackType],
-    ) -> bool:
-        return False
-
-
 @typing.final
 class _NamedLockPool(typing.Generic[AsyncLockT]):
     """
@@ -392,6 +370,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
             async with pool.get("key'): # Reenter the underlying lock by getting another handle
                 # Nested code runs...
             # Reentry release
+
         # Final release
     # Pool closed
     ```

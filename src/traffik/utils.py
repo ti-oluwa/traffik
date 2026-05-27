@@ -271,7 +271,9 @@ class TaskTimer:
             self._task = task
             self._timer_handler = self._loop.call_later(self._timeout, self._on_timeout)
 
-    def _handle_timed_out(self, exc_type: typing.Optional[type[BaseException]]) -> None:
+    def _handle_timed_out(
+        self, exc_type: typing.Optional[typing.Type[BaseException]]
+    ) -> None:
         """
         Handle the case where the timeout was triggered.
 
@@ -289,7 +291,9 @@ class TaskTimer:
             # it's not a real cancellation, was a timeout
             raise self._error from None  # suppress context of cancellation
 
-    def stop(self, exc_type: typing.Optional[type[BaseException]] = None) -> None:
+    def stop(
+        self, exc_type: typing.Optional[typing.Type[BaseException]] = None
+    ) -> None:
         """
         Stop (and cancel) the timer, handling any timeout cancellation and propagation
         if the timer was triggered.
@@ -322,7 +326,7 @@ class TaskTimer:
 
     async def __aexit__(
         self,
-        exc_type: typing.Optional[type[BaseException]],
+        exc_type: typing.Optional[typing.Type[BaseException]],
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> bool:

@@ -13,7 +13,7 @@ from traffik._locks import (
     _AsyncFairRLock,
     _AsyncRLock,
     _NamedLockHandle,
-    _NamedLockPool,
+    _NamedLockPool, _AsyncLockContext,
 )
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError, LockAcquisitionError
@@ -152,6 +152,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         lock_kind: typing.Literal["fair", "unfair"] = "unfair",
         lock_pool_size: int = 128,
         lock_pool_headroom: int = 4,
+        prepopulate_lock_pool: bool = True,
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -186,6 +187,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             the excess locks will be closed to free up resources.
             This allows the pool to temporarily grow under high contention while still enforcing an upper
             bound on resource usage.
+        :param prepopulate_lock_pool: Whether to pre-populate the named lock pool with idle locks up to `lock_pool_size` on initialization.
+             Pre-populating can reduce latency for the first few lock acquisitions at the cost of using more resources upfront.
         :param kwargs: Additional keyword arguments.
         """
         kwargs.pop("persistent", None)
@@ -213,9 +216,13 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
         self._lock_pool_size = lock_pool_size
         self._lock_pool_headroom = lock_pool_headroom
-        self._named_lock_pool: typing.Optional[_NamedLockPool[_AsyncInMemoryLock]] = (
-            None
-        )
+        self._reentrant_lock_pool: typing.Optional[
+            _NamedLockPool[_AsyncInMemoryLock]
+        ] = None
+        self._non_reentrant_lock_pool: typing.Optional[
+            _NamedLockPool[_AsyncInMemoryLock]
+        ] = None
+        self._prepopulate_lock_pool = prepopulate_lock_pool
 
         self._cleanup_task: typing.Optional[asyncio.Task] = None
         self._cleanup_frequency = cleanup_frequency
@@ -231,8 +238,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         if not self._shards:
             self._shards = [OrderedDict() for _ in range(self._number_of_shards)]
 
-        if self._named_lock_pool is None or self._named_lock_pool.closed:
-            self._named_lock_pool = _NamedLockPool(
+        if self._reentrant_lock_pool is None or self._reentrant_lock_pool.closed:
+            self._reentrant_lock_pool = _NamedLockPool(
                 factory=lambda: _AsyncInMemoryLock(
                     lock=self._lock_cls(), reentrant=True
                 ),
@@ -240,8 +247,21 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 headroom=self._lock_pool_headroom,
             )
 
-        # Pre-populate named lock pool
-        self._named_lock_pool.populate()
+        if (
+            self._non_reentrant_lock_pool is None
+            or self._non_reentrant_lock_pool.closed
+        ):
+            self._non_reentrant_lock_pool = _NamedLockPool(
+                factory=lambda: _AsyncInMemoryLock(
+                    lock=self._lock_cls(), reentrant=False
+                ),
+                max_size=self._lock_pool_size,
+                headroom=self._lock_pool_headroom,
+            )
+
+        if self._prepopulate_lock_pool:
+            self._reentrant_lock_pool.populate()
+            self._non_reentrant_lock_pool.populate()
 
         if self._cleanup_task is None and self._cleanup_frequency:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -322,7 +342,32 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :return: A `_NamedLockHandle` for the requested lock.
         """
         self._assert_ready()
-        return self._named_lock_pool.get(name)  # type: ignore[union-attr]
+        return (
+            self._reentrant_lock_pool.get(name)  # type: ignore[union-attr]
+            if reentrant
+            else self._non_reentrant_lock_pool.get(name)  # type: ignore[union-attr]
+        )
+
+    def lock(
+        self,
+        name: str,
+        ttl: typing.Optional[float] = None,
+        blocking: typing.Optional[bool] = None,
+        blocking_timeout: typing.Optional[float] = None,
+        reentrant: bool = False,
+        # Default to True to enforce TTL locally in the backend since locks are in-memory and local.
+        enforce_ttl_locally: bool = True,
+        local_ttl_factor: float = 1.0,
+    ):
+        return super().lock(
+            name=name,
+            ttl=ttl,
+            blocking=blocking,
+            blocking_timeout=blocking_timeout,
+            reentrant=reentrant,
+            enforce_ttl_locally=enforce_ttl_locally,
+            local_ttl_factor=local_ttl_factor,
+        )
 
     # Note: Shard locks are not essentially needed in the `get`, `set`, `delete`,
     # `increment`, etc. methods (except in `multi_set` and `multi_get`). This because shard ops
@@ -607,6 +652,10 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     pass
             self._cleanup_task = None
 
-        if self._named_lock_pool is not None:
-            self._named_lock_pool.close()
-            self._named_lock_pool = None
+        if self._reentrant_lock_pool is not None:
+            self._reentrant_lock_pool.close()
+            self._reentrant_lock_pool = None
+
+        if self._non_reentrant_lock_pool is not None:
+            self._non_reentrant_lock_pool.close()
+            self._non_reentrant_lock_pool = None

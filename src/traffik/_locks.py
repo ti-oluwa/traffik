@@ -417,7 +417,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         """
         Initialize the lock handle.
 
-        :param pool: The `_NamedLockPool` instance that created this handle. Used for reference accounting on release.
+        :param pool: The `_NamedLockPool` instance that created this handle.
         :param name: Logical lock name.
         :param lock: Underlying pooled lock instance.
         """

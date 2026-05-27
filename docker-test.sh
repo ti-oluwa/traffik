@@ -46,6 +46,7 @@ Available commands:
   test-py310         Run tests on Python 3.10
   test-py311         Run tests on Python 3.11
   test-py312         Run tests on Python 3.12
+  test-py313         Run tests on Python 3.13
   dev                Start development environment with shell
   redis              Start Redis service only
   quality            Run code quality checks
@@ -81,7 +82,7 @@ build_images() {
 # Run full test suite
 run_tests() {
     print_info "Starting full test suite..."
-    docker compose up -f docker-compose.yml --build --abort-on-container-exit test
+    docker compose up -f compose.yml --build --abort-on-container-exit test
     print_success "Full test suite completed"
 }
 
@@ -102,39 +103,46 @@ run_native_tests() {
 # Run tests across all Python versions
 run_tests_matrix() {
     print_info "Running tests across Python versions..."
-    docker compose -f docker-compose.yml up --build --abort-on-container-exit \
-        test-py39 test-py310 test-py311 test-py312
+    docker compose -f compose.yml up --build --abort-on-container-exit \
+        test-py39 test-py310 test-py311 test-py312 test-py313
     print_success "Matrix tests completed"
 }
 
 run_py39_tests() {
     print_info "Running tests on Python 3.9..."
-    docker compose -f docker-compose.yml up --build --abort-on-container-exit test-py39
+    docker compose -f compose.yml up --build --abort-on-container-exit test-py39
     print_success "Python 3.9 tests completed"
 }
 run_py310_tests() {
     print_info "Running tests on Python 3.10..."
-    docker compose -f docker-compose.yml up --build --abort-on-container-exit test-py310
+    docker compose -f compose.yml up --build --abort-on-container-exit test-py310
     print_success "Python 3.10 tests completed"
 }
 run_py311_tests() {
     print_info "Running tests on Python 3.11..."
-    docker compose -f docker-compose.yml up --build --abort-on-container-exit test-py311
+    docker compose -f compose.yml up --build --abort-on-container-exit test-py311
     print_success "Python 3.11 tests completed"
 }
 
 # Run Python 3.12 tests
 run_py312_tests() {
     print_info "Running tests on Python 3.12..."
-    docker compose -f docker-compose.yml up --build --abort-on-container-exit test-py312
+    docker compose -f compose.yml up --build --abort-on-container-exit test-py312
     print_success "Python 3.12 tests completed"
+}
+
+# Run Python 3.13 tests
+run_py313_tests() {
+    print_info "Running tests on Python 3.13..."
+    docker compose -f compose.yml up --build --abort-on-container-exit test-py313
+    print_success "Python 3.13 tests completed"
 }
 
 # Start development environment
 start_dev() {
     print_info "Starting development environment..."
-    docker compose -f docker-compose.yml up --build -d redis
-    docker compose -f docker-compose.yml run --rm shell
+    docker compose -f compose.yml up --build -d dev
+    docker compose -f compose.yml run --rm shell
 }
 
 # Start Redis only
@@ -154,21 +162,21 @@ run_quality() {
 # Run coverage
 run_coverage() {
     print_info "Running tests with coverage..."
-    docker compose -f docker-compose.yml up --build --abort-on-container-exit coverage
+    docker compose -f compose.yml up --build --abort-on-container-exit coverage
     print_info "Coverage report generated in htmlcov/"
 }
 
 # Run CI suite
 run_ci() {
     print_info "Running CI..."
-    docker compose -f docker-compose.yml up --build --abort-on-container-exit ci
+    docker compose -f compose.yml up --build --abort-on-container-exit ci
     print_success "CI suite completed successfully!"
 }
 
 # Clean up
 cleanup() {
     print_info "Cleaning up Docker resources..."
-    docker compose -f docker-compose.yml down -v --remove-orphans
+    docker compose -f compose.yml down -v --remove-orphans
     docker system prune -f
     print_success "Cleanup completed"
 }
@@ -181,14 +189,14 @@ show_logs() {
 # Open shell
 open_shell() {
     print_info "Opening development shell..."
-    docker compose -f docker-compose.yml up -d redis
-    docker compose -f docker-compose.yml run --rm shell
+    docker compose -f compose.yml up -d redis
+    docker compose -f compose.yml run --rm shell
 }
 
 # Watch mode
 watch_tests() {
     print_info "Starting test watch mode..."
-    docker compose -f docker-compose.yml up --build test-watch
+    docker compose -f compose.yml up --build test-watch
 }
 
 # Main command handling

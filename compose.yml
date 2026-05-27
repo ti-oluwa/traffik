@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # Redis service for testing
+  # Service for testing
   redis:
     image: redis:7-alpine
     ports:

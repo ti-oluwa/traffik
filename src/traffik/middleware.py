@@ -9,7 +9,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import ConfigurationError, _build_exception_handler_getter
+from traffik.exceptions import (
+    BackendConnectionError,
+    ConfigurationError,
+    _build_exception_handler_getter,
+)
 from traffik.registry import ThrottleRule
 from traffik.throttles import Throttle
 from traffik.types import (
@@ -370,6 +374,7 @@ class ThrottleMiddleware:
         "backend",
         "get_exception_handler",
         "context",
+        "_backend_ok",
     )
 
     def __init__(
@@ -392,7 +397,11 @@ class ThrottleMiddleware:
 
         :param app: The ASGI application to wrap.
         :param middleware_throttles: A sequence of `MiddlewareThrottle` instances to apply.
-        :param backend: An optional throttle backend to use.
+        :param backend: An optional throttle backend to use. It is advised that this backend is
+            initialized and ready before starting the application. If not provided, the middleware will attempt to
+            retrieve a backend from the application context on each request, which allows it to work with backends
+            that are set up in the application's lifespan. However, for better performance, it's recommended to
+            provide the backend directly to the middleware if possible.
         :param exception_handler_getter: An optional callable that takes an exception and returns an ASGI exception handler.
         :param context: An optional mapping of context to pass to the throttles.
             This is merged with any context provided by individual throttles, with the
@@ -409,6 +418,8 @@ class ThrottleMiddleware:
         self.app = app
         self.middleware_throttles = _prep_throttles(middleware_throttles, sort=sort)
         self.backend = backend if backend is not None else get_throttle_backend(app)
+        # We set to True once we've successfully checked that the backend is ready once.
+        self._backend_ok = False
         self.get_exception_handler = exception_handler_getter
         self.context = context
 
@@ -441,7 +452,13 @@ class ThrottleMiddleware:
         # The backend context must be not closed on context exit.
         # It must also be persistent to ensure throttles can maintain
         # state across multiple connections.
-        async with backend(close_on_exit=False, persistent=True):
+        async with backend(
+            close_on_exit=False,
+            persistent=True,
+            initialized=self._backend_ok,  # Only initialize if the backend isn't OK
+        ):
+            # We can now say the backend is OK after a successful context entry
+            self._backend_ok = True
             context = self.context
             for throttle in self.middleware_throttles[typ]:
                 try:
@@ -450,6 +467,11 @@ class ThrottleMiddleware:
                         context=context,
                     )
                 except Exception as exc:
+                    if isinstance(exc, BackendConnectionError):
+                        # We pessimistically set the backend as not OK, so that we attempt to re-initialize it on the next request.
+                        # This helps in recovery in case of transient backend connection issues.
+                        self._backend_ok = False
+
                     # This approach allows custom throttles to raise custom exceptions
                     # that will be handled if they register an exception handler with
                     # the application. If not, the exception will propagate and the

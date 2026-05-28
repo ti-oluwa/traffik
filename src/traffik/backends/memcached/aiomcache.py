@@ -11,7 +11,7 @@ from types import TracebackType
 import aiomcache
 from aiomcache import ClientException
 
-from traffik._locks import _GatedNamedLock, _NamedGateRegistry, token_generator
+from traffik._locks import _GatedNamedLock, _NamedGateRegistry, get_token
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.memcached._utils import _parse_memcached_url
 from traffik.exceptions import (
@@ -191,7 +191,7 @@ class _AsyncMemcachedLock:
         # we generate our own unique token per acquisition attempt.
         # This helps prevent the "stale lock" problem but only
         # per process, not cross-process if clocks are skewed across processes.
-        token = str(token_generator.next())
+        token = get_token()
         start = monotonic()
         attempts = 0
         max_spins = self._max_spins_before_backoff
@@ -320,7 +320,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         lock_blocking: typing.Optional[bool] = None,
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
-        lock_contention_threshold: int = 4,
+        lock_contention_threshold: int = 1,
         track_keys: bool = False,
         **kwargs: typing.Any,
     ) -> None:

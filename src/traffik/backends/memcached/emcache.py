@@ -14,7 +14,7 @@ from types import TracebackType
 import emcache
 from typing_extensions import Self
 
-from traffik._locks import _GatedNamedLock, _NamedGateRegistry, token_generator
+from traffik._locks import _GatedNamedLock, _NamedGateRegistry, get_token
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.memcached._utils import _parse_memcached_url
 from traffik.exceptions import (
@@ -177,7 +177,7 @@ class _AsyncMemcachedLock:
 
         # We generate our own fencing token per acquisition attempt.
         # This helps prevent the "stale lock" problem per-process.
-        token = str(token_generator.next())
+        token = get_token()
         name_bytes = self._name_bytes
         token_bytes = token.encode()
         start = monotonic()
@@ -323,7 +323,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         lock_blocking: typing.Optional[bool] = None,
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
-        lock_contention_threshold: int = 4,
+        lock_contention_threshold: int = 1,
         track_keys: bool = False,
         autobatching: bool = False,
         ssl: bool = False,

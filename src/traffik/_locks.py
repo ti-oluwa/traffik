@@ -1,12 +1,13 @@
 """Locking utilities"""
 
 import asyncio
-import threading
+import itertools
+import os
+import secrets
 import typing
 import weakref
 from collections import deque
 from contextlib import asynccontextmanager, contextmanager
-from time import time_ns
 from types import TracebackType
 
 from typing_extensions import Self
@@ -20,46 +21,14 @@ from traffik.exceptions import (
 from traffik.types import AsyncLock
 from traffik.utils import TaskTimer
 
-
-@typing.final
-class __TokenGenerator:
-    """
-    A thread-safe fence token generator that produces unique, monotonically increasing integer tokens.
-
-    Each token is a combination of the current timestamp in nanoseconds and a sequence number
-    to ensure uniqueness even when multiple tokens are generated within the same nanosecond.
-
-    64-bit Token Structure:
-    - Upper 48 bits: Timestamp in nanoseconds.
-    - Lower 16 bits: Sequence number (0-65535).
-    """
-
-    __slots__ = ("_lock", "_last_timestamp", "_sequence_number")
-
-    def __init__(self):
-        self._lock = threading.Lock()
-        """Lock for thread-safe token generation."""
-        self._last_timestamp = 0
-        """Last timestamp in nanoseconds."""
-        self._sequence_number = 0
-        """Sequence number for tokens generated within the same nanosecond."""
-
-    def next(self) -> int:
-        """Generate the next unique fence token."""
-        with self._lock:
-            timestamp = int(time_ns())
-
-            if timestamp == self._last_timestamp:
-                self._sequence_number += 1
-            else:
-                self._last_timestamp = timestamp
-                self._sequence_number = 0
-
-            return (timestamp << 16) | self._sequence_number
+_PREFIX = secrets.token_hex(8)
+_PID = f"{os.getpid():08x}"
+_COUNTER = itertools.count()
 
 
-token_generator = __TokenGenerator()
-"""Global (fence) token generator instance."""
+def get_token() -> str:
+    """Return a safe/unique (fence) token."""
+    return f"{_PREFIX}{next(_COUNTER):016x}{_PID}"
 
 
 AsyncLockT = typing.TypeVar("AsyncLockT", bound=AsyncLock)
@@ -793,8 +762,8 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         self._acquired = True
 
         # Start the lock hold-time watchdog after the lock is confirmed acquired.
-        # `TaskTimer` schedules task.cancel() via `call_later`. The CancelledError
-        # that bubbles up through the body is then converted to LockTimeoutError
+        # `TaskTimer` schedules task.cancel() via `call_later`. The `CancelledError`
+        # that bubbles up through the body is then converted to `LockTimeoutError`
         # inside `__aexit__` before the lock is released.
         if self._ttl is not None:
             loop = asyncio.get_running_loop()
@@ -817,7 +786,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> None:
-        # Firt and most important, we need to exit `TaskTimer`
+        # First and most important, we need to exit `TaskTimer`
         # This must happen before the lock release so that:
         # - A normal exit cancels the `call_later` handle (hence no spurious fire).
         # - A TTL-fired exit converts `CancelledError` to `LockTimeoutError`.
@@ -1015,7 +984,7 @@ class _NamedGateRegistry:
         try:
             yield handle
         finally:
-            if handle is not None:
+            if handle is not None and handle._acquired:
                 handle.release()
             else:
                 # Release the waiter count for the None path directly,
@@ -1233,22 +1202,27 @@ class _NamedGateHandle:
         """
         Release the gate and decrement the registry waiter count.
 
-        Releases the asyncio.Lock if it was acquired (unblocking the next
+        Releases the `asyncio.Lock` if it was acquired (unblocking the next
         local task queued behind this gate) and decrements the waiter count
         in the registry (allowing the gate to be destroyed when no more
         tasks are racing for this name).
 
         Idempotent. Subsequent calls after the first are no-ops.
+        :raises LockReleaseError: If this handle was never acquired or has already
         """
         if self._released:
             return
 
-        self._released = True
+        if not self._acquired:
+            raise LockReleaseError(
+                f"Cannot release gate handle for '{self._name}' that was never acquired."
+            )
+
         try:
-            if self._acquired:
-                self._acquired = False
-                self._lock.release()
+            self._lock.release()
         finally:
+            self._released = True
+            self._acquired = False
             self._registry._release(self._name)
 
     async def __aenter__(self) -> Self:
@@ -1264,7 +1238,12 @@ class _NamedGateHandle:
         traceback: typing.Optional[TracebackType],
     ) -> None:
         """Release the gate."""
-        self.release()
+        if self._acquired:
+            self.release()
+        else:
+            # Even if we failed to acquire the gate, we still need to release
+            # our slot in the registry's waiter count.
+            self._registry._release(self._name)
 
 
 @typing.final
@@ -1380,9 +1359,6 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
             wait forever. Ignored when blocking=False.
         :return: True if the distributed lock was acquired, False otherwise.
         """
-        loop = asyncio.get_running_loop()
-        name = self._name
-
         # If the current task already owns the underlying lock, we can skip the gate
         # and delegate the ability to reenter the underlying lock to the underlying lock.
         # That is, if the lock is reentrant, the task can reenter it as many times as it wants
@@ -1394,7 +1370,7 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
                 blocking_timeout=blocking_timeout,
             )
 
-        with self._registry.gate(name) as gate:
+        with self._registry.gate(self._name) as gate:
             if gate is None:
                 # Below contention threshold. No gate required.
                 return await self._lock.acquire(
@@ -1416,10 +1392,13 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
                 )
 
             # Single deadline spanning gate wait and lock acquire.
-            deadline = loop.time() + blocking_timeout
-            gate_timeout = deadline - loop.time()
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+            deadline = now + blocking_timeout
+            gate_timeout = deadline - now
             if gate_timeout <= 0:
                 return False
+
             if not await gate.acquire(timeout=gate_timeout):
                 return False
 

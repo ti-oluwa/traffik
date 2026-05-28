@@ -27,7 +27,7 @@ from traffik import HTTPThrottle, get_remote_address
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
-from traffik.backends.redis.coredis import RedisBackend
+from traffik.backends.redis.aioredis import RedisBackend
 from traffik.registry import ThrottleRegistry
 from traffik.strategies.custom import GCRAStrategy
 from traffik.strategies.fixed_window import FixedWindowStrategy
@@ -124,7 +124,7 @@ class ScenarioResult:
         return sorted_latencies[idx] * 1000
 
 
-def create_traffik_backend(config: BenchmarkConfig) -> ThrottleBackend:
+def create_traffik_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typing.Any]:
     """Create Traffik backend based on configuration."""
     if config.traffik_backend == "redis":
         if not config.traffik_redis_url:
@@ -178,10 +178,11 @@ def create_traffik_strategy(config: BenchmarkConfig) -> ThrottleStrategy:
 def create_traffik_app(
     limit: int = 100, window: int = 60, config: Optional[BenchmarkConfig] = None
 ):
-    """Create FastAPI app with Traffik rate limiting.
+    """
+    Create FastAPI app with Traffik rate limiting.
 
     Returns (app, backend) tuple so callers can manage backend lifecycle
-    via ``async with backend():`` instead of relying on ASGI lifespan.
+    via `async with backend():` instead of relying on ASGI lifespan.
     """
     if config is None:
         config = BenchmarkConfig()

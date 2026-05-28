@@ -13,7 +13,8 @@ from traffik._locks import (
     _AsyncFairRLock,
     _AsyncRLock,
     _NamedLockHandle,
-    _NamedLockPool, _AsyncLockContext,
+    _NamedLockPool,
+    _AsyncLockContext,
 )
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError, LockAcquisitionError

@@ -580,7 +580,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         lock_blocking: typing.Optional[bool] = None,
         lock_ttl: typing.Optional[float] = None,
         lock_blocking_timeout: typing.Optional[float] = None,
-        lock_contention_threshold: int = 4,
+        lock_contention_threshold: int = 1,
         **kwargs: typing.Any,
     ) -> None:
         """

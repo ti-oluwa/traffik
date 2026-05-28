@@ -312,6 +312,10 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         Initialize the throttle backend ensuring it is ready for use.
 
+        This method should be a no-op if the backend is already initialized and ready.
+        `ready()` is the API available for checking if the backend is initialized ans
+        ready for use.
+
         Subclasses must implement this method to set up connections,
         create tables/collections, or perform any necessary setup.
         """
@@ -583,6 +587,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         app: typing.Optional[ASGIApp] = None,
         persistent: typing.Optional[bool] = None,
         close_on_exit: typing.Optional[bool] = None,
+        initialized: bool = False,
     ) -> "_BackendContext[Self]":
         """
         Create a throttle context for the backend.
@@ -600,7 +605,10 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
         :param close_on_exit: Whether to close the backend when exiting the context.
             If None, context will auto-close on exit, except if nested within another context.
-        :return: A context manager for the throttle backend.
+        :param initialized: Whether the backend is already initialized and initialization
+            and readiness check should be skipped. This is useful if you have already called `initialize()`
+            on the backend instance before creating the context, such as during application startup. 
+        :return: A context manager in which this throttle backend is set as the current context's backend.
         """
         if app is not None:
             # Ensure app context attribute exists and set the backend in
@@ -633,6 +641,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             backend=self,
             persistent=persistent_ctx,
             close_on_exit=close_ctx_on_exit,
+            initialized=initialized,
         )
 
 
@@ -644,15 +653,19 @@ ThrottleBackendTco = typing.TypeVar(
 class _BackendContext(typing.Generic[ThrottleBackendTco]):
     """
     Context manager for throttle backends.
+
+    The context sets the given backend as the current context's throttle backend 
+    on enter and resets it on exit.
     """
 
-    __slots__ = ("backend", "persistent", "close_on_exit", "_token")
+    __slots__ = ("backend", "persistent", "close_on_exit", "_token", "_initialized")
 
     def __init__(
         self,
         backend: ThrottleBackendTco,
         persistent: bool = False,
         close_on_exit: bool = True,
+        initialized: bool = False,
     ) -> None:
         """
         Initialize the backend context
@@ -660,17 +673,21 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
         :param backend: The throttle backend instance to manage in this context
         :param persistent: Whether to keep the backend state on context exit
         :param close_on_exit: Whether to close the backend connection on context exit
+        :param initialized: Whether the backend is already initialized and initialization
+            and readiness check should be skipped.
         """
         self.backend = backend
         self.persistent = persistent
         self.close_on_exit = close_on_exit
         self._token: typing.Optional[Token[typing.Optional[ThrottleBackend]]] = None
+        self._initialized = initialized
 
     async def __aenter__(self) -> ThrottleBackendTco:
         backend = self.backend
-        await backend.initialize()
-        if not await backend.ready():
-            raise BackendError("Throttle backend is not ready for operations.")
+        if not self._initialized:
+            await backend.initialize()
+            if not await backend.ready():
+                raise BackendError("Throttle backend is not ready for operations.")
 
         self._token = _backend_ctx.set(backend)
         return backend

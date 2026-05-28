@@ -664,7 +664,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         lock_pool_headroom: int = 4,
         prepopulate_lock_pool: bool = True,
         max_keys: int = 65536,
-        number_of_shards: int = 64,
+        number_of_shards: int = 10,
         max_value_size: int = 512,
         cleanup_frequency: typing.Optional[float] = None,
         shared_memory_name: typing.Optional[str] = None,

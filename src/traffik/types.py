@@ -241,6 +241,7 @@ class AsyncLock(typing.Protocol):
 
         :param blocking: If False, return immediately if the lock is held.
         :param blocking_timeout: Max time (seconds) to wait if blocking is True.
+            If the timeout is triggered return False. `None` means wait indefinitely.
         :return: True if the lock was acquired, False otherwise.
         """
         ...

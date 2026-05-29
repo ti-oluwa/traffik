@@ -1,6 +1,5 @@
 """Throttle decorator. For FastAPI only."""
 
-import asyncio
 import functools
 import inspect
 import typing
@@ -81,7 +80,7 @@ def _apply_throttle(
     # We need the throttle dependency to be the first parameter of the route
     # So that the rate limit check is done before any other operations or dependencies
     # are resolved/executed, improving the efficiency of implementation.
-    if asyncio.iscoroutinefunction(route):
+    if inspect.iscoroutinefunction(route):
         wrapper_code = f"""
 async def route_wrapper(
     {throttle_dep_param_name}: Annotated[typing.Any, Depends(throttle)],

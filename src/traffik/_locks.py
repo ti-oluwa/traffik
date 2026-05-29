@@ -5,7 +5,6 @@ import itertools
 import os
 import secrets
 import typing
-import weakref
 from collections import deque
 from contextlib import asynccontextmanager, contextmanager
 from types import TracebackType
@@ -14,21 +13,21 @@ from typing_extensions import Self
 
 from traffik.exceptions import (
     LockAcquisitionError,
-    LockError,
+    LockPoolError,
     LockReleaseError,
     LockTimeoutError,
 )
 from traffik.types import AsyncLock
 from traffik.utils import TaskTimer
 
-_PREFIX = secrets.token_hex(8)
-_PID = f"{os.getpid():08x}"
-_COUNTER = itertools.count()
+__PREFIX = secrets.token_hex(8)
+__PID = f"{os.getpid():08x}"
+__COUNTER = itertools.count()
 
 
 def get_token() -> str:
     """Return a safe/unique (fence) token."""
-    return f"{_PREFIX}{next(_COUNTER):016x}{_PID}"
+    return f"{__PREFIX}{next(__COUNTER):016x}{__PID}"
 
 
 AsyncLockT = typing.TypeVar("AsyncLockT", bound=AsyncLock)
@@ -75,8 +74,8 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         "_headroom",
         "_max_capacity",
         "_allocated",
-        "_free",
-        "_active",
+        "_idle",
+        "_in_use",
         "_closed",
     )
 
@@ -108,10 +107,10 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         self._max_capacity = max_size * headroom
         self._allocated = 0
 
-        self._free: list[AsyncLockT] = []
+        self._idle: typing.List[AsyncLockT] = []
         """Idle reusable lock instances."""
-        self._active: dict[str, tuple[AsyncLockT, int]] = {}
-        """Mapping of name to (lock, reference_count)"""
+        self._in_use: typing.Dict[str, typing.Tuple[AsyncLockT, int]] = {}
+        """Mapping of in-use names to (lock, reference_count)"""
         self._closed = False
 
     def get(self, name: str, /) -> "_NamedLockHandle[AsyncLockT]":
@@ -129,24 +128,24 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         :raises RuntimeError: If the pool allocation limit is exceeded.
         """
         if self._closed:
-            raise RuntimeError("Cannot get lock handle from closed pool.")
+            raise LockPoolError("Cannot get lock handle from closed pool.")
 
-        entry = self._active.get(name)
+        entry = self._in_use.get(name)
         if entry is not None:
             lock, refcount = entry
-            self._active[name] = (lock, refcount + 1)
+            self._in_use[name] = (lock, refcount + 1)
             return _NamedLockHandle(pool=self, name=name, lock=lock)
 
-        if self._free:
-            lock = self._free.pop()
+        if self._idle:
+            lock = self._idle.pop()
         else:
             if self._allocated >= self._max_capacity:
-                raise RuntimeError("Named lock pool maximum capacity exceeded.")
+                raise LockPoolError("Named lock pool maximum capacity exceeded.")
 
             lock = self._factory()
             self._allocated += 1
 
-        self._active[name] = (lock, 1)
+        self._in_use[name] = (lock, 1)
         return _NamedLockHandle(pool=self, name=name, lock=lock)
 
     @asynccontextmanager
@@ -189,26 +188,19 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         if self._closed:
             return
 
-        entry = self._active.get(name)
+        entry = self._in_use.get(name)
         if entry is None:
             return
 
         lock, refcount = entry
         if refcount > 1:
-            self._active[name] = (lock, refcount - 1)
+            self._in_use[name] = (lock, refcount - 1)
             return
 
-        del self._active[name]
+        del self._in_use[name]
 
-        if (
-            (locked := getattr(lock, "locked", None)) is not None
-            and callable(locked)
-            and locked()
-        ):
-            raise RuntimeError(f"Attempted to recycle locked lock for name '{name}'.")
-
-        if len(self._free) < self._max_size:
-            self._free.append(lock)
+        if len(self._idle) < self._max_size:
+            self._idle.append(lock)
             return
 
         # Discard the lock if it can't be recycled
@@ -238,17 +230,17 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         :param n: Number of locks to create. If None, fills the free list up to `max_size`.
         """
         if self._closed:
-            raise RuntimeError("Cannot populate locks in closed registry.")
+            raise LockPoolError("Cannot populate locks in closed registry.")
 
         if n is None:
-            n = self._max_size - len(self._free)
+            n = self._max_size - len(self._idle)
         else:
-            n = min(n, self._max_size - len(self._free))
+            n = min(n, self._max_size - len(self._idle))
 
         remaining_capacity = self._max_capacity - self._allocated
         n = min(n, remaining_capacity)
         for _ in range(n):
-            self._free.append(self._factory())
+            self._idle.append(self._factory())
             self._allocated += 1
 
     @property
@@ -278,17 +270,22 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
     @property
     def active_name_count(self) -> int:
         """Number of currently active logical lock names."""
-        return len(self._active)
+        return len(self._in_use)
 
     @property
     def active_reference_count(self) -> int:
         """Total active references across all names."""
-        return sum(refcount for _, refcount in self._active.values())
+        return sum(refcount for _, refcount in self._in_use.values())
 
     @property
     def free_count(self) -> int:
         """Number of reusable idle locks currently cached."""
-        return len(self._free)
+        return len(self._idle)
+
+    @property
+    def size(self) -> int:
+        """Return the current size of the lock pool. Both in-use and free"""
+        return len(self._in_use) + len(self._idle)
 
     @property
     def closed(self) -> bool:
@@ -307,13 +304,13 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
             return
 
         self._closed = True
-        for lock, _ in self._active.values():
+        for lock, _ in self._in_use.values():
             self._discard_lock(lock)
-        self._active.clear()
+        self._in_use.clear()
 
-        for lock in self._free:
+        for lock in self._idle:
             self._discard_lock(lock)
-        self._free.clear()
+        self._idle.clear()
 
 
 @typing.final
@@ -377,9 +374,6 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         # an already used (released) named lock handle, has we have no way of
         # tracking that reliably back in the pool. Handles are therefore one-time use only.
         self._released = False
-        # Discard the handle if it is garbage collected without being released,
-        # to prevent leaks in the pool reference accounting.
-        weakref.finalize(self, self.discard)
 
     def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
         """Return True if the specified task (or current task if None) owns the lock."""
@@ -708,25 +702,10 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         :raises LockTimeoutError: Timed out waiting for the lock.
         :raises LockAcquisitionError: Non-blocking acquire returned False immediately.
         """
-        if self._blocking_timeout is not None:
-            try:
-                acquired = await asyncio.wait_for(
-                    self._lock.acquire(
-                        blocking=self._blocking,
-                        blocking_timeout=self._blocking_timeout,
-                    ),
-                    timeout=self._blocking_timeout,
-                )
-            except TimeoutError as exc:
-                raise LockTimeoutError(
-                    f"Timed out waiting to acquire {type(self._lock).__qualname__!r} lock after {self._blocking_timeout}s."
-                ) from exc
-        else:
-            acquired = await self._lock.acquire(
-                blocking=self._blocking,
-                blocking_timeout=self._blocking_timeout,
-            )
-
+        acquired = await self._lock.acquire(
+            blocking=self._blocking,
+            blocking_timeout=self._blocking_timeout,
+        )
         if not acquired:
             raise LockAcquisitionError(
                 f"Could not acquire {type(self._lock).__qualname__!r} lock (non-blocking)."
@@ -742,7 +721,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         """
         try:
             await self._lock.release()
-        except (LockError, RuntimeError, TimeoutError) as release_exc:
+        except (RuntimeError, TimeoutError) as release_exc:
             if exc_type is None:
                 raise LockReleaseError(
                     f"Failed to release {type(self._lock).__qualname__!r} lock."
@@ -876,7 +855,7 @@ class _NamedGateRegistry:
     def __init__(
         self,
         contention_threshold: int = 1,
-        lock_type: typing.Literal["fair", "unfair"] = "unfair",
+        lock_kind: typing.Literal["fair", "unfair"] = "unfair",
     ) -> None:
         """
         Initialize the gate registry.
@@ -896,7 +875,7 @@ class _NamedGateRegistry:
             Must be >= 1. Setting it to 1 (default) means any second waiter
             triggers a gate. Setting it to N means up to N tasks race freely
             before gating begins.
-        :param lock_type: Type of asyncio lock to use for gates. "fair" means
+        :param lock_kind: Kind of asyncio lock to use for gates. "fair" means
             FIFO ordering is respected, while "unfair" means no ordering guarantees.
             Fair locks may have higher overhead but can prevent starvation under high contention.
             Defaults to "fair". Unfair locks may be more performant in low contention scenarios but
@@ -909,7 +888,7 @@ class _NamedGateRegistry:
         self._gates: typing.Dict[str, typing.Union[_AsyncFairRLock, asyncio.Lock]] = {}
         self._waiters: typing.Dict[str, int] = {}
         self._closed = False
-        self._lock_cls = _AsyncFairRLock if lock_type == "fair" else asyncio.Lock
+        self._lock_cls = _AsyncFairRLock if lock_kind == "fair" else asyncio.Lock
 
     def get(self, name: str) -> typing.Optional["_NamedGateHandle"]:
         """
@@ -934,7 +913,8 @@ class _NamedGateRegistry:
             the underlying lock.
         """
         if self._closed:
-            raise RuntimeError("Cannot get gate handle from closed registry.")
+            # The gate registry is essentially a gate pool, hence the use of the `LockPoolError` here
+            raise LockPoolError("Cannot get gate handle from closed registry.")
 
         count = self._waiters.get(name, 0)
         self._waiters[name] = count + 1
@@ -1025,6 +1005,11 @@ class _NamedGateRegistry:
         if threshold < 1:
             raise ValueError("`contention_threshold` must be at least 1.")
         self._contention_threshold = threshold
+
+    @property
+    def size(self) -> int:
+        """Return the current size of the registry. Number of active gates"""
+        return len(self._gates)
 
     @property
     def contention_threshold(self) -> int:
@@ -1125,9 +1110,6 @@ class _NamedGateHandle:
         self._lock = lock
         self._acquired = False
         self._released = False
-        # Discard the handle if it is garbage collected without being released,
-        # to prevent leaks in the registry reference accounting.
-        weakref.finalize(self, self.discard)
 
     def discard(self) -> None:
         """

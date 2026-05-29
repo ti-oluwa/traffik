@@ -60,8 +60,8 @@ def _parse_memcached_nodes(
                     emcache.MemcachedHostAddress(parsed["host"], parsed["port"])
                 )
             elif ":" in node:
-                host, port_str = node.rsplit(":", 1)
-                result.append(emcache.MemcachedHostAddress(host, int(port_str)))
+                host, port = node.rsplit(":", 1)
+                result.append(emcache.MemcachedHostAddress(host, int(port)))
             else:
                 result.append(emcache.MemcachedHostAddress(node, 11211))
         else:
@@ -129,7 +129,7 @@ class _AsyncMemcachedLock:
             the outermost acquire/release round-trips to Memcached. Defaults to False.
         """
         self._name = name
-        self._name_bytes = name.encode()
+        self._name_bytes = name.encode("utf-8")
         self._client = client
         self._ttl = ttl if ttl is not None else 0
         self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
@@ -139,7 +139,7 @@ class _AsyncMemcachedLock:
         self._max_spins_before_backoff = max_spins_before_backoff
         self._spin_max_delay_seconds = spin_max_delay_seconds
 
-    def is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool:
+    def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
         """Return True if the current task owns this lock."""
         if task is None:
             task = asyncio.current_task()
@@ -178,8 +178,6 @@ class _AsyncMemcachedLock:
         # We generate our own fencing token per acquisition attempt.
         # This helps prevent the "stale lock" problem per-process.
         token = get_token()
-        name_bytes = self._name_bytes
-        token_bytes = token.encode()
         start = monotonic()
         attempts = 0
         max_spins = self._max_spins_before_backoff
@@ -188,20 +186,20 @@ class _AsyncMemcachedLock:
         while True:
             try:
                 await self._client.add(
-                    name_bytes,
-                    token_bytes,
+                    self._name_bytes,
+                    token.encode("utf-8"),
                     exptime=math.ceil(time() + self._ttl),
                     noreply=False,
                 )
                 # No exception means `add` succeeded and we now own the lock.
                 self._owner = current
                 self._token = token
-                self._reentry_count = 1
+                self._reentry_count = 0
                 return True
             except emcache.NotStoredStorageCommandError:
                 # Key already exists; lock is held by someone else.
                 pass
-            except (emcache.CommandError, Exception) as exc:
+            except (emcache.CommandError, emcache.ClusterNoAvailableNodes) as exc:
                 # Any other Memcached error during lock acquisition.
                 raise LockAcquisitionError(
                     f"Failed to acquire lock '{self._name}'"
@@ -237,7 +235,7 @@ class _AsyncMemcachedLock:
             )
 
         # Reentrant inner release. Just decrement the counter
-        if self._reentry_count > 1:
+        if self._reentry_count > 0:
             self._reentry_count -= 1
             return
 
@@ -249,13 +247,11 @@ class _AsyncMemcachedLock:
             # preventing accidental release of a lock acquired by another
             # instance after ours expired.
             item = await self._client.get(name_bytes)
-            if item is not None and item.value.decode() == token:
+            if item is not None and item.value.decode("utf-8") == token:
                 await self._client.delete(name_bytes, noreply=False)
             else:
                 sys.stderr.write(f"Warning: Lock '{self._name}' expired or stolen\n")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # nosec
+        except (emcache.CommandError, emcache.ClusterNoAvailableNodes) as exc:  # nosec
             # Lock might have expired or been released already.
             raise LockReleaseError(f"Failed to release lock '{self._name}'") from exc
         finally:
@@ -447,6 +443,72 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         self._lock_contention_threshold = lock_contention_threshold
         self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
 
+    async def initialize(self) -> None:
+        """Initialize the Memcached connection pool via emcache."""
+        if self.connection is None:
+            # Build optional kwargs for `create_client` only when values are set,
+            # so we don't pass None where `emcache` expects an absent argument.
+            create_kwargs: typing.Dict[str, typing.Any] = {
+                "max_connections": self.max_connections,
+                "min_connections": self.min_connections,
+                "autobatching": self.autobatching,
+                "ssl": self.ssl,
+                "ssl_verify": self.ssl_verify,
+            }
+            if self.purge_unused_connections_after is not None:
+                create_kwargs["purge_unused_connections_after"] = (
+                    self.purge_unused_connections_after
+                )
+            if self.connection_timeout is not None:
+                create_kwargs["connection_timeout"] = self.connection_timeout
+            if self.ssl_extra_ca is not None:
+                create_kwargs["ssl_extra_ca"] = self.ssl_extra_ca
+            if self.username is not None:
+                create_kwargs["username"] = self.username
+            if self.password is not None:
+                create_kwargs["password"] = self.password
+
+            self.connection = await emcache.create_client(
+                self._host_addresses, **create_kwargs
+            )
+
+        if self._named_gate_registry is None or self._named_gate_registry.closed:
+            self._named_gate_registry = _NamedGateRegistry(
+                contention_threshold=self._lock_contention_threshold,
+                lock_kind="unfair",
+            )
+
+    async def ready(self) -> bool:
+        """Return True if the client has been created and can serve traffic."""
+        return self.connection is not None
+
+    def set_lock_contention_threshold(self, threshold: int) -> None:
+        """
+        Adjust the process-local contention serialization gate threshold at runtime.
+
+        Setting threshold to a very large value (e.g. maxsize)
+        effectively disables the gate.
+        Tasks currently waiting on the gate are unaffected until
+        they complete their current acquire cycle.
+
+        :param threshold: The new contention threshold (must be at least 1).
+        """
+        if threshold < 1:
+            raise ValueError("threshold must be at least 1")
+
+        self._lock_contention_threshold = threshold
+        if self._named_gate_registry is not None:
+            self._named_gate_registry.set_contention_threshold(threshold)
+
+    def disable_lock_contention_gate(self) -> None:
+        """
+        Effectively disable the process-local lock contention
+        serialization gate by setting threshold very high.
+        Tasks currently waiting on the gate are unaffected until
+        they complete their current acquire cycle.
+        """
+        self.set_lock_contention_threshold(2**31)
+
     async def _track_key(self, key: str) -> None:
         """Best-effort add key to tracking set."""
         if self.connection is None:
@@ -511,71 +573,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             sys.stderr.write(f"Warning: Failed to untrack key '{key}': {exc}\n")
             sys.stderr.flush()
 
-    async def initialize(self) -> None:
-        """Initialize the Memcached connection pool via emcache."""
-        if self.connection is None:
-            # Build optional kwargs for `create_client` only when values are set,
-            # so we don't pass None where `emcache` expects an absent argument.
-            create_kwargs: typing.Dict[str, typing.Any] = {
-                "max_connections": self.max_connections,
-                "min_connections": self.min_connections,
-                "autobatching": self.autobatching,
-                "ssl": self.ssl,
-                "ssl_verify": self.ssl_verify,
-            }
-            if self.purge_unused_connections_after is not None:
-                create_kwargs["purge_unused_connections_after"] = (
-                    self.purge_unused_connections_after
-                )
-            if self.connection_timeout is not None:
-                create_kwargs["connection_timeout"] = self.connection_timeout
-            if self.ssl_extra_ca is not None:
-                create_kwargs["ssl_extra_ca"] = self.ssl_extra_ca
-            if self.username is not None:
-                create_kwargs["username"] = self.username
-            if self.password is not None:
-                create_kwargs["password"] = self.password
-
-            self.connection = await emcache.create_client(
-                self._host_addresses, **create_kwargs
-            )
-
-        if self._named_gate_registry is None or self._named_gate_registry.closed:
-            self._named_gate_registry = _NamedGateRegistry(
-                contention_threshold=self._lock_contention_threshold
-            )
-
-    async def ready(self) -> bool:
-        """Return True if the client has been created and can serve traffic."""
-        return self.connection is not None
-
-    def set_lock_contention_threshold(self, threshold: int) -> None:
-        """
-        Adjust the process-local contention serialization gate threshold at runtime.
-
-        Setting threshold to a very large value (e.g. maxsize)
-        effectively disables the gate.
-        Tasks currently waiting on the gate are unaffected until
-        they complete their current acquire cycle.
-
-        :param threshold: The new contention threshold (must be at least 1).
-        """
-        if threshold < 1:
-            raise ValueError("threshold must be at least 1")
-
-        self._lock_contention_threshold = threshold
-        if self._named_gate_registry is not None:
-            self._named_gate_registry.set_contention_threshold(threshold)
-
-    def disable_lock_contention_gate(self) -> None:
-        """
-        Effectively disable the process-local lock contention
-        serialization gate by setting threshold very high.
-        Tasks currently waiting on the gate are unaffected until
-        they complete their current acquire cycle.
-        """
-        self.set_lock_contention_threshold(2**31)
-
     def _assert_ready(self) -> None:
         """
         Raise `BackendConnectionError` if the backend has not been initialized.
@@ -587,7 +584,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
-    ) -> typing.Union[_AsyncMemcachedLock, _GatedNamedLock[_AsyncMemcachedLock]]:
+    ) -> _GatedNamedLock[_AsyncMemcachedLock]:
         """
         Get a distributed lock for the given name.
 

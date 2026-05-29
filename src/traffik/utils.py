@@ -271,9 +271,7 @@ class TaskTimer:
             self._task = task
             self._timer_handler = self._loop.call_later(self._timeout, self._on_timeout)
 
-    def _handle_timed_out(
-        self, exc_type: typing.Optional[typing.Type[BaseException]]
-    ) -> None:
+    def _handle_timed_out(self, exc_type: typing.Type[BaseException]) -> None:
         """
         Handle the case where the timeout was triggered.
 
@@ -287,7 +285,7 @@ class TaskTimer:
         if sys.version_info[:2] >= (3, 11) and self._task is not None:
             # Call uncancel to clear cancellation state from TaskTimer
             self._task.uncancel()
-        if exc_type == asyncio.CancelledError:
+        if exc_type is asyncio.CancelledError:
             # it's not a real cancellation, was a timeout
             raise self._error from None  # suppress context of cancellation
 
@@ -312,7 +310,7 @@ class TaskTimer:
             )
 
         self._done = True
-        if self._timed_out:
+        if self._timed_out and exc_type is not None:
             self._handle_timed_out(exc_type)
 
         # Cancel the timer if it's still active

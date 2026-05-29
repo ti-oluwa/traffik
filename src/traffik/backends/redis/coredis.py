@@ -22,7 +22,7 @@ import coredis.exceptions
 from coredis import Redis, RedisCluster, Sentinel
 from coredis.commands import Script
 from coredis.connection import TCPLocation
-from coredis.patterns.lock import Lock as CoredisLock
+from coredis.patterns.lock import Lock as _CoredisLock
 from typing_extensions import Self
 
 from traffik._locks import _GatedNamedLock, _NamedGateRegistry
@@ -105,6 +105,8 @@ class _AsyncCoredisLock:
     """
     Name-based, distributed Redis (un-fair) lock implementing the `AsyncLock` protocol.
 
+    Support redis cluster (eventual replication), but still does not implement the redlock algorithm.
+
     Non-reentrant by default but optionally reentrant per task.
 
     Adapts `coredis.patterns.lock.Lock` to the `AsyncLock` protocol.
@@ -150,7 +152,7 @@ class _AsyncCoredisLock:
         """
         self._name = name
         self._client = client
-        self._lock: typing.Optional[CoredisLock] = None
+        self._lock: typing.Optional[_CoredisLock] = None
         self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
         self._reentry_count: int = 0
         self._reentrant = reentrant
@@ -193,7 +195,7 @@ class _AsyncCoredisLock:
             self._reentry_count += 1
             return True
 
-        lock = CoredisLock(
+        lock = _CoredisLock(
             client=self._client,
             name=self._name,
             timeout=self._ttl,
@@ -238,10 +240,7 @@ class _AsyncCoredisLock:
         lock = self._lock
         try:
             await lock.release()  # type: ignore[union-attr]
-        except (
-            coredis.exceptions.LockError,
-            coredis.exceptions.LockReleaseError,
-        ) as exc:
+        except coredis.exceptions.LockError as exc:
             # Lock might have expired or been released already
             raise LockReleaseError(f"Failed to release lock '{self._name}'") from exc
         finally:
@@ -512,7 +511,8 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
         if self._named_gate_registry is None or self._named_gate_registry.closed:
             self._named_gate_registry = _NamedGateRegistry(
-                contention_threshold=self._lock_contention_threshold
+                contention_threshold=self._lock_contention_threshold,
+                lock_kind="fair",
             )
 
     async def ready(self) -> bool:
@@ -553,7 +553,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
-    ) -> typing.Union[_AsyncCoredisLock, _GatedNamedLock[_AsyncCoredisLock]]:
+    ) -> _GatedNamedLock[_AsyncCoredisLock]:
         """
         Return a distributed lock for the given name backed by `coredis.patterns.lock.Lock`.
         """

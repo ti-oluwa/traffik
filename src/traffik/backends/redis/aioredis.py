@@ -7,8 +7,10 @@ import typing
 from time import monotonic
 from types import TracebackType
 
+import pottery
 import redis.asyncio as aioredis
 from pottery import AIORedlock
+from redis.exceptions import NoScriptError, RedisError
 from typing_extensions import TypedDict
 
 from traffik._locks import _GatedNamedLock, _NamedGateRegistry
@@ -25,8 +27,6 @@ from traffik.types import (
     ThrottleErrorHandler,
 )
 
-# Lua script for atomic increment with conditional TTL
-# TTL is only set when key is created, but not on subsequent increments
 _INCREMENT_WITH_TTL_SCRIPT = """
 local key = KEYS[1]
 local amount = tonumber(ARGV[1])
@@ -48,7 +48,6 @@ else
 end
 """
 
-# Lua script for atomic clear on single round trip with no race conditions
 # Uses SCAN instead of KEYS to avoid blocking on large datasets
 _CLEAR_SCRIPT = """
 local pattern = ARGV[1]
@@ -191,7 +190,7 @@ class _AsyncRedisLock:
         self._max_spins_before_backoff = max_spins_before_backoff
         self._spin_max_delay_seconds = spin_max_delay_seconds
         self._reentrant = reentrant
-        self._ttl = ttl
+        self._ttl = str(ttl * 1000 if ttl else 0)
 
     @classmethod
     async def _register_acquire_script(cls, client: aioredis.Redis) -> str:
@@ -254,25 +253,25 @@ class _AsyncRedisLock:
                     2,  # KEYS
                     name,  # KEYS[1]
                     f"{name}:fence",  # KEYS[2]
-                    str(self._ttl or 0),
+                    self._ttl,
                 )
-
-            except aioredis.ResponseError as exc:
-                if "NOSCRIPT" in str(exc):
-                    # Script was flushed from Redis cache, re-register and retry
-                    # Update shared dict so backend and future locks see the new SHA
-                    self._script_shas["acquire"] = await self._client.script_load(  # type: ignore
-                        self.ACQUIRE_SCRIPT
-                    )
-                    token = await self._client.evalsha(  # type: ignore
-                        self._script_shas["acquire"],  # type: ignore[arg-type]
-                        2,  # KEYS
-                        name,  # KEYS[1]
-                        f"{name}:fence",  # KEYS[2]
-                        str(self._ttl or 0),
-                    )
-                else:
-                    raise LockAcquisitionError(exc) from exc
+            except NoScriptError:
+                # Script was flushed from Redis cache, re-register and retry
+                # Update shared dict so backend and future locks see the new SHA
+                self._script_shas["acquire"] = await self._client.script_load(  # type: ignore
+                    self.ACQUIRE_SCRIPT
+                )
+                token = await self._client.evalsha(  # type: ignore
+                    self._script_shas["acquire"],  # type: ignore[arg-type]
+                    2,  # KEYS
+                    name,  # KEYS[1]
+                    f"{name}:fence",  # KEYS[2]
+                    self._ttl,
+                )
+            except RedisError as exc:  # nosec
+                raise LockAcquisitionError(
+                    f"Failed to acquire lock '{self._name}'"
+                ) from exc
 
             if token:
                 self._owner = current
@@ -330,25 +329,20 @@ class _AsyncRedisLock:
             )
             if not released:
                 sys.stderr.write(f"Warning: Lock '{name}' expired or stolen\n")
-        except aioredis.ResponseError as exc:
-            if "NOSCRIPT" in str(exc):
-                # Script was flushed from Redis cache, re-register and retry
-                # Update shared dict so backend and future locks see the new SHA
-                self._script_shas["release"] = await self._client.script_load(  # type: ignore
-                    self.RELEASE_SCRIPT
-                )
-                await self._client.evalsha(  # type: ignore
-                    self._script_shas["release"],  # type: ignore[arg-type]
-                    1,  # num keys
-                    name,  # KEYS[1]
-                    token,  # ARGV[1]
-                )
-            else:
-                raise LockReleaseError(exc) from exc
-
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # nosec
+                sys.stderr.flush()
+        except NoScriptError:
+            # Script was flushed from Redis cache, re-register and retry
+            # Update shared dict so backend and future locks see the new SHA
+            self._script_shas["release"] = await self._client.script_load(  # type: ignore
+                self.RELEASE_SCRIPT
+            )
+            await self._client.evalsha(  # type: ignore
+                self._script_shas["release"],  # type: ignore[arg-type]
+                1,  # num keys
+                name,  # KEYS[1]
+                token,  # ARGV[1]
+            )
+        except RedisError as exc:  # nosec
             # Lock might have expired or been released already
             raise LockReleaseError(f"Failed to release lock '{name}'") from exc
         finally:
@@ -357,7 +351,6 @@ class _AsyncRedisLock:
             self._owner = None
             self._token = None
             self._reentry_count = 0
-            sys.stderr.flush()
 
     async def __aenter__(self):
         if not await self.acquire():
@@ -471,20 +464,12 @@ class _AsyncRedLock:
             self._reentry_count += 1
             return True
 
-        # Determine effective timeout
-        if not blocking:
-            # Since `pottery.AIORedlock` does not support a non-blocking mode,
-            # we use a very short timeout to approximate it.
-            effective_timeout = 1e-6
-        else:
-            effective_timeout = blocking_timeout or -1
-
-        # Attempt to acquire the Redis lock
+        effective_timeout = blocking_timeout if (blocking and blocking_timeout) else -1
         try:
             acquired = await self._lock.acquire(
                 blocking=blocking, timeout=effective_timeout
             )
-        except Exception as exc:  # nosec
+        except pottery.PrimitiveError as exc:
             raise LockAcquisitionError(
                 f"Failed to acquire lock '{self._name}'"
             ) from exc
@@ -519,9 +504,7 @@ class _AsyncRedLock:
         name = self._name
         try:
             await self._lock.release()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # nosec
+        except pottery.PrimitiveError as exc:
             # Lock might have expired or been released already
             raise LockReleaseError(f"Failed to release lock '{name}'") from exc
         finally:
@@ -672,7 +655,8 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
 
         if self._named_gate_registry is None or self._named_gate_registry.closed:
             self._named_gate_registry = _NamedGateRegistry(
-                contention_threshold=self._lock_contention_threshold
+                contention_threshold=self._lock_contention_threshold,
+                lock_kind="fair",
             )
 
     def set_lock_contention_threshold(self, threshold: int) -> None:
@@ -750,7 +734,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     async def _ensure_lock_scripts_shas(self) -> None:
         """Ensure the lock Lua scripts are registered and stored in the shared dict."""
         if self._lock_script_shas is None and self.connection is not None:
-            self._lock_script_shas = dict(  # type: ignore[assignment]
+            self._lock_script_shas = _LockScriptSHAs(  # type: ignore[assignment]
                 acquire=await _AsyncRedisLock._register_acquire_script(self.connection),
                 release=await _AsyncRedisLock._register_release_script(self.connection),
             )
@@ -766,11 +750,7 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
-    ) -> typing.Union[
-        _AsyncRedisLock,
-        _AsyncRedLock,
-        _GatedNamedLock[typing.Union[_AsyncRedisLock, _AsyncRedLock]],
-    ]:
+    ) -> _GatedNamedLock[typing.Union[_AsyncRedisLock, _AsyncRedLock]]:
         """Returns a distributed Redis lock for the given name."""
         self._assert_ready()
         if not self._use_redlock:
@@ -864,23 +844,19 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                 str(amount),  # ARGV[1]
                 str(ttl),  # ARGV[2]
             )
-            return int(result) if result is not None else 0
-        except aioredis.ResponseError as exc:
-            # Check if it's a NOSCRIPT error (script flushed from Redis cache)
-            if "NOSCRIPT" in str(exc):
-                # Re-register the script and retry
-                self._increment_with_ttl_sha = await self.connection.script_load(  # type: ignore
-                    self.INCREMENT_WITH_TTL_SCRIPT
-                )
-                result = await self.connection.evalsha(  # type: ignore
-                    self._increment_with_ttl_sha,  # type: ignore[arg-type]
-                    1,
-                    key,
-                    str(amount),
-                    str(ttl),
-                )
-                return int(result) if result is not None else 0
-            raise
+        except NoScriptError:
+            # Re-register the script and retry
+            self._increment_with_ttl_sha = await self.connection.script_load(  # type: ignore
+                self.INCREMENT_WITH_TTL_SCRIPT
+            )
+            result = await self.connection.evalsha(  # type: ignore
+                self._increment_with_ttl_sha,  # type: ignore[arg-type]
+                1,
+                key,
+                str(amount),
+                str(ttl),
+            )
+        return int(result) if result is not None else 0
 
     async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
         """
@@ -932,19 +908,16 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
                 0,  # no KEYS, pattern passed as ARGV
                 f"{self.namespace}:*",  # ARGV[1]
             )
-        except aioredis.ResponseError as exc:
-            if "NOSCRIPT" in str(exc):
-                # Script was flushed, re-register and retry
-                self._clear_sha = await self.connection.script_load(  # type: ignore
-                    self.CLEAR_SCRIPT
-                )
-                await self.connection.evalsha(  # type: ignore
-                    self._clear_sha,  # type: ignore[arg-type]
-                    0,
-                    f"{self.namespace}:*",
-                )
-            else:
-                raise
+        except NoScriptError:
+            # Script was flushed, re-register and retry
+            self._clear_sha = await self.connection.script_load(  # type: ignore
+                self.CLEAR_SCRIPT
+            )
+            await self.connection.evalsha(  # type: ignore
+                self._clear_sha,  # type: ignore[arg-type]
+                0,
+                f"{self.namespace}:*",
+            )
 
     async def reset(self) -> None:
         """Reset all keys in the namespace."""

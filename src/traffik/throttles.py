@@ -24,7 +24,7 @@ from traffik.config import (
     THROTTLE_DEFAULT_SCOPE,
     THROTTLED_STATE_KEY,
 )
-from traffik.exceptions import ConfigurationError
+from traffik.exceptions import _EXEMPT_EXCEPTIONS, ConfigurationError
 from traffik.headers import Header, Headers
 from traffik.rates import Rate
 from traffik.registry import (
@@ -136,7 +136,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         "_error_callback",
         "_connection_type",
         "_disabled",
-        "_update_lock",
+        "_guard",
         "__signature__",
         "__weakref__",
     )
@@ -307,7 +307,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self.dynamic_rules = dynamic_rules
         self.cache_ids = cache_ids
         self._disabled = False
-        self._update_lock = asyncio.Lock()
+        self._guard = asyncio.Lock()
         self.registry.register(uid, self)
 
         # Ensure that we copy the context to avoid potential mutation issues from outside after initialization
@@ -381,7 +381,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
     @property
     def is_disabled(self) -> bool:
-        """Returns True if this throttle is currently disabled.
+        """
+        Returns True if this throttle is currently disabled.
 
         When disabled, `hit(...)` returns immediately without consuming any quota.
         Use `disable()` and `enable()` to change this state.
@@ -398,7 +399,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         Safe to call from async error handlers (`on_error` callbacks).
         """
-        async with self._update_lock:
+        if self._disabled:
+            return
+        async with self._guard:
             self._disabled = True
 
     async def enable(self) -> None:
@@ -408,7 +411,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         Acquires the update lock then clears the disabled flag so that
         subsequent `hit` calls resume normal throttle evaluation.
         """
-        async with self._update_lock:
+        if not self._disabled:
+            return
+        async with self._guard:
             self._disabled = False
 
     async def update_rate(self, rate: RateType[HTTPConnectionT]) -> None:
@@ -418,7 +423,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :param rate: The new rate, a rate string (`"10/min"`), a `Rate`
             instance, or an async callable `(connection, context) -> Rate`.
         """
-        async with self._update_lock:
+        async with self._guard:
             self.rate = Rate.parse(rate) if isinstance(rate, str) else rate  # type: ignore[arg-type]
             self._uses_rate_func = callable(rate)
 
@@ -426,11 +431,11 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self, backend: ThrottleBackend[typing.Any, HTTPConnectionT]
     ) -> None:
         """
-        Replace the throttle's fixed backend atomically.
+        Replace the throttle's fixed backend.
 
         :param backend: The new backend instance.
         """
-        async with self._update_lock:
+        async with self._guard:
             self.backend = backend  # type: ignore[assignment]
 
     async def update_strategy(self, strategy: ThrottleStrategy) -> None:
@@ -439,17 +444,17 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         :param strategy: The new strategy callable.
         """
-        async with self._update_lock:
+        async with self._guard:
             self.strategy = strategy
 
     async def update_cost(self, cost: CostType[HTTPConnectionT]) -> None:
         """
-        Update the throttle cost atomically.
+        Update the throttle cost.
 
         :param cost: The new cost, a static integer or an async callable
             `(connection, context) -> int`.
         """
-        async with self._update_lock:
+        async with self._guard:
             self._uses_cost_func = callable(cost)
             self.cost = cost  # type: ignore[assignment]
 
@@ -457,11 +462,13 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self, min_wait_period: typing.Optional[int]
     ) -> None:
         """
-        Update the minimum wait period atomically.
+        Update the minimum wait period.
 
         :param min_wait_period: The new floor wait time in milliseconds, or None to remove it.
         """
-        async with self._update_lock:
+        if self.min_wait_period == min_wait_period:
+            return
+        async with self._guard:
             self.min_wait_period = min_wait_period
 
     async def update_handle_throttled(
@@ -471,11 +478,11 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         ],
     ) -> None:
         """
-        Replace the throttled handler atomically.
+        Replace the throttled handler.
 
         :param handle_throttled: New handler, or None to fall back to the backend default.
         """
-        async with self._update_lock:
+        async with self._guard:
             self.handle_throttled = handle_throttled  # type: ignore[assignment]
 
     async def update_headers(
@@ -488,12 +495,12 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         ],
     ) -> None:
         """
-        Replace the response header collection atomically.
+        Replace the response header collection.
 
         :param headers: New headers, a `Headers` instance,
             a plain mapping of `{name: Header}` pairs, or None to clear all headers.
         """
-        async with self._update_lock:
+        async with self._guard:
             if headers is None:
                 self._headers = typing.cast(Headers[HTTPConnectionT], Headers())
             elif not isinstance(headers, Headers):
@@ -505,26 +512,25 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self, identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]]
     ) -> None:
         """
-        Replace the connection identifier function atomically.
+        Replace the connection identifier function.
 
         The identifier determines how connections are keyed for throttle tracking.
         Updating it takes effect on the next `hit(...)` call.
 
         :param identifier: New identifier callable, or None to use the backend default.
         """
-        async with self._update_lock:
+        async with self._guard:
             self.identifier = identifier  # type: ignore[assignment]
 
     async def update_error_handler(
-        self,
-        handler: ThrottleErrorHandler[HTTPConnectionT, ThrottleExceptionInfo],
+        self, handler: ThrottleErrorHandler[HTTPConnectionT, ThrottleExceptionInfo]
     ) -> None:
         """
         Update the error handler for the throttle.
 
         :param handler: The custom error handler to set.
         """
-        async with self._update_lock:
+        async with self._guard:
             self._error_callback = handler
 
     async def get_headers(
@@ -855,7 +861,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> HTTPConnectionT:
         """
-        Throttle the connection based on the limit and time period.
+        Hit the connection throttle.
 
         Records a hit for the connection and applies throttling if necessary.
 
@@ -939,7 +945,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         key = self.get_namespaced_key(connection, connection_id, merged_context)
         try:
             wait_ms = await self.strategy(key, rate, backend, actual_cost)  # type: ignore[arg-type]
-        except (asyncio.CancelledError, SystemExit, KeyboardInterrupt):
+        except _EXEMPT_EXCEPTIONS:
             raise
         except BaseException as exc:
             sys.stderr.write(
@@ -1059,21 +1065,20 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         if stat is None:
             return True  # Can't determine, assume available (optimistic)
 
-        # Resolve cost
-        check_cost: int
+        resolved_cost: int
         if cost is not None:
-            check_cost = cost
+            resolved_cost = cost
         elif self._uses_cost_func:
             if context:
                 merged_context = self._default_context.copy()
                 merged_context.update(context)
             else:
                 merged_context = self._default_context
-            check_cost = await self.cost(connection, merged_context)  # type: ignore[operator]
+            resolved_cost = await self.cost(connection, merged_context)  # type: ignore[operator]
         else:
-            check_cost = self.cost  # type: ignore[assignment]
+            resolved_cost = self.cost  # type: ignore[assignment]
 
-        return stat.hits_remaining >= check_cost
+        return stat.hits_remaining >= resolved_cost
 
     def quota(
         self,
@@ -1214,26 +1219,26 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         from traffik.registry import ThrottleRule
 
         # Global throttle: 100 req/min across all methods
-        global_throttle = HTTPThrottle(uid="global", rate="100/min")
+        global_throttle = HTTPThrottle(uid="api:global", rate="100/min")
 
         # Write throttle: stricter 20 req/min for mutations only
-        write_throttle = HTTPThrottle(uid="writes", rate="20/min")
+        write_throttle = HTTPThrottle(uid="api:writes", rate="20/min")
 
         # Add a rule to the global throttle so it only applies to write methods,
         # effectively bypassing it for reads.
         write_throttle.add_rules(
-            "global",
+            "api:global",
             ThrottleRule(methods={"POST", "PUT", "PATCH", "DELETE"}),
         )
 
         # Now on a GET request:
         #   - global_throttle.hit(...) checks the rule -> method not in
-        #     {"POST","PUT","PATCH","DELETE"} -> rule returns False -> skipped
-        #   - write_throttle.hit(...) runs normally
+        #     {"POST","PUT","PATCH","DELETE"} -> rule returns `False` -> skipped
+        #   - write_throttle.hit(...) runs normally (does not apply)
         #
         # On a POST request:
         #   - global_throttle.hit(...) checks the rule -> method in set
-        #     -> rule returns True -> throttle applies
+        #     -> rule returns `True` -> throttle applies
         #   - write_throttle.hit(...) also applies
         ```
         """

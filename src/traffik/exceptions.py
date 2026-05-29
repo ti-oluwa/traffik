@@ -1,5 +1,6 @@
 """`traffik` exceptions and exception handling utilities."""
 
+import asyncio
 import http
 import typing
 
@@ -72,6 +73,12 @@ class LockReleaseError(LockError):
 
 class LockTimeoutError(LockError, TimeoutError):
     """Exception raised when a lock timeout occurs"""
+
+    pass
+
+
+class LockPoolError(LockError):
+    """Exception raised for lock pool errors"""
 
     pass
 
@@ -170,3 +177,7 @@ def _build_exception_handler_getter(
         return typing.cast(typing.Optional[TraffikExceptionHandler], handler)
 
     return handler_getter
+
+
+_EXEMPT_EXCEPTIONS = (asyncio.CancelledError, SystemExit, KeyboardInterrupt)
+"""Exceptions that should almost never be caught as they affect program control flow or termination."""

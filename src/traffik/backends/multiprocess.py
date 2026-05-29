@@ -346,7 +346,7 @@ class _AsyncSharedMemoryLock:
         current = asyncio.current_task()
         if current is None:
             raise LockAcquisitionError(
-                "Lock must be acquired from within an asyncio Task."
+                "Lock must be acquired from within an `asyncio.Task`."
             )
 
         # Reentrant. Current task already holds the lock

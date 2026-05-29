@@ -11,10 +11,10 @@ from types import TracebackType
 
 from traffik._locks import (
     _AsyncFairRLock,
+    _AsyncLockContext,
     _AsyncRLock,
     _NamedLockHandle,
     _NamedLockPool,
-    _AsyncLockContext,
 )
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError, LockAcquisitionError

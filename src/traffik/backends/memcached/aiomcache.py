@@ -9,7 +9,7 @@ from time import monotonic
 from types import TracebackType
 
 import aiomcache
-from aiomcache import ClientException
+from aiomcache.exceptions import ClientException
 
 from traffik._locks import _GatedNamedLock, _NamedGateRegistry, get_token
 from traffik.backends.base import ThrottleBackend
@@ -108,6 +108,7 @@ class _AsyncMemcachedLock:
 
     __slots__ = (
         "_name",
+        "_name_bytes",
         "_client",
         "_ttl",
         "_owner",
@@ -142,11 +143,12 @@ class _AsyncMemcachedLock:
             the outermost acquire/release round-trips to Memcached. Defaults to False.
         """
         self._name = name
+        self._name_bytes = name.encode("utf-8")
         self._client = client
         self._ttl = math.ceil(ttl) if ttl is not None else 0
         self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
         self._token: typing.Optional[str] = None
-        self._reentry_count: int = 0
+        self._reentry_count = 0
         self._reentrant = reentrant
         self._max_spins_before_backoff = max_spins_before_backoff
         self._spin_max_delay_seconds = spin_max_delay_seconds
@@ -200,15 +202,21 @@ class _AsyncMemcachedLock:
         while True:
             # `add()` is atomic, as only succeeds if key doesn't exist
             # Returns True if added, False if key already exists
-            added = await self._client.add(
-                self._name.encode(),
-                token.encode(),
-                exptime=self._ttl,
-            )
+            try:
+                added = await self._client.add(
+                    self._name_bytes,
+                    token.encode("utf-8"),
+                    exptime=self._ttl,
+                )
+            except ClientException as exc:
+                raise LockAcquisitionError(
+                    f"Failed to acquire lock '{self._name}'"
+                ) from exc
+
             if added:
                 self._owner = current
                 self._token = token
-                self._reentry_count = 1
+                self._reentry_count = 0
                 return True
 
             # Lock is held by someone else
@@ -244,25 +252,23 @@ class _AsyncMemcachedLock:
             )
 
         # Reentrant inner release. Just decrement the counter
-        if self._reentry_count > 1:
+        if self._reentry_count > 0:
             self._reentry_count -= 1
             return
 
         # Outermost release. Attempt Memcached release, but clear ownership regardless of outcome
-        name = self._name
+        name_bytes = self._name_bytes
         token = self._token
         try:
             # Ensure we only release/delete if we own the lock (token matches)
-            current = await self._client.get(name.encode())
-            if current and current.decode() == token:
-                await self._client.delete(name.encode())
+            current = await self._client.get(name_bytes)
+            if current and current.decode("utf-8") == token:
+                await self._client.delete(name_bytes)
             else:
-                sys.stderr.write(f"Warning: Lock '{name}' expired or stolen\n")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # nosec
+                sys.stderr.write(f"Warning: Lock '{self._name}' expired or stolen\n")
+        except ClientException as exc:  # nosec
             # Lock might have expired or been released already
-            raise LockReleaseError(f"Failed to release lock '{name}'") from exc
+            raise LockReleaseError(f"Failed to release lock '{self._name}'") from exc
         finally:
             # Clear ownership regardless of whether Memcached release succeeded.
             # If release failed, the key will expire via TTL.
@@ -476,7 +482,8 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
 
         if self._named_gate_registry is None or self._named_gate_registry.closed:
             self._named_gate_registry = _NamedGateRegistry(
-                contention_threshold=self._lock_contention_threshold
+                contention_threshold=self._lock_contention_threshold,
+                lock_kind="unfair",
             )
 
     async def ready(self) -> bool:
@@ -527,7 +534,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
-    ) -> typing.Union[_AsyncMemcachedLock, _GatedNamedLock[_AsyncMemcachedLock]]:
+    ) -> _GatedNamedLock[_AsyncMemcachedLock]:
         """
         Get a distributed lock for the given name.
 

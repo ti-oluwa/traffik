@@ -17,33 +17,33 @@ from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
-    "TieredRate",
-    "AdaptiveThrottle",
-    "PriorityQueue",
-    "QuotaWithRollover",
-    "TimeOfDay",
-    "CostBasedTokenBucket",
     "GCRA",
-    "DistributedFairness",
-    "GeographicDistribution",
-    "TieredRateStrategy",
-    "AdaptiveThrottleStrategy",
-    "PriorityQueueStrategy",
-    "QuotaWithRolloverStrategy",
-    "TimeOfDayStrategy",
-    "CostBasedTokenBucketStrategy",
-    "GCRAStrategy",
-    "DistributedFairnessStrategy",
-    "GeographicDistributionStrategy",
-    "TieredRateStatMetadata",
+    "AdaptiveThrottle",
     "AdaptiveThrottleStatMetadata",
-    "PriorityQueueStatMetadata",
-    "QuotaWithRolloverStatMetadata",
-    "TimeOfDayStatMetadata",
+    "AdaptiveThrottleStrategy",
+    "CostBasedTokenBucket",
     "CostBasedTokenBucketStatMetadata",
-    "GCRAStatMetadata",
+    "CostBasedTokenBucketStrategy",
+    "DistributedFairness",
     "DistributedFairnessStatMetadata",
+    "DistributedFairnessStrategy",
+    "GCRAStatMetadata",
+    "GCRAStrategy",
+    "GeographicDistribution",
     "GeographicDistributionStatMetadata",
+    "GeographicDistributionStrategy",
+    "PriorityQueue",
+    "PriorityQueueStatMetadata",
+    "PriorityQueueStrategy",
+    "QuotaWithRollover",
+    "QuotaWithRolloverStatMetadata",
+    "QuotaWithRolloverStrategy",
+    "TieredRate",
+    "TieredRateStatMetadata",
+    "TieredRateStrategy",
+    "TimeOfDay",
+    "TimeOfDayStatMetadata",
+    "TimeOfDayStrategy",
 ]
 
 
@@ -805,8 +805,7 @@ class PriorityQueueStrategy:
                     filtered_queue.append([ts, pri, c])
                     if pri >= priority:
                         higher_priority_cost += c
-                        if ts < oldest_high_priority_ts:
-                            oldest_high_priority_ts = ts
+                        oldest_high_priority_ts = min(ts, oldest_high_priority_ts)
 
             queue = filtered_queue
 
@@ -883,8 +882,7 @@ class PriorityQueueStrategy:
                 total_cost += c
                 if pri >= priority:
                     higher_priority_cost += c
-                    if ts < oldest_high_priority_ts:
-                        oldest_high_priority_ts = ts
+                    oldest_high_priority_ts = min(ts, oldest_high_priority_ts)
 
         queue = filtered_queue
         hits_remaining = max(rate.limit - higher_priority_cost, 0.0)

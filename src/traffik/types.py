@@ -13,17 +13,17 @@ from traffik.rates import Rate
 
 __all__ = [
     "EXEMPTED",
-    "HTTPConnectionT",
-    "HTTPConnectionTcon",
-    "WaitPeriod",
-    "Matchable",
-    "ExceptionHandler",
-    "LockConfig",
-    "Stringable",
+    "AsyncLock",
     "ConnectionIdentifier",
     "ConnectionThrottledHandler",
     "Dependency",
-    "AsyncLock",
+    "ExceptionHandler",
+    "HTTPConnectionT",
+    "HTTPConnectionTcon",
+    "LockConfig",
+    "Matchable",
+    "Stringable",
+    "WaitPeriod",
 ]
 
 P = ParamSpec("P")

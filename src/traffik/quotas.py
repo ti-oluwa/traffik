@@ -10,7 +10,7 @@ from types import TracebackType
 from starlette.exceptions import HTTPException
 from typing_extensions import Self
 
-from traffik.backoff import (
+from traffik.backoff import (  # noqa
     DEFAULT_BACKOFF,
     ConstantBackoff,
     ExponentialBackoff,
@@ -42,12 +42,6 @@ _NON_RETRYABLE_EXCEPTIONS: typing.Tuple[typing.Type[BaseException], ...] = (
 )
 """Tuple of exceptions that should not be retried. They are considered non-retryable signals."""
 
-# Aliases for backwards compatibility
-ConstantBackoff = ConstantBackoff
-LinearBackoff = LinearBackoff
-LogarithmicBackoff = LogarithmicBackoff
-ExponentialBackoff = ExponentialBackoff
-
 
 def _resolve_lock_key(
     lock: typing.Union[bool, str, None],
@@ -76,16 +70,16 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
     """A quota entry queued for deferred consumption."""
 
     __slots__ = (
-        "throttle",
-        "cost",
-        "resolved_cost",
-        "context",
-        "retry",
-        "retry_on",
+        "_retry_type",
         "backoff",
         "base_delay",
+        "context",
+        "cost",
         "max_attempts",
-        "_retry_type",
+        "resolved_cost",
+        "retry",
+        "retry_on",
+        "throttle",
     )
 
     def __init__(
@@ -119,9 +113,9 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         # Determine retry_on type for fast checks during retries
         if retry_on is None:
             self._retry_type: typing.Optional[str] = None
-        elif isinstance(retry_on, tuple) and all(isinstance(t, type) for t in retry_on):
-            self._retry_type = "exception_type"
-        elif isinstance(retry_on, type):
+        elif isinstance(retry_on, type) or (
+            isinstance(retry_on, tuple) and all(isinstance(t, type) for t in retry_on)
+        ):
             self._retry_type = "exception_type"
         elif callable(retry_on) and inspect.iscoroutinefunction(retry_on):
             self._retry_type = "coroutine"
@@ -219,23 +213,23 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
     """
 
     __slots__ = (
-        "connection",
-        "_default_context",
-        "owner",
-        "apply_on_error",
-        "apply_on_exit",
-        "lock_config",
-        "parent",
-        "_lock_key",
-        "_queue",
+        "_applied_cost",
+        "_cancelled",
         "_children",
         "_consumed",
-        "_cancelled",
-        "_entered",
+        "_default_context",
         "_depth",
-        "_queued_cost",
-        "_applied_cost",
+        "_entered",
         "_exit_stack",
+        "_lock_key",
+        "_queue",
+        "_queued_cost",
+        "apply_on_error",
+        "apply_on_exit",
+        "connection",
+        "lock_config",
+        "owner",
+        "parent",
     )
 
     def __init__(
@@ -394,7 +388,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                     await self.apply()
             return None
 
-        except BaseException as exc:
+        except BaseException as exc:  # noqa
             # Store exception to raise after lock release
             exit_exc = exc
         finally:
@@ -556,10 +550,10 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         # For callables, we use identity check (`is`) because:
         # - Different lambda instances are never equal even with same code
         # - We want to ensure the exact same retry logic applies
-        if last_entry.retry_on is not retry_on:
-            # Special case: both None is OK
-            if not (last_entry.retry_on is None and retry_on is None):
-                return False
+        if last_entry.retry_on is not retry_on and not (
+            last_entry.retry_on is None and retry_on is None
+        ):  # Special case: both None is OK
+            return False
 
         # Backoff strategy must match
         # Using identity check because backoff objects may not implement __eq__

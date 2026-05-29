@@ -79,11 +79,11 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
     """
 
     __slots__ = (
-        "throttle",
-        "rule",
+        "__signature__",
         "_default_context",
         "cost",
-        "__signature__",
+        "rule",
+        "throttle",
     )
 
     def __init__(
@@ -369,12 +369,12 @@ class ThrottleMiddleware:
     """
 
     __slots__ = (
-        "app",
-        "middleware_throttles",
-        "backend",
-        "get_exception_handler",
-        "context",
         "_backend_ok",
+        "app",
+        "backend",
+        "context",
+        "get_exception_handler",
+        "middleware_throttles",
     )
 
     def __init__(

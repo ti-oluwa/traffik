@@ -13,7 +13,7 @@ import msgpack  # type: ignore[import-untyped]
 from starlette.requests import HTTPConnection
 from typing_extensions import Self, TypeGuard
 
-from traffik.config import (
+from traffik.config import (  # noqa
     get_lock_blocking,
     get_lock_blocking_timeout,
     get_lock_ttl,
@@ -22,14 +22,6 @@ from traffik.config import (
     set_lock_ttl,
 )
 from traffik.types import AwaitableCallable, T
-
-# For backwards compatibility
-get_lock_blocking = get_lock_blocking
-get_lock_blocking_timeout = get_lock_blocking_timeout
-get_lock_ttl = get_lock_ttl
-set_lock_blocking = set_lock_blocking
-set_lock_blocking_timeout = set_lock_blocking_timeout
-set_lock_ttl = set_lock_ttl
 
 
 def get_remote_address(connection: HTTPConnection) -> typing.Optional[str]:
@@ -201,13 +193,13 @@ class TaskTimer:
     """
 
     __slots__ = (
-        "_timed_out",
-        "_timeout",
+        "_done",
+        "_error",
         "_loop",
         "_task",
+        "_timed_out",
+        "_timeout",
         "_timer_handler",
-        "_error",
-        "_done",
     )
 
     def __init__(

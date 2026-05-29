@@ -35,6 +35,8 @@ dependencies = [
     "starlette>=0.14.0",
     "annotated-types>=0.7.0",
     "msgpack>=1.1.2",
+    "httpx>=0.28.1",
+    "rich>=15.0.0",
 ]
 
 [project.urls]
@@ -140,6 +142,7 @@ dev = [
     "memory-profiler>=0.61.0",
     "line-profiler>=5.0.0",
     "pymemcache>=4.0.0",
+    "click>=8.1.8",
 ]
 benchmark = [
     "slowapi>=0.1.4",

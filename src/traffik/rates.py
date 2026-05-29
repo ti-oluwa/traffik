@@ -11,14 +11,14 @@ class Rate:
     """Rate limit definition"""
 
     __slots__ = (
-        "limit",
         "expire",
         "is_subsecond",
-        "unlimited",
-        "rps",
+        "limit",
+        "rpd",
         "rph",
         "rpm",
-        "rpd",
+        "rps",
+        "unlimited",
     )
 
     def __init__(

@@ -19,3 +19,4 @@ build/
 *.bak
 *.tmp
 *.swp
+_benchmarks/

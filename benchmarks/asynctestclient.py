@@ -11,6 +11,16 @@ from starlette.types import Message, Scope
 from starlette.websockets import WebSocketDisconnect
 
 
+def _ensure_bytes(
+    val: typing.Union[str, bytes], /, *, encoding: str = "utf-8"
+) -> bytes:
+    return val if isinstance(val, bytes) else val.encode(encoding=encoding)
+
+
+def _ensure_str(val: typing.Union[str, bytes], /, *, encoding: str = "utf-8") -> str:
+    return val if isinstance(val, str) else val.decode(encoding=encoding)
+
+
 class AsyncWebSocketTestSession:
     """
     Asynchronous test session for WebSocket connections to ASGI applications.
@@ -281,15 +291,20 @@ class _ASGIAdapter(HTTPAdapter):
 
         # Include other request headers.
         headers += [
-            (key.lower().encode(), value.encode())
+            (
+                key.lower().encode(encoding="utf-8"),
+                _ensure_bytes(value, encoding="utf-8"),
+            )
             for key, value in request_headers.items()
         ]
 
         subprotocol = request_headers.get("sec-websocket-protocol", None)
         if subprotocol is None:
-            subprotocols: typing.Sequence[str] = []
+            subprotocols = []
         else:
-            subprotocols = [value.strip() for value in subprotocol.split(",")]
+            subprotocols = [
+                value.strip() for value in _ensure_str(subprotocol).split(",")
+            ]
 
         scope = {
             "type": "websocket",
@@ -401,7 +416,7 @@ class AsyncTestClient(Session):
             auth=auth,
             timeout=timeout,
             allow_redirects=allow_redirects,
-            proxies=proxies,
+            proxies=dict(proxies) if proxies else None,
             hooks=hooks,
             stream=stream,
             verify=verify,
@@ -440,7 +455,7 @@ class AsyncTestClient(Session):
         except _Upgrade as exc:
             session = exc.session
             if not isinstance(session, AsyncWebSocketTestSession):
-                raise RuntimeError(
+                raise RuntimeError(  # noqa
                     f"Expected `AsyncWebSocketTestSession`, got {type(session)}"
                 ) from exc
         else:

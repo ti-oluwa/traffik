@@ -9,6 +9,8 @@ import pytest
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.inmemory import InMemoryBackend
 
+logger = logging.getLogger(__name__)
+
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
 REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
@@ -36,7 +38,7 @@ def get_redis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
     if os.getenv("SKIP_REDIS_TESTS", "false").lower() in ("1", "true", "yes", "t"):
         raise SkipBackend("Skipping Redis backend tests as per environment setting.")
 
-    from traffik.backends.redis import RedisBackend
+    from traffik.backends.redis.aioredis import RedisBackend
 
     return RedisBackend(
         connection=REDIS_URL,
@@ -124,7 +126,7 @@ def _backend_gen(
         try:
             backend = backend_factory(namespace, persistent)
         except SkipBackend as exc:
-            logging.debug(f"Skipping backend: {exc}")
+            logger.debug(f"Skipping backend: {exc}")
             continue
         yield backend
 

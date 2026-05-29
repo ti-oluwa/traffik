@@ -1,6 +1,6 @@
 # Traffik
 
-Distributed rate limiting for FastAPI and Starlette. Handles everything from a single dev server to multi-process workers sharing state over Redis, Memcached, or POSIX shared memory whil still using the same throttle code throughout.
+Traffik provides rate limiting for FastAPI and Starlette applications. It has support for single dev server, single machine with multiple workers, and multiple machine with multiple workers, sharing state over Redis, Memcached, or POSIX shared memory.
 
 [![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
 [![Code Quality](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/code-quality.yaml)
@@ -311,14 +311,14 @@ throttle = HTTPThrottle(
     "api",
     rate="100/min",
     headers=Headers({
-        "X-RateLimit-Limit":     Header.LIMIT(when="always"),
+        "X-RateLimit-Limit": Header.LIMIT(when="always"),
         "X-RateLimit-Remaining": Header.REMAINING(when="always"),
-        "Retry-After":           Header.RESET_SECONDS(when="throttled"),
+        "Retry-After": Header.RESET_SECONDS(when="throttled"),
     }),
 )
 ```
 
-You can also resolve headers manually in a custom throttled handler:
+You can then resolve headers manually in a custom throttled handler or in your route:
 
 ```python
 from traffik.exceptions import ConnectionThrottled
@@ -358,7 +358,7 @@ throttle = HTTPThrottle(
 
 ## Deferred quota (QuotaContext)
 
-Sometimes you only want to consume quota if the operation actually succeeds, or you want to consume several throttles (sort-of)atomically:
+Sometimes you only want to consume quota if the operation actually succeeds, or you want to consume several throttles (sort-of) atomically:
 
 ```python
 async def create_order(request: Request):

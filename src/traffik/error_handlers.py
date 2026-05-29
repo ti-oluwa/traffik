@@ -15,16 +15,17 @@ from traffik.throttles import ThrottleExceptionInfo
 from traffik.types import BackoffStrategy, HTTPConnectionT, WaitPeriod
 
 __all__ = [
-    "backend_fallback",
-    "retry",
-    "failover",
     "CircuitBreaker",
+    "backend_fallback",
+    "failover",
+    "retry",
 ]
 
 
 def backend_fallback(
     backend: ThrottleBackend[typing.Any, HTTPConnectionT],
     fallback_on: typing.Tuple[typing.Type[BaseException], ...] = (BackendError,),
+    initialized: bool = False,
 ) -> typing.Callable[
     [HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]
 ]:
@@ -74,7 +75,7 @@ def backend_fallback(
         if not isinstance(exc, fallback_on):
             raise exc
 
-        if not await backend.ready():
+        if not initialized and not await backend.ready():
             await backend.initialize()
 
         throttle = exc_info["throttle"]

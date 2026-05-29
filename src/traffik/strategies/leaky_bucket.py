@@ -12,11 +12,11 @@ from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
     "LeakyBucket",
+    "LeakyBucketStatMetadata",
     "LeakyBucketStrategy",
     "LeakyBucketWithQueue",
-    "LeakyBucketWithQueueStrategy",
-    "LeakyBucketStatMetadata",
     "LeakyBucketWithQueueStatMetadata",
+    "LeakyBucketWithQueueStrategy",
 ]
 
 

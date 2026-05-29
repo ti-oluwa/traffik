@@ -12,12 +12,12 @@ from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
-    "SlidingWindowLog",
     "SlidingWindowCounter",
-    "SlidingWindowLogStrategy",
-    "SlidingWindowCounterStrategy",
-    "SlidingWindowLogStatMetadata",
     "SlidingWindowCounterStatMetadata",
+    "SlidingWindowCounterStrategy",
+    "SlidingWindowLog",
+    "SlidingWindowLogStatMetadata",
+    "SlidingWindowLogStrategy",
 ]
 
 
@@ -173,8 +173,7 @@ class SlidingWindowLogStrategy:
                     if ts_f > window_start:
                         valid_entries.append([ts_f, c_f])
                         current_cost_sum += c_f
-                        if ts_f < oldest_timestamp:
-                            oldest_timestamp = ts_f
+                        oldest_timestamp = min(ts_f, oldest_timestamp)
             except (ValueError, TypeError):
                 valid_entries = []
                 current_cost_sum = 0.0

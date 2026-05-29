@@ -12,11 +12,11 @@ from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
     "TokenBucket",
-    "TokenBucketWithDebt",
-    "TokenBucketStrategy",
-    "TokenBucketWithDebtStrategy",
     "TokenBucketStatMetadata",
+    "TokenBucketStrategy",
+    "TokenBucketWithDebt",
     "TokenBucketWithDebtStatMetadata",
+    "TokenBucketWithDebtStrategy",
 ]
 
 
@@ -485,7 +485,7 @@ class TokenBucketWithDebtStrategy:
         max_debt = self.max_debt
 
         full_key = backend.get_key(str(key))
-        bucket_key = bucket_key = f"{full_key}:tokenbucket:{capacity}:debt:{max_debt}"
+        bucket_key = f"{full_key}:tokenbucket:{capacity}:debt:{max_debt}"
 
         old_state_json = await backend.get(bucket_key)
         # If state exists, load tokens and last refill time

@@ -6,8 +6,8 @@ import typing
 
 __all__ = [
     "ConstantBackoff",
-    "LinearBackoff",
     "ExponentialBackoff",
+    "LinearBackoff",
     "LogarithmicBackoff",
 ]
 

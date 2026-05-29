@@ -52,14 +52,14 @@ from traffik.types import (
 )
 
 __all__ = [
-    "Throttle",
     "HTTPThrottle",
     "RequestThrottle",
+    "Throttle",
+    "ThrottleExceptionInfo",
     "WebSocketThrottle",
     "is_throttled",
-    "ThrottleExceptionInfo",
-    "websocket_throttled",
     "throttled",
+    "websocket_throttled",
 ]
 
 ThrottleStrategy = typing.Callable[
@@ -112,33 +112,33 @@ class Throttle(typing.Generic[HTTPConnectionT]):
     """Base connection throttle class"""
 
     __slots__ = (
-        "_id",
-        "uid",
-        "rate",
-        "identifier",
-        "backend",
-        "handle_throttled",
-        "strategy",
-        "cost",
-        "min_wait_period",
-        "registry",
-        "_rules",
-        "_rules_resolved",
-        "_rules_count",
-        "dynamic_rules",
-        "cache_ids",
-        "on_error",
-        "use_fixed_backend",
-        "_headers",
-        "_default_context",
-        "_uses_rate_func",
-        "_uses_cost_func",
-        "_error_callback",
-        "_connection_type",
-        "_disabled",
-        "_guard",
         "__signature__",
         "__weakref__",
+        "_connection_type",
+        "_default_context",
+        "_disabled",
+        "_error_callback",
+        "_guard",
+        "_headers",
+        "_id",
+        "_rules",
+        "_rules_count",
+        "_rules_resolved",
+        "_uses_cost_func",
+        "_uses_rate_func",
+        "backend",
+        "cache_ids",
+        "cost",
+        "dynamic_rules",
+        "handle_throttled",
+        "identifier",
+        "min_wait_period",
+        "on_error",
+        "rate",
+        "registry",
+        "strategy",
+        "uid",
+        "use_fixed_backend",
     )
 
     def __init__(
@@ -1006,11 +1006,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :return: A `StrategyStat` object containing the current throttling strategy statistics,
             or None if the connection is not being throttled or the throttle strategy does not support stats
         """
-        # We check if the strategy has a `get_stat` method. This is to ensure backward compatibility
-        # with the defined `ThrottleStrategy` type which does not include `get_stat(...)`.
-        if not hasattr(self.strategy, "get_stat"):
-            return None
-
         backend = self.get_backend(connection)
         identifier = self.identifier or backend.identifier
         if (connection_id := await identifier(connection)) is EXEMPTED:
@@ -1343,7 +1338,7 @@ def is_throttled(connection: HTTPConnection) -> bool:
 class HTTPThrottle(Throttle[Request]):
     """HTTP connection throttle"""
 
-    __slots__ = "use_method"
+    __slots__ = ("use_method",)
 
     def __init__(
         self,

@@ -9,7 +9,7 @@ from typing_extensions import Self
 
 from traffik.types import HTTPConnectionT, StrategyStat
 
-__all__ = ["Header", "Headers", "DEFAULT_HEADERS_ALWAYS", "DEFAULT_HEADERS_THROTTLED"]
+__all__ = ["DEFAULT_HEADERS_ALWAYS", "DEFAULT_HEADERS_THROTTLED", "Header", "Headers"]
 
 HeaderResolver = typing.Callable[
     [
@@ -120,12 +120,12 @@ class Header(typing.Generic[HTTPConnectionT]):
     """
 
     __slots__ = (
+        "_check",
+        "_hash",
+        "_is_static",
         "_raw",
         "_resolver",
-        "_check",
         "_when",
-        "_is_static",
-        "_hash",
     )
 
     def __init__(
@@ -347,7 +347,7 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
     the same contents will not disable the header.
     """
 
-    __slots__ = ("_raw", "_is_static")
+    __slots__ = ("_is_static", "_raw")
 
     def __init__(
         self,

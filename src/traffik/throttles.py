@@ -1080,6 +1080,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         return stat.hits_remaining >= resolved_cost
 
+    test = check  # Alias for convenience
+
     def quota(
         self,
         connection: HTTPConnectionT,

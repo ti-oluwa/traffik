@@ -14,7 +14,6 @@ import statistics
 import time
 import typing
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 import aiomcache
 import httpx
@@ -25,7 +24,6 @@ from slowapi import Limiter as SlowAPILimiter
 
 from traffik import HTTPThrottle, get_remote_address
 from traffik.backends.base import ThrottleBackend
-from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.backends.redis.aioredis import RedisBackend
 from traffik.registry import ThrottleRegistry
@@ -51,7 +49,7 @@ class BenchmarkConfig:
     """Configuration for benchmark execution."""
 
     # General settings
-    scenarios: List[str] = field(
+    scenarios: typing.List[str] = field(
         default_factory=lambda: [
             "low",
             "high",
@@ -67,16 +65,16 @@ class BenchmarkConfig:
     # Traffik configuration
     traffik_backend: str = "inmemory"  # inmemory, redis, memcached
     traffik_strategy: str = "fixed-window"  # fixed-window, sliding-window-counter, sliding-window-log, token-bucket, token-bucket-debt, leaky-bucket, leaky-bucket-queue
-    traffik_redis_url: Optional[str] = None
-    traffik_memcached_url: Optional[str] = None
+    traffik_redis_url: typing.Optional[str] = None
+    traffik_memcached_url: typing.Optional[str] = None
     # We will not track keys for memcached backend by default to avoid performance overhead
     traffik_memcached_track_keys: bool = False
 
     # SlowAPI configuration
     slowapi_backend: str = "inmemory"  # inmemory, redis, memcached
     slowapi_strategy: str = "fixed-window"  # fixed-window, sliding-window-counter, fixed-window-elastic-expiry, moving-window
-    slowapi_redis_url: Optional[str] = None
-    slowapi_memcached_url: Optional[str] = None
+    slowapi_redis_url: typing.Optional[str] = None
+    slowapi_memcached_url: typing.Optional[str] = None
 
 
 @dataclass
@@ -89,7 +87,7 @@ class ScenarioResult:
     successful_requests: int
     throttled_requests: int
     total_time: float
-    latencies: List[float]
+    latencies: typing.List[float]
 
     @property
     def requests_per_second(self) -> float:
@@ -124,7 +122,9 @@ class ScenarioResult:
         return sorted_latencies[idx] * 1000
 
 
-def create_traffik_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typing.Any]:
+def create_traffik_backend(
+    config: BenchmarkConfig,
+) -> ThrottleBackend[typing.Any, typing.Any]:
     """Create Traffik backend based on configuration."""
     if config.traffik_backend == "redis":
         if not config.traffik_redis_url:
@@ -176,7 +176,7 @@ def create_traffik_strategy(config: BenchmarkConfig) -> ThrottleStrategy:
 
 
 def create_traffik_app(
-    limit: int = 100, window: int = 60, config: Optional[BenchmarkConfig] = None
+    limit: int = 100, window: int = 60, config: typing.Optional[BenchmarkConfig] = None
 ):
     """
     Create FastAPI app with Traffik rate limiting.
@@ -254,7 +254,7 @@ async def flush_slowapi_storage(config: BenchmarkConfig) -> None:
 
 
 def create_slowapi_app(
-    limit: int = 100, window: int = 60, config: Optional[BenchmarkConfig] = None
+    limit: int = 100, window: int = 60, config: typing.Optional[BenchmarkConfig] = None
 ):
     """Create FastAPI app with SlowAPI rate limiting."""
     if config is None:
@@ -264,9 +264,11 @@ def create_slowapi_app(
     storage_uri = create_slowapi_backend(config)
 
     limiter = SlowAPILimiter(
-        key_func=lambda request: request.headers.get("X-Client-ID")
-        or get_remote_address(request)
-        or "anonymous",
+        key_func=lambda request: (
+            request.headers.get("X-Client-ID")
+            or get_remote_address(request)
+            or "anonymous"
+        ),
         storage_uri=storage_uri,
         strategy=config.slowapi_strategy.replace("_", "-"),
     )
@@ -588,7 +590,7 @@ async def run_distributed_test(library: str, config: BenchmarkConfig) -> Scenari
 
 async def run_benchmark_suite(
     library: str, config: BenchmarkConfig
-) -> Dict[str, List[ScenarioResult]]:
+) -> typing.Dict[str, typing.List[ScenarioResult]]:
     """Run all benchmark scenarios for a library."""
     print(f"\n{'=' * 60}")
     print(f"Running benchmarks for: {library}")
@@ -638,7 +640,7 @@ async def run_benchmark_suite(
     return results
 
 
-def aggregate_results(results: List[ScenarioResult]) -> ScenarioResult:
+def aggregate_results(results: typing.List[ScenarioResult]) -> ScenarioResult:
     """Aggregate multiple scenario results."""
     if not results:
         raise ValueError("No results to aggregate")
@@ -663,8 +665,8 @@ def aggregate_results(results: List[ScenarioResult]) -> ScenarioResult:
 
 
 def print_comparison(
-    traffik_results: Dict[str, List[ScenarioResult]],
-    slowapi_results: Dict[str, List[ScenarioResult]],
+    traffik_results: typing.Dict[str, typing.List[ScenarioResult]],
+    slowapi_results: typing.Dict[str, typing.List[ScenarioResult]],
 ):
     """Print comparison table of results."""
     print("\n" + "=" * 80)
@@ -868,7 +870,7 @@ def print_comparison(
 
 
 def print_single_library_results(
-    library: str, results: Dict[str, List[ScenarioResult]]
+    library: str, results: typing.Dict[str, typing.List[ScenarioResult]]
 ):
     """Print results for a single library."""
     print("\n" + "=" * 80)

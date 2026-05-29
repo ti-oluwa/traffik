@@ -724,6 +724,8 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 return False
         return True
 
+    test = check  # Alias for convenience
+
     async def stat(
         self,
         throttle: typing.Optional[Throttle[HTTPConnectionT]] = None,
@@ -863,7 +865,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             return isinstance(exc, entry.retry_on)  # type: ignore[arg-type]
 
         # Retry type is a callable here. Use precomputed `resolved_cost`
-        exc_info = dict(
+        exc_info = dict(  # noqa
             connection=self.connection,
             exception=exc,
             attempt=attempt,

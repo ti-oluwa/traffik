@@ -279,9 +279,11 @@ def create_slowapi_app(
     storage_uri = create_slowapi_backend(config)
 
     limiter = SlowAPILimiter(
-        key_func=lambda request: request.headers.get("X-Client-ID")
-        or get_remote_address(request)
-        or "anonymous",
+        key_func=lambda request: (
+            request.headers.get("X-Client-ID")
+            or get_remote_address(request)
+            or "anonymous"
+        ),
         storage_uri=storage_uri,
         strategy=config.slowapi_strategy.replace("_", "-"),
         default_limits=[f"{limit}/{window}second"],

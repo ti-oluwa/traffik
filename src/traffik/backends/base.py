@@ -607,7 +607,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             If None, context will auto-close on exit, except if nested within another context.
         :param initialized: Whether the backend is already initialized and initialization
             and readiness check should be skipped. This is useful if you have already called `initialize()`
-            on the backend instance before creating the context, such as during application startup. 
+            on the backend instance before creating the context, such as during application startup.
         :return: A context manager in which this throttle backend is set as the current context's backend.
         """
         if app is not None:
@@ -654,11 +654,11 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
     """
     Context manager for throttle backends.
 
-    The context sets the given backend as the current context's throttle backend 
+    The context sets the given backend as the current context's throttle backend
     on enter and resets it on exit.
     """
 
-    __slots__ = ("backend", "persistent", "close_on_exit", "_token", "_initialized")
+    __slots__ = ("_initialized", "_token", "backend", "close_on_exit", "persistent")
 
     def __init__(
         self,
@@ -707,7 +707,7 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
                 await backend.reset()
                 # Should raise `BackendError` due to wrap,
                 # but catch all to prevent context exit failure
-            except BaseException as exc:
+            except BaseException as exc:  # noqa
                 sys.stderr.write(
                     f"Error resetting throttle backend during context exit: {exc}\n"
                 )
@@ -716,8 +716,8 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
 
         if self.close_on_exit:
             try:
-                await backend.close()
-            except BaseException as exc:  # Same here
+                await asyncio.shield(backend.close())
+            except BaseException as exc:  # noqa  # Same here
                 sys.stderr.write(
                     f"Error closing throttle backend during context exit: {exc}\n"
                 )

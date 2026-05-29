@@ -9,7 +9,7 @@ authors = [
 maintainers = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
 ]
-license = { file = "LICENSE" }
+license-files = [ "LICENSE" ]
 keywords = [
     "starlette", "fastapi", "throttling", "rate-limiting", "api", "multiprocess",
     "distributed-systems", "redis", "memcached", "websocket", "asyncio", "middleware",
@@ -17,7 +17,6 @@ keywords = [
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",

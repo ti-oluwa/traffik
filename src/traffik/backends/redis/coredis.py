@@ -17,7 +17,6 @@ import typing
 from contextlib import AsyncExitStack
 from types import TracebackType
 
-import coredis
 import coredis.exceptions
 from coredis import Redis, RedisCluster, Sentinel
 from coredis.commands import Script
@@ -119,14 +118,14 @@ class _AsyncCoredisLock:
     """
 
     __slots__ = (
-        "_name",
         "_client",
         "_lock",
+        "_name",
         "_owner",
-        "_reentry_count",
-        "_ttl",
-        "_sleep",
         "_reentrant",
+        "_reentry_count",
+        "_sleep",
+        "_ttl",
     )
 
     def __init__(
@@ -734,7 +733,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             try:
                 # Close the connection pool and all underlying sockets. Safe to call multiple times.
                 await self._exit_stack.aclose()
-            except Exception as exc:
+            except coredis.exceptions.RedisError as exc:
                 sys.stderr.write(
                     f"Warning: error while closing coredis connection: {exc}\n"
                 )

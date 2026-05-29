@@ -107,16 +107,16 @@ class _AsyncMemcachedLock:
     """
 
     __slots__ = (
+        "_client",
+        "_max_spins_before_backoff",
         "_name",
         "_name_bytes",
-        "_client",
-        "_ttl",
         "_owner",
-        "_token",
-        "_reentry_count",
-        "_max_spins_before_backoff",
-        "_spin_max_delay_seconds",
         "_reentrant",
+        "_reentry_count",
+        "_spin_max_delay_seconds",
+        "_token",
+        "_ttl",
     )
 
     def __init__(

@@ -11,7 +11,6 @@ from types import TracebackType
 
 from traffik._locks import (
     _AsyncFairRLock,
-    _AsyncLockContext,
     _AsyncRLock,
     _NamedLockHandle,
     _NamedLockPool,
@@ -315,14 +314,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """Periodically reclaim expired entries. Runs as a background `asyncio.Task`."""
         assert self._cleanup_frequency
         while self._initialized:
-            try:
-                await asyncio.sleep(self._cleanup_frequency)
-                await self._cleanup()
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                # Never crash the cleanup loop. Keep the backend alive.
-                pass
+            await asyncio.sleep(self._cleanup_frequency)
+            await self._cleanup()
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False

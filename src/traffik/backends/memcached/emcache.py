@@ -65,12 +65,15 @@ def _parse_memcached_nodes(
             else:
                 result.append(emcache.MemcachedHostAddress(node, 11211))
         else:
-            raise ValueError(
+            raise TypeError(
                 f"Cannot parse Memcached node specifier: {node!r}. "
                 "Expected a (host, port) tuple, a 'memcached://host:port' URL, "
                 "or a 'host:port' string."
             )
     return result
+
+
+_EMCACHE_BASE_EXCEPTIONS = (emcache.CommandError, emcache.ClusterNoAvailableNodes)
 
 
 @typing.final
@@ -92,16 +95,16 @@ class _AsyncMemcachedLock:
     """
 
     __slots__ = (
+        "_client",
+        "_max_spins_before_backoff",
         "_name",
         "_name_bytes",
-        "_client",
-        "_ttl",
         "_owner",
-        "_token",
-        "_reentry_count",
-        "_max_spins_before_backoff",
-        "_spin_max_delay_seconds",
         "_reentrant",
+        "_reentry_count",
+        "_spin_max_delay_seconds",
+        "_token",
+        "_ttl",
     )
 
     def __init__(
@@ -199,7 +202,7 @@ class _AsyncMemcachedLock:
             except emcache.NotStoredStorageCommandError:
                 # Key already exists; lock is held by someone else.
                 pass
-            except (emcache.CommandError, emcache.ClusterNoAvailableNodes) as exc:
+            except _EMCACHE_BASE_EXCEPTIONS as exc:
                 # Any other Memcached error during lock acquisition.
                 raise LockAcquisitionError(
                     f"Failed to acquire lock '{self._name}'"
@@ -251,7 +254,7 @@ class _AsyncMemcachedLock:
                 await self._client.delete(name_bytes, noreply=False)
             else:
                 sys.stderr.write(f"Warning: Lock '{self._name}' expired or stolen\n")
-        except (emcache.CommandError, emcache.ClusterNoAvailableNodes) as exc:  # nosec
+        except _EMCACHE_BASE_EXCEPTIONS as exc:  # nosec
             # Lock might have expired or been released already.
             raise LockReleaseError(f"Failed to release lock '{self._name}'") from exc
         finally:
@@ -331,7 +334,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
     ) -> None:
         """
         Initialize the `emcache` Memcached backend.
-
 
         :param url: Optional Memcached URL (e.g. `"memcached://host:port"`).
             Mutually exclusive with explicit `host`/`port` values.
@@ -542,7 +544,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
                         exptime=0,
                         noreply=False,
                     )
-        except Exception as exc:
+        except _EMCACHE_BASE_EXCEPTIONS as exc:
             sys.stderr.write(f"Warning: Failed to track key '{key}': {exc}\n")
             sys.stderr.flush()
 
@@ -569,7 +571,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
                     )
                 else:
                     await self.connection.delete(tracking_key, noreply=False)
-        except Exception as exc:
+        except _EMCACHE_BASE_EXCEPTIONS as exc:
             sys.stderr.write(f"Warning: Failed to untrack key '{key}': {exc}\n")
             sys.stderr.flush()
 

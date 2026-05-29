@@ -194,7 +194,7 @@ class _SharedMemoryLockBytePool:
     creates its own `_AsyncSharedMemoryLock` instances via `_NamedLockPool`.
     """
 
-    __slots__ = ("_base", "_size", "_free", "_lock")
+    __slots__ = ("_base", "_free", "_lock", "_size")
 
     def __init__(self, base_offset: int, size: int) -> None:
         """
@@ -277,11 +277,11 @@ class _AsyncSharedMemoryLock:
         "_buffer",
         "_byte_index",
         "_byte_pool",
-        "_owner",
-        "_reentry_count",
         "_max_spins_before_backoff",
-        "_spin_max_delay_seconds",
+        "_owner",
         "_reentrant",
+        "_reentry_count",
+        "_spin_max_delay_seconds",
     )
 
     def __init__(
@@ -2556,13 +2556,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         assert self._cleanup_frequency is not None
         while self._initialized:
-            try:
-                await asyncio.sleep(self._cleanup_frequency)
-                await asyncio.get_running_loop().run_in_executor(None, self._cleanup)
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                pass
+            await asyncio.sleep(self._cleanup_frequency)
+            await asyncio.get_running_loop().run_in_executor(None, self._cleanup)
 
     async def reset(self) -> None:
         """Reset the backend by clearing all throttling data."""
@@ -2599,13 +2594,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             self._cleanup_task = None
 
         if self._buffer is not None and self._lock_byte_pool is not None:
-            try:
-                self._buffer[
-                    self._lock_bytes_offset : self._lock_bytes_offset
-                    + self._lock_byte_pool_size
-                ] = bytes(self._lock_byte_pool_size)
-            except Exception:
-                pass
+            self._buffer[
+                self._lock_bytes_offset : self._lock_bytes_offset
+                + self._lock_byte_pool_size
+            ] = bytes(self._lock_byte_pool_size)
 
         if self._buffer is not None:
             self._buffer.release()

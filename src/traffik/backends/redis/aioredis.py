@@ -10,6 +10,7 @@ from types import TracebackType
 import pottery
 import redis.asyncio as aioredis
 from pottery import AIORedlock
+from redis.asyncio.cluster import ClusterNode
 from redis.exceptions import NoScriptError, RedisError
 from typing_extensions import TypedDict
 
@@ -26,6 +27,8 @@ from traffik.types import (
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
+
+_AnyRedis = typing.Union[aioredis.Redis, aioredis.RedisCluster]
 
 _INCREMENT_WITH_TTL_SCRIPT = """
 local key = KEYS[1]
@@ -146,22 +149,22 @@ class _AsyncRedisLock:
     """Lua script for safe acquire with optional TTL"""
 
     __slots__ = (
-        "_name",
         "_client",
-        "_owner",
-        "_token",
-        "_reentry_count",
-        "_ttl",
-        "_script_shas",
         "_max_spins_before_backoff",
-        "_spin_max_delay_seconds",
+        "_name",
+        "_owner",
         "_reentrant",
+        "_reentry_count",
+        "_script_shas",
+        "_spin_max_delay_seconds",
+        "_token",
+        "_ttl",
     )
 
     def __init__(
         self,
         name: str,
-        client: aioredis.Redis,
+        client: _AnyRedis,
         script_shas: _LockScriptSHAs,
         ttl: typing.Optional[float] = None,
         max_spins_before_backoff: int = 4,
@@ -193,12 +196,12 @@ class _AsyncRedisLock:
         self._ttl = str(ttl * 1000 if ttl else 0)
 
     @classmethod
-    async def _register_acquire_script(cls, client: aioredis.Redis) -> str:
+    async def _register_acquire_script(cls, client: _AnyRedis) -> str:
         """Register and return the acquire script SHA."""
         return await client.script_load(cls.ACQUIRE_SCRIPT)
 
     @classmethod
-    async def _register_release_script(cls, client: aioredis.Redis) -> str:
+    async def _register_release_script(cls, client: _AnyRedis) -> str:
         """Register and return the release script SHA."""
         return await client.script_load(cls.RELEASE_SCRIPT)
 
@@ -387,13 +390,13 @@ class _AsyncRedLock:
     """
 
     __slots__ = (
-        "_name",
         "_client",
         "_lock",
+        "_name",
         "_owner",
+        "_reentrant",
         "_reentry_count",
         "_ttl",
-        "_reentrant",
     )
 
     def __init__(
@@ -529,7 +532,7 @@ class _AsyncRedLock:
 # - Redis Stack
 
 
-class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
+class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
     """
     Redis throttle backend.
 
@@ -546,9 +549,19 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
     def __init__(
         self,
         connection: typing.Union[
-            str, typing.Callable[[], typing.Awaitable[aioredis.Redis]]
+            str,
+            _AnyRedis,
+            aioredis.Sentinel,
+            typing.Sequence[
+                typing.Union[typing.Tuple[str, int], typing.Dict[str, typing.Any]]
+            ],
+            typing.Callable[[], typing.Awaitable[_AnyRedis]],
         ],
         *,
+        sentinel_service_name: typing.Optional[str] = None,
+        sentinel_kwargs: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        cluster_kwargs: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        url_kwargs: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         namespace: str,
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
         handle_throttled: typing.Optional[
@@ -596,15 +609,6 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             an `asyncio.Lock` to reduce Redis connection hammering and thundering herd issues.
         :param kwargs: Additional keyword arguments passed to the base `ThrottleBackend`.
         """
-        if isinstance(connection, str):
-            # Create a redis connection factory with the provided URL
-            async def _factory():
-                return await aioredis.from_url(connection, decode_responses=True)
-
-            self._get_connection = _factory
-        else:
-            self._get_connection = connection
-
         super().__init__(
             None,
             namespace=namespace,
@@ -617,6 +621,13 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
             lock_blocking_timeout=lock_blocking_timeout,
             **kwargs,
         )
+        self._raw_connection = connection
+        self._sentinel_service_name = sentinel_service_name
+        self._sentinel_kwargs: dict = dict(sentinel_kwargs or {})
+        self._cluster_kwargs: dict = dict(cluster_kwargs or {})
+        self._url_kwargs: dict = dict(url_kwargs or {})
+        self._owns_connection: bool = False
+
         self._increment_with_ttl_sha: typing.Optional[str] = None
         """SHA hash of the loaded Lua script for increment_with_ttl."""
         self._clear_sha: typing.Optional[str] = None
@@ -637,10 +648,64 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
         """Registry for named gates used by `_GatedNamedLock` wrappers around non-reentrant locks."""
 
+    async def _build_client(self) -> _AnyRedis:
+        raw = self._raw_connection
+
+        if callable(raw) and not isinstance(
+            raw, (aioredis.Redis, aioredis.RedisCluster, aioredis.Sentinel)
+        ):
+            self._owns_connection = True
+            return await raw()
+
+        if isinstance(raw, (aioredis.Redis, aioredis.RedisCluster)):
+            self._owns_connection = False
+            return raw
+
+        if isinstance(raw, aioredis.Sentinel):
+            if not self._sentinel_service_name:
+                raise ValueError(
+                    "`sentinel_service_name` is required when using a `Sentinel` connection."
+                )
+            self._owns_connection = False
+            return raw.master_for(
+                self._sentinel_service_name,
+                decode_responses=True,
+                **self._sentinel_kwargs,
+            )
+
+        if isinstance(raw, (list, tuple)):
+            nodes = []
+            for item in raw:
+                if isinstance(item, dict):
+                    nodes.append(
+                        {"host": item["host"], "port": int(item.get("port", 6379))}
+                    )
+                elif isinstance(item, (list, tuple)) and len(item) == 2:
+                    nodes.append({"host": item[0], "port": int(item[1])})
+                else:
+                    raise TypeError(
+                        f"Unsupported node specifier type: {type(item)!r}. "
+                        "Expected dict with 'host'/'port' or (host, port) tuple."
+                    )
+            self._owns_connection = True
+            return aioredis.RedisCluster(
+                startup_nodes=[ClusterNode(n["host"], n["port"]) for n in nodes],
+                decode_responses=True,
+                **self._cluster_kwargs,
+            )
+
+        if isinstance(raw, str):
+            self._owns_connection = True
+            return await aioredis.from_url(
+                raw, decode_responses=True, **self._url_kwargs
+            )
+
+        raise TypeError(f"Unsupported connection argument type: {type(raw)!r}.")
+
     async def initialize(self) -> None:
         """Ensure the Redis connection is ready. Load and register Lua scripts."""
         if self.connection is None:
-            self.connection = await self._get_connection()
+            self.connection = await self._build_client()
             try:
                 # Pre-load all Lua scripts
                 await self._ensure_increment_with_ttl_script()
@@ -924,20 +989,19 @@ class RedisBackend(ThrottleBackend[aioredis.Redis, HTTPConnectionT]):
         await self.clear()
 
     async def close(self) -> None:
-        """Close the Redis connection."""
-        if self.connection is not None:
+        if self.connection is not None and self._owns_connection:
             try:
                 await self.connection.aclose()
-            except Exception as exc:
+            except RedisError as exc:
                 sys.stderr.write(
                     f"Warning: error while closing redis connection: {exc}\n"
                 )
                 sys.stderr.flush()
-            finally:
-                self.connection = None
-                self._increment_with_ttl_script = None
-                self._clear_script = None
-                self._lock_script_shas = None
+
+        self.connection = None
+        self._increment_with_ttl_sha = None
+        self._clear_sha = None
+        self._lock_script_shas = None
 
         if self._named_gate_registry is not None:
             self._named_gate_registry.close()

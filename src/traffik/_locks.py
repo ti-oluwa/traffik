@@ -69,14 +69,14 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
     """
 
     __slots__ = (
-        "_factory",
-        "_max_size",
-        "_headroom",
-        "_max_capacity",
         "_allocated",
+        "_closed",
+        "_factory",
+        "_headroom",
         "_idle",
         "_in_use",
-        "_closed",
+        "_max_capacity",
+        "_max_size",
     )
 
     def __init__(
@@ -345,12 +345,12 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
     """
 
     __slots__ = (
-        "_pool",
-        "_name",
-        "_lock",
-        "_acquired",
-        "_released",
         "__weakref__",
+        "_acquired",
+        "_lock",
+        "_name",
+        "_pool",
+        "_released",
     )
 
     def __init__(
@@ -467,7 +467,7 @@ class _AsyncFairRLock:
     Adapted from: https://github.com/Joshuaalbert/Fair_AsyncRLock/blob/81e0d89d64c0cbc81a91c2f45992c79471ecc3bb/fair_async_rlock/fair_async_rlock.py
     """
 
-    __slots__ = ("_owner", "_count", "_owner_transfer", "_queue")
+    __slots__ = ("_count", "_owner", "_owner_transfer", "_queue")
 
     def __init__(self) -> None:
         self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
@@ -565,7 +565,7 @@ class _AsyncRLock:
     This lock is reentrant per `asyncio.Task` but not FIFO / not fair. It may lower locking overhead than fair lock
     """
 
-    __slots__ = ("_lock", "_owner", "_count")
+    __slots__ = ("_count", "_lock", "_owner")
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
@@ -651,12 +651,12 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
     """
 
     __slots__ = (
-        "_lock",
-        "_ttl",
+        "_acquired",
         "_blocking",
         "_blocking_timeout",
-        "_acquired",
+        "_lock",
         "_timer",
+        "_ttl",
     )
 
     def __init__(
@@ -845,11 +845,11 @@ class _NamedGateRegistry:
     """
 
     __slots__ = (
-        "_gates",
-        "_waiters",
-        "_contention_threshold",
         "_closed",
+        "_contention_threshold",
+        "_gates",
         "_lock_cls",
+        "_waiters",
     )
 
     def __init__(
@@ -1083,12 +1083,12 @@ class _NamedGateHandle:
     """
 
     __slots__ = (
-        "_registry",
-        "_name",
-        "_lock",
-        "_acquired",
-        "_released",
         "__weakref__",
+        "_acquired",
+        "_lock",
+        "_name",
+        "_registry",
+        "_released",
     )
 
     def __init__(

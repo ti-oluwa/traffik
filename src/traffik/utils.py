@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import enum
 import functools
 import inspect
 import sys
@@ -323,3 +324,179 @@ class TaskTimer:
         if not self._done:
             self.stop(exc_type)
         return False
+
+
+class CircuitState(str, enum.Enum):
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+
+class CircuitBreaker:
+    """
+    Process-local asyncio-safe circuit breaker.
+
+    **States**:
+
+    - `CLOSED`: Normal operation. Executions are allowed through.
+
+    - `OPEN`: The protected operation is considered unhealthy.
+        Executions are rejected until the recovery timeout expires.
+
+    - `HALF_OPEN`: A single probe execution is allowed through to test
+        recovery. All other executions continue to be rejected until
+        the probe completes.
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 60.0,
+        success_threshold: int = 2,
+    ) -> None:
+        """
+        Initialize circuit breaker.
+
+        :param failure_threshold: Number of consecutive failures required to open the circuit.
+        :param recovery_timeout: Seconds to remain open before allowing a recovery probe.
+        :param success_threshold: Number of successful probe requests required to
+            fully close the circuit.
+        """
+        if failure_threshold < 1:
+            raise ValueError("failure_threshold must be >= 1")
+
+        if success_threshold < 1:
+            raise ValueError("success_threshold must be >= 1")
+
+        if recovery_timeout <= 0:
+            raise ValueError("recovery_timeout must be > 0")
+
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.success_threshold = success_threshold
+        self._lock = asyncio.Lock()
+        self._state: CircuitState = CircuitState.CLOSED
+        self._failure_count = 0
+        self._success_count = 0
+        self._opened_at: typing.Optional[float] = None
+
+        # Use this flag to track so only one task may probe during HALF_OPEN.
+        self._probe_in_progress = False
+
+    @property
+    def state(self) -> CircuitState:
+        """Current circuit state."""
+        return self._state
+
+    @property
+    def is_open(self) -> bool:
+        """Whether the circuit is currently open."""
+        return self._state is CircuitState.OPEN
+
+    @property
+    def is_closed(self) -> bool:
+        """Whether the circuit is currently closed."""
+        return self._state is CircuitState.CLOSED
+
+    @property
+    def is_half_open(self) -> bool:
+        """Whether the circuit is currently half-open."""
+        return self._state is CircuitState.HALF_OPEN
+
+    async def allow_execution(self) -> bool:
+        """
+        Determine whether an operation may be attempted.
+
+        :return: True if the operation may be executed. False if the caller should
+            immediately use an alternative path or fail fast.
+        """
+        async with self._lock:
+            now = pytime.monotonic()
+
+            if self._state is CircuitState.CLOSED:
+                return True
+
+            if self._state is CircuitState.OPEN:
+                assert self._opened_at is not None
+
+                if now - self._opened_at < self.recovery_timeout:
+                    return False
+
+                self._state = CircuitState.HALF_OPEN
+                self._success_count = 0
+                self._probe_in_progress = True
+
+                return True
+
+            # HALF_OPEN
+            if self._probe_in_progress:
+                return False
+
+            self._probe_in_progress = True
+            return True
+
+    async def record_success(self) -> None:
+        """Record a successful backend operation."""
+        async with self._lock:
+            if self._state is CircuitState.CLOSED:
+                self._failure_count = 0
+                return
+
+            if self._state is CircuitState.HALF_OPEN:
+                self._probe_in_progress = False
+                self._success_count += 1
+
+                if self._success_count >= self.success_threshold:
+                    self._close()
+
+    async def record_failure(self) -> None:
+        """Record a failed backend operation."""
+        async with self._lock:
+            if self._state is CircuitState.CLOSED:
+                self._failure_count += 1
+
+                if self._failure_count >= self.failure_threshold:
+                    self._open()
+
+                return
+
+            if self._state is CircuitState.HALF_OPEN:
+                self._probe_in_progress = False
+                self._open()
+
+    async def force_open(self) -> None:
+        """Force the circuit into the OPEN state."""
+        async with self._lock:
+            self._open()
+
+    async def force_close(self) -> None:
+        """Force the circuit into the CLOSED state."""
+        async with self._lock:
+            self._close()
+
+    async def info(self) -> dict[str, typing.Any]:
+        """Return current breaker information."""
+        async with self._lock:
+            return {
+                "state": self._state.value,
+                "failure_count": self._failure_count,
+                "success_count": self._success_count,
+                "opened_at": self._opened_at,
+                "probe_in_progress": self._probe_in_progress,
+            }
+
+    def _open(self) -> None:
+        """Transition to OPEN."""
+        self._state = CircuitState.OPEN
+        self._opened_at = pytime.monotonic()
+        self._failure_count = 0
+        self._success_count = 0
+        self._probe_in_progress = False
+
+    def _close(self) -> None:
+        """Transition to CLOSED."""
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._success_count = 0
+        self._opened_at = None
+        self._probe_in_progress = False

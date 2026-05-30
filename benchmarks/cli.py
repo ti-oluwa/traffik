@@ -4,24 +4,24 @@ import sys
 import click
 
 from benchmarks.base import BackendKind, BenchmarkConfig, StrategyKind
-from benchmarks.benchmarks.http_bench import run_all_scenarios as run_http_scenarios
-from benchmarks.benchmarks.middleware_bench import (
-    run_all_scenarios as run_middleware_scenarios,
+from benchmarks.bench.http import run_scenarios as run_http_scenarios
+from benchmarks.bench.middleware import (
+    run_scenarios as run_middleware_scenarios,
 )
-from benchmarks.benchmarks.multiprocess_bench import (
-    run_all_scenarios as run_multiprocess_scenarios,
+from benchmarks.bench.multiprocess import (
+    run_scenarios as run_multiprocess_scenarios,
 )
-from benchmarks.benchmarks.websocket_bench import (
-    run_all_scenarios as run_websocket_scenarios,
+from benchmarks.bench.websocket import (
+    run_scenarios as run_websocket_scenarios,
 )
-from benchmarks.reporters.json_reporter import print_json
-from benchmarks.reporters.table import print_results_table
-from benchmarks.scenarios.http import SCENARIO_REGISTRY as HTTP_SCENARIOS
-from benchmarks.scenarios.middleware import SCENARIO_REGISTRY as MIDDLEWARE_SCENARIOS
+from benchmarks.output.json import print_json
+from benchmarks.output.table import print_results_table
+from benchmarks.scenarios.http import SCENARIOS as HTTP_SCENARIOS
+from benchmarks.scenarios.middleware import SCENARIOS as MIDDLEWARE_SCENARIOS
 from benchmarks.scenarios.multiprocess import (
-    SCENARIO_REGISTRY as MULTIPROCESS_SCENARIOS,
+    SCENARIOS as MULTIPROCESS_SCENARIOS,
 )
-from benchmarks.scenarios.websocket import SCENARIO_REGISTRY as WEBSOCKET_SCENARIOS
+from benchmarks.scenarios.websocket import SCENARIOS as WEBSOCKET_SCENARIOS
 
 
 def common_options(func):

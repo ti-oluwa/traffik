@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import time
 import typing
 
 import httpx
@@ -7,6 +8,7 @@ import httpx
 from benchmarks.backends import create_backend, create_strategy
 from benchmarks.base import BenchmarkConfig, ScenarioResult
 from benchmarks.scenarios.common import (
+    ScenarioFunc,
     make_http_app,
     run_http_scenario,
     send_sequential,
@@ -174,8 +176,6 @@ async def scenario_concurrent_contention(
             iteration=iteration,
         )
     except Exception as exc:
-        import sys
-
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Concurrent Contention",
@@ -264,8 +264,6 @@ async def scenario_many_unique_keys(
                 base_url="http://test",
                 timeout=30.0,
             ) as client:
-                import time
-
                 start_time = time.perf_counter()
 
                 latencies = []
@@ -277,7 +275,7 @@ async def scenario_many_unique_keys(
                 for batch_idx in range(num_batches):
                     batch_size = min(10, 300 - batch_idx * 10)
 
-                    async def single_request(user_idx):
+                    async def single_request(user_idx: int):
                         try:
                             user_id = f"user-{user_idx % 50}"
                             start = time.perf_counter()
@@ -362,8 +360,6 @@ async def scenario_window_boundary_burst(
                 base_url="http://test",
                 timeout=30.0,
             ) as client:
-                import time
-
                 start_time = time.perf_counter()
 
                 all_latencies = []
@@ -400,8 +396,6 @@ async def scenario_window_boundary_burst(
                     iteration=iteration,
                 )
     except Exception as exc:
-        import sys
-
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Window Boundary Burst",
@@ -508,7 +502,7 @@ async def scenario_error_recovery(
         await backend.close()
 
 
-SCENARIO_REGISTRY: typing.Dict[str, typing.Callable] = {
+SCENARIOS: typing.Dict[str, ScenarioFunc] = {
     "below_limit": scenario_below_limit_steady,
     "at_limit": scenario_at_limit_edge,
     "over_limit": scenario_over_limit_burst,

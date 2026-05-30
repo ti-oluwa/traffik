@@ -8,7 +8,7 @@ from starlette.requests import HTTPConnection
 
 from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.error_handlers import CircuitBreaker, backend_fallback, failover, retry
+from traffik.error_handlers import CircuitBreaker, failover, fallback, retry
 from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
@@ -141,7 +141,7 @@ class TestCircuitBreaker:
 
 
 class TestBackendFallback:
-    """Tests for backend_fallback error handler."""
+    """Tests for fallback error handler."""
 
     @pytest.mark.anyio
     async def test_fallback_on_connection_error(self):
@@ -150,7 +150,7 @@ class TestBackendFallback:
         fallback_backend = InMemoryBackend(namespace="fallback")
 
         async with fallback_backend(close_on_exit=True):
-            handler = backend_fallback(
+            handler = fallback(
                 backend=fallback_backend, fallback_on=(BackendConnectionError,)
             )
 
@@ -181,7 +181,7 @@ class TestBackendFallback:
         fallback_backend = InMemoryBackend(namespace="fallback")
 
         async with fallback_backend(close_on_exit=True):
-            handler = backend_fallback(
+            handler = fallback(
                 backend=fallback_backend, fallback_on=(BackendConnectionError,)
             )
 

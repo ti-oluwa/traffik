@@ -10,9 +10,12 @@ import asyncio
 import time
 import typing
 
+import httpx
+
 from benchmarks.backends import create_strategy
 from benchmarks.base import BenchmarkConfig, ScenarioResult
 from benchmarks.scenarios.common import (
+    ScenarioFunc,
     make_http_app,
     run_http_scenario,
     send_sequential,
@@ -278,8 +281,6 @@ async def scenario_many_unique_keys(
         app = make_http_app(throttle, backend)
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
-            import httpx
-
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(
                 transport=transport,
@@ -297,7 +298,7 @@ async def scenario_many_unique_keys(
                 for batch_idx in range(num_batches):
                     batch_size = min(10, 300 - batch_idx * 10)
 
-                    async def single_request(user_idx):
+                    async def single_request(user_idx: int):
                         try:
                             user_id = f"user-{user_idx % 50}"
                             start = time.perf_counter()
@@ -376,8 +377,6 @@ async def scenario_window_boundary_burst(
         app = make_http_app(throttle, backend)
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
-            import httpx
-
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(
                 transport=transport,
@@ -594,8 +593,6 @@ async def scenario_key_eviction(
         app = make_http_app(throttle, backend)
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
-            import httpx
-
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(
                 transport=transport,
@@ -685,7 +682,7 @@ async def scenario_key_eviction(
         await backend.close()
 
 
-SCENARIO_REGISTRY: typing.Dict[str, typing.Callable] = {
+SCENARIOS: typing.Dict[str, ScenarioFunc] = {
     "below_limit": scenario_below_limit_steady,
     "at_limit": scenario_at_limit_edge,
     "over_limit": scenario_over_limit_burst,

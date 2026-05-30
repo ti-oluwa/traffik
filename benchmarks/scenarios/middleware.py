@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import time
 import typing
 
 import httpx
@@ -7,6 +8,7 @@ import httpx
 from benchmarks.backends import create_backend, create_strategy
 from benchmarks.base import BenchmarkConfig, ScenarioResult
 from benchmarks.scenarios.common import (
+    ScenarioFunc,
     make_middleware_app,
     run_http_scenario,
     send_sequential,
@@ -33,7 +35,7 @@ async def scenario_below_limit_steady(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(throttle, backend, middleware_throttle)
+        app = make_middleware_app(middleware_throttle, backend)
         return await run_http_scenario(
             "Middleware Below-Limit Steady State",
             app,
@@ -78,7 +80,7 @@ async def scenario_at_limit_edge(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(throttle, backend, middleware_throttle)
+        app = make_middleware_app(middleware_throttle, backend)
         return await run_http_scenario(
             "Middleware At-Limit Edge",
             app,
@@ -123,7 +125,7 @@ async def scenario_over_limit_burst(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(throttle, backend, middleware_throttle)
+        app = make_middleware_app(middleware_throttle, backend)
         return await run_http_scenario(
             "Middleware Over-Limit Burst",
             app,
@@ -168,7 +170,7 @@ async def scenario_concurrent_contention(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(throttle, backend, middleware_throttle)
+        app = make_middleware_app(middleware_throttle, backend)
         return await run_http_scenario(
             "Middleware Concurrent Contention",
             app,
@@ -213,7 +215,7 @@ async def scenario_single_hot_key(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(throttle, backend, middleware_throttle)
+        app = make_middleware_app(middleware_throttle, backend)
         return await run_http_scenario(
             "Middleware Single Hot Key",
             app,
@@ -259,7 +261,7 @@ async def scenario_many_unique_keys(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(throttle, backend, middleware_throttle)
+        app = make_middleware_app(middleware_throttle, backend)
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
             transport = httpx.ASGITransport(app=app)
@@ -268,8 +270,6 @@ async def scenario_many_unique_keys(
                 base_url="http://test",
                 timeout=30.0,
             ) as client:
-                import time
-
                 start_time = time.perf_counter()
 
                 latencies = []
@@ -358,7 +358,7 @@ async def scenario_window_boundary_burst(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(throttle, backend, middleware_throttle)
+        app = make_middleware_app(middleware_throttle, backend)
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
             transport = httpx.ASGITransport(app=app)
@@ -367,8 +367,6 @@ async def scenario_window_boundary_burst(
                 base_url="http://test",
                 timeout=30.0,
             ) as client:
-                import time
-
                 start_time = time.perf_counter()
 
                 all_latencies = []
@@ -439,7 +437,7 @@ async def scenario_sustained_high_load(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(throttle, backend, middleware_throttle)
+        app = make_middleware_app(middleware_throttle, backend)
         return await run_http_scenario(
             "Middleware Sustained High Load",
             app,
@@ -485,7 +483,7 @@ async def scenario_error_recovery(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(throttle, backend, middleware_throttle)
+        app = make_middleware_app(middleware_throttle, backend)
         return await run_http_scenario(
             "Middleware Error Recovery (on_error=allow)",
             app,
@@ -530,7 +528,7 @@ async def scenario_selective_throttling(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(throttle, backend, middleware_throttle)
+        app = make_middleware_app(middleware_throttle, backend)
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
             transport = httpx.ASGITransport(app=app)
@@ -539,8 +537,6 @@ async def scenario_selective_throttling(
                 base_url="http://test",
                 timeout=30.0,
             ) as client:
-                import time
-
                 start_time = time.perf_counter()
 
                 all_latencies = []
@@ -599,7 +595,7 @@ async def scenario_selective_throttling(
         await backend.close()
 
 
-SCENARIO_REGISTRY: typing.Dict[str, typing.Callable] = {
+SCENARIOS: typing.Dict[str, ScenarioFunc] = {
     "below_limit": scenario_below_limit_steady,
     "at_limit": scenario_at_limit_edge,
     "over_limit": scenario_over_limit_burst,

@@ -7,14 +7,14 @@ from enum import Enum, auto
 
 class BackendKind(Enum):
     """Supported backend variants."""
-    
+
     INMEMORY = auto()
     MULTIPROCESS = auto()
     REDIS_AIOREDIS = auto()
     REDIS_COREDIS = auto()
     MEMCACHED_AIOMCACHE = auto()
     MEMCACHED_EMCACHE = auto()
-    
+
     @classmethod
     def choices(cls) -> typing.List[str]:
         """
@@ -36,7 +36,7 @@ class BackendKind(Enum):
 
 class StrategyKind(Enum):
     """Supported throttling strategies."""
-    
+
     FIXED_WINDOW = auto()
     SLIDING_WINDOW_COUNTER = auto()
     SLIDING_WINDOW_LOG = auto()
@@ -45,7 +45,7 @@ class StrategyKind(Enum):
     LEAKY_BUCKET = auto()
     LEAKY_BUCKET_QUEUE = auto()
     GCRA = auto()
-    
+
     @classmethod
     def choices(cls) -> typing.List[str]:
         """
@@ -67,7 +67,7 @@ class StrategyKind(Enum):
 
 class OutputFormat(Enum):
     """Output format options."""
-    
+
     TABLE = auto()
     JSON = auto()
 
@@ -88,6 +88,7 @@ class ScenarioResult:
     :param latencies_seconds: Per-request latency in seconds, same length as total_requests.
     :param iteration: Which iteration number this result belongs to (1-based).
     """
+
     scenario_name: str
     backend_kind: str
     strategy_kind: str
@@ -98,7 +99,7 @@ class ScenarioResult:
     total_time_seconds: float
     latencies_seconds: typing.List[float]
     iteration: int
-    
+
     @property
     def requests_per_second(self) -> float:
         """
@@ -109,7 +110,7 @@ class ScenarioResult:
         if self.total_time_seconds == 0:
             return 0.0
         return self.total_requests / self.total_time_seconds
-    
+
     @property
     def success_rate(self) -> float:
         """
@@ -120,7 +121,7 @@ class ScenarioResult:
         if self.total_requests == 0:
             return 0.0
         return self.successful_requests / self.total_requests * 100
-    
+
     @property
     def throttle_rate(self) -> float:
         """
@@ -131,7 +132,7 @@ class ScenarioResult:
         if self.total_requests == 0:
             return 0.0
         return self.throttled_requests / self.total_requests * 100
-    
+
     @property
     def error_rate(self) -> float:
         """
@@ -142,7 +143,7 @@ class ScenarioResult:
         if self.total_requests == 0:
             return 0.0
         return self.error_requests / self.total_requests * 100
-    
+
     @property
     def p50_ms(self) -> float:
         """
@@ -155,7 +156,7 @@ class ScenarioResult:
         sorted_latencies = sorted(self.latencies_seconds)
         median = statistics.median(sorted_latencies)
         return median * 1000
-    
+
     @property
     def p95_ms(self) -> float:
         """
@@ -168,7 +169,7 @@ class ScenarioResult:
         sorted_latencies = sorted(self.latencies_seconds)
         index = int(len(sorted_latencies) * 0.95)
         return sorted_latencies[index] * 1000
-    
+
     @property
     def p99_ms(self) -> float:
         """
@@ -181,7 +182,7 @@ class ScenarioResult:
         sorted_latencies = sorted(self.latencies_seconds)
         index = int(len(sorted_latencies) * 0.99)
         return sorted_latencies[index] * 1000
-    
+
     @property
     def mean_ms(self) -> float:
         """
@@ -193,7 +194,7 @@ class ScenarioResult:
             return 0.0
         mean = statistics.mean(self.latencies_seconds)
         return mean * 1000
-    
+
     @property
     def stddev_ms(self) -> float:
         """
@@ -218,12 +219,13 @@ class AggregatedResult:
     :param iterations: Number of iterations aggregated.
     :param results: Individual per-iteration results.
     """
+
     scenario_name: str
     backend_kind: str
     strategy_kind: str
     iterations: int
     results: typing.List[ScenarioResult]
-    
+
     @property
     def total_requests(self) -> int:
         """
@@ -232,7 +234,7 @@ class AggregatedResult:
         :return: Sum of requests across all results.
         """
         return sum(r.total_requests for r in self.results)
-    
+
     @property
     def mean_rps(self) -> float:
         """
@@ -243,7 +245,7 @@ class AggregatedResult:
         if not self.results:
             return 0.0
         return statistics.mean(r.requests_per_second for r in self.results)
-    
+
     @property
     def p50_ms(self) -> float:
         """
@@ -257,7 +259,7 @@ class AggregatedResult:
         if not all_latencies:
             return 0.0
         return statistics.median(all_latencies) * 1000
-    
+
     @property
     def p95_ms(self) -> float:
         """
@@ -273,7 +275,7 @@ class AggregatedResult:
         sorted_latencies = sorted(all_latencies)
         index = int(len(sorted_latencies) * 0.95)
         return sorted_latencies[index] * 1000
-    
+
     @property
     def p99_ms(self) -> float:
         """
@@ -289,7 +291,7 @@ class AggregatedResult:
         sorted_latencies = sorted(all_latencies)
         index = int(len(sorted_latencies) * 0.99)
         return sorted_latencies[index] * 1000
-    
+
     @property
     def mean_ms(self) -> float:
         """
@@ -303,7 +305,7 @@ class AggregatedResult:
         if not all_latencies:
             return 0.0
         return statistics.mean(all_latencies) * 1000
-    
+
     @property
     def success_rate(self) -> float:
         """
@@ -316,7 +318,7 @@ class AggregatedResult:
         if total == 0:
             return 0.0
         return total_successful / total * 100
-    
+
     @property
     def throttle_rate(self) -> float:
         """
@@ -329,7 +331,7 @@ class AggregatedResult:
         if total == 0:
             return 0.0
         return total_throttled / total * 100
-    
+
     @property
     def error_rate(self) -> float:
         """
@@ -342,7 +344,7 @@ class AggregatedResult:
         if total == 0:
             return 0.0
         return total_errors / total * 100
-    
+
     @property
     def rps_stddev(self) -> float:
         """
@@ -373,6 +375,7 @@ class BenchmarkConfig:
     :param multiprocess_shards: Number of shards for MultiProcessInMemoryBackend.
     :param multiprocess_max_keys: Maximum keys for MultiProcessInMemoryBackend.
     """
+
     backend_kind: str = "inmemory"
     strategy_kind: str = "fixed_window"
     iterations: int = 3

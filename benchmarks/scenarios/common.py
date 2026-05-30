@@ -3,12 +3,23 @@ import time
 import typing
 
 import httpx
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 
 from benchmarks.base import BenchmarkConfig, ScenarioResult
+from traffik.backends.base import ThrottleBackend
+from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
+from traffik.throttles import HTTPThrottle, WebSocketThrottle, is_throttled
 
 
-def make_http_app(throttle, backend) -> FastAPI:
+class ScenarioFunc(typing.Protocol):
+    async def __call__(
+        self, config: BenchmarkConfig, iteration: int
+    ) -> ScenarioResult: ...
+
+
+def make_http_app(
+    throttle: HTTPThrottle, backend: ThrottleBackend[typing.Any, typing.Any]
+) -> FastAPI:
     """
     Create a minimal FastAPI app with a single throttled GET /test endpoint.
 
@@ -16,7 +27,7 @@ def make_http_app(throttle, backend) -> FastAPI:
     :param backend: The backend the throttle is bound to.
     :return: A FastAPI application instance.
     """
-    app = FastAPI()
+    app = FastAPI(lifespan=backend.lifespan)
 
     @app.get("/test")
     async def test_endpoint(request: Request = Depends(throttle)):
@@ -25,7 +36,40 @@ def make_http_app(throttle, backend) -> FastAPI:
     return app
 
 
-def make_middleware_app(throttle, backend, middleware_throttle) -> FastAPI:
+def make_ws_app(
+    throttle: WebSocketThrottle, backend: ThrottleBackend[typing.Any, typing.Any]
+) -> FastAPI:
+    """
+    Create a minimal FastAPI app with a throttled WebSocket at /ws.
+
+    :param throttle: A WebSocketThrottle instance.
+    :param backend: The backend instance.
+    :return: A FastAPI application using backend.lifespan.
+    """
+    app = FastAPI(lifespan=backend.lifespan)
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket):
+        await websocket.accept()
+        try:
+            while True:
+                data = await websocket.receive_json()
+                await throttle(websocket)
+
+                if is_throttled(websocket):
+                    await websocket.send_json({"type": "rate_limit"})
+                else:
+                    await websocket.send_json({"echo": data, "status": "ok"})
+        except WebSocketDisconnect:
+            pass
+
+    return app
+
+
+def make_middleware_app(
+    throttle: typing.Union[MiddlewareThrottle, HTTPThrottle],
+    backend: ThrottleBackend[typing.Any, typing.Any],
+) -> FastAPI:
     """
     Create a FastAPI app with ThrottleMiddleware applied to /test.
 
@@ -36,9 +80,7 @@ def make_middleware_app(throttle, backend, middleware_throttle) -> FastAPI:
     :param middleware_throttle: A MiddlewareThrottle wrapping the throttle.
     :return: A FastAPI application instance with ThrottleMiddleware.
     """
-    from traffik.middleware import ThrottleMiddleware
-
-    app = FastAPI()
+    app = FastAPI(lifespan=backend.lifespan)
 
     @app.get("/test")
     async def test_endpoint():
@@ -50,7 +92,7 @@ def make_middleware_app(throttle, backend, middleware_throttle) -> FastAPI:
 
     app.add_middleware(  # type: ignore
         ThrottleMiddleware,
-        throttle=middleware_throttle,  # type: ignore[arg-type]
+        throttle=throttle,  # type: ignore[arg-type]
         path="/test",  # type: ignore[arg-type]
         methods={"GET"},  # type: ignore[arg-type]
     )
@@ -65,7 +107,7 @@ async def send_sequential(
     headers: typing.Optional[typing.Dict[str, str]] = None,
 ) -> typing.Tuple[typing.List[float], int, int, int]:
     """
-    Send n sequential GET requests and collect timing and status counts.
+    Send `n` sequential GET requests and collect timing and status counts.
 
     :param client: An initialized httpx AsyncClient.
     :param n: Number of requests to send.
@@ -105,7 +147,7 @@ async def send_concurrent(
     headers: typing.Optional[typing.Dict[str, str]] = None,
 ) -> typing.Tuple[typing.List[float], int, int, int]:
     """
-    Send n requests in batches of `concurrency` using asyncio.gather.
+    Send `n` requests in batches of `concurrency` using asyncio.gather.
 
     :param client: An initialized httpx AsyncClient.
     :param n: Total number of requests to send.
@@ -124,7 +166,7 @@ async def send_concurrent(
     for batch_idx in range(num_batches):
         batch_size = min(concurrency, n - batch_idx * concurrency)
 
-        async def single_request(idx):
+        async def single_request(idx: int):
             try:
                 start = time.perf_counter()
                 response = await client.get(path, headers=headers)

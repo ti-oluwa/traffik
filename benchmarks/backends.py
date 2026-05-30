@@ -8,8 +8,8 @@ from traffik.backends.base import ThrottleBackend
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.memcached.aiomcache import MemcachedBackend as AiomcacheBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
-from traffik.backends.redis.aioredis import RedisBackend as AioredisRedisBackend
-from traffik.backends.redis.coredis import RedisBackend as CoredisRedisBackend
+from traffik.backends.redis.aioredis import RedisBackend as AioredisBackend
+from traffik.backends.redis.coredis import RedisBackend as CoredisBackend
 from traffik.strategies.custom import GCRAStrategy
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.strategies.leaky_bucket import (
@@ -38,7 +38,7 @@ if sys.platform != "win32" or sys.platform != "cygwin":
         HAS_EMCACHE = False
 
 
-STRATEGY_MAP: typing.Dict[str, typing.Any] = {
+STRATEGIES: typing.Dict[str, typing.Any] = {
     "fixed_window": FixedWindowStrategy,
     "sliding_window_counter": SlidingWindowCounterStrategy,
     "sliding_window_log": SlidingWindowLogStrategy,
@@ -65,7 +65,7 @@ async def get_identifier(connection: Request) -> str:
     return connection.client[0] if connection.client else "anonymous"
 
 
-def create_backend(config: BenchmarkConfig) -> ThrottleBackend:
+def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typing.Any]:
     """
     Instantiate the backend specified by config.backend_kind.
 
@@ -91,14 +91,14 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend:
             max_keys=config.multiprocess_max_keys,
         )
     elif backend_kind == "redis_aioredis":
-        return AioredisRedisBackend(
+        return AioredisBackend(
             connection=config.redis_url,
             namespace="bench",
             identifier=get_identifier,
             persistent=False,
         )
     elif backend_kind == "redis_coredis":
-        return CoredisRedisBackend(
+        return CoredisBackend(
             connection=config.redis_url,
             namespace="bench",
             identifier=get_identifier,
@@ -139,8 +139,8 @@ def create_strategy(config: BenchmarkConfig):
     """
     strategy_kind = config.strategy_kind.lower()
 
-    if strategy_kind not in STRATEGY_MAP:
+    if strategy_kind not in STRATEGIES:
         raise ValueError(f"Unknown strategy kind: {strategy_kind}")
 
-    strategy_class = STRATEGY_MAP[strategy_kind]
+    strategy_class = STRATEGIES[strategy_kind]
     return strategy_class()

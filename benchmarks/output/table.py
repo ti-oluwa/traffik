@@ -21,7 +21,7 @@ def print_results_table(
     """
     console = Console()
     table = Table(title=title)
-    
+
     # Add columns
     table.add_column("Scenario", width=35)
     table.add_column("Backend", width=18)
@@ -33,7 +33,7 @@ def print_results_table(
     table.add_column("Success %", width=10, justify="right")
     table.add_column("Throttled %", width=11, justify="right")
     table.add_column("Errors %", width=9, justify="right")
-    
+
     # Add rows
     for result in results:
         scenario = result.scenario_name
@@ -46,14 +46,14 @@ def print_results_table(
         success = f"{result.success_rate:.1f}"
         throttle = f"{result.throttle_rate:.1f}"
         error = f"{result.error_rate:.1f}"
-        
+
         # Check for highlighting
         row_style = None
         if result.error_rate > 1.0:
             row_style = "yellow"
         elif result.p99_ms > 100.0:
             row_style = "red"
-        
+
         table.add_row(
             scenario,
             backend,
@@ -67,15 +67,19 @@ def print_results_table(
             error,
             style=row_style,
         )
-    
+
     console.print(table)
-    
+
     # Print summary
     total_scenarios = len(results)
     total_requests = sum(r.total_requests for r in results)
-    total_time = sum(r.results[0].total_time_seconds if r.results else 0 for r in results)
-    
-    console.print(f"\nTotal scenarios: {total_scenarios} | Total requests: {total_requests} | Run time: {total_time:.1f}s")
+    total_time = sum(
+        r.results[0].total_time_seconds if r.results else 0 for r in results
+    )
+
+    console.print(
+        f"\nTotal scenarios: {total_scenarios} | Total requests: {total_requests} | Run time: {total_time:.1f}s"
+    )
 
 
 def print_comparison_table(
@@ -90,31 +94,43 @@ def print_comparison_table(
     """
     console = Console()
     table = Table(title="Benchmark Comparison (vs Baseline)")
-    
+
     table.add_column("Scenario", width=35)
     table.add_column("Backend", width=18)
     table.add_column("req/s (Δ%)", width=15, justify="right")
     table.add_column("P50 (Δ%)", width=13, justify="right")
     table.add_column("P95 (Δ%)", width=13, justify="right")
-    
+
     baseline_rps = baseline.mean_rps
     baseline_p50 = baseline.p50_ms
     baseline_p95 = baseline.p95_ms
-    
+
     for result in others:
         scenario = result.scenario_name
         backend = result.backend_kind
-        
-        rps_delta = ((result.mean_rps - baseline_rps) / baseline_rps * 100) if baseline_rps > 0 else 0
-        p50_delta = ((result.p50_ms - baseline_p50) / baseline_p50 * 100) if baseline_p50 > 0 else 0
-        p95_delta = ((result.p95_ms - baseline_p95) / baseline_p95 * 100) if baseline_p95 > 0 else 0
-        
+
+        rps_delta = (
+            ((result.mean_rps - baseline_rps) / baseline_rps * 100)
+            if baseline_rps > 0
+            else 0
+        )
+        p50_delta = (
+            ((result.p50_ms - baseline_p50) / baseline_p50 * 100)
+            if baseline_p50 > 0
+            else 0
+        )
+        p95_delta = (
+            ((result.p95_ms - baseline_p95) / baseline_p95 * 100)
+            if baseline_p95 > 0
+            else 0
+        )
+
         rps_style = "green" if rps_delta > 0 else "red"
         rps_str = f"{result.mean_rps:.1f} ({rps_delta:+.1f}%)"
-        
+
         p50_str = f"{result.p50_ms:.2f} ({p50_delta:+.1f}%)"
         p95_str = f"{result.p95_ms:.2f} ({p95_delta:+.1f}%)"
-        
+
         table.add_row(
             scenario,
             backend,
@@ -122,5 +138,5 @@ def print_comparison_table(
             p50_str,
             p95_str,
         )
-    
+
     console.print(table)

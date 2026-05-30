@@ -44,15 +44,17 @@ def print_json(
     """
     if meta is None:
         meta = {}
-    
+
     # Add default metadata
-    meta.setdefault("timestamp", datetime.datetime.now(datetime.timezone.utc).isoformat())
+    meta.setdefault(
+        "timestamp", datetime.datetime.now(datetime.timezone.utc).isoformat()
+    )
     meta.setdefault("platform", sys.platform)
     meta.setdefault("python_version", platform.python_version())
-    
+
     output = {
         "meta": meta,
         "results": [result_to_dict(r) for r in results],
     }
-    
+
     print(json.dumps(output, indent=2))

@@ -11,9 +11,9 @@ if sys.platform == "win32" or sys.platform == "cygwin":
         sys.exit(1)
 else:
     from benchmarks.base import AggregatedResult, BenchmarkConfig
-    from benchmarks.scenarios.multiprocess import SCENARIO_REGISTRY
+    from benchmarks.scenarios.multiprocess import SCENARIOS
 
-    async def run_all_scenarios(
+    async def run_scenarios(
         config: BenchmarkConfig,
         scenario_keys: typing.List[str],
         warmup_iterations: int = 1,
@@ -26,14 +26,14 @@ else:
         :param warmup_iterations: Number of warmup runs to discard.
         :return: List of aggregated results, one per scenario.
         """
-        results = []
+        results: typing.List[AggregatedResult] = []
 
         for scenario_key in scenario_keys:
-            if scenario_key not in SCENARIO_REGISTRY:
+            if scenario_key not in SCENARIOS:
                 print(f"ERROR: Unknown scenario: {scenario_key}", file=sys.stderr)
                 continue
 
-            scenario_func = SCENARIO_REGISTRY[scenario_key]
+            scenario_func = SCENARIOS[scenario_key]
 
             # Warmup
             print(f"Running warmup for {scenario_key}...", file=sys.stderr)

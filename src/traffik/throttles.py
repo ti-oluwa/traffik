@@ -80,6 +80,8 @@ class ThrottleExceptionInfo(TypedDict):
     """The type of exception the handler is for."""
     connection: HTTPConnection
     """The HTTP connection associated with the exception."""
+    key: str
+    """The throttle key associated with the exception"""
     cost: int
     """The cost associated with the throttling operation."""
     rate: Rate
@@ -799,6 +801,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self,
         connection: HTTPConnectionT,
         exc: BaseException,
+        key: str,
         cost: int,
         rate: Rate,
         backend: ThrottleBackend[typing.Any, HTTPConnectionT],
@@ -809,6 +812,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         :param connection: The HTTP connection being throttled.
         :param exc: The exception that occurred during throttling.
+        :param key: The throttle key associated with the error.
         :param cost: The cost/weight of the request that caused the error.
         :param rate: The rate associated with the throttling operation.
         :param backend: The backend used during the throttling operation.
@@ -817,9 +821,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :return: The wait period in milliseconds.
         """
         if self._error_callback:
-            exc_info = dict(
+            exc_info = dict(  # noqa
                 exception=exc,
                 connection=connection,
+                key=key,
                 cost=cost,
                 rate=rate,
                 context=context,
@@ -834,9 +839,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         elif not self.use_fixed_backend and self.on_error is None:
             # For dynamic backend throttles, check backend's on_error
             if backend._error_callback:
-                exc_info = dict(
+                exc_info = dict(  # noqa
                     exception=exc,
                     connection=connection,
+                    key=key,
                     cost=cost,
                     rate=rate,
                     context=context,
@@ -947,7 +953,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             wait_ms = await self.strategy(key, rate, backend, actual_cost)  # type: ignore[arg-type]
         except _EXEMPT_EXCEPTIONS:
             raise
-        except BaseException as exc:
+        except BaseException as exc:  # noqa
             sys.stderr.write(
                 f"Warning: An error occurred while utilizing strategy '{self.strategy!r}'.\n {type(exc).__name__}: {exc}\n"
             )
@@ -955,6 +961,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             wait_ms = await self._handle_error(
                 connection,
                 exc=exc,
+                key=key,
                 cost=actual_cost,  # type: ignore
                 rate=rate,  # type: ignore
                 backend=backend,

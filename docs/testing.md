@@ -148,13 +148,13 @@ async def test_error_handler_fallback():
     primary = InMemoryBackend(namespace="primary", persistent=False)
     fallback = InMemoryBackend(namespace="fallback", persistent=False)
 
-    from traffik.error_handlers import backend_fallback
+    from traffik.error_handlers import fallback
 
     throttle = HTTPThrottle(
         "test:fallback",
         rate="10/min",
         backend=primary,
-        on_error=backend_fallback(backend=fallback, fallback_on=(BackendError,)),
+        on_error=fallback(backend=fallback, fallback_on=(BackendError,)),
     )
 
     app = FastAPI(lifespan=primary.lifespan)

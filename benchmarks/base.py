@@ -10,10 +10,10 @@ class BackendKind(Enum):
 
     INMEMORY = auto()
     MULTIPROCESS = auto()
-    REDIS_AIOREDIS = auto()
-    REDIS_COREDIS = auto()
-    MEMCACHED_AIOMCACHE = auto()
-    MEMCACHED_EMCACHE = auto()
+    AIOREDIS = auto()
+    COREDIS = auto()
+    AIOMCACHE = auto()
+    EMCACHE = auto()
 
     @classmethod
     def choices(cls) -> typing.List[str]:
@@ -25,12 +25,12 @@ class BackendKind(Enum):
         choices = [
             "inmemory",
             "multiprocess",
-            "redis_aioredis",
-            "redis_coredis",
-            "memcached_aiomcache",
+            "aioredis",
+            "coredis",
+            "aiomcache",
         ]
         if sys.platform != "win32":
-            choices.append("memcached_emcache")
+            choices.append("emcache")
         return choices
 
 

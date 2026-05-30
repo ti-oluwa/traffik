@@ -28,7 +28,7 @@ def fallback(
     backend: ThrottleBackend[typing.Any, HTTPConnectionT],
     fallback_on: typing.Optional[typing.Tuple[typing.Type[BaseException], ...]] = None,
     on: typing.Tuple[typing.Type[BaseException], ...] = (BackendError,),
-    initialized: bool = False,
+    initialized: bool = True,
 ) -> typing.Callable[
     [HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]
 ]:
@@ -65,24 +65,32 @@ def fallback(
     ```
 
     :param backend: The backend to use when primary fails
-    :param initialized: Whether the fallback backend is already
-        initialized. When `True`, readiness checks and initialization are skipped.
+    :param initialized: Whether the fallback backend is already initialized.
+        When `True`, readiness checks and initialization are skipped.
     :param on: Tuple of exception types that trigger fallback. Defaults to `BackendError`
     :return: Error handler function
     """
     if fallback_on is not None:
-        warnings.warn("`fallback_on` is deprecated use `on`", UserWarning, stacklevel=2)
+        warnings.warn(
+            "`fallback_on` is deprecated. Use `on`.", UserWarning, stacklevel=2
+        )
         on = fallback_on
+
+    # Helps ensure that initialization is done once across all requests
+    _initialized = initialized
 
     async def handler(
         connection: HTTPConnectionT, exc_info: ThrottleExceptionInfo
     ) -> WaitPeriod:
+        nonlocal _initialized
+
         exc = exc_info["exception"]
         if not isinstance(exc, on):
             raise exc
 
-        if not initialized and not await backend.ready():
+        if not _initialized and not initialized and not await backend.ready():
             await backend.initialize()
+            _initialized = True
 
         throttle = exc_info["throttle"]
         wait_ms = await throttle.strategy(
@@ -149,8 +157,6 @@ def retry(
     async def handler(
         connection: HTTPConnection, exc_info: ThrottleExceptionInfo
     ) -> WaitPeriod:
-        nonlocal backoff, backoff_multiplier
-
         exc = exc_info["exception"]
         if not isinstance(exc, retry_on):
             raise exc
@@ -163,16 +169,15 @@ def retry(
 
         delay = retry_delay
         last_exc: BaseException = exc
-
-        if backoff_multiplier is None and backoff is None:
-            backoff = DEFAULT_BACKOFF
-
-        uses_strategy = backoff is not None
+        _backoff = backoff
+        _uses_strategy = _backoff is not None or backoff_multiplier is None
+        if _backoff is None and backoff_multiplier is None:
+            _backoff = DEFAULT_BACKOFF
 
         for attempt in range(max_retries):
             if attempt > 0:
-                if uses_strategy:
-                    delay = backoff(attempt, retry_delay)  # type: ignore
+                if _uses_strategy:
+                    delay = _backoff(attempt, retry_delay)  # type: ignore
                     await asyncio.sleep(delay)
                 else:
                     await asyncio.sleep(delay)
@@ -196,7 +201,7 @@ def failover(
     max_retries: int = 2,
     retry_delay: float = 0.05,
     backoff: typing.Optional[BackoffStrategy] = None,
-    initialized: bool = False,
+    initialized: bool = True,
 ) -> typing.Callable[
     [HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]
 ]:
@@ -236,9 +241,8 @@ def failover(
     ```
 
     :param backend: Fallback backend to use when primary fails
-    :param initialized: Whether the fallback backend is already
-        initialized. When `True`, readiness checks and initialization
-        are skipped.
+    :param initialized: Whether the fallback backend is already initialized.
+        When `True`, readiness checks and initialization are skipped.
     :param breaker: CircuitBreaker instance (creates new one if None)
     :param max_retries: Number of retries before falling back
     :param retry_delay: Initial delay between retries (seconds)
@@ -285,6 +289,9 @@ def failover(
             key=key,
         )
 
+    # Helps ensure that initialization is done once across all requests
+    _initialized = initialized
+
     async def _use_fallback(
         throttle: Throttle,
         rate: Rate,
@@ -292,8 +299,11 @@ def failover(
         key: str,
     ) -> WaitPeriod:
         """Use fallback backend for throttling."""
-        if not initialized and not await backend.ready():
+        nonlocal _initialized
+
+        if not _initialized and not initialized and not await backend.ready():
             await backend.initialize()
+            _initialized = True
 
         wait_ms = await throttle.strategy(
             key,

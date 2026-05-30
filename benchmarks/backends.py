@@ -90,21 +90,21 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typin
             number_of_shards=config.multiprocess_shards,
             max_keys=config.multiprocess_max_keys,
         )
-    elif backend_kind == "redis_aioredis":
+    elif backend_kind == "aioredis":
         return AioredisBackend(
             connection=config.redis_url,
             namespace="bench",
             identifier=get_identifier,
             persistent=False,
         )
-    elif backend_kind == "redis_coredis":
+    elif backend_kind == "coredis":
         return CoredisBackend(
             connection=config.redis_url,
             namespace="bench",
             identifier=get_identifier,
             persistent=False,
         )
-    elif backend_kind == "memcached_aiomcache":
+    elif backend_kind == "aiomcache":
         return AiomcacheBackend(
             host=config.memcached_host,
             port=config.memcached_port,
@@ -112,7 +112,7 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typin
             identifier=get_identifier,
             persistent=False,
         )
-    elif backend_kind == "memcached_emcache":
+    elif backend_kind == "emcache":
         if not HAS_EMCACHE:
             raise ValueError(
                 f"Backend '{backend_kind}' is not available on this platform. "

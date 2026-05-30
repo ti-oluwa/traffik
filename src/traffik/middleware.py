@@ -497,7 +497,7 @@ class ThrottleMiddleware:
                             await response(scope, receive, send)  # type: ignore[call-arg]
                             return
 
-                    raise exc
+                    raise
 
         # Ensure that the next middleware or application call is not nested
         # within this middleware's backend context. Else, it would cause

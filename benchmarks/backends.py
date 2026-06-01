@@ -27,7 +27,7 @@ from traffik.strategies.token_bucket import (
 
 HAS_EMCACHE: bool = False
 
-if sys.platform != "win32" or sys.platform != "cygwin":
+if sys.platform not in ("win32", "cygwin"):
     try:
         from traffik.backends.memcached.emcache import (
             MemcachedBackend as EmcacheBackend,
@@ -38,7 +38,7 @@ if sys.platform != "win32" or sys.platform != "cygwin":
         HAS_EMCACHE = False
 
 
-STRATEGIES: typing.Dict[str, typing.Any] = {
+STRATEGIES = {
     "fixed_window": FixedWindowStrategy,
     "sliding_window_counter": SlidingWindowCounterStrategy,
     "sliding_window_log": SlidingWindowLogStrategy,
@@ -52,7 +52,7 @@ STRATEGIES: typing.Dict[str, typing.Any] = {
 
 async def get_identifier(connection: Request) -> str:
     """
-    Default benchmark identifier: uses X-Client-ID header or falls back to IP.
+    Default benchmark identifier: uses `X-Client-ID` header or falls back to IP.
 
     :param connection: The HTTP connection.
     :return: A string identifier for the connection.
@@ -60,8 +60,6 @@ async def get_identifier(connection: Request) -> str:
     client_id = connection.headers.get("X-Client-ID")
     if client_id:
         return client_id
-
-    # Try to get remote address
     return connection.client[0] if connection.client else "anonymous"
 
 
@@ -73,16 +71,15 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typin
     :return: An uninitialized backend instance.
     :raises ValueError: If backend_kind is unknown or unavailable on this platform.
     """
-    backend_kind = config.backend_kind.lower()
-
-    if backend_kind == "inmemory":
+    kind = config.backend_kind.lower()
+    if kind == "inmemory":
         return InMemoryBackend(
             namespace="bench",
             identifier=get_identifier,
             persistent=False,
             number_of_shards=8,
         )
-    elif backend_kind == "multiprocess":
+    elif kind == "multiprocess":
         return MultiProcessInMemoryBackend(
             namespace="bench",
             identifier=get_identifier,
@@ -90,21 +87,21 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typin
             number_of_shards=config.multiprocess_shards,
             max_keys=config.multiprocess_max_keys,
         )
-    elif backend_kind == "aioredis":
+    elif kind == "aioredis":
         return AioredisBackend(
             connection=config.redis_url,
             namespace="bench",
             identifier=get_identifier,
             persistent=False,
         )
-    elif backend_kind == "coredis":
+    elif kind == "coredis":
         return CoredisBackend(
             connection=config.redis_url,
             namespace="bench",
             identifier=get_identifier,
             persistent=False,
         )
-    elif backend_kind == "aiomcache":
+    elif kind == "aiomcache":
         return AiomcacheBackend(
             host=config.memcached_host,
             port=config.memcached_port,
@@ -112,10 +109,10 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typin
             identifier=get_identifier,
             persistent=False,
         )
-    elif backend_kind == "emcache":
+    elif kind == "emcache":
         if not HAS_EMCACHE:
             raise ValueError(
-                f"Backend '{backend_kind}' is not available on this platform. "
+                f"Backend '{kind}' is not available on this platform. "
                 "EmCache requires a POSIX system."
             )
         return EmcacheBackend(  # type: ignore
@@ -126,7 +123,7 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typin
             persistent=False,
         )
     else:
-        raise ValueError(f"Unknown backend kind: {backend_kind}")
+        raise ValueError(f"Unknown backend kind: {kind}")
 
 
 def create_strategy(config: BenchmarkConfig):

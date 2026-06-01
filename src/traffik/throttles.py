@@ -116,7 +116,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
     __slots__ = (
         "__signature__",
         "__weakref__",
-        "_connection_type",
         "_default_context",
         "_disabled",
         "_error_callback",
@@ -142,6 +141,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         "uid",
         "use_fixed_backend",
     )
+
+    connection_type: typing.Type[HTTPConnectionT]  # Should be set in subclasses
 
     def __init__(
         self,
@@ -584,97 +585,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             stat=stat,
             context=context,
         )
-
-    @property
-    def connection_type(self) -> typing.Type[HTTPConnection]:
-        """
-        Returns the `HTTPConnection` type that this throttle is designed for.
-
-        If `_connection_type` is already set, it returns it. Otherwise,
-        it resolves the connection type through a resolution process that checks for type hints
-        in the class definition, including generic parameters and method annotations.
-        """
-        # Notice that we didn't define the `_connection_type` in `__init__`.
-        # This is so that when subclasses want to override the connection type resolution logic,
-        # they can set `_connection_type` directly before calling `super().__init__()`,
-        # so that when `connection_type` is accessed during `__init__`,
-        # it returns the connection type they set without going through the resolution process.
-        if getattr(self, "_connection_type", None) is not None:
-            return self._connection_type  # type: ignore[has-type]
-
-        self._connection_type = self._resolve_connection_type()
-        return self._connection_type
-
-    def _resolve_connection_type(self) -> typing.Type[HTTPConnection]:
-        """
-        Resolve's the `HTTPConnection` type that this throttle is designed for.
-
-        Resolution order:
-        1. Check the connection type cache to see if we've already resolved
-            the connection type for this throttle class before.
-        2. `__orig_class__` (set when instantiated as e.g. `Throttle[Request](...)`)
-        3. Walk `__orig_bases__` through the MRO (for subclasses like `HTTPThrottle`)
-        4. Inspect the `hit` method's `connection` parameter type hint
-        5. If all else fails, default to `HTTPConnection`
-        """
-        if type(self) in _conection_type_cache:
-            return _conection_type_cache[type(self)]  # type: ignore[return-value]
-
-        # Check `__orig_class__` which is available when generic is instantiated directly
-        orig_class = getattr(self, "__orig_class__", None)
-        if orig_class is not None:
-            args = typing.get_args(orig_class)
-            if (
-                args
-                and isinstance(args[0], type)
-                and issubclass(args[0], HTTPConnection)
-            ):
-                _cache_connection_type(type(self), args[0])
-                return args[0]  # type: ignore[return-value]
-
-        # If the `__orig_class__` attribute is not set, walk class hierarchy for concrete type args on `Throttle` bases
-        # e.g. `HTTPThrottle(Throttle[Request])` gives `Request` as the connection type
-        for cls in type(self).__mro__:
-            for base in getattr(cls, "__orig_bases__", ()):
-                origin = typing.get_origin(base)
-                if origin is None:
-                    continue
-                try:
-                    if not (origin is Throttle or issubclass(origin, Throttle)):
-                        continue
-                except TypeError:
-                    continue
-                args = typing.get_args(base)
-                if (
-                    args
-                    and isinstance(args[0], type)
-                    and issubclass(args[0], HTTPConnection)
-                ):
-                    _cache_connection_type(type(self), args[0])
-                    return args[0]  # type: ignore[return-value]
-
-        # Lastly, inspect the `hit(...)` method signature for a concrete connection annotation
-        try:
-            hints = typing.get_type_hints(type(self).hit, include_extras=False)
-            # Check for a parameter named "connection" first since that's the conventional name for the connection parameter in `__call__`.
-            # If it's not present, the first parameter annotated as a subclass of HTTPConnection is
-            # assumed to be the connection type for the throttle
-            connection_type = (
-                hints.get("connection", None) or hints[list(hints.keys())[0]]
-            )
-            if (
-                connection_type is not None
-                and isinstance(connection_type, type)
-                and issubclass(connection_type, HTTPConnection)
-            ):
-                _cache_connection_type(type(self), connection_type)
-                return connection_type  # type: ignore[return-value]
-        except Exception:  # nosec
-            pass
-
-        # Fallback to `HTTPConnection`.
-        # Do not cache this fallback result to allow for dynamic resolution later on.
-        return HTTPConnection
 
     def _make_signature(self) -> inspect.Signature:
         """
@@ -1347,6 +1257,8 @@ class HTTPThrottle(Throttle[Request]):
 
     __slots__ = ("use_method",)
 
+    connection_type = Request
+
     def __init__(
         self,
         uid: str,
@@ -1561,6 +1473,8 @@ class WebSocketThrottle(Throttle[WebSocket]):
 
     __slots__ = ()
 
+    connection_type = WebSocket
+
     def __init__(
         self,
         uid: str,
@@ -1749,7 +1663,7 @@ def throttled(
                     "No HTTP connection found in route parameters for throttling."
                 )
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             loop.run_until_complete(throttle(connection))  # type: ignore
             return route(*args, **kwargs)
 

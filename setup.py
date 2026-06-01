@@ -67,7 +67,7 @@ setup(
             "pytest-asyncio>=0.24.0",
             "pytest-cov>=5.0.0",
             "pytest-rerunfailures>=16.0.1",
-            "httpx>=0.28.0",
+            "httpx2>=0.28.0",
             "anyio>=4.0.0",
             "requests>=2.32.4",
         ],

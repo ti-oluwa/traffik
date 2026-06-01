@@ -3,7 +3,7 @@ import sys
 import time
 import typing
 
-import httpx
+import httpx2
 
 from benchmarks.backends import create_backend, create_strategy
 from benchmarks.base import BenchmarkConfig, ScenarioResult
@@ -18,7 +18,7 @@ from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
 
-async def scenario_below_limit_steady(
+async def below_limit_steady(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Below-Limit Steady State scenario."""
@@ -35,17 +35,17 @@ async def scenario_below_limit_steady(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(middleware_throttle, backend)
+        app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
             "Middleware Below-Limit Steady State",
             app,
             backend,
-            80,
-            config,
+            n=80,
+            config=config,
             concurrent=False,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Middleware Below-Limit Steady State",
@@ -63,9 +63,7 @@ async def scenario_below_limit_steady(
         await backend.close()
 
 
-async def scenario_at_limit_edge(
-    config: BenchmarkConfig, iteration: int = 1
-) -> ScenarioResult:
+async def at_limit_edge(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
     """At-Limit Edge scenario."""
     backend = create_backend(config)
     try:
@@ -80,17 +78,17 @@ async def scenario_at_limit_edge(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(middleware_throttle, backend)
+        app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
             "Middleware At-Limit Edge",
             app,
             backend,
-            100,
-            config,
+            n=100,
+            config=config,
             concurrent=False,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Middleware At-Limit Edge",
@@ -108,7 +106,7 @@ async def scenario_at_limit_edge(
         await backend.close()
 
 
-async def scenario_over_limit_burst(
+async def over_limit_burst(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Over-Limit Burst scenario."""
@@ -125,17 +123,17 @@ async def scenario_over_limit_burst(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(middleware_throttle, backend)
+        app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
             "Middleware Over-Limit Burst",
             app,
             backend,
-            200,
-            config,
+            n=200,
+            config=config,
             concurrent=False,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Middleware Over-Limit Burst",
@@ -153,7 +151,7 @@ async def scenario_over_limit_burst(
         await backend.close()
 
 
-async def scenario_concurrent_contention(
+async def concurrent_contention(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Concurrent Contention scenario."""
@@ -170,17 +168,17 @@ async def scenario_concurrent_contention(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(middleware_throttle, backend)
+        app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
             "Middleware Concurrent Contention",
             app,
             backend,
-            500,
-            config,
+            n=500,
+            config=config,
             concurrent=True,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Middleware Concurrent Contention",
@@ -198,9 +196,7 @@ async def scenario_concurrent_contention(
         await backend.close()
 
 
-async def scenario_single_hot_key(
-    config: BenchmarkConfig, iteration: int = 1
-) -> ScenarioResult:
+async def single_hot_key(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
     """Single Hot Key scenario."""
     backend = create_backend(config)
     try:
@@ -215,18 +211,18 @@ async def scenario_single_hot_key(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(middleware_throttle, backend)
+        app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
             "Middleware Single Hot Key",
             app,
             backend,
-            300,
-            config,
+            n=300,
+            config=config,
             concurrent=True,
             iteration=iteration,
             headers={"X-Client-ID": "hot-key-user"},
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Middleware Single Hot Key",
@@ -244,7 +240,7 @@ async def scenario_single_hot_key(
         await backend.close()
 
 
-async def scenario_many_unique_keys(
+async def many_unique_keys(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Many Unique Keys scenario."""
@@ -261,11 +257,11 @@ async def scenario_many_unique_keys(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(middleware_throttle, backend)
+        app = make_middleware_app(throttles=[middleware_throttle])
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
+            transport = httpx2.ASGITransport(app=app)
+            async with httpx2.AsyncClient(
                 transport=transport,
                 base_url="http://test",
                 timeout=30.0,
@@ -281,7 +277,7 @@ async def scenario_many_unique_keys(
                 for batch_idx in range(num_batches):
                     batch_size = min(10, 300 - batch_idx * 10)
 
-                    async def single_request(user_idx):
+                    async def single_request(user_idx: int):
                         try:
                             user_id = f"user-{user_idx % 50}"
                             start = time.perf_counter()
@@ -290,7 +286,7 @@ async def scenario_many_unique_keys(
                             )
                             end = time.perf_counter()
                             return end - start, response.status_code
-                        except Exception:
+                        except Exception:  # noqa
                             return 0.0, 0
 
                     tasks = [
@@ -323,7 +319,7 @@ async def scenario_many_unique_keys(
                     latencies_seconds=latencies,
                     iteration=iteration,
                 )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Middleware Many Unique Keys",
@@ -341,7 +337,7 @@ async def scenario_many_unique_keys(
         await backend.close()
 
 
-async def scenario_window_boundary_burst(
+async def window_boundary_burst(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Window Boundary Burst scenario."""
@@ -358,11 +354,11 @@ async def scenario_window_boundary_burst(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(middleware_throttle, backend)
+        app = make_middleware_app(throttles=[middleware_throttle])
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
+            transport = httpx2.ASGITransport(app=app)
+            async with httpx2.AsyncClient(
                 transport=transport,
                 base_url="http://test",
                 timeout=30.0,
@@ -402,7 +398,7 @@ async def scenario_window_boundary_burst(
                     latencies_seconds=all_latencies,
                     iteration=iteration,
                 )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Middleware Window Boundary Burst",
@@ -420,7 +416,7 @@ async def scenario_window_boundary_burst(
         await backend.close()
 
 
-async def scenario_sustained_high_load(
+async def sustained_high_load(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Sustained High Load scenario."""
@@ -437,17 +433,17 @@ async def scenario_sustained_high_load(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(middleware_throttle, backend)
+        app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
             "Middleware Sustained High Load",
             app,
             backend,
-            800,
-            config,
+            n=800,
+            config=config,
             concurrent=True,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Middleware Sustained High Load",
@@ -465,9 +461,7 @@ async def scenario_sustained_high_load(
         await backend.close()
 
 
-async def scenario_error_recovery(
-    config: BenchmarkConfig, iteration: int = 1
-) -> ScenarioResult:
+async def error_recovery(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
     """Error Recovery scenario."""
     backend = create_backend(config)
     try:
@@ -483,17 +477,17 @@ async def scenario_error_recovery(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(middleware_throttle, backend)
+        app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
             "Middleware Error Recovery (on_error=allow)",
             app,
             backend,
-            100,
-            config,
+            n=100,
+            config=config,
             concurrent=False,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Middleware Error Recovery (on_error=allow)",
@@ -511,7 +505,7 @@ async def scenario_error_recovery(
         await backend.close()
 
 
-async def scenario_selective_throttling(
+async def selective_throttling(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Selective Throttling scenario."""
@@ -528,11 +522,11 @@ async def scenario_selective_throttling(
         )
         middleware_throttle = MiddlewareThrottle(throttle)
         await backend.initialize()
-        app = make_middleware_app(middleware_throttle, backend)
+        app = make_middleware_app(throttles=[middleware_throttle])
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
+            transport = httpx2.ASGITransport(app=app)
+            async with httpx2.AsyncClient(
                 transport=transport,
                 base_url="http://test",
                 timeout=30.0,
@@ -577,7 +571,7 @@ async def scenario_selective_throttling(
                     latencies_seconds=all_latencies,
                     iteration=iteration,
                 )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="Selective Throttling",
@@ -596,14 +590,14 @@ async def scenario_selective_throttling(
 
 
 SCENARIOS: typing.Dict[str, ScenarioFunc] = {
-    "below_limit": scenario_below_limit_steady,
-    "at_limit": scenario_at_limit_edge,
-    "over_limit": scenario_over_limit_burst,
-    "concurrent": scenario_concurrent_contention,
-    "hot_key": scenario_single_hot_key,
-    "many_keys": scenario_many_unique_keys,
-    "window_boundary": scenario_window_boundary_burst,
-    "sustained": scenario_sustained_high_load,
-    "error_recovery": scenario_error_recovery,
-    "selective": scenario_selective_throttling,
+    "below_limit": below_limit_steady,
+    "at_limit": at_limit_edge,
+    "over_limit": over_limit_burst,
+    "concurrent": concurrent_contention,
+    "hot_key": single_hot_key,
+    "many_keys": many_unique_keys,
+    "window_boundary": window_boundary_burst,
+    "sustained": sustained_high_load,
+    "error_recovery": error_recovery,
+    "selective": selective_throttling,
 }

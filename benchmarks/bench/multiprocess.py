@@ -33,14 +33,14 @@ else:
                 print(f"ERROR: Unknown scenario: {scenario_key}", file=sys.stderr)
                 continue
 
-            scenario_func = SCENARIOS[scenario_key]
+            scenario = SCENARIOS[scenario_key]
 
             # Warmup
             print(f"Running warmup for {scenario_key}...", file=sys.stderr)
             for _ in range(warmup_iterations):
                 try:
-                    await scenario_func(config, iteration=0)
-                except Exception as exc:
+                    await scenario(config, iteration=0)
+                except Exception as exc:  # noqa
                     print(
                         f"WARN: Warmup failed for {scenario_key}: {exc}",
                         file=sys.stderr,
@@ -54,9 +54,9 @@ else:
                     file=sys.stderr,
                 )
                 try:
-                    result = await scenario_func(config, iteration=i)
+                    result = await scenario(config, iteration=i)
                     scenario_results.append(result)
-                except Exception as exc:
+                except Exception as exc:  # noqa
                     print(
                         f"WARN: Iteration {i} failed for {scenario_key}: {exc}",
                         file=sys.stderr,

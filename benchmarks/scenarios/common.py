@@ -2,13 +2,13 @@ import asyncio
 import time
 import typing
 
-import httpx
+import httpx2
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 
 from benchmarks.base import BenchmarkConfig, ScenarioResult
 from traffik.backends.base import ThrottleBackend
 from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
-from traffik.throttles import HTTPThrottle, WebSocketThrottle, is_throttled
+from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle, is_throttled
 
 
 class ScenarioFunc(typing.Protocol):
@@ -17,17 +17,14 @@ class ScenarioFunc(typing.Protocol):
     ) -> ScenarioResult: ...
 
 
-def make_http_app(
-    throttle: HTTPThrottle, backend: ThrottleBackend[typing.Any, typing.Any]
-) -> FastAPI:
+def make_http_app(throttle: HTTPThrottle) -> FastAPI:
     """
     Create a minimal FastAPI app with a single throttled GET /test endpoint.
 
     :param throttle: An HTTPThrottle instance.
-    :param backend: The backend the throttle is bound to.
     :return: A FastAPI application instance.
     """
-    app = FastAPI(lifespan=backend.lifespan)
+    app = FastAPI()
 
     @app.get("/test")
     async def test_endpoint(request: Request = Depends(throttle)):
@@ -67,20 +64,24 @@ def make_ws_app(
 
 
 def make_middleware_app(
-    throttle: typing.Union[MiddlewareThrottle, HTTPThrottle],
-    backend: ThrottleBackend[typing.Any, typing.Any],
+    throttles: typing.Iterable[typing.Union[MiddlewareThrottle, Throttle]],
 ) -> FastAPI:
     """
-    Create a FastAPI app with ThrottleMiddleware applied to /test.
+    Create a FastAPI app with `ThrottleMiddleware` applied to `/test`.
 
-    Also has an /unthrottled endpoint for selective throttling tests.
+    Also has an `/unthrottled` endpoint for selective throttling tests.
 
-    :param throttle: An HTTPThrottle instance.
-    :param backend: The backend instance.
-    :param middleware_throttle: A MiddlewareThrottle wrapping the throttle.
-    :return: A FastAPI application instance with ThrottleMiddleware.
+    :param throttles: `Throttle` or `MiddlewareThrottle` instances.
+    :return: A FastAPI application instance with `ThrottleMiddleware`.
     """
-    app = FastAPI(lifespan=backend.lifespan)
+    app = FastAPI()
+
+    app.add_middleware(  # type: ignore
+        ThrottleMiddleware,
+        middleware_throttles=throttles,  # type: ignore[arg-type]
+        path="/test",  # type: ignore[arg-type]
+        methods={"GET"},  # type: ignore[arg-type]
+    )
 
     @app.get("/test")
     async def test_endpoint():
@@ -90,18 +91,11 @@ def make_middleware_app(
     async def unthrottled_endpoint():
         return {"status": "ok"}
 
-    app.add_middleware(  # type: ignore
-        ThrottleMiddleware,
-        throttle=throttle,  # type: ignore[arg-type]
-        path="/test",  # type: ignore[arg-type]
-        methods={"GET"},  # type: ignore[arg-type]
-    )
-
     return app
 
 
 async def send_sequential(
-    client: httpx.AsyncClient,
+    client: httpx2.AsyncClient,
     n: int,
     path: str = "/test",
     headers: typing.Optional[typing.Dict[str, str]] = None,
@@ -109,7 +103,7 @@ async def send_sequential(
     """
     Send `n` sequential GET requests and collect timing and status counts.
 
-    :param client: An initialized httpx AsyncClient.
+    :param client: An initialized httpx2 AsyncClient.
     :param n: Number of requests to send.
     :param path: URL path to request.
     :param headers: Optional headers to send with each request.
@@ -140,7 +134,7 @@ async def send_sequential(
 
 
 async def send_concurrent(
-    client: httpx.AsyncClient,
+    client: httpx2.AsyncClient,
     n: int,
     concurrency: int,
     path: str = "/test",
@@ -149,7 +143,7 @@ async def send_concurrent(
     """
     Send `n` requests in batches of `concurrency` using asyncio.gather.
 
-    :param client: An initialized httpx AsyncClient.
+    :param client: An initialized httpx2 AsyncClient.
     :param n: Total number of requests to send.
     :param concurrency: Max requests per gather batch.
     :param path: URL path to request.
@@ -208,7 +202,7 @@ async def run_http_scenario(
     """
     Run a single HTTP scenario iteration.
 
-    Enters the backend context, creates an httpx ASGI client, runs requests,
+    Enters the backend context, creates an httpx2 ASGI client, runs requests,
     and returns a ScenarioResult.
 
     :param scenario_name: Human-readable name for this scenario.
@@ -223,8 +217,8 @@ async def run_http_scenario(
     :return: A populated ScenarioResult.
     """
     async with backend(persistent=False, close_on_exit=False, initialized=True):
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(
             transport=transport,
             base_url="http://test",
             timeout=30.0,

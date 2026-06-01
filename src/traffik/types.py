@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from starlette.requests import HTTPConnection
 from starlette.responses import Response
-from typing_extensions import ParamSpec, TypeAlias, TypedDict
+from typing_extensions import ParamSpec, TypeAlias, TypedDict, TypeVar
 
 from traffik.rates import Rate
 
@@ -28,10 +28,10 @@ __all__ = [
 
 P = ParamSpec("P")
 Q = ParamSpec("Q")
-R = typing.TypeVar("R")
-S = typing.TypeVar("S")
-T = typing.TypeVar("T")
-Rco = typing.TypeVar("Rco", covariant=True)
+R = TypeVar("R")
+S = TypeVar("S")
+T = TypeVar("T")
+Rco = TypeVar("Rco", covariant=True)
 
 EXEMPTED = object()
 """
@@ -45,8 +45,8 @@ when the connection should not be subject to throttling.
 Function: TypeAlias = typing.Callable[P, R]
 CoroutineFunction: TypeAlias = typing.Callable[P, typing.Awaitable[R]]
 
-HTTPConnectionT = typing.TypeVar("HTTPConnectionT", bound=HTTPConnection)
-HTTPConnectionTcon = typing.TypeVar(
+HTTPConnectionT = TypeVar("HTTPConnectionT", bound=HTTPConnection)
+HTTPConnectionTcon = TypeVar(
     "HTTPConnectionTcon", bound=HTTPConnection, contravariant=True
 )
 WaitPeriod: TypeAlias = float
@@ -59,7 +59,7 @@ ExceptionHandler: TypeAlias = typing.Callable[
 
 AwaitableCallable = typing.Callable[..., typing.Awaitable[T]]
 
-MappingT = typing.TypeVar("MappingT", bound=typing.Mapping[typing.Any, typing.Any])
+MappingT = TypeVar("MappingT", bound=typing.Mapping[typing.Any, typing.Any])
 ThrottleErrorHandler = typing.Callable[
     [HTTPConnectionT, MappingT], typing.Awaitable[WaitPeriod]
 ]
@@ -201,7 +201,7 @@ class Dependency(typing.Protocol, typing.Generic[P, Rco]):
     ) -> typing.Union[Rco, typing.Awaitable[Rco]]: ...
 
 
-MapT = typing.TypeVar("MapT", bound=Mapping)
+MapT = TypeVar("MapT", bound=Mapping)
 
 
 @dataclass(frozen=True)

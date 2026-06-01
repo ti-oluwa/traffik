@@ -2,7 +2,7 @@ import sys
 
 if sys.platform == "win32" or sys.platform == "cygwin":
     raise SystemExit(
-        "MultiProcessInMemoryBackend benchmarks are not supported on Windows. "
+        "Multiprocess inmemory backend benchmarks are not supported on Windows. "
         "This module requires the 'fork' multiprocessing start method."
     )
 
@@ -10,7 +10,7 @@ import asyncio
 import time
 import typing
 
-import httpx
+import httpx2
 
 from benchmarks.backends import create_strategy
 from benchmarks.base import BenchmarkConfig, ScenarioResult
@@ -36,12 +36,11 @@ def create_multiprocess_backend(config: BenchmarkConfig) -> MultiProcessInMemory
         namespace="bench",
         number_of_shards=config.multiprocess_shards,
         max_keys=config.multiprocess_max_keys,
-        persistent=False,
         cleanup_frequency=30.0,
     )
 
 
-async def scenario_below_limit_steady(
+async def below_limit_steady(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Below-Limit Steady State scenario."""
@@ -57,17 +56,17 @@ async def scenario_below_limit_steady(
             registry=registry,
         )
         await backend.initialize()
-        app = make_http_app(throttle, backend)
+        app = make_http_app(throttle)
         return await run_http_scenario(
             "MP Below-Limit Steady State",
             app,
             backend,
-            80,
-            config,
+            n=80,
+            config=config,
             concurrent=False,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="MP Below-Limit Steady State",
@@ -85,9 +84,7 @@ async def scenario_below_limit_steady(
         await backend.close()
 
 
-async def scenario_at_limit_edge(
-    config: BenchmarkConfig, iteration: int = 1
-) -> ScenarioResult:
+async def at_limit_edge(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
     """At-Limit Edge scenario."""
     backend = create_multiprocess_backend(config)
     try:
@@ -101,17 +98,17 @@ async def scenario_at_limit_edge(
             registry=registry,
         )
         await backend.initialize()
-        app = make_http_app(throttle, backend)
+        app = make_http_app(throttle)
         return await run_http_scenario(
             "MP At-Limit Edge",
             app,
             backend,
-            100,
-            config,
+            n=100,
+            config=config,
             concurrent=False,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="MP At-Limit Edge",
@@ -129,7 +126,7 @@ async def scenario_at_limit_edge(
         await backend.close()
 
 
-async def scenario_over_limit_burst(
+async def over_limit_burst(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Over-Limit Burst scenario."""
@@ -145,17 +142,17 @@ async def scenario_over_limit_burst(
             registry=registry,
         )
         await backend.initialize()
-        app = make_http_app(throttle, backend)
+        app = make_http_app(throttle)
         return await run_http_scenario(
             "MP Over-Limit Burst",
             app,
             backend,
-            200,
-            config,
+            n=200,
+            config=config,
             concurrent=False,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="MP Over-Limit Burst",
@@ -173,7 +170,7 @@ async def scenario_over_limit_burst(
         await backend.close()
 
 
-async def scenario_concurrent_contention(
+async def concurrent_contention(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Concurrent Contention scenario."""
@@ -189,17 +186,17 @@ async def scenario_concurrent_contention(
             registry=registry,
         )
         await backend.initialize()
-        app = make_http_app(throttle, backend)
+        app = make_http_app(throttle)
         return await run_http_scenario(
             "MP Concurrent Contention",
             app,
             backend,
-            500,
-            config,
+            n=500,
+            config=config,
             concurrent=True,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="MP Concurrent Contention",
@@ -217,9 +214,7 @@ async def scenario_concurrent_contention(
         await backend.close()
 
 
-async def scenario_single_hot_key(
-    config: BenchmarkConfig, iteration: int = 1
-) -> ScenarioResult:
+async def single_hot_key(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
     """Single Hot Key scenario."""
     backend = create_multiprocess_backend(config)
     try:
@@ -233,18 +228,18 @@ async def scenario_single_hot_key(
             registry=registry,
         )
         await backend.initialize()
-        app = make_http_app(throttle, backend)
+        app = make_http_app(throttle)
         return await run_http_scenario(
             "MP Single Hot Key",
             app,
             backend,
-            300,
-            config,
+            n=300,
+            config=config,
             concurrent=True,
             iteration=iteration,
             headers={"X-Client-ID": "hot-key-user"},
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="MP Single Hot Key",
@@ -262,7 +257,7 @@ async def scenario_single_hot_key(
         await backend.close()
 
 
-async def scenario_many_unique_keys(
+async def many_unique_keys(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Many Unique Keys scenario."""
@@ -278,11 +273,11 @@ async def scenario_many_unique_keys(
             registry=registry,
         )
         await backend.initialize()
-        app = make_http_app(throttle, backend)
+        app = make_http_app(throttle)
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
+            transport = httpx2.ASGITransport(app=app)
+            async with httpx2.AsyncClient(
                 transport=transport,
                 base_url="http://test",
                 timeout=30.0,
@@ -307,7 +302,7 @@ async def scenario_many_unique_keys(
                             )
                             end = time.perf_counter()
                             return end - start, response.status_code
-                        except Exception:
+                        except Exception:  # noqa
                             return 0.0, 0
 
                     tasks = [
@@ -340,7 +335,7 @@ async def scenario_many_unique_keys(
                     latencies_seconds=latencies,
                     iteration=iteration,
                 )
-    except Exception as exc:
+    except Exception as exc:  # noqa  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="MP Many Unique Keys",
@@ -358,7 +353,7 @@ async def scenario_many_unique_keys(
         await backend.close()
 
 
-async def scenario_window_boundary_burst(
+async def window_boundary_burst(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Window Boundary Burst scenario."""
@@ -374,11 +369,11 @@ async def scenario_window_boundary_burst(
             registry=registry,
         )
         await backend.initialize()
-        app = make_http_app(throttle, backend)
+        app = make_http_app(throttle)
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
+            transport = httpx2.ASGITransport(app=app)
+            async with httpx2.AsyncClient(
                 transport=transport,
                 base_url="http://test",
                 timeout=30.0,
@@ -417,7 +412,7 @@ async def scenario_window_boundary_burst(
                     latencies_seconds=all_latencies,
                     iteration=iteration,
                 )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="MP Window Boundary Burst",
@@ -435,7 +430,7 @@ async def scenario_window_boundary_burst(
         await backend.close()
 
 
-async def scenario_sustained_high_load(
+async def sustained_high_load(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """Sustained High Load scenario."""
@@ -451,17 +446,17 @@ async def scenario_sustained_high_load(
             registry=registry,
         )
         await backend.initialize()
-        app = make_http_app(throttle, backend)
+        app = make_http_app(throttle)
         return await run_http_scenario(
             "MP Sustained High Load",
             app,
             backend,
-            800,
-            config,
+            n=800,
+            config=config,
             concurrent=True,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="MP Sustained High Load",
@@ -479,9 +474,7 @@ async def scenario_sustained_high_load(
         await backend.close()
 
 
-async def scenario_error_recovery(
-    config: BenchmarkConfig, iteration: int = 1
-) -> ScenarioResult:
+async def error_recovery(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
     """Error Recovery scenario."""
     backend = create_multiprocess_backend(config)
     try:
@@ -496,17 +489,17 @@ async def scenario_error_recovery(
             on_error="allow",
         )
         await backend.initialize()
-        app = make_http_app(throttle, backend)
+        app = make_http_app(throttle)
         return await run_http_scenario(
             "MP Error Recovery (on_error=allow)",
             app,
             backend,
-            100,
-            config,
+            n=100,
+            config=config,
             concurrent=False,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="MP Error Recovery (on_error=allow)",
@@ -524,7 +517,7 @@ async def scenario_error_recovery(
         await backend.close()
 
 
-async def scenario_shared_memory_stress(
+async def shared_memory_stress(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """MP Shared Memory Stress scenario."""
@@ -540,17 +533,17 @@ async def scenario_shared_memory_stress(
             registry=registry,
         )
         await backend.initialize()
-        app = make_http_app(throttle, backend)
+        app = make_http_app(throttle)
         return await run_http_scenario(
             "MP Shared Memory Stress",
             app,
             backend,
-            2000,
-            config,
+            n=2000,
+            config=config,
             concurrent=True,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="MP Shared Memory Stress",
@@ -568,9 +561,7 @@ async def scenario_shared_memory_stress(
         await backend.close()
 
 
-async def scenario_key_eviction(
-    config: BenchmarkConfig, iteration: int = 1
-) -> ScenarioResult:
+async def key_eviction(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
     """MP Key Eviction scenario."""
     backend = MultiProcessInMemoryBackend.create(
         namespace="bench",
@@ -590,11 +581,11 @@ async def scenario_key_eviction(
             registry=registry,
         )
         await backend.initialize()
-        app = make_http_app(throttle, backend)
+        app = make_http_app(throttle)
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
+            transport = httpx2.ASGITransport(app=app)
+            async with httpx2.AsyncClient(
                 transport=transport,
                 base_url="http://test",
                 timeout=30.0,
@@ -623,7 +614,7 @@ async def scenario_key_eviction(
                             throttled += 1
                         else:
                             errors += 1
-                    except Exception:
+                    except Exception:  # noqa
                         errors += 1
 
                 # Sleep to allow cleanup cycle
@@ -646,7 +637,7 @@ async def scenario_key_eviction(
                             throttled += 1
                         else:
                             errors += 1
-                    except Exception:
+                    except Exception:  # noqa
                         errors += 1
 
                 end_time = time.perf_counter()
@@ -664,7 +655,7 @@ async def scenario_key_eviction(
                     latencies_seconds=latencies,
                     iteration=iteration,
                 )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="MP Key Eviction",
@@ -683,15 +674,15 @@ async def scenario_key_eviction(
 
 
 SCENARIOS: typing.Dict[str, ScenarioFunc] = {
-    "below_limit": scenario_below_limit_steady,
-    "at_limit": scenario_at_limit_edge,
-    "over_limit": scenario_over_limit_burst,
-    "concurrent": scenario_concurrent_contention,
-    "hot_key": scenario_single_hot_key,
-    "many_keys": scenario_many_unique_keys,
-    "window_boundary": scenario_window_boundary_burst,
-    "sustained": scenario_sustained_high_load,
-    "error_recovery": scenario_error_recovery,
-    "shared_memory": scenario_shared_memory_stress,
-    "key_eviction": scenario_key_eviction,
+    "below_limit": below_limit_steady,
+    "at_limit": at_limit_edge,
+    "over_limit": over_limit_burst,
+    "concurrent": concurrent_contention,
+    "hot_key": single_hot_key,
+    "many_keys": many_unique_keys,
+    "window_boundary": window_boundary_burst,
+    "sustained": sustained_high_load,
+    "error_recovery": error_recovery,
+    "shared_memory": shared_memory_stress,
+    "key_eviction": key_eviction,
 }

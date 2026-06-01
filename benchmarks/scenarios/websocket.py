@@ -3,7 +3,7 @@ import sys
 import time
 import typing
 
-from benchmarks.asynctestclient import AsyncTestClient
+from benchmarks.asynctestclient import AsyncTestClient, AsyncWebSocketTestSession
 from benchmarks.backends import create_backend, create_strategy
 from benchmarks.base import BenchmarkConfig, ScenarioResult
 from benchmarks.scenarios.common import ScenarioFunc, make_ws_app
@@ -11,14 +11,13 @@ from traffik import WebSocketThrottle
 from traffik.registry import ThrottleRegistry
 
 
-async def send_ws_messages(
-    websocket_session,
-    n: int,
+async def send_messages(
+    ws: AsyncWebSocketTestSession, n: int
 ) -> typing.Tuple[typing.List[float], int, int]:
     """
     Send n JSON messages over an open WebSocket session and collect timing.
 
-    :param websocket_session: An open AsyncWebSocketTestSession.
+    :param ws: An open `AsyncWebSocketTestSession`.
     :param n: Number of messages to send.
     :return: Tuple of (latencies_seconds, successful, throttled).
     """
@@ -29,8 +28,8 @@ async def send_ws_messages(
     for i in range(n):
         try:
             start = time.perf_counter()
-            await websocket_session.send_json({"message": f"test_{i}"})
-            response = await websocket_session.receive_json()
+            await ws.send_json({"message": f"test_{i}"})
+            response = await ws.receive_json()
             end = time.perf_counter()
             latencies.append(end - start)
 
@@ -38,15 +37,13 @@ async def send_ws_messages(
                 throttled += 1
             else:
                 successful += 1
-        except Exception:
+        except Exception:  # noqa
             pass
 
     return latencies, successful, throttled
 
 
-async def ws_scenario_below_limit(
-    config: BenchmarkConfig, iteration: int = 1
-) -> ScenarioResult:
+async def below_limit(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
     """WS Below-Limit scenario."""
     backend = create_backend(config)
     try:
@@ -67,7 +64,7 @@ async def ws_scenario_below_limit(
             client.websocket_connect("/ws") as ws,
         ):
             start = time.perf_counter()
-            latencies, successful, throttled = await send_ws_messages(ws, 50)
+            latencies, successful, throttled = await send_messages(ws, 50)
             end = time.perf_counter()
             total_time = end - start
 
@@ -83,7 +80,7 @@ async def ws_scenario_below_limit(
                 latencies_seconds=latencies,
                 iteration=iteration,
             )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: WS scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="WS Below-Limit",
@@ -101,9 +98,7 @@ async def ws_scenario_below_limit(
         await backend.close()
 
 
-async def ws_scenario_over_limit(
-    config: BenchmarkConfig, iteration: int = 1
-) -> ScenarioResult:
+async def over_limit(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
     """WS Over-Limit scenario."""
     backend = create_backend(config)
     try:
@@ -124,7 +119,7 @@ async def ws_scenario_over_limit(
             client.websocket_connect("/ws") as ws,
         ):
             start = time.perf_counter()
-            latencies, successful, throttled = await send_ws_messages(ws, 150)
+            latencies, successful, throttled = await send_messages(ws, 150)
             end = time.perf_counter()
             total_time = end - start
 
@@ -140,7 +135,7 @@ async def ws_scenario_over_limit(
                 latencies_seconds=latencies,
                 iteration=iteration,
             )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: WS scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="WS Over-Limit",
@@ -158,9 +153,7 @@ async def ws_scenario_over_limit(
         await backend.close()
 
 
-async def ws_scenario_burst(
-    config: BenchmarkConfig, iteration: int = 1
-) -> ScenarioResult:
+async def burst(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
     """WS Burst scenario."""
     backend = create_backend(config)
     try:
@@ -181,7 +174,7 @@ async def ws_scenario_burst(
             client.websocket_connect("/ws") as ws,
         ):
             start = time.perf_counter()
-            latencies, successful, throttled = await send_ws_messages(ws, 100)
+            latencies, successful, throttled = await send_messages(ws, 100)
             end = time.perf_counter()
             total_time = end - start
 
@@ -197,7 +190,7 @@ async def ws_scenario_burst(
                 latencies_seconds=latencies,
                 iteration=iteration,
             )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: WS scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="WS Burst",
@@ -215,7 +208,7 @@ async def ws_scenario_burst(
         await backend.close()
 
 
-async def ws_scenario_concurrent_connections(
+async def concurrent_connections(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """WS Concurrent Connections scenario."""
@@ -243,9 +236,9 @@ async def ws_scenario_concurrent_connections(
                     AsyncTestClient(app) as client,
                     client.websocket_connect("/ws") as ws,
                 ):
-                    latencies, successful, throttled = await send_ws_messages(ws, 20)
+                    latencies, successful, throttled = await send_messages(ws, 20)
                     return latencies, successful, throttled
-            except Exception:
+            except Exception:  # noqa
                 return [], 0, 0
 
         start = time.perf_counter()
@@ -271,7 +264,7 @@ async def ws_scenario_concurrent_connections(
             latencies_seconds=all_latencies,
             iteration=iteration,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: WS scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="WS Concurrent Connections",
@@ -289,7 +282,7 @@ async def ws_scenario_concurrent_connections(
         await backend.close()
 
 
-async def ws_scenario_window_boundary(
+async def window_boundary(
     config: BenchmarkConfig, iteration: int = 1
 ) -> ScenarioResult:
     """WS Window Boundary scenario."""
@@ -319,7 +312,7 @@ async def ws_scenario_window_boundary(
 
             # Three waves of 10 messages each
             for wave in range(3):
-                latencies, successful, throttled = await send_ws_messages(ws, 10)
+                latencies, successful, throttled = await send_messages(ws, 10)
                 all_latencies.extend(latencies)
                 total_successful += successful
                 total_throttled += throttled
@@ -342,7 +335,7 @@ async def ws_scenario_window_boundary(
                 latencies_seconds=all_latencies,
                 iteration=iteration,
             )
-    except Exception as exc:
+    except Exception as exc:  # noqa
         print(f"WARN: WS scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
             scenario_name="WS Window Boundary",
@@ -361,9 +354,9 @@ async def ws_scenario_window_boundary(
 
 
 SCENARIOS: typing.Dict[str, ScenarioFunc] = {
-    "below_limit": ws_scenario_below_limit,
-    "over_limit": ws_scenario_over_limit,
-    "burst": ws_scenario_burst,
-    "concurrent": ws_scenario_concurrent_connections,
-    "window_boundary": ws_scenario_window_boundary,
+    "below_limit": below_limit,
+    "over_limit": over_limit,
+    "burst": burst,
+    "concurrent": concurrent_connections,
+    "window_boundary": window_boundary,
 }

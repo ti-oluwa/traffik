@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 from fastapi import FastAPI, WebSocket
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from starlette.requests import Request
 
 from tests.asynctestclient import AsyncTestClient

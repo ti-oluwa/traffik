@@ -6,7 +6,7 @@ import anyio
 import pytest
 from fastapi import Depends, FastAPI, WebSocket
 from fastapi.testclient import TestClient
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from starlette.websockets import WebSocketDisconnect
 
 from tests.utils import default_client_identifier

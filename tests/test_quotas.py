@@ -1,51 +1,40 @@
 """Tests for `QuotaContext` functionality."""
 
+import functools
+import typing
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from starlette.requests import Request
+from starlette.requests import HTTPConnection
 
+from tests.utils import make_connection, requires_throttle_type
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.exceptions import (
-    QuotaAppliedError,
-    QuotaCancelledError,
-    QuotaError,
-)
-from traffik.quotas import (
-    ConstantBackoff,
-    ExponentialBackoff,
-    LinearBackoff,
-    LogarithmicBackoff,
-    QuotaContext,
-)
+from traffik.exceptions import QuotaAppliedError, QuotaCancelledError, QuotaError
+from traffik.quotas import QuotaContext
 from traffik.registry import ThrottleRegistry
-from traffik.throttles import HTTPThrottle
+from traffik.throttles import Throttle
 
-
-@pytest.fixture(scope="function")
-def connection() -> (
-    Request
-):  # Named as `connection` to avoid conflict with pytest-native `request` fixture
-    """Create a test connection for quota context tests."""
-    scope = {
-        "type": "http",
-        "method": "GET",
-        "path": "/",
-        "query_string": b"",
-        "headers": [],
-        "server": ("testserver", 80),
-    }
-    return Request(scope)
+new_connection = functools.partial(
+    make_connection, path="/", query_string=b"", server=("testserver", 80)
+)
 
 
 @pytest.mark.asyncio
 @pytest.mark.quota
-async def test_quota_context_bound_mode(backend: InMemoryBackend, connection: Request):
-    """Test `QuotaContext` in bound mode (created via throttle.quota())."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-bound-quota", rate="5/s", registry=ThrottleRegistry()
+@requires_throttle_type
+class TestQuotaContext:
+    async def test_quota_context_bound_mode(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test `QuotaContext` in bound mode (created via throttle.quota())."""
+        throttle = throttle_type(
+            "test-bound-quota",
+            rate="5/s",
+            registry=ThrottleRegistry(),
         )
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
 
         # Create bound quota context
         async with throttle.quota(connection) as quota:
@@ -66,20 +55,26 @@ async def test_quota_context_bound_mode(backend: InMemoryBackend, connection: Re
         assert quota.consumed is True
         assert quota.applied_cost == 5
 
+    async def test_quota_context_unbound_mode(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test `QuotaContext` in unbound mode."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_unbound_mode(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test `QuotaContext` in unbound mode."""
-    async with backend(close_on_exit=True):
-        throttle1 = HTTPThrottle(
-            "test-unbound-1", rate="5/s", backend=backend, registry=ThrottleRegistry()
+        throttle1 = throttle_type(
+            "test-unbound-1",
+            rate="5/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-        throttle2 = HTTPThrottle(
-            "test-unbound-2", rate="3/s", backend=backend, registry=ThrottleRegistry()
+        throttle2 = throttle_type(
+            "test-unbound-2",
+            rate="3/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
 
         # Create unbound quota context
         async with QuotaContext(connection) as quota:
@@ -96,34 +91,31 @@ async def test_quota_context_unbound_mode(
         assert quota.consumed is True
         assert quota.applied_cost == 3
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_unbound_requires_throttle(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test that unbound context requires throttle argument."""
-    async with backend(close_on_exit=True):
+    async def test_quota_context_unbound_requires_throttle(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test that unbound context requires throttle argument."""
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with QuotaContext(connection) as quota:
             # Should raise ValueError when no throttle is provided
             with pytest.raises(ValueError, match="No throttle specified"):
                 quota.consume()
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_cost_aggregation(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test automatic cost aggregation for consecutive calls."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+    async def test_quota_context_cost_aggregation(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test automatic cost aggregation for consecutive calls."""
+        throttle = throttle_type(
             "test-aggregation",
             rate="10/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=False) as quota:
             # Consecutive calls with same config should aggregate
             quota.consume(cost=2)
@@ -135,21 +127,25 @@ async def test_quota_context_cost_aggregation(
             assert quota._queue[0].cost == 6
             assert quota.queued_cost == 6
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_cost_aggregation_different_configs(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test that different configs prevent cost aggregation."""
-    async with backend(close_on_exit=True):
-        throttle1 = HTTPThrottle(
-            "test-no-agg-1", rate="10/s", backend=backend, registry=ThrottleRegistry()
+    async def test_quota_context_cost_aggregation_different_configs(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test that different configs prevent cost aggregation."""
+        throttle1 = throttle_type(
+            "test-no-agg-1",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-        throttle2 = HTTPThrottle(
-            "test-no-agg-2", rate="5/s", backend=backend, registry=ThrottleRegistry()
+        throttle2 = throttle_type(
+            "test-no-agg-2",
+            rate="5/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with QuotaContext(connection, apply_on_exit=False) as quota:
             # Different throttles - no aggregation
             quota.consume(throttle1, cost=2)
@@ -161,21 +157,19 @@ async def test_quota_context_cost_aggregation_different_configs(
             quota.consume(throttle1, cost=1, retry=1)
             assert len(quota._queue) == 4
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_manual_apply(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test manual apply() with apply_on_exit=False."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+    async def test_quota_context_manual_apply(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test manual apply() with apply_on_exit=False."""
+        throttle = throttle_type(
             "test-manual-apply",
             rate="5/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=True) as quota:
             quota.consume(cost=2)
             quota.consume(cost=3)
@@ -192,16 +186,19 @@ async def test_quota_context_manual_apply(
         # Exit should not apply again (idempotent)
         assert quota.consumed is True
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_cancel(backend: InMemoryBackend, connection: Request):
-    """Test cancelling quota context."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-cancel", rate="5/s", backend=backend, registry=ThrottleRegistry()
+    async def test_quota_context_cancel(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test cancelling quota context."""
+        throttle = throttle_type(
+            "test-cancel",
+            rate="5/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=True) as quota:
             quota.consume(cost=2)
             quota.consume(cost=3)
@@ -219,21 +216,19 @@ async def test_quota_context_cancel(backend: InMemoryBackend, connection: Reques
         assert quota.consumed is False
         assert quota.applied_cost == 0
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_cancel_idempotent(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test that cancel() is idempotent."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+    async def test_quota_context_cancel_idempotent(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test that cancel() is idempotent."""
+        throttle = throttle_type(
             "test-cancel-idempotent",
             rate="5/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=False) as quota:
             quota.consume(cost=2)
 
@@ -244,21 +239,19 @@ async def test_quota_context_cancel_idempotent(
             await quota.cancel()
             assert quota.cancelled is True
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_cannot_enqueue_after_cancel(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test that enqueueing after cancel raises error."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+    async def test_quota_context_cannot_enqueue_after_cancel(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test that enqueueing after cancel raises error."""
+        throttle = throttle_type(
             "test-enqueue-after-cancel",
             rate="5/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=False) as quota:
             quota.consume(cost=2)
             await quota.cancel()
@@ -267,21 +260,19 @@ async def test_quota_context_cannot_enqueue_after_cancel(
             with pytest.raises(QuotaCancelledError, match="Cannot queue quota entries"):
                 quota.consume(cost=1)
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_cannot_enqueue_after_apply(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test that enqueueing after apply raises error."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+    async def test_quota_context_cannot_enqueue_after_apply(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test that enqueueing after apply raises error."""
+        throttle = throttle_type(
             "test-enqueue-after-apply",
             rate="5/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=False) as quota:
             quota.consume(cost=2)
             await quota.apply()
@@ -290,21 +281,19 @@ async def test_quota_context_cannot_enqueue_after_apply(
             with pytest.raises(QuotaAppliedError, match="Cannot queue quota entries"):
                 quota.consume(cost=1)
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_cannot_cancel_after_apply(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test that cancelling after apply raises error."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+    async def test_quota_context_cannot_cancel_after_apply(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test that cancelling after apply raises error."""
+        throttle = throttle_type(
             "test-cancel-after-apply",
             rate="5/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=False) as quota:
             quota.consume(cost=2)
             await quota.apply()
@@ -313,21 +302,19 @@ async def test_quota_context_cannot_cancel_after_apply(
             with pytest.raises(QuotaAppliedError, match="Cannot cancel a consumed"):
                 await quota.cancel()
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_apply_on_error_false(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test apply_on_error=False (default) - don't apply on exception."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+    async def test_quota_context_apply_on_error_false(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test apply_on_error=False (default) - don't apply on exception."""
+        throttle = throttle_type(
             "test-apply-on-error-false",
             rate="5/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         quota = None
         try:
             async with throttle.quota(connection, apply_on_error=False) as quota:
@@ -341,21 +328,19 @@ async def test_quota_context_apply_on_error_false(
         assert quota.consumed is False
         assert quota.applied_cost == 0
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_apply_on_error_true(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test apply_on_error=True - apply on any exception."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+    async def test_quota_context_apply_on_error_true(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test apply_on_error=True - apply on any exception."""
+        throttle = throttle_type(
             "test-apply-on-error-true",
             rate="5/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         quota = None
         try:
             async with throttle.quota(connection, apply_on_error=True) as quota:
@@ -369,21 +354,20 @@ async def test_quota_context_apply_on_error_true(
         assert quota.consumed is True
         assert quota.applied_cost == 3
 
+    async def test_quota_context_apply_on_error_specific(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test apply_on_error with specific exception types."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_apply_on_error_specific(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test apply_on_error with specific exception types."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+        throttle = throttle_type(
             "test-apply-on-error-specific",
             rate="5/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         # Apply only on ValueError
         quota = None
         try:
@@ -414,16 +398,20 @@ async def test_quota_context_apply_on_error_specific(
         assert quota2.consumed is False
         assert quota2.applied_cost == 0
 
+    async def test_quota_context_nested(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test nested quota contexts."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_nested(backend: InMemoryBackend, connection: Request):
-    """Test nested quota contexts."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-nested", rate="10/s", backend=backend, registry=ThrottleRegistry()
+        throttle = throttle_type(
+            "test-nested",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=False) as parent:
             parent.consume(cost=2)
 
@@ -446,21 +434,20 @@ async def test_quota_context_nested(backend: InMemoryBackend, connection: Reques
         assert parent.consumed is True
         assert parent.applied_cost == 6
 
+    async def test_quota_context_nested_multiple_levels(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test multiple levels of nesting."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_nested_multiple_levels(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test multiple levels of nesting."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+        throttle = throttle_type(
             "test-nested-levels",
             rate="20/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=True) as level0:
             level0.consume(cost=1)
             assert level0.depth == 0
@@ -518,21 +505,20 @@ async def test_quota_context_nested_multiple_levels(
         assert level0.applied_cost == 6
         assert level0.consumed is True
 
+    async def test_quota_context_nested_cancel(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test cancelling nested quota context."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_nested_cancel(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test cancelling nested quota context."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+        throttle = throttle_type(
             "test-nested-cancel",
             rate="10/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=True) as parent:
             parent.consume(cost=2)
 
@@ -547,16 +533,19 @@ async def test_quota_context_nested_cancel(
 
         assert parent.applied_cost == 2
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_check(backend: InMemoryBackend, connection: Request):
-    """Test quota availability checking."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-check", rate="5/s", backend=backend, registry=ThrottleRegistry()
+    async def test_quota_context_check(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test quota availability checking."""
+        throttle = throttle_type(
+            "test-check",
+            rate="5/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=True) as quota:
             # Should have quota available
             has_quota = await quota.check(cost=3)
@@ -575,16 +564,20 @@ async def test_quota_context_check(backend: InMemoryBackend, connection: Request
             has_quota = await quota2.check(cost=3)
             assert has_quota is False
 
+    async def test_quota_context_stat(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test getting throttle statistics."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_stat(backend: InMemoryBackend, connection: Request):
-    """Test getting throttle statistics."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-stat", rate="10/s", backend=backend, registry=ThrottleRegistry()
+        throttle = throttle_type(
+            "test-stat",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=True) as quota:
             # Get initial stat
             stat = await quota.stat()
@@ -599,30 +592,35 @@ async def test_quota_context_stat(backend: InMemoryBackend, connection: Request)
             assert stat is not None
             assert stat.hits_remaining == 6  # 10 - 4
 
+    async def test_quota_context_retry_basic(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test basic retry functionality."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_retry_basic(backend: InMemoryBackend, connection: Request):
-    """Test basic retry functionality."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-retry", rate="10/s", backend=backend, registry=ThrottleRegistry()
+        throttle = throttle_type(
+            "test-retry",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
 
         attempt_count = 0
 
         # Mock throttle to fail twice then succeed
-        original_hit = throttle.hit
+        hit = throttle.hit
 
-        async def mock_call(*args, **kwargs):
+        async def mock_hit(*args, **kwargs):
             nonlocal attempt_count
             attempt_count += 1
             if attempt_count < 3:
                 raise ValueError("Simulated failure")
-            return await original_hit(*args, **kwargs)
+            return await hit(*args, **kwargs)
 
-        mock = AsyncMock(side_effect=mock_call)
-        with patch.object(HTTPThrottle, "hit", mock):
+        mock = AsyncMock(side_effect=mock_hit)
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
+        with patch.object(throttle_type, "hit", mock):
             async with throttle.quota(connection, apply_on_exit=True) as quota:
                 quota.consume(cost=2, retry=3, base_delay=0.01)
 
@@ -630,15 +628,14 @@ async def test_quota_context_retry_basic(backend: InMemoryBackend, connection: R
             assert quota.consumed is True
             assert attempt_count == 3
 
+    async def test_quota_context_retry_exhausted(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test retry exhaustion when max attempts reached."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_retry_exhausted(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test retry exhaustion when max attempts reached."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+        throttle = throttle_type(
             "test-retry-exhausted",
             rate="10/s",
             backend=backend,
@@ -648,13 +645,14 @@ async def test_quota_context_retry_exhausted(
         attempt_count = 0
 
         # Mock throttle to always fail
-        async def mock_call(*args, **kwargs):
+        async def mock_hit(*args, **kwargs):
             nonlocal attempt_count
             attempt_count += 1
             raise ValueError("Always fails")
 
-        mock = AsyncMock(side_effect=mock_call)
-        with patch.object(HTTPThrottle, "hit", mock):
+        mock = AsyncMock(side_effect=mock_hit)
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
+        with patch.object(throttle_type, "hit", mock):
             with pytest.raises(ValueError, match="Always fails"):
                 async with throttle.quota(connection, apply_on_exit=True) as quota:
                     quota.consume(cost=2, retry=2, base_delay=0.01)
@@ -662,142 +660,52 @@ async def test_quota_context_retry_exhausted(
             # Should have tried 3 times (1 + 2 retries)
             assert attempt_count == 3
 
+    async def test_quota_context_retry_on_specific_exception(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test retry_on with specific exception types."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_retry_on_specific_exception(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test retry_on with specific exception types."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-retry-on", rate="10/s", backend=backend, registry=ThrottleRegistry()
+        throttle = throttle_type(
+            "test-retry-on",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
 
         # Mock throttle to raise TypeError
-        async def mock_call(*args, **kwargs):
+        async def mock_hit(*args, **kwargs):
             raise TypeError("Wrong type")
 
-        mock = AsyncMock(side_effect=mock_call)
-        with patch.object(HTTPThrottle, "hit", mock):
-            # Should retry on ValueError but not TypeError
-            with pytest.raises(TypeError, match="Wrong type"):
-                async with throttle.quota(connection, apply_on_exit=True) as quota:
-                    quota.consume(
-                        cost=2, retry=3, retry_on=(ValueError,), base_delay=0.01
-                    )
+        mock = AsyncMock(side_effect=mock_hit)
+        # Should retry on ValueError but not TypeError
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
+        with (
+            patch.object(throttle_type, "hit", mock),
+            pytest.raises(TypeError, match="Wrong type"),
+        ):
+            async with throttle.quota(connection, apply_on_exit=True) as quota:
+                quota.consume(cost=2, retry=3, retry_on=(ValueError,), base_delay=0.01)
 
-                assert mock.call_count == 1  # Should not retry since it's TypeError
-                assert (
-                    quota.consumed is False
-                )  # Should not consume since it didn't retry
-                assert quota.applied_cost == 0  # Should not apply since it didn't retry
+            assert mock.call_count == 1  # Should not retry since it's TypeError
+            assert quota.consumed is False  # Should not consume since it didn't retry
+            assert quota.applied_cost == 0  # Should not apply since it didn't retry
 
+    async def test_quota_context_locking(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test quota context locking."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_constant_backoff(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test ConstantBackoff strategy."""
-    base_delay = 0.5
-
-    # Test that delay remains constant
-    delay1 = ConstantBackoff(1, base_delay)
-    delay2 = ConstantBackoff(2, base_delay)
-    delay3 = ConstantBackoff(3, base_delay)
-
-    assert delay1 == base_delay
-    assert delay2 == base_delay
-    assert delay3 == base_delay
-
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_linear_backoff(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test LinearBackoff strategy."""
-    backoff = LinearBackoff(increment=1.0)
-    base_delay = 0.5
-
-    # Delay should increase linearly
-    delay1 = backoff(1, base_delay)  # 0.5 + 0*1 = 0.5
-    delay2 = backoff(2, base_delay)  # 0.5 + 1*1 = 1.5
-    delay3 = backoff(3, base_delay)  # 0.5 + 2*1 = 2.5
-
-    assert delay1 == 0.5
-    assert delay2 == 1.5
-    assert delay3 == 2.5
-
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_exponential_backoff(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test ExponentialBackoff strategy."""
-    backoff = ExponentialBackoff(multiplier=2.0)
-    base_delay = 1.0
-
-    # Delay should double each time
-    delay1 = backoff(1, base_delay)  # 1 * 2^0 = 1
-    delay2 = backoff(2, base_delay)  # 1 * 2^1 = 2
-    delay3 = backoff(3, base_delay)  # 1 * 2^2 = 4
-
-    assert delay1 == 1.0
-    assert delay2 == 2.0
-    assert delay3 == 4.0
-
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_exponential_backoff_with_max(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test ExponentialBackoff with max_delay cap."""
-    backoff = ExponentialBackoff(multiplier=2.0, max_delay=3.0)
-    base_delay = 1.0
-
-    delay1 = backoff(1, base_delay)  # 1
-    delay2 = backoff(2, base_delay)  # 2
-    delay3 = backoff(3, base_delay)  # Should be capped at 3.0
-    delay4 = backoff(4, base_delay)  # Should be capped at 3.0
-
-    assert delay1 == 1.0
-    assert delay2 == 2.0
-    assert delay3 == 3.0
-    assert delay4 == 3.0
-
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_logarithmic_backoff(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test LogarithmicBackoff strategy."""
-    backoff = LogarithmicBackoff(base=2.0)
-    base_delay = 1.0
-
-    # Delay should increase logarithmically
-    delay1 = backoff(1, base_delay)  # 1 * log2(2) = 1.0
-    delay2 = backoff(2, base_delay)  # 1 * log2(3) ≈ 1.585
-    delay3 = backoff(3, base_delay)  # 1 * log2(4) = 2.0
-
-    assert delay1 == 1.0
-    assert 1.5 < delay2 < 1.6
-    assert delay3 == 2.0
-
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_locking(backend: InMemoryBackend, connection: Request):
-    """Test quota context locking."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-locking", rate="10/s", backend=backend, registry=ThrottleRegistry()
+        throttle = throttle_type(
+            "test-locking",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         # Test with lock=True (uses throttle UID)
         async with throttle.quota(connection, lock=True) as quota:
             assert quota._lock_key == f"quota:{throttle.uid}"
@@ -813,53 +721,60 @@ async def test_quota_context_locking(backend: InMemoryBackend, connection: Reque
             assert quota3._lock_key is None
             quota3.consume(cost=1)
 
+    async def test_quota_context_nested_lock_deadlock_detection(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test that nested contexts detect potential deadlocks."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_nested_lock_deadlock_detection(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test that nested contexts detect potential deadlocks."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-deadlock", rate="10/s", backend=backend, registry=ThrottleRegistry()
+        throttle = throttle_type(
+            "test-deadlock",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, lock=True) as parent:
             # Child using same lock key should raise error
             with pytest.raises(QuotaError, match="same lock key"):
                 async with parent.nested(lock=True):
                     pass
 
+    async def test_quota_context_nested_lock_reentrant(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test nested contexts with reentrant lock flag."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_nested_lock_reentrant(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test nested contexts with reentrant lock flag."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-reentrant", rate="10/s", backend=backend, registry=ThrottleRegistry()
+        throttle = throttle_type(
+            "test-reentrant",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
+        async with (
+            throttle.quota(connection, lock=True) as parent,
+            parent.nested(lock=True, lock_config={"reentrant": True}) as child,
+        ):  # Should work with reentrant=True
+            child.consume(cost=2)
 
-        async with throttle.quota(connection, lock=True) as parent:
-            # Should work with reentrant_lock=True
-            async with parent.nested(
-                lock=True, lock_config={"reentrant": True}
-            ) as child:
-                child.consume(cost=2)
+    async def test_quota_context_empty_apply(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test applying empty quota context."""
 
-
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_empty_apply(backend: InMemoryBackend, connection: Request):
-    """Test applying empty quota context."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-empty", rate="10/s", backend=backend, registry=ThrottleRegistry()
+        throttle = throttle_type(
+            "test-empty",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         # Empty context should apply without error
         async with throttle.quota(connection) as quota:
             pass
@@ -868,16 +783,20 @@ async def test_quota_context_empty_apply(backend: InMemoryBackend, connection: R
         assert quota.applied_cost == 0
         assert quota.queued_cost == 0
 
+    async def test_quota_context_properties(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test quota context properties."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_properties(backend: InMemoryBackend, connection: Request):
-    """Test quota context properties."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-properties", rate="10/s", backend=backend, registry=ThrottleRegistry()
+        throttle = throttle_type(
+            "test-properties",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=False) as quota:
             # Initial state
             assert quota.active is True
@@ -896,40 +815,43 @@ async def test_quota_context_properties(backend: InMemoryBackend, connection: Re
             assert quota.consumed is True
             assert quota.applied_cost == 3
 
+    async def test_quota_context_aliases(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test quota context method aliases."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_aliases(backend: InMemoryBackend, connection: Request):
-    """Test quota context method aliases."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-aliases", rate="10/s", backend=backend, registry=ThrottleRegistry()
+        throttle = throttle_type(
+            "test-aliases",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=False) as quota:
-            # Test consume alias for __call__
-            quota.consume(cost=2)
+            # Test __call__ alias for consume
+            quota(cost=2)
             assert quota.queued_cost == 2
 
             # Test discard alias for cancel
             await quota.discard()
             assert quota.cancelled is True
 
+    async def test_quota_context_nested_alias(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test that quota() is an alias for nested()."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_nested_alias(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test that quota() is an alias for nested()."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+        throttle = throttle_type(
             "test-nested-alias",
             rate="10/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=False) as parent:
             # Use quota() alias
             async with parent.quota() as child:
@@ -939,15 +861,14 @@ async def test_quota_context_nested_alias(
 
             assert parent.queued_cost == 2
 
+    async def test_quota_context_default_context_merging(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test default context merging."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_default_context_merging(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test default context merging."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+        throttle = throttle_type(
             "test-context-merge",
             rate="10/s",
             backend=backend,
@@ -956,7 +877,7 @@ async def test_quota_context_default_context_merging(
 
         default_ctx = {"key1": "value1", "key2": "value2"}
         override_ctx = {"key2": "override", "key3": "value3"}
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(
             connection, context=default_ctx, apply_on_exit=False
         ) as quota:
@@ -970,21 +891,20 @@ async def test_quota_context_default_context_merging(
             assert entry.context["key2"] == "override"  # Overridden
             assert entry.context["key3"] == "value3"  # From override
 
+    async def test_quota_context_multiple_children(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test parent with multiple child contexts."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_multiple_children(
-    backend: InMemoryBackend, connection: Request
-):
-    """Test parent with multiple child contexts."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
+        throttle = throttle_type(
             "test-multi-children",
             rate="20/s",
             backend=backend,
             registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, apply_on_exit=True) as parent:
             parent.consume(cost=1)
 
@@ -1001,16 +921,20 @@ async def test_quota_context_multiple_children(
 
         assert parent.applied_cost == 6
 
+    async def test_quota_context_zero_cost(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Test handling of zero cost entries."""
 
-@pytest.mark.asyncio
-@pytest.mark.quota
-async def test_quota_context_zero_cost(backend: InMemoryBackend, connection: Request):
-    """Test handling of zero cost entries."""
-    async with backend(close_on_exit=True):
-        throttle = HTTPThrottle(
-            "test-zero-cost", rate="10/s", backend=backend, registry=ThrottleRegistry()
+        throttle = throttle_type(
+            "test-zero-cost",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
-
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection) as quota:
             quota.consume(cost=0)
             quota.consume(cost=0)

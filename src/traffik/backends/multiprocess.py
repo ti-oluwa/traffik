@@ -650,6 +650,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self,
         namespace: str = "mp-inmemory",
         identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
+        persistent: bool = False,
         handle_throttled: typing.Optional[
             ConnectionThrottledHandler[HTTPConnectionT, typing.Any]
         ] = None,
@@ -746,7 +747,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             namespace=namespace,
             identifier=identifier,
             handle_throttled=handle_throttled,
-            persistent=False,
+            persistent=persistent,
             on_error=on_error,
             lock_blocking=lock_blocking,
             lock_ttl=lock_ttl,

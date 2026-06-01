@@ -1,161 +1,40 @@
 """Tests for error handling strategies."""
 
-import time
-from unittest.mock import MagicMock
+import functools
+import typing
 
 import pytest
 from starlette.requests import HTTPConnection
 
-from traffik import HTTPThrottle
+from tests.utils import make_connection, requires_throttle_type
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.error_handlers import CircuitBreaker, failover, fallback, retry
+from traffik.error_handlers import failover, fallback, retry
 from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
-from traffik.throttles import ThrottleExceptionInfo
+from traffik.throttles import Throttle, ThrottleExceptionInfo
+from traffik.utils import CircuitBreaker
+
+new_connection = functools.partial(make_connection, HTTPConnection)
 
 
-def create_mock_connection():
-    """Create a properly mocked HTTPConnection for testing."""
-
-    mock_conn = MagicMock(spec=HTTPConnection)
-    mock_conn.scope = {
-        "type": "http",
-        "method": "GET",
-        "path": "/test",
-        "headers": [],
-        "client": ("127.0.0.1", 50000),
-    }
-    return mock_conn
-
-
-class TestCircuitBreaker:
-    """Tests for CircuitBreaker class."""
-
-    def test_initial_state(self):
-        """Test circuit breaker starts in closed state."""
-        breaker = CircuitBreaker()
-        assert breaker.is_open() is False
-        assert breaker._state == "closed"
-        assert breaker._failures == 0
-
-    def test_open_after_threshold(self):
-        """Test circuit opens after reaching failure threshold."""
-        breaker = CircuitBreaker(failure_threshold=3)
-
-        # Record failures
-        breaker.record_failure()
-        assert breaker.is_open() is False
-
-        breaker.record_failure()
-        assert breaker.is_open() is False
-
-        breaker.record_failure()
-        # Should open after 3rd failure
-        assert breaker.is_open() is True
-        assert breaker._state == "open"
-
-    def test_half_open_after_timeout(self):
-        """Test circuit enters half-open state after recovery timeout."""
-        breaker = CircuitBreaker(
-            failure_threshold=1,
-            recovery_timeout=0.1,  # 100ms
-        )
-
-        # Open the circuit
-        breaker.record_failure()
-        assert breaker.is_open() is True
-
-        # Should still be open immediately
-        assert breaker.is_open() is True
-
-        # Wait for recovery timeout
-        time.sleep(0.15)
-
-        # Should transition to half-open
-        is_open = breaker.is_open()
-        assert is_open is False
-        assert breaker._state == "half_open"
-
-    def test_close_from_half_open(self):
-        """Test circuit closes after successful operations in half-open."""
-        breaker = CircuitBreaker(
-            failure_threshold=1, recovery_timeout=0.01, success_threshold=2
-        )
-
-        # Open the circuit
-        breaker.record_failure()
-        assert breaker.is_open() is True
-
-        # Wait for half-open
-        time.sleep(0.02)
-        breaker.is_open()  # Trigger transition to half-open
-
-        # Record successes
-        breaker.record_success()
-        assert breaker._state == "half_open"
-
-        breaker.record_success()
-        # Should close after 2nd success
-        assert breaker._state == "closed"
-
-    def test_reopen_from_half_open_on_failure(self):
-        """Test circuit reopens if failure occurs in half-open state."""
-        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=0.01)
-
-        # Open the circuit
-        breaker.record_failure()
-
-        # Wait for half-open
-        time.sleep(0.02)
-        breaker.is_open()
-        assert breaker._state == "half_open"
-
-        # Record a failure in half-open
-        breaker.record_failure()
-        assert breaker._state == "open"
-
-    def test_reset_failures_on_success_in_closed(self):
-        """Test failures reset on success when circuit is closed."""
-        breaker = CircuitBreaker(failure_threshold=3)
-
-        breaker.record_failure()
-        breaker.record_failure()
-        assert breaker._failures == 2
-
-        # Success resets counter
-        breaker.record_success()
-        assert breaker._failures == 0
-        assert breaker._state == "closed"
-
-    def test_info(self):
-        """Test info() returns current state."""
-        breaker = CircuitBreaker()
-        info = breaker.info()
-
-        assert "state" in info
-        assert "failures" in info
-        assert "successes" in info
-        assert "opened_at" in info
-        assert info["state"] == "closed"
-
-
+@pytest.mark.anyio
+@requires_throttle_type
 class TestBackendFallback:
     """Tests for fallback error handler."""
 
-    @pytest.mark.anyio
-    async def test_fallback_on_connection_error(self):
+    async def test_fallback_on_connection_error(
+        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
+    ):
         """Test falls back to secondary backend on connection error."""
         primary = InMemoryBackend(namespace="primary")
-        fallback_backend = InMemoryBackend(namespace="fallback")
+        secondary = InMemoryBackend(namespace="fallback")
 
-        async with fallback_backend(close_on_exit=True):
-            handler = fallback(
-                backend=fallback_backend, fallback_on=(BackendConnectionError,)
-            )
+        async with secondary(close_on_exit=True):
+            handler = fallback(backend=secondary, on=(BackendConnectionError,))
 
             # Create mock exc_info
-            throttle = HTTPThrottle(
+            throttle = throttle_type(
                 uid="test-fallback-conn",
                 rate="10/s",
                 backend=primary,
@@ -163,52 +42,57 @@ class TestBackendFallback:
             )
             exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                 "exception": BackendConnectionError("Connection failed"),
-                "connection": create_mock_connection(),
+                "connection": new_connection(),
                 "cost": 1,
                 "rate": Rate.parse("10/s"),
                 "backend": primary,
                 "context": None,
                 "throttle": throttle,  # type: ignore[arg-type]
+                "key": "test-key",
             }
 
             # Should use fallback and return 0 (allowed)
             wait = await handler(exc_info["connection"], exc_info)
             assert wait >= 0, "Should attempt fallback"
 
-    @pytest.mark.anyio
-    async def test_reraises_on_other_errors(self):
-        """Test re-raises errors not in fallback_on tuple."""
-        fallback_backend = InMemoryBackend(namespace="fallback")
+    async def test_reraises_on_other_errors(
+        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
+    ):
+        """Test re-raises errors not in on tuple."""
+        secondary = InMemoryBackend(namespace="fallback")
 
-        async with fallback_backend(close_on_exit=True):
-            handler = fallback(
-                backend=fallback_backend, fallback_on=(BackendConnectionError,)
-            )
-
-            throttle = HTTPThrottle(
+        async with secondary(close_on_exit=True):
+            handler = fallback(backend=secondary, on=(BackendConnectionError,))
+            throttle = throttle_type(
                 uid="test-fallback-reraise",
                 rate="10/s",
                 registry=ThrottleRegistry(),
             )
             exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                 "exception": ValueError("Some other error"),
-                "connection": create_mock_connection(),
+                "connection": new_connection(),
                 "cost": 1,
                 "rate": Rate.parse("10/s"),
                 "backend": InMemoryBackend(),
                 "context": None,
                 "throttle": throttle,  # type: ignore[arg-type]
+                "key": "test-key",
             }
 
             with pytest.raises(ValueError, match="Some other error"):
                 await handler(exc_info["connection"], exc_info)
 
 
+@pytest.mark.anyio
+@requires_throttle_type
 class TestRetryHandler:
     """Tests for retry error handler."""
 
-    @pytest.mark.anyio
-    async def test_retries_on_timeout(self):
+    async def test_retries_on_timeout(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
         """Test retries operations on timeout errors."""
         call_count = 0
 
@@ -219,113 +103,118 @@ class TestRetryHandler:
                 raise TimeoutError("Timeout")
             return 0.0
 
-        backend = InMemoryBackend()
-        async with backend(close_on_exit=True):
-            throttle = HTTPThrottle(
-                uid="test-retry-timeout",
-                rate="10/s",
-                backend=backend,
-                registry=ThrottleRegistry(),
-            )
-            throttle.strategy = mock_strategy
+        throttle = throttle_type(
+            uid="test-retry-timeout",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
+        )
+        throttle.strategy = mock_strategy
 
-            handler = retry(max_retries=3, retry_delay=0.01)
+        handler = retry(max_retries=3, retry_delay=0.01)
 
-            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
-                "exception": TimeoutError("Timeout"),
-                "connection": create_mock_connection(),
-                "cost": 1,
-                "rate": Rate.parse("10/s"),
-                "backend": backend,
-                "context": None,
-                "throttle": throttle,  # type: ignore[arg-type]
-            }
+        exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
+            "exception": TimeoutError("Timeout"),
+            "connection": new_connection(),
+            "cost": 1,
+            "rate": Rate.parse("10/s"),
+            "backend": backend,
+            "context": None,
+            "throttle": throttle,  # type: ignore[arg-type]
+            "key": "test-key",
+        }
 
-            wait = await handler(exc_info["connection"], exc_info)
-            assert call_count == 3, "Should retry 2 times after initial failure"
-            assert wait == 0.0, "Should succeed after retries"
+        wait = await handler(exc_info["connection"], exc_info)
+        assert call_count == 3, "Should retry 2 times after initial failure"
+        assert wait == 0.0, "Should succeed after retries"
 
-    @pytest.mark.anyio
-    async def test_reraises_after_max_retries(self):
+    async def test_reraises_after_max_retries(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
         """Test re-raises exception after exhausting retries."""
 
         async def failing_strategy(key, rate, backend, cost):
             raise TimeoutError("Always fails")
 
-        backend = InMemoryBackend()
-        async with backend(close_on_exit=True):
-            throttle = HTTPThrottle(
-                uid="test-retry-exhaust",
-                rate="10/s",
-                backend=backend,
-                registry=ThrottleRegistry(),
-            )
-            throttle.strategy = failing_strategy
+        throttle = throttle_type(
+            uid="test-retry-exhaust",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
+        )
+        throttle.strategy = failing_strategy
 
-            handler = retry(max_retries=2, retry_delay=0.01)
+        handler = retry(max_retries=2, retry_delay=0.01)
 
-            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
-                "exception": TimeoutError("Timeout"),
-                "connection": create_mock_connection(),
-                "cost": 1,
-                "rate": Rate.parse("10/s"),
-                "backend": backend,
-                "context": None,
-                "throttle": throttle,  # type: ignore[arg-type]
-            }
+        exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
+            "exception": TimeoutError("Timeout"),
+            "connection": new_connection(),
+            "cost": 1,
+            "rate": Rate.parse("10/s"),
+            "backend": backend,
+            "context": None,
+            "throttle": throttle,  # type: ignore[arg-type]
+            "key": "test-key",
+        }
 
-            with pytest.raises(TimeoutError):
-                await handler(exc_info["connection"], exc_info)
+        with pytest.raises(TimeoutError):
+            await handler(exc_info["connection"], exc_info)
 
-    @pytest.mark.anyio
-    async def test_does_not_retry_other_errors(self):
+    async def test_does_not_retry_other_errors(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
         """Test re-raises errors not in retry_on tuple."""
         handler = retry(retry_on=(TimeoutError,))
+        throttle = throttle_type(
+            uid="test-retry-other-err",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
+        )
 
-        backend = InMemoryBackend()
-        async with backend(close_on_exit=True):
-            throttle = HTTPThrottle(
-                uid="test-retry-other-err",
-                rate="10/s",
-                backend=backend,
-                registry=ThrottleRegistry(),
-            )
+        exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
+            "exception": ValueError("Not a timeout"),
+            "connection": new_connection(),
+            "cost": 1,
+            "rate": Rate.parse("10/s"),
+            "backend": backend,
+            "context": None,
+            "throttle": throttle,  # type: ignore[arg-type]
+            "key": "test-key",
+        }
 
-            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
-                "exception": ValueError("Not a timeout"),
-                "connection": create_mock_connection(),
-                "cost": 1,
-                "rate": Rate.parse("10/s"),
-                "backend": backend,
-                "context": None,
-                "throttle": throttle,  # type: ignore[arg-type]
-            }
-
-            with pytest.raises(ValueError, match="Not a timeout"):
-                await handler(exc_info["connection"], exc_info)
+        with pytest.raises(ValueError, match="Not a timeout"):
+            await handler(exc_info["connection"], exc_info)
 
 
+@pytest.mark.anyio
+@requires_throttle_type
 class TestFailover:
     """Tests for failover error handler."""
 
-    @pytest.mark.anyio
-    async def test_uses_fallback_when_circuit_open(self):
+    async def test_uses_fallback_when_circuit_open(
+        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
+    ):
         """Test uses fallback backend when circuit is open."""
         primary = InMemoryBackend(namespace="primary")
-        fallback_backend = InMemoryBackend(namespace="fallback")
+        secondary = InMemoryBackend(namespace="fallback")
         breaker_instance = CircuitBreaker(failure_threshold=1)
 
-        async with fallback_backend(close_on_exit=True):
+        async with secondary(close_on_exit=True):
             # Open the circuit
-            breaker_instance.record_failure()
+            await breaker_instance.record_failure()
 
             handler = failover(
-                backend=fallback_backend,
+                backend=secondary,
                 breaker=breaker_instance,
                 max_retries=0,
             )
 
-            throttle = HTTPThrottle(
+            throttle = throttle_type(
                 uid="test-failover-open",
                 rate="10/s",
                 backend=primary,
@@ -333,20 +222,22 @@ class TestFailover:
             )
             exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                 "exception": BackendError("Error"),
-                "connection": create_mock_connection(),
+                "connection": new_connection(),
                 "cost": 1,
                 "rate": Rate.parse("10/s"),
                 "backend": primary,
                 "context": None,
                 "throttle": throttle,  # type: ignore[arg-type]
+                "key": "test-key",
             }
 
             # Should use fallback and succeed
             wait = await handler(exc_info["connection"], exc_info)
             assert wait >= 0
 
-    @pytest.mark.anyio
-    async def test_retries_primary_when_closed(self):
+    async def test_retries_primary_when_closed(
+        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
+    ):
         """Test retries primary backend when circuit is closed."""
         retry_count = 0
 
@@ -358,40 +249,41 @@ class TestFailover:
             return 0.0
 
         primary = InMemoryBackend(namespace="primary")
-        fallback_backend = InMemoryBackend(namespace="fallback")
+        secondary = InMemoryBackend(namespace="fallback")
         breaker_instance = CircuitBreaker()
 
-        async with primary(close_on_exit=True):
-            async with fallback_backend(close_on_exit=True):
-                throttle = HTTPThrottle(
-                    uid="test-failover-closed",
-                    rate="10/s",
-                    backend=primary,
-                    registry=ThrottleRegistry(),
-                )
-                throttle.strategy = counting_strategy
+        async with primary(close_on_exit=True), secondary(close_on_exit=True):
+            throttle = throttle_type(
+                uid="test-failover-closed",
+                rate="10/s",
+                backend=primary,
+                registry=ThrottleRegistry(),
+            )
+            throttle.strategy = counting_strategy
 
-                handler = failover(
-                    backend=fallback_backend,
-                    breaker=breaker_instance,
-                    max_retries=2,
-                )
+            handler = failover(
+                backend=secondary,
+                breaker=breaker_instance,
+                max_retries=2,
+            )
 
-                exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
-                    "exception": BackendError("Error"),
-                    "connection": create_mock_connection(),
-                    "cost": 1,
-                    "rate": Rate.parse("10/s"),
-                    "backend": primary,
-                    "context": None,
-                    "throttle": throttle,  # type: ignore[arg-type]
-                }
+            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
+                "exception": BackendError("Error"),
+                "connection": new_connection(),
+                "cost": 1,
+                "rate": Rate.parse("10/s"),
+                "backend": primary,
+                "context": None,
+                "throttle": throttle,  # type: ignore[arg-type]
+                "key": "test-key",
+            }
 
-                _ = await handler(exc_info["connection"], exc_info)
-                assert retry_count >= 2, "Should retry primary"
+            _ = await handler(exc_info["connection"], exc_info)
+            assert retry_count >= 2, "Should retry primary"
 
-    @pytest.mark.anyio
-    async def test_records_failures_to_circuit_breaker(self):
+    async def test_records_failures_to_circuit_breaker(
+        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
+    ):
         """Test records failures to circuit breaker."""
         primary_fail_count = 0
 
@@ -405,32 +297,32 @@ class TestFailover:
             return 0.0
 
         primary = InMemoryBackend(namespace="primary")
-        fallback_backend = InMemoryBackend(namespace="fallback")
+        secondary = InMemoryBackend(namespace="fallback")
         breaker_instance = CircuitBreaker(failure_threshold=1)
 
-        async with primary(close_on_exit=True):
-            async with fallback_backend(close_on_exit=True):
-                throttle = HTTPThrottle(
-                    uid="test-failover-record",
-                    rate="10/s",
-                    backend=primary,
-                )
-                throttle.strategy = primary_failing_strategy
+        async with primary(close_on_exit=True), secondary(close_on_exit=True):
+            throttle = throttle_type(
+                uid="test-failover-record",
+                rate="10/s",
+                backend=primary,
+            )
+            throttle.strategy = primary_failing_strategy
 
-                handler = failover(
-                    backend=fallback_backend, breaker=breaker_instance, max_retries=1
-                )
+            handler = failover(
+                backend=secondary, breaker=breaker_instance, max_retries=1
+            )
 
-                exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
-                    "exception": BackendError("Error"),
-                    "connection": create_mock_connection(),
-                    "cost": 1,
-                    "rate": Rate.parse("10/s"),
-                    "backend": primary,
-                    "context": None,
-                    "throttle": throttle,  # type: ignore[arg-type]
-                }
+            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
+                "exception": BackendError("Error"),
+                "connection": new_connection(),
+                "cost": 1,
+                "rate": Rate.parse("10/s"),
+                "backend": primary,
+                "context": None,
+                "throttle": throttle,  # type: ignore[arg-type]
+                "key": "test-key",
+            }
 
-                # First failure - should open circuit (threshold=1)
-                await handler(exc_info["connection"], exc_info)
-                assert breaker_instance.is_open()
+            # First failure - should open circuit (threshold=1)
+            await handler(exc_info["connection"], exc_info)
+            assert breaker_instance.is_open

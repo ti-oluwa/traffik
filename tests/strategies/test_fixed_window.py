@@ -11,9 +11,10 @@ from traffik.strategies.fixed_window import FixedWindowStrategy
 
 @pytest.mark.anyio
 @pytest.mark.strategy
-async def test_fixed_window_basic_limiting(backend: InMemoryBackend):
-    """Test basic rate limiting with fixed window strategy."""
-    async with backend(close_on_exit=True):
+class TestFixedWindow:
+    async def test_fixed_window_basic_limiting(self, backend: InMemoryBackend):
+        """Test basic rate limiting with fixed window strategy."""
+
         strategy = FixedWindowStrategy()
         rate = Rate.parse("3/s")
         key = "user:123"
@@ -28,12 +29,9 @@ async def test_fixed_window_basic_limiting(backend: InMemoryBackend):
         assert wait > 0, "Request 4 should be throttled"
         assert wait <= rate.expire, "Wait time should not exceed window duration"
 
+    async def test_fixed_window_reset(self, backend: InMemoryBackend):
+        """Test that counter resets after window expires."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_fixed_window_reset(backend: InMemoryBackend):
-    """Test that counter resets after window expires."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("2/100ms")
         key = "user:456"
@@ -54,12 +52,9 @@ async def test_fixed_window_reset(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend)
         assert wait == 0.0, "Should be allowed after window reset"
 
+    async def test_fixed_window_different_keys(self, backend: InMemoryBackend):
+        """Test that different keys are tracked independently."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_fixed_window_different_keys(backend: InMemoryBackend):
-    """Test that different keys are tracked independently."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("2/s")
 
@@ -73,12 +68,9 @@ async def test_fixed_window_different_keys(backend: InMemoryBackend):
         wait = await strategy("user:2", rate, backend)
         assert wait == 0.0, "User 2 should not be affected"
 
+    async def test_fixed_window_unlimited_rate(self, backend: InMemoryBackend):
+        """Test that unlimited rates always allow requests."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_fixed_window_unlimited_rate(backend: InMemoryBackend):
-    """Test that unlimited rates always allow requests."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate(limit=0, seconds=0)
         key = "user:unlimited"
@@ -88,12 +80,9 @@ async def test_fixed_window_unlimited_rate(backend: InMemoryBackend):
             wait = await strategy(key, rate, backend)
             assert wait == 0.0, "Unlimited rate should always allow requests"
 
+    async def test_fixed_window_concurrent_requests(self, backend: InMemoryBackend):
+        """Test strategy under concurrent load."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_fixed_window_concurrent_requests(backend: InMemoryBackend):
-    """Test strategy under concurrent load."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("10/s")
         key = "user:concurrent"
@@ -111,12 +100,9 @@ async def test_fixed_window_concurrent_requests(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend)
         assert wait > 0, "11th request should be throttled"
 
+    async def test_fixed_window_boundary_burst(self, backend: InMemoryBackend):
+        """Test that fixed window allows bursts at boundaries."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_fixed_window_boundary_burst(backend: InMemoryBackend):
-    """Test that fixed window allows bursts at boundaries."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("5/100ms")
         key = "user:boundary"
@@ -134,12 +120,9 @@ async def test_fixed_window_boundary_burst(backend: InMemoryBackend):
             wait = await strategy(key, rate, backend)
             assert wait == 0.0, f"Request {i + 1} in new window should be allowed"
 
+    async def test_fixed_window_wait_ms_accuracy(self, backend: InMemoryBackend):
+        """Test that wait time calculation is accurate."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_fixed_window_wait_ms_accuracy(backend: InMemoryBackend):
-    """Test that wait time calculation is accurate."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("1/200ms")
         key = "user:wait"
@@ -152,12 +135,9 @@ async def test_fixed_window_wait_ms_accuracy(backend: InMemoryBackend):
         assert wait > 0, "Should be throttled"
         assert wait <= 200, f"Wait time {wait}ms should not exceed window 200ms"
 
+    async def test_fixed_window_multiple_windows(self, backend: InMemoryBackend):
+        """Test behavior across multiple time windows."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_fixed_window_multiple_windows(backend: InMemoryBackend):
-    """Test behavior across multiple time windows."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("2/200ms")
         key = "user:multiwindow"
@@ -174,13 +154,10 @@ async def test_fixed_window_multiple_windows(backend: InMemoryBackend):
             # Wait for next window. Next window starts at (window + 1) * 100ms
             await asyncio.sleep(0.11)  # 110ms to ensure new window
 
+    @pytest.mark.flaky(reruns=3, reruns_delay=2)
+    async def test_fixed_window_sub_second_rates(self, backend: InMemoryBackend):
+        """Test with rates smaller than 1 second."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-@pytest.mark.flaky(reruns=3, reruns_delay=2)
-async def test_fixed_window_sub_second_rates(backend: InMemoryBackend):
-    """Test with rates smaller than 1 second."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("5/100ms")
         key = "user:subsecond"

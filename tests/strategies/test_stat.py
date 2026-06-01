@@ -23,9 +23,10 @@ from traffik.strategies.token_bucket import (
 
 @pytest.mark.anyio
 @pytest.mark.strategy
-async def test_fixed_window_stat(backend: InMemoryBackend):
-    """Test Fixed Window strategy statistics."""
-    async with backend(close_on_exit=True):
+class TestStrategyStat:
+    async def test_fixed_window_stat(self, backend: InMemoryBackend):
+        """Test Fixed Window strategy statistics."""
+
         strategy = FixedWindowStrategy()
         rate = Rate.parse("10/s")
         key = "user:stat"
@@ -65,12 +66,9 @@ async def test_fixed_window_stat(backend: InMemoryBackend):
         assert stat.hits_remaining == 0, "Should still have 0 hits remaining"
         assert stat.wait_ms > 0.0, "Should have wait time"
 
+    async def test_sliding_window_log_stat(self, backend: InMemoryBackend):
+        """Test Sliding Window Log strategy statistics."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_sliding_window_log_stat(backend: InMemoryBackend):
-    """Test Sliding Window Log strategy statistics."""
-    async with backend(close_on_exit=True):
         strategy = SlidingWindowLogStrategy()
         rate = Rate.parse("5/s")
         key = "user:sliding_stat"
@@ -95,12 +93,9 @@ async def test_sliding_window_log_stat(backend: InMemoryBackend):
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining == 0, "Should have 0 hits remaining"
 
+    async def test_sliding_window_counter_stat(self, backend: InMemoryBackend):
+        """Test Sliding Window Counter strategy statistics."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_sliding_window_counter_stat(backend: InMemoryBackend):
-    """Test Sliding Window Counter strategy statistics."""
-    async with backend(close_on_exit=True):
         strategy = SlidingWindowCounterStrategy()
         rate = Rate.parse("8/s")
         key = "user:counter_stat"
@@ -118,12 +113,9 @@ async def test_sliding_window_counter_stat(backend: InMemoryBackend):
         assert stat.hits_remaining >= 0, "Should have valid hits remaining"
         assert stat.hits_remaining <= 8, "Should not exceed limit"
 
+    async def test_token_bucket_stat(self, backend: InMemoryBackend):
+        """Test Token Bucket strategy statistics."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_token_bucket_stat(backend: InMemoryBackend):
-    """Test Token Bucket strategy statistics."""
-    async with backend(close_on_exit=True):
         strategy = TokenBucketStrategy(burst_size=15)
         rate = Rate.parse("10/s")
         key = "user:token_stat"
@@ -150,12 +142,9 @@ async def test_token_bucket_stat(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend, cost=1)
         assert wait > 0, "Should be throttled"
 
+    async def test_token_bucket_with_debt_stat(self, backend: InMemoryBackend):
+        """Test Token Bucket with Debt strategy statistics."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_token_bucket_with_debt_stat(backend: InMemoryBackend):
-    """Test Token Bucket with Debt strategy statistics."""
-    async with backend(close_on_exit=True):
         strategy = TokenBucketWithDebtStrategy(max_debt=5)
         rate = Rate.parse("10/s")
         key = "user:debt_stat"
@@ -183,12 +172,9 @@ async def test_token_bucket_with_debt_stat(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend, cost=3)
         assert wait > 0, "Should be throttled at max debt"
 
+    async def test_leaky_bucket_stat(self, backend: InMemoryBackend):
+        """Test Leaky Bucket strategy statistics."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_leaky_bucket_stat(backend: InMemoryBackend):
-    """Test Leaky Bucket strategy statistics."""
-    async with backend(close_on_exit=True):
         strategy = LeakyBucketStrategy()
         rate = Rate.parse("12/s")
         key = "user:leaky_stat"
@@ -210,12 +196,9 @@ async def test_leaky_bucket_stat(backend: InMemoryBackend):
         assert stat.hits_remaining < 1, "Bucket should be ~full"
         assert stat.wait_ms >= 0.0, "Should have valid wait time"
 
+    async def test_leaky_bucket_with_queue_stat(self, backend: InMemoryBackend):
+        """Test Leaky Bucket with Queue strategy statistics."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_leaky_bucket_with_queue_stat(backend: InMemoryBackend):
-    """Test Leaky Bucket with Queue strategy statistics."""
-    async with backend(close_on_exit=True):
         strategy = LeakyBucketWithQueueStrategy()
         rate = Rate.parse("8/s")
         key = "user:queue_stat"
@@ -231,12 +214,9 @@ async def test_leaky_bucket_with_queue_stat(backend: InMemoryBackend):
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining >= 0, "Should have valid hits remaining"
 
+    async def test_stat_with_cost(self, backend: InMemoryBackend):
+        """Test statistics with variable costs."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_stat_with_cost(backend: InMemoryBackend):
-    """Test statistics with variable costs."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("20/s")
         key = "user:stat_cost"
@@ -258,12 +238,9 @@ async def test_stat_with_cost(backend: InMemoryBackend):
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining == 5, "Should account for cost=3"
 
+    async def test_stat_unlimited_rate(self, backend: InMemoryBackend):
+        """Test statistics with unlimited rate."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_stat_unlimited_rate(backend: InMemoryBackend):
-    """Test statistics with unlimited rate."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate(limit=0, seconds=0)  # Unlimited
         key = "user:unlimited_stat"
@@ -280,12 +257,9 @@ async def test_stat_unlimited_rate(backend: InMemoryBackend):
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.hits_remaining == float("inf"), "Should still be infinite"
 
+    async def test_stat_after_window_reset(self, backend: InMemoryBackend):
+        """Test that stats reset correctly after window expires."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_stat_after_window_reset(backend: InMemoryBackend):
-    """Test that stats reset correctly after window expires."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("5/200ms")
         key = "user:reset_stat"
@@ -305,12 +279,9 @@ async def test_stat_after_window_reset(backend: InMemoryBackend):
         assert stat.hits_remaining == 5, "Should be reset to full limit"
         assert stat.wait_ms == 0.0, "Should have no wait time"
 
+    async def test_stat_keys_isolation(self, backend: InMemoryBackend):
+        """Test that stats for different keys are independent."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_stat_keys_isolation(backend: InMemoryBackend):
-    """Test that stats for different keys are independent."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("10/s")
 
@@ -327,12 +298,9 @@ async def test_stat_keys_isolation(backend: InMemoryBackend):
         # Stats should be independent
         assert stat1.hits_remaining != stat2.hits_remaining
 
+    async def test_stat_wait_ms_accuracy(self, backend: InMemoryBackend):
+        """Test that wait_ms in stat is reasonably accurate."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_stat_wait_ms_accuracy(backend: InMemoryBackend):
-    """Test that wait_ms in stat is reasonably accurate."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("3/s")
         key = "user:wait_accuracy"
@@ -353,12 +321,9 @@ async def test_stat_wait_ms_accuracy(backend: InMemoryBackend):
         # The stat wait_ms might be slightly different due to when it's calculated
         assert abs(stat.wait_ms - wait_from_call) < 100, "Wait times should be close"
 
+    async def test_stat_token_refill(self, backend: InMemoryBackend):
+        """Test that token bucket stat reflects token refill over time."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_stat_token_refill(backend: InMemoryBackend):
-    """Test that token bucket stat reflects token refill over time."""
-    async with backend(close_on_exit=True):
         strategy = TokenBucketStrategy()
         rate = Rate.parse("10/s")  # 10 tokens per second
         key = "user:refill_stat"
@@ -377,12 +342,9 @@ async def test_stat_token_refill(backend: InMemoryBackend):
         assert stat.hits_remaining >= 1, "Should have refilled at least 1 token"
         assert stat.hits_remaining <= 4, "Should have refilled ~2 tokens"
 
+    async def test_stat_concurrent_access(self, backend: InMemoryBackend):
+        """Test that stats work correctly with concurrent requests."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_stat_concurrent_access(backend: InMemoryBackend):
-    """Test that stats work correctly with concurrent requests."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("20/s")
         key = "user:concurrent_stat"
@@ -397,12 +359,9 @@ async def test_stat_concurrent_access(backend: InMemoryBackend):
             "Should have 5 hits remaining after 15 requests"
         )
 
+    async def test_stat_fields_present(self, backend: InMemoryBackend):
+        """Test that all required stat fields are present."""
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_stat_fields_present(backend: InMemoryBackend):
-    """Test that all required stat fields are present."""
-    async with backend(close_on_exit=True):
         strategy = FixedWindowStrategy()
         rate = Rate.parse("10/s")
         key = "user:fields"
@@ -421,4 +380,4 @@ async def test_stat_fields_present(backend: InMemoryBackend):
         assert isinstance(stat.hits_remaining, (int, float)), (
             "hits_remaining should be numeric"
         )
-        assert isinstance(stat.wait_ms, (int, float)), "wait_ms should be numeric"
+        assert isinstance(stat.wait_ms, (int, float)), "'wait_ms' should be an integer or float"

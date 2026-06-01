@@ -474,7 +474,7 @@ class CircuitBreaker:
         async with self._lock:
             self._close()
 
-    async def info(self) -> dict[str, typing.Any]:
+    async def info(self) -> typing.Dict[str, typing.Any]:
         """Return current breaker information."""
         async with self._lock:
             return {

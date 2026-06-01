@@ -990,7 +990,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         if (
             child_lock_key is not None
             and child_lock_key == self._lock_key
-            and (not lock_config or not lock_config.get("reentrant", False))
+            and (lock_config and not lock_config.get("reentrant", False))
         ):
             raise QuotaError(
                 f"Nested quota context is using the same lock key as its parent "

@@ -21,9 +21,9 @@ from traffik.strategies.token_bucket import (
 
 @pytest.mark.anyio
 @pytest.mark.strategy
-async def test_fixed_window_with_cost(backend: InMemoryBackend):
-    """Test Fixed Window strategy with variable request costs."""
-    async with backend(close_on_exit=True):
+class TestStrategyCost:
+    async def test_fixed_window_with_cost(self, backend: InMemoryBackend):
+        """Test Fixed Window strategy with variable request costs."""
         strategy = FixedWindowStrategy()
         rate = Rate.parse("10/s")
         key = "user:cost"
@@ -46,12 +46,8 @@ async def test_fixed_window_with_cost(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend, cost=1)
         assert wait > 0, "Fifth request should be throttled (10+1 > 10)"
 
-
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_sliding_window_log_with_cost(backend: InMemoryBackend):
-    """Test Sliding Window Log strategy with variable request costs."""
-    async with backend(close_on_exit=True):
+    async def test_sliding_window_log_with_cost(self, backend: InMemoryBackend):
+        """Test Sliding Window Log strategy with variable request costs."""
         strategy = SlidingWindowLogStrategy()
         rate = Rate.parse("20/s")
         key = "user:sliding_cost"
@@ -74,12 +70,8 @@ async def test_sliding_window_log_with_cost(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend, cost=2)
         assert wait == 0.0, "Cost=2 should be allowed (18+2 = 20)"
 
-
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_sliding_window_counter_with_cost(backend: InMemoryBackend):
-    """Test Sliding Window Counter strategy with variable request costs."""
-    async with backend(close_on_exit=True):
+    async def test_sliding_window_counter_with_cost(self, backend: InMemoryBackend):
+        """Test Sliding Window Counter strategy with variable request costs."""
         strategy = SlidingWindowCounterStrategy()
         rate = Rate.parse("15/500ms")
         key = "user:counter_cost"
@@ -98,12 +90,8 @@ async def test_sliding_window_counter_with_cost(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend, cost=1)
         assert wait > 0, "Any request should be throttled (15+1 > 15)"
 
-
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_token_bucket_with_cost(backend: InMemoryBackend):
-    """Test Token Bucket strategy with variable request costs."""
-    async with backend(close_on_exit=True):
+    async def test_token_bucket_with_cost(self, backend: InMemoryBackend):
+        """Test Token Bucket strategy with variable request costs."""
         strategy = TokenBucketStrategy(burst_size=20)
         rate = Rate.parse("10/s")
         key = "user:token_cost"
@@ -126,12 +114,8 @@ async def test_token_bucket_with_cost(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend, cost=2)
         assert wait == 0.0, "Cost=2 should be allowed (exactly enough)"
 
-
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_token_bucket_with_debt_and_cost(backend: InMemoryBackend):
-    """Test Token Bucket with Debt strategy using variable costs."""
-    async with backend(close_on_exit=True):
+    async def test_token_bucket_with_debt_and_cost(self, backend: InMemoryBackend):
+        """Test Token Bucket with Debt strategy using variable costs."""
         strategy = TokenBucketWithDebtStrategy(max_debt=15)
         rate = Rate.parse("10/s")
         key = "user:debt_cost"
@@ -156,12 +140,8 @@ async def test_token_bucket_with_debt_and_cost(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend, cost=2)
         assert wait == 0.0, "Cost=2 should be allowed (debt at 15)"
 
-
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_leaky_bucket_with_cost(backend: InMemoryBackend):
-    """Test Leaky Bucket strategy with variable request costs."""
-    async with backend(close_on_exit=True):
+    async def test_leaky_bucket_with_cost(self, backend: InMemoryBackend):
+        """Test Leaky Bucket strategy with variable request costs."""
         strategy = LeakyBucketStrategy()
         rate = Rate.parse("20/s")
         key = "user:leaky_cost"
@@ -180,12 +160,8 @@ async def test_leaky_bucket_with_cost(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend, cost=1)
         assert wait > 0, "Cost=1 should be throttled (bucket full)"
 
-
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_leaky_bucket_with_queue_and_cost(backend: InMemoryBackend):
-    """Test Leaky Bucket with Queue strategy using variable costs."""
-    async with backend(close_on_exit=True):
+    async def test_leaky_bucket_with_queue_and_cost(self, backend: InMemoryBackend):
+        """Test Leaky Bucket with Queue strategy using variable costs."""
         strategy = LeakyBucketWithQueueStrategy()
         rate = Rate.parse("15/s")
         key = "user:queue_cost"
@@ -203,12 +179,8 @@ async def test_leaky_bucket_with_queue_and_cost(backend: InMemoryBackend):
         # Just verify it returns a valid wait period
         assert wait >= 0.0, "Valid wait period returned"
 
-
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_cost_accumulation_across_strategies(backend: InMemoryBackend):
-    """Test that costs accumulate correctly over time."""
-    async with backend(close_on_exit=True):
+    async def test_cost_accumulation_across_strategies(self, backend: InMemoryBackend):
+        """Test that costs accumulate correctly over time."""
         strategy = FixedWindowStrategy()
         rate = Rate.parse("100/s")
         key = "user:accumulation"
@@ -225,12 +197,8 @@ async def test_cost_accumulation_across_strategies(backend: InMemoryBackend):
 
         assert total_cost == 100, f"Total cost should be 100, got {total_cost}"
 
-
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_mixed_cost_and_default_cost(backend: InMemoryBackend):
-    """Test mixing explicit costs with default cost=1."""
-    async with backend(close_on_exit=True):
+    async def test_mixed_cost_and_default_cost(self, backend: InMemoryBackend):
+        """Test mixing explicit costs with default cost=1."""
         strategy = FixedWindowStrategy()
         rate = Rate.parse("10/s")
         key = "user:mixed"
@@ -254,12 +222,8 @@ async def test_mixed_cost_and_default_cost(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend)
         assert wait > 0, "Should be throttled (10+1 > 10)"
 
-
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_large_cost_single_request(backend: InMemoryBackend):
-    """Test that a single request with large cost can exceed or meet limit."""
-    async with backend(close_on_exit=True):
+    async def test_large_cost_single_request(self, backend: InMemoryBackend):
+        """Test that a single request with large cost can exceed or meet limit."""
         strategy = FixedWindowStrategy()
         rate = Rate.parse("10/s")
         key = "user:large"
@@ -272,12 +236,8 @@ async def test_large_cost_single_request(backend: InMemoryBackend):
         wait = await strategy(key, rate, backend, cost=1)
         assert wait > 0, "Should be throttled after hitting limit"
 
-
-@pytest.mark.anyio
-@pytest.mark.strategy
-async def test_cost_isolation_between_keys(backend: InMemoryBackend):
-    """Test that costs for different keys don't interfere."""
-    async with backend(close_on_exit=True):
+    async def test_cost_isolation_between_keys(self, backend: InMemoryBackend):
+        """Test that costs for different keys don't interfere."""
         strategy = FixedWindowStrategy()
         rate = Rate.parse("10/s")
 

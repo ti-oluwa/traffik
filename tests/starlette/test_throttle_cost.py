@@ -4,7 +4,7 @@ import asyncio
 import typing
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -18,13 +18,13 @@ from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.throttle
-async def test_http_throttle_with_default_cost(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test HTTPThrottle with default cost."""
-    async with inmemory_backend(close_on_exit=True):
+class TestThrottleCost:
+    async def test_http_throttle_with_default_cost(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test HTTPThrottle with default cost."""
         throttle = HTTPThrottle(
             "test-default-cost-sl",
             rate="5/s",
@@ -52,14 +52,10 @@ async def test_http_throttle_with_default_cost(
             response = await client.get("/api/endpoint")
             assert response.status_code == 429, "Request 6 should be throttled"
 
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_http_throttle_with_custom_cost(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test HTTPThrottle with custom cost."""
-    async with inmemory_backend(close_on_exit=True):
+    async def test_http_throttle_with_custom_cost(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test HTTPThrottle with custom cost."""
         throttle = HTTPThrottle(
             "test-custom-cost-sl",
             rate="10/s",
@@ -88,14 +84,10 @@ async def test_http_throttle_with_custom_cost(
             response = await client.get("/api/expensive")
             assert response.status_code == 429, "Request 6 should be throttled"
 
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_http_throttle_override_cost_per_request(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test HTTPThrottle with per-request cost override."""
-    async with inmemory_backend(close_on_exit=True):
+    async def test_http_throttle_override_cost_per_request(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test HTTPThrottle with per-request cost override."""
         throttle = HTTPThrottle(
             "test-override-cost-sl",
             rate="20/2s",
@@ -137,12 +129,8 @@ async def test_http_throttle_override_cost_per_request(
                 response = await client.get("/api/heavy")
                 assert response.status_code == 200
 
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -> None:
-    """Test WebSocketThrottle with variable costs."""
-    async with inmemory_backend(close_on_exit=True):
+    async def test_websocket_throttle_with_cost(self, backend: InMemoryBackend) -> None:
+        """Test WebSocketThrottle with variable costs."""
 
         async def ws_throttled(
             connection: WebSocket,
@@ -175,13 +163,13 @@ async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -
                 except WebSocketDisconnect:
                     # Throttle handler may have closed the connection
                     break
-                except Exception as exc:
+                except Exception as exc:  # noqa
                     print("Exception caught in websocket:", exc)
                     # Only try to send if websocket is still connected
                     if websocket.client_state.value != 3:  # 3 = DISCONNECTED
                         try:
                             await websocket.send_text("Internal error")
-                        except Exception:
+                        except Exception:  # noqa
                             pass
                     break
 
@@ -189,20 +177,20 @@ async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -
         app = Starlette(routes=routes)
 
         base_url = "http://0.0.0.0"
-        running_loop = asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
         async with (
             AsyncTestClient(
                 app=app,
                 base_url=base_url,
-                event_loop=running_loop,
+                event_loop=loop,
             ) as client,
             client.websocket_connect(url="/ws") as ws,
         ):
             # Reset the backend before starting the test
             # as connecting to the websocket already counts as a request
             # and we want to start fresh.
-            await inmemory_backend.reset()
-            await inmemory_backend.initialize()
+            await backend.reset()
+            await backend.initialize()
 
             async def make_ws_request(id: int) -> tuple[str, int]:
                 try:
@@ -223,12 +211,8 @@ async def test_websocket_throttle_with_cost(inmemory_backend: InMemoryBackend) -
             response, code = await make_ws_request(6)
             assert response == "Throttled"
 
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttle_cost_isolation(inmemory_backend: InMemoryBackend) -> None:
-    """Test that costs are isolated between different throttles."""
-    async with inmemory_backend(close_on_exit=True):
+    async def test_throttle_cost_isolation(self, backend: InMemoryBackend) -> None:
+        """Test that costs are isolated between different throttles."""
         throttle1 = HTTPThrottle(
             "test-isolation-1-sl",
             rate="10/s",

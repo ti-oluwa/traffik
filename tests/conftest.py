@@ -29,12 +29,12 @@ def get_inmemory_backend(namespace: str, persistent: bool) -> InMemoryBackend:
     return InMemoryBackend(
         persistent=persistent,
         namespace=namespace,
-        number_of_shards=3,
+        number_of_shards=8,
         cleanup_frequency=2,
     )
 
 
-def get_redis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
+def get_aioredis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
     if os.getenv("SKIP_REDIS_TESTS", "false").lower() in ("1", "true", "yes", "t"):
         raise SkipBackend("Skipping Redis backend tests as per environment setting.")
 
@@ -48,19 +48,51 @@ def get_redis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
     )
 
 
-def get_memcached_backend(namespace: str, persistent: bool) -> ThrottleBackend:
+def get_coredis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
+    if os.getenv("SKIP_REDIS_TESTS", "false").lower() in ("1", "true", "yes", "t"):
+        raise SkipBackend("Skipping Redis backend tests as per environment setting.")
+
+    from traffik.backends.redis.coredis import RedisBackend
+
+    return RedisBackend(
+        connection=REDIS_URL,
+        namespace=namespace,
+        persistent=persistent,
+    )
+
+
+def get_aiomcache_backend(namespace: str, persistent: bool) -> ThrottleBackend:
     if os.getenv("SKIP_MEMCACHED_TESTS", "false").lower() in ("1", "true", "yes", "t"):
         raise SkipBackend(
             "Skipping Memcached backend tests as per environment setting."
         )
 
-    from traffik.backends.memcached import MemcachedBackend
+    from traffik.backends.memcached.aiomcache import MemcachedBackend
 
     return MemcachedBackend(
         host=MEMCACHED_HOST,
         port=MEMCACHED_PORT,
         namespace=namespace,
         pool_size=MEMCACHED_POOL_SIZE,
+        persistent=persistent,
+        # Enable key tracking for testing purposes
+        # So that we can clean up keys after tests
+        track_keys=True,
+    )
+
+
+def get_emcache_backend(namespace: str, persistent: bool) -> ThrottleBackend:
+    if os.getenv("SKIP_MEMCACHED_TESTS", "false").lower() in ("1", "true", "yes", "t"):
+        raise SkipBackend(
+            "Skipping Memcached backend tests as per environment setting."
+        )
+
+    from traffik.backends.memcached.emcache import MemcachedBackend
+
+    return MemcachedBackend(
+        host=MEMCACHED_HOST,
+        port=MEMCACHED_PORT,
+        namespace=namespace,
         persistent=persistent,
         # Enable key tracking for testing purposes
         # So that we can clean up keys after tests
@@ -79,11 +111,15 @@ def get_multiprocess_backend(namespace: str, persistent: bool) -> ThrottleBacken
     )
 
 
-BACKEND_FACTORIES: typing.List[typing.Callable[[str, bool], ThrottleBackend]] = [
-    get_memcached_backend,
-    get_redis_backend,
+BACKEND_FACTORIES: typing.List[
+    typing.Callable[[str, bool], ThrottleBackend[typing.Any, typing.Any]]
+] = [
     get_inmemory_backend,
     get_multiprocess_backend,
+    get_emcache_backend,
+    get_aiomcache_backend,
+    get_aioredis_backend,
+    get_coredis_backend,
 ]
 
 
@@ -142,6 +178,7 @@ def inmemory_backend() -> InMemoryBackend:
 
 
 @pytest.fixture(scope="function")
-async def backend() -> InMemoryBackend:
-    backend = InMemoryBackend(persistent=False)
-    return backend
+async def backend() -> typing.AsyncGenerator[InMemoryBackend, None]:
+    backend = InMemoryBackend()
+    async with backend(close_on_exit=True):
+        yield backend

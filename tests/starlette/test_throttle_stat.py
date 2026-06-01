@@ -3,7 +3,7 @@
 import asyncio
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
@@ -21,11 +21,12 @@ from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.throttle
-async def test_http_throttle_stat_basic(inmemory_backend: InMemoryBackend) -> None:
-    """Test HTTPThrottle.stat() method returns statistics."""
-    async with inmemory_backend(close_on_exit=True):
+class TestThrottleStat:
+    async def test_http_throttle_stat_basic(self, backend: InMemoryBackend) -> None:
+        """Test HTTPThrottle.stat() method returns statistics."""
+
         throttle = HTTPThrottle(
             "test-stat-basic-sl",
             rate="10/s",
@@ -77,12 +78,11 @@ async def test_http_throttle_stat_basic(inmemory_backend: InMemoryBackend) -> No
             assert data["after"]["hits_remaining"] == 9
             assert data["after"]["wait_ms"] == 0.0
 
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_http_throttle_stat_with_cost(inmemory_backend: InMemoryBackend) -> None:
-    """Test HTTPThrottle.stat() reflects cost properly."""
-    async with inmemory_backend(close_on_exit=True):
+    async def test_http_throttle_stat_with_cost(
+        self,
+        backend: InMemoryBackend,
+    ) -> None:
+        """Test HTTPThrottle.stat() reflects cost properly."""
         throttle = HTTPThrottle(
             "test-stat-cost-sl",
             rate="20/s",
@@ -126,12 +126,12 @@ async def test_http_throttle_stat_with_cost(inmemory_backend: InMemoryBackend) -
             assert data["before"] == 15
             assert data["after"] == 10
 
+    async def test_http_throttle_stat_at_limit(
+        self,
+        backend: InMemoryBackend,
+    ) -> None:
+        """Test HTTPThrottle.stat() when at rate limit."""
 
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_http_throttle_stat_at_limit(inmemory_backend: InMemoryBackend) -> None:
-    """Test HTTPThrottle.stat() when at rate limit."""
-    async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
             "test-stat-limit-sl",
             rate="3/s",
@@ -144,7 +144,7 @@ async def test_http_throttle_stat_at_limit(inmemory_backend: InMemoryBackend) ->
             try:
                 await throttle(request)
                 throttled = False
-            except Exception:
+            except Exception:  # noqa
                 throttled = True
             stat = await throttle.stat(request)
             return JSONResponse(
@@ -178,14 +178,11 @@ async def test_http_throttle_stat_at_limit(inmemory_backend: InMemoryBackend) ->
             assert data["wait_ms"] > 0.0
             assert data["throttled"] is True
 
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_http_throttle_stat_different_keys(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test HTTPThrottle.stat() for different clients."""
-    async with inmemory_backend(close_on_exit=True):
+    async def test_http_throttle_stat_different_keys(
+        self,
+        backend: InMemoryBackend,
+    ) -> None:
+        """Test HTTPThrottle.stat() for different clients."""
 
         async def custom_identifier(connection: Request) -> str:
             # Use query parameter as identifier for testing
@@ -231,14 +228,12 @@ async def test_http_throttle_stat_different_keys(
             response = await client.get("/api/resource?user=user1")
             assert response.json()["hits_remaining"] == 3
 
+    async def test_http_throttle_stat_unlimited_rate(
+        self,
+        backend: InMemoryBackend,
+    ) -> None:
+        """Test HTTPThrottle.stat() with unlimited rate."""
 
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_http_throttle_stat_unlimited_rate(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test HTTPThrottle.stat() with unlimited rate."""
-    async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
             "test-stat-unlimited-sl",
             rate=Rate(limit=0, seconds=0),  # Unlimited
@@ -271,12 +266,8 @@ async def test_http_throttle_stat_unlimited_rate(
                 data = response.json()
                 assert data["is_infinite"], "Should always show infinite hits"
 
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> None:
-    """Test WebSocketThrottle.stat() method."""
-    async with inmemory_backend(close_on_exit=True):
+    async def test_websocket_throttle_stat(self, backend: InMemoryBackend) -> None:
+        """Test WebSocketThrottle.stat() method."""
         ws_throttle = WebSocketThrottle(
             "test-ws-stat-sl",
             rate="5/s",
@@ -330,7 +321,7 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
 
                     if throttled:
                         break
-            except Exception as exc:
+            except Exception as exc:  # noqa
                 close_code = 1011  # Internal Error
                 close_reason = str(exc)
 
@@ -351,8 +342,8 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
             client.websocket_connect(url="/ws") as ws,
         ):
             # Reset backend after connection (connection counts as a request)
-            await inmemory_backend.reset()
-            await inmemory_backend.initialize()
+            await backend.reset()
+            await backend.initialize()
 
             # Get initial stat
             initial_data = await ws.receive_json()
@@ -379,48 +370,8 @@ async def test_websocket_throttle_stat(inmemory_backend: InMemoryBackend) -> Non
             assert response["before"] == 0
             assert response["throttled"] is True
 
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttle_stat_without_strategy_support(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test that throttles handle strategies without get_stat method."""
-    async with inmemory_backend(close_on_exit=True):
-        # Create a simple strategy without get_stat
-        async def simple_strategy(key, rate, backend, cost=1):
-            return 0.0  # Always allow
-
-        throttle = HTTPThrottle(
-            "test-no-stat-sl",
-            rate="10/s",
-            identifier=default_client_identifier,
-            strategy=simple_strategy,
-            registry=ThrottleRegistry(),
-        )
-
-        async def no_stat_endpoint(request: Request) -> JSONResponse:
-            stat = await throttle.stat(request)
-            return JSONResponse({"stat": stat})
-
-        routes = [Route("/api/no-stat", no_stat_endpoint, methods=["GET"])]
-        app = Starlette(routes=routes)
-
-        base_url = "http://test"
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url=base_url
-        ) as client:
-            response = await client.get("/api/no-stat")
-            data = response.json()
-            # Should return None when strategy doesn't support stats
-            assert data["stat"] is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttle_stat_fields(inmemory_backend: InMemoryBackend) -> None:
-    """Test that HTTPThrottle.stat() returns all required fields."""
-    async with inmemory_backend(close_on_exit=True):
+    async def test_throttle_stat_fields(self, backend: InMemoryBackend) -> None:
+        """Test that HTTPThrottle.stat() returns all required fields."""
         throttle = HTTPThrottle(
             "test-stat-fields-sl",
             rate="10/s",

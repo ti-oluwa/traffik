@@ -26,14 +26,14 @@ backend = InMemoryBackend(namespace="test", persistent=False)
 
 ## Basic Test Pattern
 
-Here's the standard setup with `pytest`, `anyio`, and `httpx.AsyncClient`:
+Here's the standard setup with `pytest`, `anyio`, and `httpx2.AsyncClient`:
 
 ```python
 # tests/test_my_endpoints.py
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
+from httpx2 import AsyncClient, ASGITransport
 from fastapi import FastAPI, Request, Depends
 from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend

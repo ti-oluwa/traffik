@@ -20,9 +20,7 @@ from traffik.types import StrategyStat
 
 
 def _make_stat(
-    limit: int = 10,
-    hits_remaining: float = 5,
-    wait_ms: float = 0,
+    limit: int = 10, hits_remaining: float = 5, wait_ms: float = 0
 ) -> StrategyStat[typing.Mapping]:
     """Helper to create a StrategyStat for testing."""
     return StrategyStat(

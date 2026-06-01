@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import sys
 import typing
 
 from starlette.requests import HTTPConnection
@@ -10,6 +11,7 @@ from starlette.websockets import WebSocket
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import (
+    _EXEMPT_EXCEPTIONS,
     BackendConnectionError,
     ConfigurationError,
     _build_exception_handler_getter,
@@ -214,7 +216,8 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
 
 
 _SortThrottles = typing.Union[
-    typing.Literal["cheap_first", "cheap_last", False, None],
+    None,
+    typing.Literal["cheap_first", "cheap_last", False],
     typing.Callable[
         [typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]],
         typing.Any,
@@ -419,6 +422,7 @@ class ThrottleMiddleware:
         self.middleware_throttles = _prep_throttles(middleware_throttles, sort=sort)
         self.backend = backend if backend is not None else get_throttle_backend(app)
         # We set to True once we've successfully checked that the backend is ready once.
+        # Also actively tracks backend health
         self._backend_ok = False
         self.get_exception_handler = exception_handler_getter
         self.context = context
@@ -466,6 +470,8 @@ class ThrottleMiddleware:
                         connection,  # type: ignore[arg-type]
                         context=context,
                     )
+                except _EXEMPT_EXCEPTIONS:
+                    raise
                 except Exception as exc:
                     if isinstance(exc, BackendConnectionError):
                         # We pessimistically set the backend as not OK, so that we attempt to re-initialize it on the next request.

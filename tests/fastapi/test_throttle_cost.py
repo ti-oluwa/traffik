@@ -5,7 +5,7 @@ import typing
 
 import pytest
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 
 from tests.asynctestclient import AsyncTestClient
 from tests.utils import default_client_identifier

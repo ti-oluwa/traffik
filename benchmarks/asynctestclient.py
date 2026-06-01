@@ -366,7 +366,7 @@ class AsyncTestClient(Session):
         super().__init__()
 
         # Separate queues for lifespan
-        self.event_loop = event_loop or asyncio.get_event_loop()
+        self.event_loop = event_loop or asyncio.get_running_loop()
         self.lifespan_receive_queue: asyncio.Queue[Message] = asyncio.Queue()
         self.lifespan_send_queue: asyncio.Queue[Message] = asyncio.Queue()
 

@@ -1,30 +1,35 @@
 import asyncio
+import functools
 import sys
+import typing
 
 import click
+from typing_extensions import ParamSpec, TypeVar
 
 from benchmarks.base import BackendKind, BenchmarkConfig, StrategyKind
 from benchmarks.bench.http import run_scenarios as run_http_scenarios
-from benchmarks.bench.middleware import (
-    run_scenarios as run_middleware_scenarios,
-)
-from benchmarks.bench.multiprocess import (
-    run_scenarios as run_multiprocess_scenarios,
-)
-from benchmarks.bench.websocket import (
-    run_scenarios as run_websocket_scenarios,
-)
-from benchmarks.output.json import print_json
+from benchmarks.bench.middleware import run_scenarios as run_middleware_scenarios
+
+if sys.platform not in ("win32", "cygwin"):
+    from benchmarks.bench.multiprocess import (
+        run_scenarios as run_multiprocess_scenarios,
+    )
+    from benchmarks.scenarios.multiprocess import SCENARIOS as MULTIPROCESS_SCENARIOS
+else:
+    run_multiprocess_scenarios = None
+    MULTIPROCESS_SCENARIOS = {}
+from benchmarks.bench.websocket import run_scenarios as run_websocket_scenarios
+from benchmarks.output._json import print_json
 from benchmarks.output.table import print_results_table
 from benchmarks.scenarios.http import SCENARIOS as HTTP_SCENARIOS
 from benchmarks.scenarios.middleware import SCENARIOS as MIDDLEWARE_SCENARIOS
-from benchmarks.scenarios.multiprocess import (
-    SCENARIOS as MULTIPROCESS_SCENARIOS,
-)
 from benchmarks.scenarios.websocket import SCENARIOS as WEBSOCKET_SCENARIOS
 
+P = ParamSpec("P")
+R = TypeVar("R")
 
-def common_options(func):
+
+def options(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
     """Common click options for all benchmark commands."""
 
     @click.option(
@@ -90,7 +95,8 @@ def common_options(func):
         default="all",
         help="Comma-separated scenario names or 'all'.",
     )
-    def wrapper(*args, **kwargs):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs) -> R:
         return func(*args, **kwargs)
 
     return wrapper
@@ -108,7 +114,7 @@ def cli() -> None:
 
 
 @cli.command("http")
-@common_options
+@options
 def http_command(
     backend,
     strategy,
@@ -162,7 +168,7 @@ def http_command(
 
 
 @cli.command("middleware")
-@common_options
+@options
 def middleware_command(
     backend,
     strategy,
@@ -216,7 +222,7 @@ def middleware_command(
 
 
 @cli.command("websocket")
-@common_options
+@options
 def websocket_command(
     backend,
     strategy,
@@ -269,7 +275,7 @@ def websocket_command(
 
 
 @cli.command("multiprocess")
-@common_options
+@options
 def multiprocess_command(
     backend,
     strategy,
@@ -301,6 +307,10 @@ def multiprocess_command(
         concurrency=concurrency,
         output_format=output,
     )
+    if run_multiprocess_scenarios is None:
+        click.echo("ERROR: MultiProcess benchmarks require a POSIX system.", err=True)
+        sys.exit(1)
+        return
 
     # Resolve scenario keys
     if scenarios == "all":

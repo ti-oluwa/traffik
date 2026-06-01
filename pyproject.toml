@@ -35,8 +35,6 @@ dependencies = [
     "starlette>=0.14.0",
     "annotated-types>=0.7.0",
     "msgpack>=1.1.2",
-    "httpx>=0.28.1",
-    "rich>=15.0.0",
 ]
 
 [project.urls]
@@ -67,7 +65,7 @@ test = [
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=5.0.0",
     "pytest-rerunfailures>=16.0.1",
-    "httpx>=0.28.0",
+    "httpx2>=0.28.0",
     "anyio>=4.0.0",
     "requests>=2.32.4",
 ]
@@ -99,6 +97,7 @@ markers = [
     "backend: tests that test a throttle backend",
     "strategy: tests that test a throttling strategy",
     "throttle: tests that test throttling functionality",
+    "registry: tests that test throttle registry functionality",
     "redis: Redis related tests",
     "memcached: tests that require Memcached access",
     "fastapi: tests that are specific to FastAPI",
@@ -134,21 +133,18 @@ dev = [
     "mypy>=1.14.1",
     "pytest-watch>=4.2.0",
     "ruff>=0.12.1",
+    "traffik[all]",
     "traffik[test]",
     "traffik[docs]",
-    "slowapi>=0.1.4",
     "psutil>=5.9.5",
     "uvicorn>=0.22.0",
     "memory-profiler>=0.61.0",
     "line-profiler>=5.0.0",
-    "pymemcache>=4.0.0",
-    "click>=8.1.8",
 ]
 benchmark = [
-    "slowapi>=0.1.4",
-    "psutil>=5.9.5",
-    "uvicorn>=0.22.0",
-    "memory-profiler>=0.61.0",
-    "line-profiler>=5.0.0",
+    # "slowapi>=0.1.4",
+    "rich>=15.0.0",
     "pymemcache>=4.0.0",
+    "click>=8.1.8",
+    "httpx2>=0.28.1",
 ]

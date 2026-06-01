@@ -913,7 +913,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
                 result, emcache.NotFoundCommandError
             ):
                 raise BackendError(
-                    f"Failed to clear key '{key}': {str(result)}"
+                    f"Failed to clear key '{key}': {result!s}"
                 ) from result
 
         # Remove the tracking key itself.

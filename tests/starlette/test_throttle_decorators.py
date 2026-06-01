@@ -1,25 +1,33 @@
 """Tests for the Starlette `throttled` decorator in throttles.py."""
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
-from starlette.testclient import TestClient
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from tests.asynctestclient import AsyncTestClient
 from tests.utils import default_client_identifier
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle, throttled
 
 
+@pytest.mark.throttle
+def test_throttled_no_throttles_raises() -> None:
+    """Test that throttled() with no throttles raises ValueError."""
+    with pytest.raises(ValueError, match="At least one throttle"):
+        throttled()
+
+
 @pytest.mark.asyncio
 @pytest.mark.throttle
-async def test_throttled_single_throttle(inmemory_backend: InMemoryBackend) -> None:
-    """Test `@throttled` with a single throttle on an async route."""
-    async with inmemory_backend(close_on_exit=True):
+class TestDecoratorWithHTTPThrottle:
+    async def test_throttled_single_throttle(self, backend: InMemoryBackend) -> None:
+        """Test `@throttled` with a single throttle on an async route."""
+
         throttle = HTTPThrottle(
             "test-decorator-single-sl",
             rate="3/s",
@@ -47,14 +55,9 @@ async def test_throttled_single_throttle(inmemory_backend: InMemoryBackend) -> N
             response = await client.get("/")
             assert response.status_code == 429, "Request 4 should be throttled"
 
+    async def test_throttled_multiple_throttles(self, backend: InMemoryBackend) -> None:
+        """Test `@throttled` with multiple throttles applied sequentially."""
 
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttled_multiple_throttles(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test `@throttled` with multiple throttles applied sequentially."""
-    async with inmemory_backend(close_on_exit=True):
         burst_throttle = HTTPThrottle(
             "test-decorator-burst-sl",
             rate="2/s",
@@ -87,14 +90,11 @@ async def test_throttled_multiple_throttles(
             response = await client.get("/")
             assert response.status_code == 429, "Should be throttled by burst limit"
 
+    async def test_throttled_with_route_parameter(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test throttled(throttle, route=func) direct form."""
 
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttled_with_route_parameter(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test throttled(throttle, route=func) direct form."""
-    async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
             "test-decorator-route-param-sl",
             rate="2/s",
@@ -120,14 +120,11 @@ async def test_throttled_with_route_parameter(
             response = await client.get("/")
             assert response.status_code == 429
 
+    async def test_throttled_no_connection_raises(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test that throttled raises ValueError when no HTTPConnection in params."""
 
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttled_no_connection_raises(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test that throttled raises ValueError when no HTTPConnection in params."""
-    async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
             "test-decorator-no-conn-sl",
             rate="5/s",
@@ -142,21 +139,12 @@ async def test_throttled_no_connection_raises(
         with pytest.raises(ValueError, match="No HTTP connection found"):
             await bad_endpoint("hello")  # type: ignore
 
+    async def test_throttled_preserves_function_metadata(
+        self,
+        backend: InMemoryBackend,
+    ) -> None:
+        """Test that @throttled preserves the wrapped function's metadata."""
 
-@pytest.mark.throttle
-def test_throttled_no_throttles_raises() -> None:
-    """Test that throttled() with no throttles raises ValueError."""
-    with pytest.raises(ValueError, match="At least one throttle"):
-        throttled()
-
-
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttled_preserves_function_metadata(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test that @throttled preserves the wrapped function's metadata."""
-    async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
             "test-decorator-meta-sl",
             rate="5/s",
@@ -172,14 +160,11 @@ async def test_throttled_preserves_function_metadata(
         assert my_endpoint.__name__ == "my_endpoint"
         assert my_endpoint.__doc__ == "My endpoint docstring."
 
+    async def test_throttled_connection_in_kwargs(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test that throttled finds HTTPConnection in kwargs."""
 
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttled_connection_in_kwargs(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test that throttled finds HTTPConnection in kwargs."""
-    async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
             "test-decorator-kwargs-sl",
             rate="2/s",
@@ -206,14 +191,9 @@ async def test_throttled_connection_in_kwargs(
             response = await client.get("/")
             assert response.status_code == 429
 
+    async def test_throttled_different_routes(self, backend: InMemoryBackend) -> None:
+        """Test that throttled works correctly on different routes with same throttle."""
 
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttled_different_routes(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test that throttled works correctly on different routes with same throttle."""
-    async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
             "test-decorator-routes-sl",
             rate="3/s",
@@ -251,14 +231,9 @@ async def test_throttled_different_routes(
             response = await client.get("/b")
             assert response.status_code == 200
 
+    async def test_throttled_retry_after_header(self, backend: InMemoryBackend) -> None:
+        """Test that throttled responses include Retry-After header."""
 
-@pytest.mark.asyncio
-@pytest.mark.throttle
-async def test_throttled_retry_after_header(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test that throttled responses include Retry-After header."""
-    async with inmemory_backend(close_on_exit=True):
         throttle = HTTPThrottle(
             "test-decorator-retry-sl",
             rate="1/s",
@@ -284,75 +259,79 @@ async def test_throttled_retry_after_header(
             assert response.headers.get("Retry-After") is not None
 
 
+@pytest.mark.anyio
 @pytest.mark.throttle
-def test_throttled_websocket_single_throttle(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test `@throttled` with a WebSocketThrottle on a WebSocket route."""
-    throttle = WebSocketThrottle(
-        "test-ws-decorator-sl",
-        rate="2/5s",
-        identifier=default_client_identifier,
-        registry=ThrottleRegistry(),
-    )
+class TestDecoratorWithWebsocketThrottle:
+    async def test_throttled_websocket_single_throttle(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test `@throttled` with a WebSocketThrottle on a WebSocket route."""
+        throttle = WebSocketThrottle(
+            "test-ws-decorator-sl",
+            rate="2/5s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
+        )
 
-    @throttled(throttle)
-    async def ws_endpoint(websocket: WebSocket) -> None:
-        await websocket.accept()
-        await websocket.send_json({"message": "connected"})
-        await websocket.close()
+        @throttled(throttle)
+        async def ws_endpoint(websocket: WebSocket) -> None:
+            await websocket.accept()
+            await websocket.send_json({"message": "connected"})
+            await websocket.close()
 
-    routes = [WebSocketRoute("/ws", ws_endpoint)]
-    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+        routes = [WebSocketRoute("/ws", ws_endpoint)]
+        app = Starlette(routes=routes, lifespan=backend.lifespan)
 
-    with TestClient(app, base_url="http://test") as client:
-        # First 2 connections should succeed
-        for _ in range(2):
-            with client.websocket_connect("/ws") as websocket:
-                data = websocket.receive_json()
-                assert data == {"message": "connected"}
+        async with AsyncTestClient(app, base_url="http://test") as client:
+            # First 2 connections should succeed
+            for _ in range(2):
+                async with client.websocket_connect("/ws") as ws:
+                    data = await ws.receive_json()
+                    assert data == {"message": "connected"}
 
-        # 3rd connection should be throttled
-        with pytest.raises((WebSocketDisconnect, Exception)):
-            with client.websocket_connect("/ws") as websocket:
-                websocket.receive_json()
+            # 3rd connection should be throttled
+            with (
+                pytest.raises((WebSocketDisconnect, Exception)),
+            ):
+                async with client.websocket_connect("/ws") as ws:
+                    await ws.receive_json()
 
+    async def test_throttled_websocket_multiple_throttles(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test `@throttled` with multiple `WebSocketThrottles` applied sequentially."""
+        burst = WebSocketThrottle(
+            "test-ws-burst-sl",
+            rate="2/5s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
+        )
+        sustained = WebSocketThrottle(
+            "test-ws-sustained-sl",
+            rate="5/60s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
+        )
 
-@pytest.mark.throttle
-def test_throttled_websocket_multiple_throttles(
-    inmemory_backend: InMemoryBackend,
-) -> None:
-    """Test `@throttled` with multiple `WebSocketThrottles` applied sequentially."""
-    burst = WebSocketThrottle(
-        "test-ws-burst-sl",
-        rate="2/5s",
-        identifier=default_client_identifier,
-        registry=ThrottleRegistry(),
-    )
-    sustained = WebSocketThrottle(
-        "test-ws-sustained-sl",
-        rate="5/60s",
-        identifier=default_client_identifier,
-        registry=ThrottleRegistry(),
-    )
+        @throttled(burst, sustained)
+        async def ws_endpoint(websocket: WebSocket) -> None:
+            await websocket.accept()
+            await websocket.send_json({"message": "ok"})
+            await websocket.close()
 
-    @throttled(burst, sustained)
-    async def ws_endpoint(websocket: WebSocket) -> None:
-        await websocket.accept()
-        await websocket.send_json({"message": "ok"})
-        await websocket.close()
+        routes = [WebSocketRoute("/ws", ws_endpoint)]
+        app = Starlette(routes=routes, lifespan=backend.lifespan)
 
-    routes = [WebSocketRoute("/ws", ws_endpoint)]
-    app = Starlette(routes=routes, lifespan=inmemory_backend.lifespan)
+        async with AsyncTestClient(app, base_url="http://test") as client:
+            # First 2 connections pass (burst limit)
+            for _ in range(2):
+                async with client.websocket_connect("/ws") as ws:
+                    data = await ws.receive_json()
+                    assert data == {"message": "ok"}
 
-    with TestClient(app, base_url="http://test") as client:
-        # First 2 connections pass (burst limit)
-        for _ in range(2):
-            with client.websocket_connect("/ws") as websocket:
-                data = websocket.receive_json()
-                assert data == {"message": "ok"}
-
-        # 3rd connection blocked by burst throttle
-        with pytest.raises((WebSocketDisconnect, Exception)):
-            with client.websocket_connect("/ws") as websocket:
-                websocket.receive_json()
+            # 3rd connection blocked by burst throttle
+            with (
+                pytest.raises((WebSocketDisconnect, Exception)),
+            ):
+                async with client.websocket_connect("/ws") as ws:
+                    await ws.receive_json()

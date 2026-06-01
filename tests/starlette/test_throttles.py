@@ -7,7 +7,7 @@ import pytest
 from httpx2 import ASGITransport, AsyncClient, Response
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
-from starlette.requests import Request, HTTPConnection
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect

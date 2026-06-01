@@ -411,9 +411,9 @@ class TestAddParameterToSignature:
         )
         updated = _add_parameter_to_signature(func, param, index=1)
         sig = inspect.signature(updated)
-        assert sig.return_annotation == bool
-        assert sig.parameters["a"].annotation == int
-        assert sig.parameters["b"].annotation == str
+        assert sig.return_annotation is bool
+        assert sig.parameters["a"].annotation is int
+        assert sig.parameters["b"].annotation is str
 
 
 @pytest.mark.anyio

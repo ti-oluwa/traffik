@@ -9,6 +9,7 @@ import threading
 import typing
 import weakref
 
+from starlette.middleware import Middleware
 from starlette.requests import HTTPConnection, Request
 from starlette.responses import Response
 from starlette.websockets import WebSocket, WebSocketState
@@ -40,6 +41,7 @@ from traffik.types import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     CostType,
+    ExceptionHandler,
     HTTPConnectionT,
     LockConfig,
     P,
@@ -142,7 +144,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         "use_fixed_backend",
     )
 
-    connection_type: typing.Type[HTTPConnectionT]  # Should be set in subclasses
+    connection_type: typing.ClassVar[typing.Any]  # Should be set in subclasses
 
     def __init__(
         self,
@@ -1109,6 +1111,28 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             lock=lock,
             lock_config=lock_config,
             parent=parent,
+        )
+
+    def as_middleware(
+        self,
+        *,
+        backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnection]] = None,
+        exception_handler_getter: typing.Optional[
+            typing.Callable[
+                [Exception], typing.Optional[ExceptionHandler[HTTPConnection]]
+            ]
+        ] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+    ) -> Middleware:
+        from traffik.middleware import ThrottleMiddleware
+
+        return Middleware(
+            ThrottleMiddleware,
+            backend=backend if backend is not None else self.backend,  # type: ignore[arg-type]
+            middleware_throttles=[self],
+            exception_handler_getter=exception_handler_getter,
+            context=context,
+            sort=None,
         )
 
     def add_rules(

@@ -335,3 +335,118 @@ class TestDecoratorWithWebsocketThrottle:
             ):
                 async with client.websocket_connect("/ws") as ws:
                     await ws.receive_json()
+
+    async def test_throttled_websocket_with_route_parameter(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test throttled(throttle, route=func) direct form for WebSocket."""
+        throttle = WebSocketThrottle(
+            "test-ws-decorator-route-param-sl",
+            rate="2/5s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
+        )
+
+        async def ws_endpoint(websocket: WebSocket) -> None:
+            await websocket.accept()
+            await websocket.send_json({"message": "ok"})
+            await websocket.close()
+
+        wrapped = throttled(throttle, route=ws_endpoint)
+
+        routes = [WebSocketRoute("/ws", wrapped)]
+        app = Starlette(routes=routes, lifespan=backend.lifespan)
+
+        async with AsyncTestClient(app, base_url="http://test") as client:
+            for _ in range(2):
+                async with client.websocket_connect("/ws") as ws:
+                    data = await ws.receive_json()
+                    assert data == {"message": "ok"}
+
+            with pytest.raises((WebSocketDisconnect, Exception)):
+                async with client.websocket_connect("/ws") as ws:
+                    await ws.receive_json()
+
+    async def test_throttled_websocket_preserves_function_metadata(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test that @throttled preserves the wrapped WebSocket function's metadata."""
+        throttle = WebSocketThrottle(
+            "test-ws-decorator-meta-sl",
+            rate="5/s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
+        )
+
+        @throttled(throttle)
+        async def my_ws_endpoint(websocket: WebSocket) -> None:
+            """My WebSocket endpoint docstring."""
+            await websocket.accept()
+            await websocket.close()
+
+        assert my_ws_endpoint.__name__ == "my_ws_endpoint"
+        assert my_ws_endpoint.__doc__ == "My WebSocket endpoint docstring."
+
+    async def test_throttled_websocket_no_connection_raises(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test that throttled raises ValueError when no WebSocket in params."""
+        throttle = WebSocketThrottle(
+            "test-ws-decorator-no-conn-sl",
+            rate="5/s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
+        )
+
+        @throttled(throttle)
+        async def bad_ws_endpoint(some_arg: str) -> None:
+            pass
+
+        with pytest.raises(ValueError, match="No HTTP connection found"):
+            await bad_ws_endpoint("hello")  # type: ignore
+
+    async def test_throttled_websocket_different_routes(
+        self, backend: InMemoryBackend
+    ) -> None:
+        """Test that throttled works correctly on different WebSocket routes with same throttle."""
+        throttle = WebSocketThrottle(
+            "test-ws-decorator-routes-sl",
+            rate="2/5s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
+        )
+
+        @throttled(throttle)
+        async def route_a(websocket: WebSocket) -> None:
+            await websocket.accept()
+            await websocket.send_json({"route": "a"})
+            await websocket.close()
+
+        @throttled(throttle)
+        async def route_b(websocket: WebSocket) -> None:
+            await websocket.accept()
+            await websocket.send_json({"route": "b"})
+            await websocket.close()
+
+        routes = [
+            WebSocketRoute("/ws/a", route_a),
+            WebSocketRoute("/ws/b", route_b),
+        ]
+        app = Starlette(routes=routes, lifespan=backend.lifespan)
+
+        async with AsyncTestClient(app, base_url="http://test") as client:
+            # Exhaust route A's limit
+            for _ in range(2):
+                async with client.websocket_connect("/ws/a") as ws:
+                    data = await ws.receive_json()
+                    assert data == {"route": "a"}
+
+            # Route A should be throttled
+            with pytest.raises((WebSocketDisconnect, Exception)):
+                async with client.websocket_connect("/ws/a") as ws:
+                    await ws.receive_json()
+
+            # Route B should work (different path in scoped key)
+            async with client.websocket_connect("/ws/b") as ws:
+                data = await ws.receive_json()
+                assert data == {"route": "b"}

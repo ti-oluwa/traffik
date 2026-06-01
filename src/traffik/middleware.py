@@ -2,8 +2,8 @@
 
 import asyncio
 import inspect
-import sys
 import typing
+from collections.abc import Collection
 
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -92,7 +92,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         self,
         throttle: Throttle[HTTPConnectionT],
         path: typing.Optional[Matchable] = None,
-        methods: typing.Optional[typing.Iterable[str]] = None,
+        methods: typing.Optional[Collection[str]] = None,
         predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
@@ -383,6 +383,7 @@ class ThrottleMiddleware:
     def __init__(
         self,
         app: ASGIApp,
+        /,
         middleware_throttles: typing.Sequence[
             typing.Union[MiddlewareThrottle[typing.Any], Throttle[typing.Any]]
         ],

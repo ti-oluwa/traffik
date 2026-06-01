@@ -3,6 +3,7 @@ import re
 import threading
 import typing
 import weakref
+from collections.abc import Collection
 
 from traffik.exceptions import ConfigurationError
 from traffik.types import (
@@ -64,7 +65,7 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
     def __init__(
         self,
         path: typing.Optional[Matchable] = None,
-        methods: typing.Optional[typing.Iterable[str]] = None,
+        methods: typing.Optional[Collection[str]] = None,
         predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
         _compute_hash: bool = True,
     ):
@@ -203,7 +204,7 @@ class BypassThrottleRule(ThrottleRule[HTTPConnectionT]):
     def __init__(
         self,
         path: typing.Optional[Matchable] = None,
-        methods: typing.Optional[typing.Iterable[str]] = None,
+        methods: typing.Optional[Collection[str]] = None,
         predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
     ):
         super().__init__(

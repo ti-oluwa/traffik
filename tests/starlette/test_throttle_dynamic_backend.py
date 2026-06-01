@@ -1,78 +1,85 @@
 """Tests for dynamic backend switching for throttles in Starlette."""
 
+import asyncio
+import typing
+
 import pytest
 from httpx2 import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from tests.utils import default_client_identifier
+from tests.asynctestclient import AsyncTestClient
+from tests.utils import (
+    default_client_identifier,
+    make_connection,
+    requires_throttle_type,
+)
+from traffik.backends.base import connection_throttled
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
-from traffik.throttles import HTTPThrottle
+from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 
 
 @pytest.mark.anyio
 @pytest.mark.throttle
-class TestHTTPThrottleDynamicBackend:
-    async def test_http_throttle_with_dynamic_backend(
-        self,
-        backend: InMemoryBackend,
-    ) -> None:
-        """Test dynamic backend switching for `HTTPThrottle` in Starlette."""
-        # This throttle should raise an error if dynamic_backend is True
-        # and a backend is provided
-        with pytest.raises(ValueError):
-            throttle = HTTPThrottle(
-                "test-dynamic-backend-with-backend",
-                rate=Rate(limit=2, seconds=50, minutes=2, hours=1),
-                dynamic_backend=True,
-                backend=backend,
-                registry=ThrottleRegistry(),
-            )
-
-        # This throttle should respect the context of the backend
-        # and should use the backend from the context if available.
-        throttle = HTTPThrottle(
-            "test-dynamic-backend-no-backend",
-            rate=Rate(limit=2, seconds=50, minutes=2, hours=1),
+@requires_throttle_type
+async def test_throttle_with_dynamic_backend(
+    backend: InMemoryBackend, throttle_type: typing.Type[Throttle[HTTPConnection]]
+) -> None:
+    """Test dynamic backend switching for `HTTPThrottle` in Starlette."""
+    # This throttle should raise an error if dynamic_backend is True
+    # and a backend is provided
+    with pytest.raises(ValueError):
+        throttle = throttle_type(
+            "test-dynamic-backend-with-backend",
+            rate=Rate(limit=2, hours=1),
             dynamic_backend=True,
-            identifier=default_client_identifier,
+            backend=backend,
             registry=ThrottleRegistry(),
         )
-        assert throttle.use_fixed_backend is False
-        assert throttle.backend is None
 
-        dummy_request = Request(
-            scope={
-                "type": "http",
-                "method": "GET",
-                "path": "/test",
-                "headers": [],
-                "app": None,
-            }
-        )
+    # This throttle should respect the context of the backend
+    # and should use the backend from the context if available.
+    throttle = throttle_type(
+        "test-dynamic-backend-no-backend",
+        rate=Rate(limit=2, hours=1),
+        dynamic_backend=True,
+        identifier=default_client_identifier,
+        registry=ThrottleRegistry(),
+    )
+    assert throttle.use_fixed_backend is False
+    assert throttle.backend is None
 
-        # Use the throttle in context to trigger the backend context detection
-        await throttle(dummy_request)
+    connection = make_connection(
+        throttle_type.connection_type, method="GET", path="/test"
+    )
+
+    # Use the throttle in context to trigger the backend context detection
+    await throttle(connection)
+    # Check that the throttle backend is still left unset
+    assert throttle.backend is None
+
+    # Check that the throttle uses the backend from the inner context
+    async with backend.__class__(persistent=True)(close_on_exit=False):
+        await throttle(connection)
         # Check that the throttle backend is still left unset
         assert throttle.backend is None
 
-        # Check that the throttle uses the backend from the inner context
-        async with backend.__class__(persistent=True)(close_on_exit=False):
-            await throttle(dummy_request)
-            # Check that the throttle backend is still left unset
-            assert throttle.backend is None
+    # On inner context exit, check that the throttle uses the backend from the main context again
+    await throttle(connection)
+    # Check that the throttle backend is still left unset
+    assert throttle.backend is None
 
-        # On inner context exit, check that the throttle uses the backend from the main context again
-        await throttle(dummy_request)
-        # Check that the throttle backend is still left unset
-        assert throttle.backend is None
 
+@pytest.mark.anyio
+@pytest.mark.throttle
+class TestHTTPThrottleDynamic:
     async def test_http_throttle_with_dynamic_backend_and_lifespan(
         self, backend: InMemoryBackend
     ) -> None:
@@ -106,7 +113,6 @@ class TestHTTPThrottleDynamicBackend:
             async with endpoint_backend(
                 close_on_exit=False, persistent=True
             ):  # Ensure that the connection stays alive across requests
-                print(throttle.get_backend(request).namespace)
                 await throttle(request)
                 return JSONResponse(
                     {"message": "special endpoint", "backend": "endpoint"}
@@ -176,7 +182,7 @@ class TestHTTPThrottleDynamicBackend:
         free_backend = backend.__class__(persistent=True)
 
         class TenantMiddleware(BaseHTTPMiddleware):
-            async def dispatch(self, request, call_next):
+            async def dispatch(self, request: Request, call_next):
                 # Extract tenant tier from Authorization header
                 auth_header = request.headers.get("authorization", "")
                 if "premium" in auth_header:
@@ -187,10 +193,10 @@ class TestHTTPThrottleDynamicBackend:
                     async with free_backend(close_on_exit=False):
                         response = await call_next(request)
                         return response
-                else:
-                    # Default to lifespan backend
-                    response = await call_next(request)
-                    return response
+
+                # Default to lifespan backend
+                response = await call_next(request)
+                return response
 
         async def data_endpoint(request):
             await quota_throttle(request)
@@ -250,4 +256,73 @@ class TestHTTPThrottleDynamicBackend:
 @pytest.mark.throttle
 @pytest.mark.websocket
 class TestWebSocketThrottleDynamic:
-    pass
+    async def test_websocket_throttle_with_dynamic_backend_and_lifespan(
+        self, backend: InMemoryBackend
+    ) -> None:
+        throttle = WebSocketThrottle(
+            "test-ws-dynamic-lifespan",
+            rate="2/5s",
+            dynamic_backend=True,
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
+            handle_throttled=connection_throttled
+        )
+
+        endpoint_backend = backend.__class__(
+            namespace="ws-endpoint",
+            persistent=True,
+        )
+
+        async def normal_ws_endpoint(websocket: WebSocket) -> None:
+            await websocket.accept()
+            await throttle(websocket)
+            await websocket.send_json({"backend": "lifespan"})
+            await websocket.close()
+
+        async def special_ws_endpoint(websocket: WebSocket) -> None:
+            async with endpoint_backend(close_on_exit=False, persistent=True):
+                await websocket.accept()
+                await throttle(websocket)
+                await websocket.send_json({"backend": "endpoint"})
+                await websocket.close()
+
+        routes = [
+            WebSocketRoute("/ws/normal", normal_ws_endpoint),
+            WebSocketRoute("/ws/special", special_ws_endpoint),
+        ]
+        app = Starlette(routes=routes, lifespan=backend.lifespan)
+
+        base_url = "http://0.0.0.0"
+        loop = asyncio.get_running_loop()
+        async with AsyncTestClient(
+            app=app, base_url=base_url, event_loop=loop
+        ) as client:
+            # Normal endpoint: uses lifespan backend (limit 2)
+            async with client.websocket_connect("/ws/normal") as ws:
+                data = await ws.receive_json()
+                assert data == {"backend": "lifespan"}
+
+            async with client.websocket_connect("/ws/normal") as ws:
+                data = await ws.receive_json()
+                assert data == {"backend": "lifespan"}
+
+            # Third normal connection should be throttled
+            with pytest.raises((WebSocketDisconnect, Exception)):
+                async with client.websocket_connect("/ws/normal") as ws:
+                    await ws.receive_json()
+
+            # Special endpoint uses its own backend, unaffected by normal's exhaustion
+            async with client.websocket_connect("/ws/special") as ws:
+                data = await ws.receive_json()
+                assert data == {"backend": "endpoint"}
+
+            async with client.websocket_connect("/ws/special") as ws:
+                data = await ws.receive_json()
+                assert data == {"backend": "endpoint"}
+
+            # Third special connection should be throttled in its own backend
+            with pytest.raises((WebSocketDisconnect, Exception)):
+                async with client.websocket_connect("/ws/special") as ws:
+                    await ws.receive_json()
+
+            assert throttle.backend is None

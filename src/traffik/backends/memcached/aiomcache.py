@@ -828,6 +828,8 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             return
 
         keys = tracked.decode().split("||")
+        # Delete the tracking key itself finally (added as last key)
+        keys.append(tracking_key)
         tasks = [
             asyncio.create_task(self.connection.delete(key.encode()))  # type: ignore[union-attr]
             for key in keys
@@ -838,9 +840,6 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
                 raise BackendError(
                     f"Failed to clear key '{key}': {str(result)}"
                 ) from result
-
-        # Delete the tracking key itself finally
-        await self.connection.delete(tracking_key.encode())  # type: ignore[union-attr]
 
     async def reset(self) -> None:
         """Reset the backend."""

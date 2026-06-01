@@ -903,6 +903,8 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             return
 
         keys = item.value.decode().split("||")
+        # Remove the tracking key itself (as last thing)
+        keys.append(self._tracking_key)
         tasks = [
             asyncio.create_task(self.connection.delete(key.encode(), noreply=False))  # type: ignore[union-attr]
             for key in keys
@@ -915,12 +917,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
                 raise BackendError(
                     f"Failed to clear key '{key}': {result!s}"
                 ) from result
-
-        # Remove the tracking key itself.
-        try:
-            await self.connection.delete(tracking_key, noreply=False)  # type: ignore[union-attr]
-        except emcache.NotFoundCommandError:
-            pass
 
     async def reset(self) -> None:
         """Reset the backend by clearing all tracked namespace data."""

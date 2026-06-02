@@ -5,7 +5,6 @@ import functools
 import inspect
 import math
 import sys
-import threading
 import typing
 import weakref
 
@@ -64,15 +63,50 @@ __all__ = [
     "websocket_throttled",
 ]
 
-ThrottleStrategy = typing.Callable[
-    [Stringable, Rate, ThrottleBackend[typing.Any, HTTPConnection], int],  # type: ignore[misc]
-    typing.Awaitable[WaitPeriod],
-]
-"""
-A callable that implements a throttling strategy.
 
-Takes a key, a Rate object, the throttle backend, and cost, and returns the wait period in milliseconds.
-"""
+@typing.runtime_checkable
+class SimpleThrottleStrategy(typing.Protocol[HTTPConnectionT]):
+    """Protocol for a simple throttling strategy."""
+
+    async def __call__(
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnectionT],
+        cost: int = 1,
+    ) -> WaitPeriod: ...
+
+
+@typing.runtime_checkable
+class FullThrottleStrategy(typing.Protocol[HTTPConnectionT]):
+    """Protocol for a complete throttling strategy."""
+
+    async def __call__(
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnectionT],
+        cost: int = 1,
+    ) -> WaitPeriod: 
+        """
+        Executes the throttling strategy.
+
+        :param key: The unique key representing the connection/request to be throttled.
+        :p 
+        """
+        ...
+
+    def get_stat(
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnectionT],
+    ) -> StrategyStat[typing.Mapping[typing.Hashable, typing.Any]]: ...
+
+
+ThrottleStrategy = typing.Union[
+    SimpleThrottleStrategy[HTTPConnectionT], FullThrottleStrategy[HTTPConnectionT]
+]
 
 
 class ThrottleExceptionInfo(TypedDict):
@@ -97,19 +131,6 @@ class ThrottleExceptionInfo(TypedDict):
 
 
 ExceptionInfo = ThrottleExceptionInfo  # Alias for backwards compatibility
-
-_conection_type_cache: typing.Dict[
-    typing.Type["Throttle"], typing.Type[HTTPConnection]
-] = {}
-_connection_type_cache_lock = threading.Lock()
-
-
-def _cache_connection_type(
-    cls: typing.Type["Throttle"], connection_type: typing.Type[HTTPConnection]
-) -> None:
-    """Cache the resolved connection type for a throttle class."""
-    with _connection_type_cache_lock:
-        _conection_type_cache[cls] = connection_type
 
 
 class Throttle(typing.Generic[HTTPConnectionT]):
@@ -154,7 +175,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         handle_throttled: typing.Optional[
             ConnectionThrottledHandler[HTTPConnectionT, Self]  # type: ignore[arg-type]
         ] = None,
-        strategy: typing.Optional[ThrottleStrategy] = None,
+        strategy: typing.Optional[ThrottleStrategy[HTTPConnectionT]] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, HTTPConnectionT]] = None,
         cost: CostType[HTTPConnectionT] = 1,
         dynamic_backend: bool = False,
@@ -443,7 +464,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         async with self._guard:
             self.backend = backend  # type: ignore[assignment]
 
-    async def update_strategy(self, strategy: ThrottleStrategy) -> None:
+    async def update_strategy(
+        self, strategy: ThrottleStrategy[HTTPConnectionT]
+    ) -> None:
         """
         Replace the throttling strategy atomically.
 
@@ -544,7 +567,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         headers: typing.Optional[
             typing.Mapping[str, typing.Union[Header[HTTPConnectionT], str]]
         ] = None,
-        stat: typing.Optional[StrategyStat[typing.Mapping]] = None,
+        stat: typing.Optional[
+            StrategyStat[typing.Mapping[typing.Hashable, typing.Any]]
+        ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> typing.Dict[str, str]:
         """
@@ -915,7 +940,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self,
         connection: HTTPConnectionT,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-    ) -> typing.Optional[StrategyStat]:
+    ) -> typing.Optional[StrategyStat[typing.Mapping[typing.Hashable, typing.Any]]]:
         """
         Get the current throttling strategy statistics for the connection.
 
@@ -925,6 +950,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :return: A `StrategyStat` object containing the current throttling strategy statistics,
             or None if the connection is not being throttled or the throttle strategy does not support stats
         """
+        strategy = self.strategy
+        if not hasattr(strategy, "get_stat"):
+            return None
+
         backend = self.get_backend(connection)
         identifier = self.identifier or backend.identifier
         if (connection_id := await identifier(connection)) is EXEMPTED:
@@ -936,8 +965,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         else:
             merged_context = self._default_context
         key = self.get_namespaced_key(connection, connection_id, merged_context)
-        stat = await self.strategy.get_stat(key, self.rate, backend)  # type: ignore[attr-defined, arg-type]
-        return stat
+        stat = await strategy.get_stat(key, self.rate, backend)  # type: ignore[attr-defined, arg-type]
+        return typing.cast(
+            StrategyStat[typing.Mapping[typing.Hashable, typing.Any]], stat
+        )
 
     async def check(
         self,
@@ -1591,7 +1622,8 @@ def throttled(
     Throttles connections to decorated route using the provided throttle(s).
 
     **Note! The decorated route must have an `HTTPConnection` (e.g., `Request`, `WebSocket`) parameter for the throttle(s) to work.**
-    For FastAPI routes, use `traffik.decorators.throttled` to bypass this constraint.
+    For FastAPI routes, use `traffik.decorators.throttled` to bypass this constraint. Note that for `WebSocket` endpoints,
+    It only guards the initial connection (befor `accept`) not every meesage.
 
     :param throttles: A single throttle or a sequence of throttles to apply to the route.
     :param route: The route to be throttled. If not provided, returns a decorator that can be used to apply throttling to routes.
@@ -1702,7 +1734,9 @@ async def _resolve_headers(
     headers: typing.Mapping[str, typing.Union[str, Header[HTTPConnectionT]]],
     connection: HTTPConnectionT,
     throttle: Throttle[HTTPConnectionT],
-    stat: typing.Optional[StrategyStat] = None,
+    stat: typing.Optional[
+        StrategyStat[typing.Mapping[typing.Hashable, typing.Any]]
+    ] = None,
     context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
 ) -> typing.Dict[str, str]:
     """

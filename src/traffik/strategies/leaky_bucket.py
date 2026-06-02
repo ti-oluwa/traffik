@@ -3,6 +3,7 @@
 import typing
 from dataclasses import dataclass, field
 
+from starlette.requests import HTTPConnection
 from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
@@ -131,7 +132,11 @@ class LeakyBucketStrategy:
     """Configuration for the lock used during rate limit checks."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         """
         Apply leaky bucket rate limiting strategy.
@@ -189,7 +194,10 @@ class LeakyBucketStrategy:
             return 0.0
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[LeakyBucketStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -327,7 +335,11 @@ class LeakyBucketWithQueueStrategy:
     """Configuration for the lock used during rate limit checks."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         """
         Apply leaky bucket with queue rate limiting strategy.
@@ -410,7 +422,10 @@ class LeakyBucketWithQueueStrategy:
             return 0.0
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[LeakyBucketWithQueueStatMetadata]:
         """
         Get current statistics for the rate limit.

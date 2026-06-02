@@ -3,6 +3,7 @@
 import typing
 from dataclasses import dataclass, field
 
+from starlette.requests import HTTPConnection
 from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
@@ -91,7 +92,11 @@ class FixedWindowStrategy:
     """Configuration for backend locking during rate limit checks."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         """
         Apply fixed window rate limiting strategy.

@@ -33,7 +33,7 @@ class AsyncWebSocketTestSession:
         self,
         app: ASGI3App,
         scope: Scope,
-        event_loop: asyncio.AbstractEventLoop,
+        loop: asyncio.AbstractEventLoop,
         receive_queue: asyncio.Queue,
         send_queue: asyncio.Queue,
     ) -> None:
@@ -42,11 +42,11 @@ class AsyncWebSocketTestSession:
 
         :param app: The ASGI application to connect to.
         :param scope: The ASGI scope for the WebSocket connection.
-        :param event_loop: The asyncio event loop to use.
+        :param loop: The asyncio event loop to use.
         :param receive_queue: The queue to receive messages from the ASGI app.
         :param send_queue: The queue to send messages to the ASGI app.
         """
-        self.event_loop = event_loop
+        self.loop = loop
         self.app = app
         self.scope = scope
         self.accepted_subprotocol = None
@@ -55,7 +55,7 @@ class AsyncWebSocketTestSession:
         self._task: typing.Optional[asyncio.Task[None]] = None
 
     async def __aenter__(self) -> "AsyncWebSocketTestSession":
-        self._task = self.event_loop.create_task(self._run())
+        self._task = self.loop.create_task(self._run())
         await asyncio.sleep(0)  # Allow task to start
         await self.send({"type": "websocket.connect"})
 
@@ -239,7 +239,7 @@ class _ASGIAdapter(HTTPAdapter):
     def __init__(
         self,
         app: ASGI3App,
-        event_loop: asyncio.AbstractEventLoop,
+        loop: asyncio.AbstractEventLoop,
         root_path: str = "",
         raise_server_exceptions: bool = True,
     ) -> None:
@@ -247,11 +247,11 @@ class _ASGIAdapter(HTTPAdapter):
         Initialize the ASGI adapter.
 
         :param app: The ASGI application to connect to.
-        :param event_loop: The asyncio event loop to use.
+        :param loop: The asyncio event loop to use.
         :param root_path: The root path for the application.
         :param raise_server_exceptions: Whether to raise server exceptions.
         """
-        self.event_loop = event_loop
+        self.loop = loop
         self.app = app
         self.raise_server_exceptions = raise_server_exceptions
         self.root_path = root_path
@@ -324,7 +324,7 @@ class _ASGIAdapter(HTTPAdapter):
         session = AsyncWebSocketTestSession(
             app=self.app,
             scope=scope,
-            event_loop=self.event_loop,
+            loop=self.loop,
             receive_queue=receive_queue,
             send_queue=send_queue,
         )
@@ -352,7 +352,7 @@ class AsyncTestClient(Session):
         base_url: str = "http://testclient",
         raise_server_exceptions: bool = True,
         root_path: str = "",
-        event_loop: typing.Optional[asyncio.AbstractEventLoop] = None,
+        loop: typing.Optional[asyncio.AbstractEventLoop] = None,
     ) -> None:
         """
         Initialize the asynchronous test client.
@@ -361,12 +361,12 @@ class AsyncTestClient(Session):
         :param base_url: The base URL for the client.
         :param raise_server_exceptions: Whether to raise server exceptions.
         :param root_path: The root path for the application.
-        :param event_loop: The asyncio event loop to use.
+        :param loop: The asyncio event loop to use.
         """
         super().__init__()
 
         # Separate queues for lifespan
-        self.event_loop = event_loop or asyncio.get_running_loop()
+        self.loop = loop or asyncio.get_running_loop()
         self.lifespan_receive_queue: asyncio.Queue[Message] = asyncio.Queue()
         self.lifespan_send_queue: asyncio.Queue[Message] = asyncio.Queue()
 
@@ -374,7 +374,7 @@ class AsyncTestClient(Session):
             app,
             raise_server_exceptions=raise_server_exceptions,
             root_path=root_path,
-            event_loop=self.event_loop,
+            loop=self.loop,
         )
         self.mount("http://", adapter)
         self.mount("https://", adapter)
@@ -502,7 +502,7 @@ class AsyncTestClient(Session):
 
     async def __aenter__(self):
         # Create lifespan task
-        self._lifespan_task = self.event_loop.create_task(
+        self._lifespan_task = self.loop.create_task(
             self.app(
                 {"type": "lifespan"}, self.__lifespan_receive, self.__lifespan_send
             )  # type: ignore[arg-type]

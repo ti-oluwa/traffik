@@ -540,7 +540,7 @@ class _AsyncFairRLock:
 
         if not self.is_owner(task=current_task):
             raise RuntimeError(
-                f"Cannot release foreign lock. {current_task!r} tried to unlock {self._owner!r}."
+                f"Cannot release foreign lock. {current_task!r} tried to unlock lock owned by {self._owner!r}."
             )
 
         self._current_task_release()

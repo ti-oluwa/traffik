@@ -3,6 +3,7 @@
 import typing
 from dataclasses import dataclass, field
 
+from starlette.requests import HTTPConnection
 from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
@@ -156,7 +157,11 @@ class TokenBucketStrategy:
     """Configuration for backend locking during rate limit checks."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         """
         Apply Token Bucket rate limiting.
@@ -222,7 +227,10 @@ class TokenBucketStrategy:
             return wait_ms
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[TokenBucketStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -272,8 +280,8 @@ class TokenBucketStrategy:
         # Hits remaining is the current token count
         hits_remaining = max(tokens, 0.0)
 
-        # If tokens are negative (shouldn't happen but safe guard), calculate wait time
-        if tokens < 0:
+        # If tokens are zero or negative (shouldn't happen but safe guard), calculate wait time
+        if tokens <= 0:
             wait_ms = abs(tokens) / refill_rate
         else:
             wait_ms = 0.0
@@ -394,7 +402,11 @@ class TokenBucketWithDebtStrategy:
             raise ValueError("`max_debt` must be non-negative")
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         """
         Apply Token Bucket with Debt rate limiting.
@@ -460,7 +472,10 @@ class TokenBucketWithDebtStrategy:
             return wait_ms
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[TokenBucketWithDebtStatMetadata]:
         """
         Get current statistics for the rate limit.

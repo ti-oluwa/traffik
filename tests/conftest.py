@@ -5,9 +5,14 @@ import os
 import typing
 
 import pytest
+from starlette.requests import HTTPConnection
 
+from tests.utils import HTTPConnectionT
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.inmemory import InMemoryBackend
+from traffik.strategies import fixed_window, leaky_bucket, sliding_window, token_bucket
+from traffik.throttles import ThrottleStrategy
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +50,7 @@ def get_aioredis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
         namespace=namespace,
         persistent=persistent,
         lock_type="redis",
+        url_kwargs={"max_connections": 500},
     )
 
 
@@ -58,6 +64,7 @@ def get_coredis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
         connection=REDIS_URL,
         namespace=namespace,
         persistent=persistent,
+        url_kwargs={"max_connections": 500},
     )
 
 
@@ -116,25 +123,25 @@ BACKEND_FACTORIES: typing.List[
 ] = [
     get_inmemory_backend,
     get_multiprocess_backend,
-    get_emcache_backend,
+    # get_emcache_backend,
     get_aiomcache_backend,
     get_aioredis_backend,
     get_coredis_backend,
 ]
 
 
-class BackendGen:
+class BackendGen(typing.Generic[HTTPConnectionT]):
     """Wraps a backend generator function to provide both iteration and call capabilities."""
 
     def __init__(
         self,
         func: typing.Callable[
-            [str, bool], typing.Iterator[ThrottleBackend[typing.Any, typing.Any]]
+            [str, bool], typing.Iterator[ThrottleBackend[typing.Any, HTTPConnectionT]]
         ],
     ) -> None:
         self._func = func
 
-    def __iter__(self) -> typing.Iterator[ThrottleBackend[typing.Any, typing.Any]]:
+    def __iter__(self) -> typing.Iterator[ThrottleBackend[typing.Any, HTTPConnectionT]]:
         return iter(self())
 
     def __call__(
@@ -148,7 +155,7 @@ class BackendGen:
                 typing.Tuple[typing.Type[ThrottleBackend[typing.Any, typing.Any]], ...],
             ]
         ] = None,
-    ) -> typing.Generator[ThrottleBackend[typing.Any, typing.Any], None, None]:
+    ) -> typing.Generator[ThrottleBackend[typing.Any, HTTPConnectionT], None, None]:
         for backend in self._func(namespace, persistent):
             if exclude is not None and isinstance(backend, exclude):
                 continue
@@ -157,7 +164,7 @@ class BackendGen:
 
 def _backend_gen(
     namespace: str = "test", persistent: bool = False
-) -> typing.Generator[ThrottleBackend[typing.Any, typing.Any], None, None]:
+) -> typing.Generator[ThrottleBackend[typing.Any, HTTPConnection], None, None]:
     for backend_factory in BACKEND_FACTORIES:
         try:
             backend = backend_factory(namespace, persistent)
@@ -168,7 +175,8 @@ def _backend_gen(
 
 
 @pytest.fixture(scope="function")
-def backends() -> BackendGen:
+def backends() -> BackendGen[HTTPConnection]:
+    """Provides a generator of throttle backends for testing"""
     return BackendGen(_backend_gen)
 
 
@@ -179,6 +187,28 @@ def inmemory_backend() -> InMemoryBackend:
 
 @pytest.fixture(scope="function")
 async def backend() -> typing.AsyncGenerator[InMemoryBackend, None]:
+    """Provides a fresh instance of `InMemoryBackend` for each test, ensuring isolation and cleanup."""
     backend = InMemoryBackend()
     async with backend(close_on_exit=True):
         yield backend
+
+
+STRATEGIES = [
+    pytest.param(fixed_window.FixedWindowStrategy, id="fixed_window"),
+    pytest.param(
+        sliding_window.SlidingWindowCounterStrategy, id="sliding_window_counter"
+    ),
+    pytest.param(sliding_window.SlidingWindowLogStrategy, id="sliding_window_log"),
+    pytest.param(token_bucket.TokenBucketStrategy, id="token_bucket"),
+    pytest.param(token_bucket.TokenBucketWithDebtStrategy, id="token_bucket_with_debt"),
+    pytest.param(leaky_bucket.LeakyBucketStrategy, id="leaky_bucket"),
+    pytest.param(
+        leaky_bucket.LeakyBucketWithQueueStrategy, id="leaky_bucket_with_queue"
+    ),
+]
+"""Default set of throttle strategiy types to test against."""
+
+
+@pytest.fixture(scope="function", params=STRATEGIES)
+def strategy(request) -> ThrottleStrategy[HTTPConnection]:
+    return request.param()

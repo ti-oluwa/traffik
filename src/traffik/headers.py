@@ -14,7 +14,7 @@ __all__ = ["DEFAULT_HEADERS_ALWAYS", "DEFAULT_HEADERS_THROTTLED", "Header", "Hea
 HeaderResolver = typing.Callable[
     [
         HTTPConnectionT,
-        StrategyStat[typing.Mapping],
+        StrategyStat[typing.Mapping[typing.Hashable, typing.Any]],
         typing.Optional[typing.Mapping[str, typing.Any]],
     ],
     str,
@@ -38,7 +38,7 @@ Type definition for a header value, which can be either:
 WhenFunc = typing.Callable[
     [
         HTTPConnectionT,
-        StrategyStat[typing.Mapping],
+        StrategyStat[typing.Mapping[typing.Hashable, typing.Any]],
         typing.Optional[typing.Mapping[str, typing.Any]],
     ],
     bool,
@@ -183,7 +183,7 @@ class Header(typing.Generic[HTTPConnectionT]):
     def check(
         self,
         connection: HTTPConnectionT,
-        stat: StrategyStat[typing.Mapping],
+        stat: StrategyStat[typing.Mapping[typing.Hashable, typing.Any]],
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> bool:
         """
@@ -205,7 +205,7 @@ class Header(typing.Generic[HTTPConnectionT]):
     def resolve(
         self,
         connection: HTTPConnectionT,
-        stat: StrategyStat[typing.Mapping],
+        stat: StrategyStat[typing.Mapping[typing.Hashable, typing.Any]],
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> str:
         """

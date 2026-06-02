@@ -4,6 +4,7 @@ import asyncio
 import typing
 from dataclasses import dataclass, field
 
+from starlette.requests import HTTPConnection
 from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
@@ -107,7 +108,7 @@ class SlidingWindowLogStrategy:
     **Storage format:**
     - Key: `{namespace}:{key}:slidinglog`
     - Value: JSON array of request timestamps in milliseconds
-    - TTL: Window duration + 1 second buffer
+    - TTL: Window duration (atleast 1 second)
 
     **Example:**
     ```python
@@ -129,7 +130,11 @@ class SlidingWindowLogStrategy:
     """Configuration for backend locking during log updates."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         """
         Apply sliding window log rate limiting strategy.
@@ -192,8 +197,11 @@ class SlidingWindowLogStrategy:
             return 0.0
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
-    ) -> StrategyStat:
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+    ) -> StrategyStat[SlidingWindowLogStatMetadata]:
         """
         Get current statistics for the rate limit.
 
@@ -246,10 +254,11 @@ class SlidingWindowLogStrategy:
             oldest_timestamp = None
 
         # Calculate remaining capacity
-        hits_remaining = max(rate.limit - current_cost_sum, 0.0)
+        limit = rate.limit
+        hits_remaining = max(limit - current_cost_sum, 0.0)
 
         # If over limit, calculate wait time
-        if current_cost_sum > rate.limit and oldest_timestamp is not None:
+        if current_cost_sum > limit and oldest_timestamp is not None:
             wait_ms = (oldest_timestamp + window_duration_ms) - now
             wait_ms = max(wait_ms, 0.0)
         else:
@@ -273,7 +282,7 @@ class SlidingWindowLogStrategy:
 @dataclass(frozen=True)
 class SlidingWindowCounterStrategy:
     """
-    Sliding Window Counter rate limiting (hybrid approach).
+    Sliding Window Counter rate limiting.
 
     Combines fixed window counters with weighted calculation to approximate
     a sliding window. Offers good accuracy with low memory usage.
@@ -305,7 +314,8 @@ class SlidingWindowCounterStrategy:
     - Key: `{namespace}:{key}:slidingcounter:{window_id}`
     - Value: Request counter (integer)
     - Uses two consecutive windows for weighted calculation
-    - TTL: Window duration + 1 second buffer
+    - TTL: 2x window duration so previous window is available
+        throughout the entire current window. Minimum of 1 second for cleanup.
 
     **Algorithm example:**
         At timestamp 00:30 (halfway through 1-minute window):
@@ -320,7 +330,6 @@ class SlidingWindowCounterStrategy:
     from traffik.rates import Rate
     from traffik.strategies import SlidingWindowCounterStrategy
 
-    # Balanced approach: good accuracy with low memory
     rate = Rate.parse("100/1m")
     strategy = SlidingWindowCounterStrategy()
     wait_ms = await strategy("user:123", rate, backend)
@@ -335,7 +344,11 @@ class SlidingWindowCounterStrategy:
     """Configuration for backend locking during counter updates."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         """
         Apply sliding window counter rate limiting strategy.
@@ -401,7 +414,10 @@ class SlidingWindowCounterStrategy:
             return 0.0
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[SlidingWindowCounterStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -443,11 +459,12 @@ class SlidingWindowCounterStrategy:
         weighted_count = (previous_count * overlap_percentage) + current_count
 
         # Calculate remaining hits
-        hits_remaining = max(rate.limit - weighted_count, 0.0)
+        limit = rate.limit
+        hits_remaining = max(limit - weighted_count, 0.0)
 
         # If over limit, calculate wait time
-        if weighted_count > rate.limit:
-            requests_over = weighted_count - rate.limit
+        if weighted_count > limit:
+            requests_over = weighted_count - limit
             if previous_count > 0:
                 wait_ratio = requests_over / previous_count
                 wait_ms = wait_ratio * time_in_current_window

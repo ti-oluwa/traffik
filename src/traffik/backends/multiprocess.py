@@ -452,8 +452,7 @@ class _AsyncSharedMemoryLock:
 
 class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     """
-    Multi-process shared-memory throttle backend with sharded layout and
-    native int64 counter storage.
+    Multi-process shared-memory throttle backend.
 
     All state (hash tables, slot data, free-slot stacks) lives in a single
     `multiprocessing.shared_memory` segment divided into *N* independent

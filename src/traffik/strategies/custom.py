@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum
 
+from starlette.requests import HTTPConnection
 from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
@@ -410,7 +411,11 @@ class TieredRateStrategy:
         return tier or self.default_tier
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -439,7 +444,10 @@ class TieredRateStrategy:
         return 0.0
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[TieredRateStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -563,7 +571,11 @@ class AdaptiveThrottleStrategy:
             raise ValueError("`min_limit_ratio` must be between 0.0 and 1.0")
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -622,7 +634,10 @@ class AdaptiveThrottleStrategy:
             return 0.0
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[AdaptiveThrottleStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -772,7 +787,11 @@ class PriorityQueueStrategy:
             return self.default_priority
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -837,7 +856,10 @@ class PriorityQueueStrategy:
             return 0.0
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[PriorityQueueStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -964,7 +986,11 @@ class QuotaWithRolloverStrategy:
             raise ValueError("`max_rollover` must be non-negative")
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -1015,7 +1041,10 @@ class QuotaWithRolloverStrategy:
             return 0.0
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[QuotaWithRolloverStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -1171,7 +1200,11 @@ class TimeOfDayStrategy:
         return 1.0
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -1199,7 +1232,10 @@ class TimeOfDayStrategy:
         return 0.0
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[TimeOfDayStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -1310,7 +1346,11 @@ class CostBasedTokenBucketStrategy:
     """Configuration for backend locking during rate limit checks."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -1391,7 +1431,10 @@ class CostBasedTokenBucketStrategy:
             return wait_ms
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[CostBasedTokenBucketStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -1535,7 +1578,11 @@ class GCRAStrategy:
             raise ValueError("`burst_tolerance_ms` must be non-negative")
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -1569,7 +1616,10 @@ class GCRAStrategy:
             return max(wait_ms, 0.0)
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[GCRAStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -1707,7 +1757,11 @@ class DistributedFairnessStrategy:
             raise ValueError("`fairness_window_ms` must be a positive number")
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -1782,7 +1836,10 @@ class DistributedFairnessStrategy:
             return max(wait_ms, 0.0)
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[DistributedFairnessStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -1964,7 +2021,11 @@ class GeographicDistributionStrategy:
         return region or self.default_region
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         if rate.unlimited:
             return 0.0
@@ -2011,7 +2072,10 @@ class GeographicDistributionStrategy:
             return max(wait_ms, 0.0)
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[GeographicDistributionStatMetadata]:
         """
         Get current statistics for the rate limit.

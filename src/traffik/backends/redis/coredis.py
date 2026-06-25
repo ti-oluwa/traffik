@@ -511,7 +511,6 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         if self._named_gate_registry is None or self._named_gate_registry.closed:
             self._named_gate_registry = _NamedGateRegistry(
                 contention_threshold=self._lock_contention_threshold,
-                lock_kind="fair",
             )
 
     async def ready(self) -> bool:
@@ -584,7 +583,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         """Set *key* to *value* with an optional expiry in seconds."""
         self._assert_ready()
         if expire is not None:
-            await self.connection.set(key, value, ex=int(expire))  # type: ignore[union-attr]
+            await self.connection.set(key, value, px=expire * 1000)  # type: ignore[union-attr]
         else:
             await self.connection.set(key, value)  # type: ignore[union-attr]
 
@@ -615,7 +614,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
     async def expire(self, key: str, seconds: int) -> bool:
         """
-        Set a TTL on *key*.  Returns `True` if the key exists and TTL was set.
+        Set a TTL on *key*. Returns `True` if the key exists and TTL was set.
         """
         self._assert_ready()
         result = await self.connection.expire(key, seconds)  # type: ignore[union-attr]

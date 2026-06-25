@@ -295,7 +295,7 @@ class _AsyncMemcachedLock:
 
 class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
     """
-    Memcached-based throttle backend with distributed locking support.
+    Memcached-based throttle backend.
 
     Uses `aiomcache` for async Memcached operations. Does not support multi-node setup.
 
@@ -483,7 +483,6 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         if self._named_gate_registry is None or self._named_gate_registry.closed:
             self._named_gate_registry = _NamedGateRegistry(
                 contention_threshold=self._lock_contention_threshold,
-                lock_kind="unfair",
             )
 
     async def ready(self) -> bool:

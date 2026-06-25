@@ -7,6 +7,7 @@ Note! This is not suitable for multi-process or distributed setups.
 import asyncio
 import typing
 from collections import OrderedDict
+from time import monotonic
 from types import TracebackType
 
 from traffik._locks import (
@@ -23,7 +24,6 @@ from traffik.types import (
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
-from traffik.utils import time
 
 
 class _AsyncLock(typing.Protocol):
@@ -298,7 +298,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     async def _cleanup(self) -> None:
         """Remove expired keys from all shards."""
-        now = time()
+        now = monotonic()
 
         # Clean each shard independently
         for lock, shard in zip(self._shard_locks, self._shards):
@@ -306,7 +306,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 expired = [
                     key
                     for key, (_, expires_at) in shard.items()
-                    if expires_at is not None and expires_at < now
+                    if expires_at is not None and expires_at <= now
                 ]
                 for key in expired:
                     del shard[key]
@@ -383,7 +383,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         value, expires_at = entry
         # Check if expired
-        if expires_at is not None and expires_at < time():
+        if expires_at is not None and expires_at <= monotonic():
             async with lock:
                 del shard[key]
             return None
@@ -398,7 +398,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         _, lock, shard = self._get_shard(key)
         expires_at = None
         if expire is not None:
-            expires_at = time() + expire
+            expires_at = monotonic() + expire
 
         async with lock:
             shard[key] = (value, expires_at)
@@ -434,7 +434,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
             value, expires_at = entry
             # Check if expired
-            if expires_at is not None and expires_at < time():
+            if expires_at is not None and expires_at <= monotonic():
                 # Expired, reinitialize
                 shard[key] = (str(amount), None)
                 return amount
@@ -468,7 +468,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 return False
 
             value, _ = entry
-            expires_at = time() + seconds
+            expires_at = monotonic() + seconds
             shard[key] = (value, expires_at)
             return True
 
@@ -484,19 +484,20 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._assert_ready()
 
         _, lock, shard = self._get_shard(key)
+        now = monotonic()
         async with lock:
             entry = shard.get(key)
             if entry is None:
                 # New key, initialize with TTL
-                expires_at = time() + ttl
+                expires_at = now + ttl
                 shard[key] = (str(amount), expires_at)
                 return amount
 
             value, expires_at = entry  # type: ignore[assignment]
             # Check if expired
-            if expires_at is not None and expires_at < time():
+            if expires_at is not None and expires_at <= now:
                 # Expired, reinitialize with new TTL
-                expires_at = time() + ttl
+                expires_at = now + ttl
                 shard[key] = (str(amount), expires_at)
                 return amount
 
@@ -505,7 +506,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 current = int(value)
             except (ValueError, TypeError):
                 # Invalid value, reset with TTL
-                expires_at = time() + ttl
+                expires_at = now + ttl
                 shard[key] = (str(amount), expires_at)
                 return amount
 
@@ -513,7 +514,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             # Only set TTL if key was created without expiration
             # (e.g., via increment() call, not increment_with_ttl)
             if expires_at is None:
-                expires_at = time() + ttl
+                expires_at = now + ttl
 
             shard[key] = (str(new_value), expires_at)
             return new_value
@@ -542,7 +543,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         # Acquire locks in sorted order to prevent deadlocks
         results: typing.Dict[str, typing.Optional[str]] = {}
-        now = time()
+        now = monotonic()
 
         for shard_idx in sorted(shard_keys.keys()):
             lock = self._shard_locks[shard_idx]
@@ -591,7 +592,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             shard_items[shard_idx].append((key, value))
 
         # Calculate expiration time once
-        expires_at = time() + expire if expire is not None else None
+        expires_at = monotonic() + expire if expire is not None else None
 
         # Acquire locks in sorted order to prevent deadlocks
         for shard_idx in sorted(shard_items.keys()):

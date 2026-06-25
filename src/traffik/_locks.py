@@ -483,7 +483,18 @@ class _AsyncFairRLock:
         return self._owner is not None
 
     async def acquire(self) -> typing.Literal[True]:
-        """Acquire the lock."""
+        """
+        Acquire the lock.
+
+        Never call with `asyncio.wait_for` as that will
+        break task ownership tracking between `acquire`
+        and `release` especially in Python3.11+.
+
+        `asyncio.wait_for` wraps `acquire in a new `asyncio.Task`.
+        So calling `asyncio.current_task()` in `acquire` give the new /wrapper task,
+        and give the caller (intended) task in `release`, cause a mismatch
+        when ownership is check later on
+        """
         current_task = asyncio.current_task()
 
         # If the lock is reentrant, acquire it immediately
@@ -579,6 +590,18 @@ class _AsyncRLock:
         return self._lock.locked()
 
     async def acquire(self) -> bool:
+        """
+        Acquire the lock.
+
+        Never call with `asyncio.wait_for` as that will
+        break task ownership tracking between `acquire`
+        and `release` especially in Python3.11+.
+
+        `asyncio.wait_for` wraps `acquire in a new `asyncio.Task`.
+        So calling `asyncio.current_task()` in `acquire` give the new /wrapper task,
+        and give the caller (intended) task in `release`, cause a mismatch
+        when ownership is check later on.
+        """
         current = asyncio.current_task()
         if current is None:
             raise RuntimeError("Must be called from within a task")
@@ -597,6 +620,7 @@ class _AsyncRLock:
         return True
 
     def release(self) -> None:
+        """Release the lock"""
         current = asyncio.current_task()
         if current is None:
             raise RuntimeError("Must be called from within a task")
@@ -848,15 +872,10 @@ class _NamedGateRegistry:
         "_closed",
         "_contention_threshold",
         "_gates",
-        "_lock_cls",
         "_waiters",
     )
 
-    def __init__(
-        self,
-        contention_threshold: int = 1,
-        lock_kind: typing.Literal["fair", "unfair"] = "unfair",
-    ) -> None:
+    def __init__(self, contention_threshold: int = 1) -> None:
         """
         Initialize the gate registry.
 
@@ -875,20 +894,13 @@ class _NamedGateRegistry:
             Must be >= 1. Setting it to 1 (default) means any second waiter
             triggers a gate. Setting it to N means up to N tasks race freely
             before gating begins.
-        :param lock_kind: Kind of asyncio lock to use for gates. "fair" means
-            FIFO ordering is respected, while "unfair" means no ordering guarantees.
-            Fair locks may have higher overhead but can prevent starvation under high contention.
-            Defaults to "fair". Unfair locks may be more performant in low contention scenarios but
-            can lead to starvation when contention is high (but very low chance of starvation when
-            contention is just above the threshold).
         """
         if contention_threshold < 1:
             raise ValueError("`contention_threshold` must be at least 1.")
         self._contention_threshold = contention_threshold
-        self._gates: typing.Dict[str, typing.Union[_AsyncFairRLock, asyncio.Lock]] = {}
+        self._gates: typing.Dict[str, asyncio.Lock] = {}
         self._waiters: typing.Dict[str, int] = {}
         self._closed = False
-        self._lock_cls = _AsyncFairRLock if lock_kind == "fair" else asyncio.Lock
 
     def get(self, name: str) -> typing.Optional["_NamedGateHandle"]:
         """
@@ -925,7 +937,7 @@ class _NamedGateRegistry:
 
         # At or above threshold. Gate this task locally.
         if name not in self._gates:
-            self._gates[name] = self._lock_cls()
+            self._gates[name] = asyncio.Lock()
         return _NamedGateHandle(registry=self, name=name, lock=self._gates[name])
 
     @contextmanager
@@ -1095,7 +1107,7 @@ class _NamedGateHandle:
         self,
         registry: _NamedGateRegistry,
         name: str,
-        lock: typing.Union[_AsyncFairRLock, asyncio.Lock],
+        lock: asyncio.Lock,
     ) -> None:
         """
         :param registry: Registry that created this handle. Used to

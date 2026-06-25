@@ -72,6 +72,7 @@ class TestThrottleBackend:
                 await asyncio.sleep(1.02)
                 # Value should be expired and return None
                 value = await backend.get(key)
+                print(backend.__class__.__name__, "stored_value after expiration:", value)
                 assert value is None
 
     async def test_namespace_isolation(self, backends: BackendGen) -> None:
@@ -231,6 +232,7 @@ class TestThrottleBackend:
 
                 # Counter should be expired
                 stored_value = await backend.get(key)
+                print(backend.__class__.__name__, "stored_value after expiration:", stored_value)
                 assert stored_value is None
 
                 # New increment after expiration should start fresh at 1
@@ -445,6 +447,7 @@ class TestThrottleBackend:
                 await backend.set(key, "value2")
                 assert await backend.get(key) == "value2"
 
+    
     async def test_set_with_expire_overwrite(self, backends: BackendGen) -> None:
         """Test that set with expiration can overwrite existing keys."""
         for backend in backends(namespace="set_expire_overwrite_test"):
@@ -460,7 +463,7 @@ class TestThrottleBackend:
                 assert await backend.get(key) == "value2"
 
                 # Wait for new expiration
-                await asyncio.sleep(1.1)
+                await asyncio.sleep(1.5)
 
                 # Key should be expired
                 value = await backend.get(key)

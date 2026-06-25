@@ -88,7 +88,6 @@ from traffik.types import (
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
-from traffik.utils import time
 
 __all__ = ["MultiProcessInMemoryBackend"]
 
@@ -1705,7 +1704,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         buffer = self._buffer
         assert buffer is not None
-        now = time()
+        now = monotonic()
         key_bytes = key.encode("utf-8")
         shard_idx = self._shard_idx_for_key(key)
         shard_base = self._shard_base(shard_idx)
@@ -1733,7 +1732,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             )
             if not occupied:
                 return None
-            if expires_at != 0.0 and expires_at < now:
+            if expires_at != 0.0 and expires_at <= now:
                 return None
 
             return str(int_val) if int_val is not None else str_val
@@ -1759,7 +1758,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         buffer = self._buffer
         assert buffer is not None
         key_bytes = key.encode("utf-8")
-        expires_at = (time() + expire) if expire is not None else 0.0
+        expires_at = (monotonic() + expire) if expire is not None else 0.0
         shard_idx = self._shard_idx_for_key(key)
         shard_base = self._shard_base(shard_idx)
 
@@ -1854,7 +1853,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         buffer = self._buffer
         assert buffer is not None
-        now = time()
+        now = monotonic()
         key_bytes = key.encode("utf-8")
         shard_idx = self._shard_idx_for_key(key)
         shard_base = self._shard_base(shard_idx)
@@ -1887,7 +1886,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 str_val, int_val, expires_at, occupied = self._read_slot(
                     buffer, shard_base, slot_idx
                 )
-                if not occupied or (expires_at != 0.0 and expires_at < now):
+                if not occupied or (expires_at != 0.0 and expires_at <= now):
                     new_value = amount
                     self._write_int_slot(buffer, shard_base, slot_idx, new_value, 0.0)
 
@@ -1925,7 +1924,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         buffer = self._buffer
         assert buffer is not None
-        now = time()
+        now = monotonic()
         key_bytes = key.encode("utf-8")
         shard_idx = self._shard_idx_for_key(key)
         shard_base = self._shard_base(shard_idx)
@@ -1949,7 +1948,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 return False
 
             _, _, expires_at, occupied = self._read_slot(buffer, shard_base, slot_idx)
-            if not occupied or (expires_at != 0.0 and expires_at < now):
+            if not occupied or (expires_at != 0.0 and expires_at <= now):
                 return False
 
             self._EXPIRY_STRUCT.pack_into(
@@ -1980,7 +1979,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         buffer = self._buffer
         assert buffer is not None
-        now = time()
+        now = monotonic()
         key_bytes = key.encode("utf-8")
         shard_idx = self._shard_idx_for_key(key)
         shard_base = self._shard_base(shard_idx)
@@ -2013,7 +2012,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 str_val, int_val, expires_at, occupied = self._read_slot(
                     buffer, shard_base, slot_idx
                 )
-                is_new = not occupied or (expires_at != 0.0 and expires_at < now)
+                is_new = not occupied or (expires_at != 0.0 and expires_at <= now)
                 if is_new:
                     new_value = amount
                     self._write_int_slot(
@@ -2067,7 +2066,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         buffer = self._buffer
         assert buffer is not None
-        now = time()
+        now = monotonic()
         results: typing.Dict[str, typing.Optional[str]] = {}
 
         for shard_idx in sorted(shard_to_keys):
@@ -2104,7 +2103,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     str_val, int_val, expires_at, occupied = self._read_slot(
                         buffer, shard_base, slot_idx
                     )
-                    if not occupied or (expires_at != 0.0 and expires_at < now):
+                    if not occupied or (expires_at != 0.0 and expires_at <= now):
                         results[k] = None
                     elif int_val is not None:
                         results[k] = str(int_val)
@@ -2144,7 +2143,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         buffer = self._buffer
         assert buffer is not None
-        expires_at = (time() + expire) if expire is not None else 0.0
+        expires_at = (monotonic() + expire) if expire is not None else 0.0
 
         slot_assignments: typing.Dict[str, typing.Tuple[int, int]] = {}
 
@@ -2247,7 +2246,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         buffer = self._buffer
         assert buffer is not None
-        prefix = f"{self.namespace}:".encode("utf-8")
+        prefix = f"{self.namespace}:".encode("utf-8")  # noqa
 
         for shard_idx in range(self._number_of_shards):
             shard_base = self._shard_base(shard_idx)
@@ -2296,7 +2295,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         if buffer is None:
             return 0
 
-        now = time()
+        now = monotonic()
         total_freed = 0
 
         for shard_idx in range(self._number_of_shards):
@@ -2307,7 +2306,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 _, _, expires_at, occupied = self._read_slot(
                     buffer, shard_base, slot_idx
                 )
-                if occupied and expires_at != 0.0 and expires_at < now:
+                if occupied and expires_at != 0.0 and expires_at <= now:
                     candidates.append((key_str.encode("utf-8"), slot_idx))
 
             if not candidates:
@@ -2328,7 +2327,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     _, _, expires_at, occupied = self._read_slot(
                         buffer, shard_base, current_slot_idx
                     )
-                    if not occupied or expires_at == 0.0 or expires_at >= now:
+                    if not occupied or expires_at == 0.0 or expires_at > now:
                         continue
 
                     self._hash_table_delete(buffer, shard_base, key_bytes)

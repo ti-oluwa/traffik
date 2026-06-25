@@ -29,7 +29,6 @@ from traffik.types import (
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
-from traffik.utils import time
 
 
 def _parse_memcached_nodes(
@@ -134,7 +133,7 @@ class _AsyncMemcachedLock:
         self._name = name
         self._name_bytes = name.encode("utf-8")
         self._client = client
-        self._ttl = ttl if ttl is not None else 0
+        self._ttl = math.ceil(ttl) if ttl is not None else 0
         self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
         self._token: typing.Optional[str] = None
         self._reentry_count: int = 0
@@ -191,7 +190,7 @@ class _AsyncMemcachedLock:
                 await self._client.add(
                     self._name_bytes,
                     token.encode("utf-8"),
-                    exptime=math.ceil(time() + self._ttl),
+                    exptime=self._ttl,
                     noreply=False,
                 )
                 # No exception means `add` succeeded and we now own the lock.
@@ -283,7 +282,7 @@ class _AsyncMemcachedLock:
 
 class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
     """
-    Memcached-based throttle backend with distributed locking support.
+    Memcached-based throttle backend.
 
     Uses `emcache` for high-performance async Memcached operations with
     native support for multiple Memcached nodes via Rendezvous hashing
@@ -477,7 +476,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         if self._named_gate_registry is None or self._named_gate_registry.closed:
             self._named_gate_registry = _NamedGateRegistry(
                 contention_threshold=self._lock_contention_threshold,
-                lock_kind="unfair",
             )
 
     async def ready(self) -> bool:
@@ -634,7 +632,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         """
         self._assert_ready()
 
-        exptime = int(time() + expire) if expire is not None else 0
+        exptime = int(expire) if expire is not None else 0
         await self.connection.set(  # type: ignore[union-attr]
             key.encode(),
             str(value).encode(),
@@ -769,7 +767,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
 
         try:
             await self.connection.touch(  # type: ignore[union-attr]
-                key.encode(), exptime=int(time() + seconds)
+                key.encode(), exptime=seconds
             )
             return True
         except emcache.NotFoundCommandError:
@@ -806,7 +804,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             await self.connection.add(  # type: ignore[union-attr]
                 encoded_key,
                 str(amount).encode(),
-                exptime=int(time() + ttl),
+                exptime=ttl,
                 noreply=False,
             )
             if self.track_keys:
@@ -852,7 +850,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         if not items:
             return
 
-        exptime = int(time() + expire) if expire is not None else 0
+        exptime = expire if expire is not None else 0
 
         async def _set_one(key: str, value: str) -> None:
             await self.connection.set(  # type: ignore[union-attr]

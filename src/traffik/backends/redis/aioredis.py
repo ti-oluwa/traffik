@@ -721,7 +721,6 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         if self._named_gate_registry is None or self._named_gate_registry.closed:
             self._named_gate_registry = _NamedGateRegistry(
                 contention_threshold=self._lock_contention_threshold,
-                lock_kind="fair",
             )
 
     def set_lock_contention_threshold(self, threshold: int) -> None:
@@ -847,12 +846,12 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         return await self.connection.get(key)  # type: ignore[union-attr]
 
     async def set(
-        self, key: str, value: typing.Any, expire: typing.Optional[int] = None
+        self, key: str, value: typing.Any, expire: typing.Optional[float] = None
     ) -> None:
         """Set value by key with optional expiration."""
         self._assert_ready()
         if expire is not None:
-            await self.connection.set(key, value, ex=expire)  # type: ignore[union-attr]
+            await self.connection.set(key, value, px=expire * 1000)  # type: ignore[union-attr]
         else:
             await self.connection.set(key, value)  # type: ignore[union-attr]
 

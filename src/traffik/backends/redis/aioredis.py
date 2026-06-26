@@ -689,7 +689,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
                     )
             self._owns_connection = True
             return aioredis.RedisCluster(
-                startup_nodes=[ClusterNode(n["host"], n["port"]) for n in nodes],
+                startup_nodes=[ClusterNode(node["host"], node["port"]) for node in nodes],
                 decode_responses=True,
                 **self._cluster_kwargs,
             )

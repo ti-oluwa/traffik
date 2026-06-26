@@ -32,6 +32,7 @@ setup(
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
         "Framework :: FastAPI",
         "Framework :: AsyncIO",
         "Topic :: Internet :: WWW/HTTP",
@@ -52,7 +53,7 @@ setup(
             "traffik[emcache]",
         ],
         "aioredis": ["pottery>=3.0.1", "redis>=5.0.0"],
-        "coredis": ["coredis>=4.20.0"],
+        "coredis": ["coredis>=6.0;  python_version >= '3.10'"],
         "aiomcache": ["aiomcache>=0.8.2"],
         "emcache": [
             "emcache>=1.3.3; sys_platform == 'linux' or sys_platform == 'darwin'"

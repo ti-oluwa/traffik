@@ -221,7 +221,9 @@ class TestSerializationUtils:
 
     def test_load_raises_on_corrupt_data(self):
         """Test that load_data raises exception on corrupted data."""
-        with pytest.raises((MsgPackDecodeError, ValueError)):  # msgpack.exceptions.UnpackException
+        with pytest.raises(
+            (MsgPackDecodeError, ValueError)
+        ):  # msgpack.exceptions.UnpackException
             load_data("not_valid_base85_data!")
 
 

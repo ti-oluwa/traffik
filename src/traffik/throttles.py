@@ -87,12 +87,12 @@ class FullThrottleStrategy(typing.Protocol[HTTPConnectionT]):
         rate: Rate,
         backend: ThrottleBackend[typing.Any, HTTPConnectionT],
         cost: int = 1,
-    ) -> WaitPeriod: 
+    ) -> WaitPeriod:
         """
         Executes the throttling strategy.
 
         :param key: The unique key representing the connection/request to be throttled.
-        :p 
+        :p
         """
         ...
 

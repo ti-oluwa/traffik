@@ -265,7 +265,7 @@ class TestWebSocketThrottleDynamic:
             dynamic_backend=True,
             identifier=default_client_identifier,
             registry=ThrottleRegistry(),
-            handle_throttled=connection_throttled
+            handle_throttled=connection_throttled,
         )
 
         endpoint_backend = backend.__class__(
@@ -294,9 +294,7 @@ class TestWebSocketThrottleDynamic:
 
         base_url = "http://0.0.0.0"
         loop = asyncio.get_running_loop()
-        async with AsyncTestClient(
-            app=app, base_url=base_url, loop=loop
-        ) as client:
+        async with AsyncTestClient(app=app, base_url=base_url, loop=loop) as client:
             # Normal endpoint: uses lifespan backend (limit 2)
             async with client.websocket_connect("/ws/normal") as ws:
                 data = await ws.receive_json()

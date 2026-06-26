@@ -17,11 +17,18 @@ import typing
 from contextlib import AsyncExitStack
 from types import TracebackType
 
+if sys.version_info < (3, 10):
+    raise ImportError(
+        "`traffik.redis.coredis` is not supported for python<3.10. Upgrade or use a different backend"
+    )
+
 import coredis.exceptions
-from coredis import Redis, RedisCluster, Sentinel
+from coredis.client import Redis, RedisCluster
 from coredis.commands import Script
 from coredis.connection import TCPLocation
 from coredis.patterns.lock import Lock as _CoredisLock
+from coredis.sentinel import Sentinel
+from coredis.typing import Node
 from typing_extensions import Self
 
 from traffik._locks import _GatedNamedLock, _NamedGateRegistry
@@ -324,7 +331,9 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             str,
             _AnyRedis,
             Sentinel,
-            typing.Sequence[typing.Union[TCPLocation, typing.Dict[str, typing.Any]]],
+            typing.Sequence[
+                typing.Union[TCPLocation, typing.Dict[str, typing.Any], Node]
+            ],
             typing.Callable[[], typing.Awaitable[_AnyRedis]],
         ],
         *,

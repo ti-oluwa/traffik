@@ -177,15 +177,61 @@ async def concurrent_contention(
         )
         await backend.initialize()
         app = make_middleware_app(throttles=[middleware_throttle])
-        return await run_http_scenario(
-            "Middleware Concurrent Contention",
-            app,
-            backend,
-            n=500,
-            config=config,
-            concurrent=True,
-            iteration=iteration,
-        )
+        async with backend(persistent=False, close_on_exit=False, initialized=True):
+            transport = httpx2.ASGITransport(app=app)
+            async with httpx2.AsyncClient(
+                transport=transport, base_url="http://test", timeout=30.0
+            ) as client:
+                start_time = time.perf_counter()
+                latencies, successful, throttled, errors = [], 0, 0, 0
+                n = 500
+                num_batches = (n + config.concurrency - 1) // config.concurrency
+
+                for batch_idx in range(num_batches):
+                    batch_size = min(
+                        config.concurrency, n - batch_idx * config.concurrency
+                    )
+
+                    async def single_request(idx: int):
+                        try:
+                            client_id = f"contention-user-{idx % config.concurrency}"
+                            start = time.perf_counter()
+                            response = await client.get(
+                                "/test", headers={"X-Client-ID": client_id}
+                            )
+                            end = time.perf_counter()
+                            return end - start, response.status_code
+                        except Exception:
+                            return 0.0, 0
+
+                    tasks = [
+                        single_request(batch_idx * config.concurrency + i)
+                        for i in range(batch_size)
+                    ]
+                    results = await asyncio.gather(*tasks)
+                    for latency, status_code in results:
+                        if latency > 0:
+                            latencies.append(latency)
+                        if status_code == 200:
+                            successful += 1
+                        elif status_code == 429:
+                            throttled += 1
+                        else:
+                            errors += 1
+
+                end_time = time.perf_counter()
+                return ScenarioResult(
+                    scenario_name="Middleware Concurrent Contention",
+                    backend_kind=config.backend_kind,
+                    strategy_kind=config.strategy_kind,
+                    total_requests=n,
+                    successful_requests=successful,
+                    throttled_requests=throttled,
+                    error_requests=errors,
+                    total_time_seconds=end_time - start_time,
+                    latencies_seconds=latencies,
+                    iteration=iteration,
+                )
     except Exception as exc:  # noqa
         print(f"WARN: Scenario failed: {exc}", file=sys.stderr)
         return ScenarioResult(
@@ -285,9 +331,11 @@ async def many_unique_keys(
                 throttled = 0
                 errors = 0
 
-                num_batches = (300 + 10 - 1) // 10
+                num_batches = (300 + config.concurrency - 1) // config.concurrency
                 for batch_idx in range(num_batches):
-                    batch_size = min(10, 300 - batch_idx * 10)
+                    batch_size = min(
+                        config.concurrency, 300 - batch_idx * config.concurrency
+                    )
 
                     async def single_request(user_idx: int):
                         try:
@@ -302,7 +350,8 @@ async def many_unique_keys(
                             return 0.0, 0
 
                     tasks = [
-                        single_request(batch_idx * 10 + i) for i in range(batch_size)
+                        single_request(batch_idx * config.concurrency + i)
+                        for i in range(batch_size)
                     ]
                     results = await asyncio.gather(*tasks)
 

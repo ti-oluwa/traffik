@@ -40,6 +40,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
     If the connection does not match the criteria, it is returned without consuming throttle quota.
 
     Usage:
+    
     ```python
     from starlette.applications import Starlette
 

@@ -79,8 +79,6 @@ def make_middleware_app(
     app.add_middleware(  # type: ignore
         ThrottleMiddleware,
         middleware_throttles=throttles,  # type: ignore[arg-type]
-        path="/test",  # type: ignore[arg-type]
-        methods={"GET"},  # type: ignore[arg-type]
     )
 
     @app.get("/test")

@@ -780,7 +780,6 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
                 ),
             )
             self._timer.start()
-
         return self
 
     async def __aexit__(

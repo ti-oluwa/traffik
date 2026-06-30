@@ -33,7 +33,9 @@ async def below_limit_steady(
             strategy=strategy,
             registry=registry,
         )
-        middleware_throttle = MiddlewareThrottle(throttle)
+        middleware_throttle = MiddlewareThrottle(
+            throttle, path="/test", methods={"GET"}
+        )
         await backend.initialize()
         app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
@@ -76,7 +78,9 @@ async def at_limit_edge(config: BenchmarkConfig, iteration: int = 1) -> Scenario
             strategy=strategy,
             registry=registry,
         )
-        middleware_throttle = MiddlewareThrottle(throttle)
+        middleware_throttle = MiddlewareThrottle(
+            throttle, path="/test", methods={"GET"}
+        )
         await backend.initialize()
         app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
@@ -121,7 +125,9 @@ async def over_limit_burst(
             strategy=strategy,
             registry=registry,
         )
-        middleware_throttle = MiddlewareThrottle(throttle)
+        middleware_throttle = MiddlewareThrottle(
+            throttle, path="/test", methods={"GET"}
+        )
         await backend.initialize()
         app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
@@ -166,7 +172,9 @@ async def concurrent_contention(
             strategy=strategy,
             registry=registry,
         )
-        middleware_throttle = MiddlewareThrottle(throttle)
+        middleware_throttle = MiddlewareThrottle(
+            throttle, path="/test", methods={"GET"}
+        )
         await backend.initialize()
         app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
@@ -209,7 +217,9 @@ async def single_hot_key(config: BenchmarkConfig, iteration: int = 1) -> Scenari
             strategy=strategy,
             registry=registry,
         )
-        middleware_throttle = MiddlewareThrottle(throttle)
+        middleware_throttle = MiddlewareThrottle(
+            throttle, path="/test", methods={"GET"}
+        )
         await backend.initialize()
         app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
@@ -255,7 +265,9 @@ async def many_unique_keys(
             strategy=strategy,
             registry=registry,
         )
-        middleware_throttle = MiddlewareThrottle(throttle)
+        middleware_throttle = MiddlewareThrottle(
+            throttle, path="/test", methods={"GET"}
+        )
         await backend.initialize()
         app = make_middleware_app(throttles=[middleware_throttle])
 
@@ -352,7 +364,9 @@ async def window_boundary_burst(
             strategy=strategy,
             registry=registry,
         )
-        middleware_throttle = MiddlewareThrottle(throttle)
+        middleware_throttle = MiddlewareThrottle(
+            throttle, path="/test", methods={"GET"}
+        )
         await backend.initialize()
         app = make_middleware_app(throttles=[middleware_throttle])
 
@@ -431,7 +445,9 @@ async def sustained_high_load(
             strategy=strategy,
             registry=registry,
         )
-        middleware_throttle = MiddlewareThrottle(throttle)
+        middleware_throttle = MiddlewareThrottle(
+            throttle, path="/test", methods={"GET"}
+        )
         await backend.initialize()
         app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
@@ -475,7 +491,9 @@ async def error_recovery(config: BenchmarkConfig, iteration: int = 1) -> Scenari
             registry=registry,
             on_error="allow",
         )
-        middleware_throttle = MiddlewareThrottle(throttle)
+        middleware_throttle = MiddlewareThrottle(
+            throttle, path="/test", methods={"GET"}
+        )
         await backend.initialize()
         app = make_middleware_app(throttles=[middleware_throttle])
         return await run_http_scenario(
@@ -520,7 +538,9 @@ async def selective_throttling(
             strategy=strategy,
             registry=registry,
         )
-        middleware_throttle = MiddlewareThrottle(throttle)
+        middleware_throttle = MiddlewareThrottle(
+            throttle, path="/test", methods={"GET"}
+        )
         await backend.initialize()
         app = make_middleware_app(throttles=[middleware_throttle])
 

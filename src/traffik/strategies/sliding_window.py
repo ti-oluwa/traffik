@@ -9,7 +9,7 @@ from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
+from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
@@ -39,7 +39,7 @@ class SlidingWindowLogStatMetadata(TypedDict):
     entry_count: int
     """Number of entries (requests) currently in the log within the window."""
 
-    current_cost_sum: float
+    current_total_cost: float
     """Total cost of all requests in the current sliding window."""
 
     oldest_entry_ms: typing.Optional[float]
@@ -169,23 +169,23 @@ class SlidingWindowLogStrategy:
 
             # Filter entries, sum costs, and find oldest timestamp in one pass for efficiency
             valid_entries = []
-            current_cost_sum = 0.0
+            current_total_cost = 0.0
             oldest_timestamp = float("inf")
 
             try:
-                for ts, c in entries:
-                    ts_f, c_f = float(ts), float(c)
-                    if ts_f > window_start:
-                        valid_entries.append([ts_f, c_f])
-                        current_cost_sum += c_f
-                        oldest_timestamp = min(ts_f, oldest_timestamp)
+                for timestamp, recorded_cost in entries:
+                    timestamp, recorded_cost = float(timestamp), float(recorded_cost)
+                    if timestamp > window_start:
+                        valid_entries.append([timestamp, recorded_cost])
+                        current_total_cost += recorded_cost
+                        oldest_timestamp = min(timestamp, oldest_timestamp)
             except (ValueError, TypeError):
                 valid_entries = []
-                current_cost_sum = 0.0
+                current_total_cost = 0.0
                 oldest_timestamp = float("inf")
 
             # If adding this request's cost would exceed limit, reject it
-            if current_cost_sum + cost > rate.limit:
+            if current_total_cost + cost > rate.limit:
                 # Use the oldest entry to calculate wait time
                 wait_ms = (oldest_timestamp + window_duration_ms) - now
                 await backend.set(log_key, dump_data(valid_entries), expire=ttl_seconds)
@@ -194,7 +194,7 @@ class SlidingWindowLogStrategy:
             # If within limit, add this request as [timestamp, cost] entry
             valid_entries.append([now, float(cost)])
             await backend.set(log_key, dump_data(valid_entries), expire=ttl_seconds)
-            return 0.0
+        return 0.0
 
     async def get_stat(
         self,
@@ -237,28 +237,28 @@ class SlidingWindowLogStrategy:
 
         # Single pass: filter entries, sum costs, and find oldest timestamp
         valid_entries = []
-        current_cost_sum = 0.0
+        current_total_cost = 0.0
         oldest_timestamp: typing.Optional[float] = None
 
         try:
-            for ts, c in entries:
-                ts_f, c_f = float(ts), float(c)
-                if ts_f > window_start:
-                    valid_entries.append([ts_f, c_f])
-                    current_cost_sum += c_f
-                    if oldest_timestamp is None or ts_f < oldest_timestamp:
-                        oldest_timestamp = ts_f
+            for timestamp, recorded_cost in entries:
+                timestamp, recorded_cost = float(timestamp), float(recorded_cost)
+                if timestamp > window_start:
+                    valid_entries.append([timestamp, recorded_cost])
+                    current_total_cost += recorded_cost
+                    if oldest_timestamp is None or timestamp < oldest_timestamp:
+                        oldest_timestamp = timestamp
         except (ValueError, TypeError):
             valid_entries = []
-            current_cost_sum = 0.0
+            current_total_cost = 0.0
             oldest_timestamp = None
 
         # Calculate remaining capacity
         limit = rate.limit
-        hits_remaining = max(limit - current_cost_sum, 0.0)
+        hits_remaining = max(limit - current_total_cost, 0.0)
 
         # If over limit, calculate wait time
-        if current_cost_sum > limit and oldest_timestamp is not None:
+        if current_total_cost > limit and oldest_timestamp is not None:
             wait_ms = (oldest_timestamp + window_duration_ms) - now
             wait_ms = max(wait_ms, 0.0)
         else:
@@ -273,7 +273,7 @@ class SlidingWindowLogStrategy:
                 strategy="sliding_window_log",
                 window_start_ms=window_start,
                 entry_count=len(valid_entries),
-                current_cost_sum=current_cost_sum,
+                current_total_cost=current_total_cost,
                 oldest_entry_ms=oldest_timestamp,
             ),
         )
@@ -326,6 +326,7 @@ class SlidingWindowCounterStrategy:
         - If limit is 100, 20 more requests allowed
 
     **Example:**
+
     ```python
     from traffik.rates import Rate
     from traffik.strategies import SlidingWindowCounterStrategy
@@ -404,14 +405,14 @@ class SlidingWindowCounterStrategy:
 
             # If weighted count exceeds limit, reject request
             if weighted_count > limit:
-                requests_over = weighted_count - limit
+                requests_excess = weighted_count - limit
                 if previous_count > 0:
-                    wait_ratio = requests_over / previous_count
+                    wait_ratio = requests_excess / previous_count
                     wait_ms = wait_ratio * time_in_current_window
                 else:
                     wait_ms = window_duration_ms - time_in_current_window
                 return wait_ms
-            return 0.0
+        return 0.0
 
     async def get_stat(
         self,
@@ -464,9 +465,9 @@ class SlidingWindowCounterStrategy:
 
         # If over limit, calculate wait time
         if weighted_count > limit:
-            requests_over = weighted_count - limit
+            requests_excess = weighted_count - limit
             if previous_count > 0:
-                wait_ratio = requests_over / previous_count
+                wait_ratio = requests_excess / previous_count
                 wait_ms = wait_ratio * time_in_current_window
             else:
                 wait_ms = window_duration_ms - time_in_current_window

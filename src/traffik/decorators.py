@@ -11,7 +11,7 @@ from starlette.requests import Request as StarletteRequest
 from starlette.websockets import WebSocket as StarletteWebSocket
 
 from traffik.throttles import Throttle
-from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S
+from traffik.typing import Dependency, HTTPConnectionT, P, Q, R, S
 from traffik.utils import _add_parameter_to_signature
 
 ThrottleT = typing.TypeVar("ThrottleT", bound=Throttle)

@@ -10,7 +10,7 @@ from starlette.middleware.exceptions import ExceptionMiddleware
 from starlette.status import HTTP_429_TOO_MANY_REQUESTS
 from starlette.types import ExceptionHandler as StarletteExceptionHandler
 
-from traffik.types import ExceptionHandler as TraffikExceptionHandler
+from traffik.typing import ExceptionHandler as TraffikExceptionHandler
 
 
 class TraffikException(Exception):

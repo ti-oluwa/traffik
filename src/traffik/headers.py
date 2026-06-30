@@ -7,7 +7,7 @@ from collections.abc import Mapping
 
 from typing_extensions import Self
 
-from traffik.types import HTTPConnectionT, StrategyStat
+from traffik.typing import HTTPConnectionT, StrategyStat
 
 __all__ = ["DEFAULT_HEADERS_ALWAYS", "DEFAULT_HEADERS_THROTTLED", "Header", "Headers"]
 

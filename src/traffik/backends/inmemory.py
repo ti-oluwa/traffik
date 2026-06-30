@@ -18,7 +18,7 @@ from traffik._locks import (
 )
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError, LockAcquisitionError
-from traffik.types import (
+from traffik.typing import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,

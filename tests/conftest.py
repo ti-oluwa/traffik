@@ -1,5 +1,5 @@
 """Global test configuration and fixtures."""
-
+import datetime
 import logging
 import os
 import typing
@@ -211,3 +211,9 @@ STRATEGIES = [
 @pytest.fixture(scope="function", params=STRATEGIES)
 def strategy(request) -> ThrottleStrategy[HTTPConnection]:
     return request.param()
+
+
+
+@pytest.fixture(scope="function")
+def utctime() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)

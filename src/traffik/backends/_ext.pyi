@@ -1,4 +1,4 @@
-"C extensions for traffik."
+"""C extensions for traffik."""
 
 def test_and_set_byte(buffer: memoryview, offset: int, /) -> int:
     """
@@ -16,7 +16,6 @@ def test_and_set_byte(buffer: memoryview, offset: int, /) -> int:
         and has been acquired; 1 indicates the lock was already held.
     :raises IndexError: If offset is out of range.
     """
-    ...
 
 def clear_byte(buffer: memoryview, offset: int, /) -> None:
     """
@@ -32,7 +31,6 @@ def clear_byte(buffer: memoryview, offset: int, /) -> None:
         range [0, len(buf)).
     :raises IndexError: If offset is out of range.
     """
-    ...
 
 def fnv_32bit_hash(data: bytes, /) -> int:
     """
@@ -45,4 +43,3 @@ def fnv_32bit_hash(data: bytes, /) -> int:
     :param data: The bytes to hash.
     :return: The 32-bit hash value as an unsigned integer (0 to 2^32 - 1).
     """
-    ...

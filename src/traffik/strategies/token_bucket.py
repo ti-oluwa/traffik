@@ -8,7 +8,7 @@ from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
+from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
@@ -127,6 +127,7 @@ class TokenBucketStrategy:
     - Formula: `tokens = min(tokens + (elapsed_time * refill_rate), capacity)`
 
     **Example:**
+
     ```python
     from traffik.rates import Rate
     from traffik.strategies import TokenBucketStrategy
@@ -360,6 +361,7 @@ class TokenBucketWithDebtStrategy:
     - Tokens can range from `-max_debt` to `+burst_size`
 
     **Example:**
+    
     ```python
     from traffik.rates import Rate
     from traffik.strategies import TokenBucketWithDebtStrategy

@@ -8,7 +8,7 @@ from starlette.websockets import WebSocket
 from typing_extensions import TypeVar
 
 from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
-from traffik.types import EXEMPTED
+from traffik.typing import EXEMPTED
 
 
 async def default_client_identifier(connection: HTTPConnection) -> str:

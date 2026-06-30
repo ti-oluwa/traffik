@@ -14,7 +14,7 @@ from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
+from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
@@ -152,8 +152,8 @@ class QuotaWithRolloverStatMetadata(TypedDict):
     effective_limit: int
     """Total effective limit (base_limit + rollover_amount)."""
 
-    used: int
-    """Amount of quota used in the current period."""
+    usage: int
+    """Amount of quota usage in the current period."""
 
     period_id: int
     """Identifier of the current quota period."""
@@ -337,6 +337,7 @@ class TieredRateStrategy:
     - Enterprise users get 10x free tier limit, premium 5x, etc.
 
     **Example:**
+
     ```python
     # Base rate: 100/hour
     # Free: 100/hour, Premium: 500/hour, Enterprise: 1000/hour
@@ -378,7 +379,7 @@ class TieredRateStrategy:
     """Configuration for backend locking during rate limit checks."""
     marker: str = "tier:"
     """
-    Marker used in keys to identify tier segment.
+    Marker usage in keys to identify tier segment.
     
     For example, with marker "tier:", in key "...:tier:premium:...", "premium" is the tier.
     """
@@ -518,6 +519,7 @@ class AdaptiveThrottleStrategy:
     - Gradually recover as load decreases
 
     **Example:**
+
     ```python
     strategy = AdaptiveThrottleStrategy(
         load_threshold=0.8,        # Start throttling at 80% capacity
@@ -713,10 +715,12 @@ class PriorityQueueStrategy:
 
     **How it works:**
     - Maintain queue of `[timestamp, priority, cost]` tuples
-    - Process high-priority requests first
+    - Process high-priority requests first so that low priority
+        request do use up quota and high priority request need to wait for reset.
     - Lower-priority requests wait longer when at capacity
 
     **Example:**
+
     ```python
     strategy = PriorityQueueStrategy(
         default_priority=Priority.NORMAL,
@@ -758,7 +762,7 @@ class PriorityQueueStrategy:
 
     marker: str = "priority:"
     """
-    Marker used in keys to identify priority segment.
+    Marker usage in keys to identify priority segment.
 
     For example, with marker "priority:", in key "...:priority:3:...", "3" is the priority level.
     """
@@ -817,22 +821,24 @@ class PriorityQueueStrategy:
             cutoff = now - rate.expire
             filtered_queue = []
             higher_priority_cost = 0
-            oldest_high_priority_ts = float("inf")
+            oldest_high_priority_timestamp = float("inf")
 
-            for ts, pri, c in queue:
-                if ts > cutoff:
-                    filtered_queue.append([ts, pri, c])
-                    if pri >= priority:
-                        higher_priority_cost += c
-                        oldest_high_priority_ts = min(ts, oldest_high_priority_ts)
+            for timestamp, recorded_priority, recorded_cost in queue:
+                if timestamp > cutoff:
+                    filtered_queue.append([timestamp, recorded_priority, recorded_cost])
+                    if recorded_priority >= priority:
+                        higher_priority_cost += recorded_cost
+                        oldest_high_priority_timestamp = min(
+                            timestamp, oldest_high_priority_timestamp
+                        )
 
             queue = filtered_queue
 
             # Check if we can accept this request
             if higher_priority_cost + cost > rate.limit:
                 # Calculate wait time based on oldest high-priority request
-                if oldest_high_priority_ts != float("inf"):
-                    wait_ms = rate.expire - (now - oldest_high_priority_ts)
+                if oldest_high_priority_timestamp != float("inf"):
+                    wait_ms = rate.expire - (now - oldest_high_priority_timestamp)
                     return max(wait_ms, 0.0)
                 return rate.expire  # Shouldn't reach here
 
@@ -853,7 +859,7 @@ class PriorityQueueStrategy:
 
             # Save updated queue
             await backend.set(queue_key, dump_data(queue), expire=ttl_seconds)
-            return 0.0
+        return 0.0
 
     async def get_stat(
         self,
@@ -896,22 +902,24 @@ class PriorityQueueStrategy:
         filtered_queue = []
         higher_priority_cost = 0
         total_cost = 0
-        oldest_high_priority_ts = float("inf")
+        oldest_high_priority_timestamp = float("inf")
 
-        for ts, pri, c in queue:
-            if ts > cutoff:
-                filtered_queue.append([ts, pri, c])
-                total_cost += c
-                if pri >= priority:
-                    higher_priority_cost += c
-                    oldest_high_priority_ts = min(ts, oldest_high_priority_ts)
+        for timestamp, recorded_priority, recorded_cost in queue:
+            if timestamp > cutoff:
+                filtered_queue.append([timestamp, recorded_priority, recorded_cost])
+                total_cost += recorded_cost
+                if recorded_priority >= priority:
+                    higher_priority_cost += recorded_cost
+                    oldest_high_priority_timestamp = min(
+                        timestamp, oldest_high_priority_timestamp
+                    )
 
         queue = filtered_queue
         hits_remaining = max(rate.limit - higher_priority_cost, 0.0)
 
         if higher_priority_cost >= rate.limit:
-            if oldest_high_priority_ts != float("inf"):
-                wait_ms = rate.expire - (now - oldest_high_priority_ts)
+            if oldest_high_priority_timestamp != float("inf"):
+                wait_ms = rate.expire - (now - oldest_high_priority_timestamp)
                 wait_ms = max(wait_ms, 0.0)
             else:
                 wait_ms = rate.expire
@@ -947,6 +955,7 @@ class QuotaWithRolloverStrategy:
     - Prevents "use it or lose it" wastage
 
     **Example:**
+
     ```python
     strategy = QuotaWithRolloverStrategy(
         rollover_percentage=0.5,  # Roll over 50% of unused quota
@@ -966,7 +975,7 @@ class QuotaWithRolloverStrategy:
     - Subscription limits
 
     **Storage:**
-    - `{key}:quota:{period}:used` - Used quota this period
+    - `{key}:quota:{period}:usage` - Used quota this period
     - `{key}:quota:{period}:rollover` - Rolled over from previous period
     """
 
@@ -1000,25 +1009,25 @@ class QuotaWithRolloverStrategy:
         current_period = int(now // window_duration_ms)
 
         full_key = backend.get_key(str(key))
-        used_key = f"{full_key}:quota:{current_period}:used"
+        usage_key = f"{full_key}:quota:{current_period}:usage"
         rollover_key = f"{full_key}:quota:{current_period}:rollover"
-        prev_used_key = f"{full_key}:quota:{current_period - 1}:used"
+        previous_usage_key = f"{full_key}:quota:{current_period - 1}:usage"
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
 
-        async with backend.lock(f"lock:{used_key}", **self.lock_config):
+        async with backend.lock(f"lock:{usage_key}", **self.lock_config):
             # Get current usage and rollover
-            used_str, rollover_str = await backend.multi_get(used_key, rollover_key)
-            used = int(used_str) if used_str else 0
+            usage_str, rollover_str = await backend.multi_get(usage_key, rollover_key)
+            usage = int(usage_str) if usage_str else 0
 
             # Use or calculate rollover for this period
             if rollover_str:
                 rollover = int(rollover_str)
             else:
                 # Calculate rollover from previous period
-                prev_used_str = await backend.get(prev_used_key)
-                if prev_used_str:
-                    prev_used = int(prev_used_str)
-                    unused = max(0, rate.limit - prev_used)
+                previous_usage_str = await backend.get(previous_usage_key)
+                if previous_usage_str:
+                    previous_usage = int(previous_usage_str)
+                    unused = max(0, rate.limit - previous_usage)
                     rollover = min(
                         self.max_rollover, int(unused * self.rollover_percentage)
                     )
@@ -1031,13 +1040,13 @@ class QuotaWithRolloverStrategy:
             effective_limit = rate.limit + rollover
 
             # Check if request exceeds limit
-            if used + cost > effective_limit:
+            if usage + cost > effective_limit:
                 time_in_period = now % window_duration_ms
                 wait_ms = window_duration_ms - time_in_period
                 return max(wait_ms, 0.0)
 
             # Increment usage
-            await backend.increment_with_ttl(used_key, amount=cost, ttl=ttl_seconds)
+            await backend.increment_with_ttl(usage_key, amount=cost, ttl=ttl_seconds)
             return 0.0
 
     async def get_stat(
@@ -1067,17 +1076,17 @@ class QuotaWithRolloverStrategy:
         current_period = int(now // window_duration_ms)
 
         full_key = backend.get_key(str(key))
-        used_key = f"{full_key}:quota:{current_period}:used"
+        usage_key = f"{full_key}:quota:{current_period}:usage"
         rollover_key = f"{full_key}:quota:{current_period}:rollover"
 
-        used_str, rollover_str = await backend.multi_get(used_key, rollover_key)
-        used = int(used_str) if used_str else 0
+        usage_str, rollover_str = await backend.multi_get(usage_key, rollover_key)
+        usage = int(usage_str) if usage_str else 0
         rollover = int(rollover_str) if rollover_str else 0
 
         effective_limit = rate.limit + rollover
-        hits_remaining = max(effective_limit - used, 0)
+        hits_remaining = max(effective_limit - usage, 0)
 
-        if used > effective_limit:
+        if usage > effective_limit:
             time_in_period = now % window_duration_ms
             wait_ms = window_duration_ms - time_in_period
             wait_ms = max(wait_ms, 0.0)
@@ -1095,7 +1104,7 @@ class QuotaWithRolloverStrategy:
                 base_limit=rate.limit,
                 rollover_amount=rollover,
                 effective_limit=effective_limit,
-                used=used,
+                usage=usage,
                 period_id=current_period,
                 period_start_ms=period_start_ms,
             ),
@@ -1118,6 +1127,7 @@ class TimeOfDayStrategy:
     Time windows should be defined in 24-hour format (0-24).
 
     **Example:**
+
     ```python
     strategy = TimeOfDayStrategy(
         time_windows=[
@@ -1310,6 +1320,7 @@ class CostBasedTokenBucketStrategy:
     - Expensive operations slow down refill temporarily
 
     **Example:**
+
     ```python
     strategy = CostBasedTokenBucketStrategy(
         burst_size=200,
@@ -1329,7 +1340,7 @@ class CostBasedTokenBucketStrategy:
     ```
 
     **Storage:**
-    - `{key}:costbucket:state` - `{"tokens": float, "last_refill": ts}`
+    - `{key}:costbucket:state` - `{"tokens": float, "last_refill": timestamp}`
     - `{key}:costbucket:history` - Recent costs for average calculation
     """
 
@@ -1390,10 +1401,10 @@ class CostBasedTokenBucketStrategy:
 
             # Calculate average cost
             if history:
-                avg_cost = sum(history) / len(history)
+                average_cost = sum(history) / len(history)
                 # Adjust refill rate based on average cost
                 # Higher average cost means a slower refill
-                cost_multiplier = max(self.min_refill_rate, 1.0 / avg_cost)
+                cost_multiplier = max(self.min_refill_rate, 1.0 / average_cost)
                 effective_refill_rate = base_refill_rate * cost_multiplier
             else:
                 effective_refill_rate = base_refill_rate
@@ -1485,11 +1496,11 @@ class CostBasedTokenBucketStrategy:
 
         # Calculate effective refill rate
         if history:
-            avg_cost = sum(history) / len(history)
-            cost_multiplier = max(self.min_refill_rate, 1.0 / avg_cost)
+            average_cost = sum(history) / len(history)
+            cost_multiplier = max(self.min_refill_rate, 1.0 / average_cost)
             effective_refill_rate = base_refill_rate * cost_multiplier
         else:
-            avg_cost = 1.0
+            average_cost = 1.0
             effective_refill_rate = base_refill_rate
 
         # Refill tokens
@@ -1512,7 +1523,7 @@ class CostBasedTokenBucketStrategy:
                 strategy="cost_based_token_bucket",
                 tokens=tokens,
                 capacity=capacity,
-                average_cost=avg_cost,
+                average_cost=average_cost,
                 cost_history_size=len(history),
                 base_refill_rate_per_ms=base_refill_rate,
                 effective_refill_rate_per_ms=effective_refill_rate,
@@ -1538,6 +1549,7 @@ class GCRAStrategy:
     - Update TAT: max(TAT, current_time) + emission_interval * cost
 
     **Example:**
+
     ```python
     # 100 req/min = 600ms between requests
     strategy = GCRAStrategy(
@@ -1696,6 +1708,7 @@ class DistributedFairnessStrategy:
     - Weighted fair queuing for priority instances
 
     **Example:**
+
     ```python
     import socket
 
@@ -1815,7 +1828,6 @@ class DistributedFairnessStrategy:
 
             # Deficit round-robin
             quantum = fair_share + deficit
-
             if usage + cost <= quantum and global_usage + cost <= rate.limit:
                 # Allow and update counters
                 await backend.increment_with_ttl(
@@ -1946,6 +1958,7 @@ class GeographicDistributionStrategy:
     **Example:**
 
     ```python
+    
     strategy = GeographicDistributionStrategy(
         region_multipliers={
             "us-east-1": 0.4,    # 40% of total capacity
@@ -1953,7 +1966,7 @@ class GeographicDistributionStrategy:
             "eu-west-1": 0.2,    # 20%
             "ap-southeast-1": 0.1,  # 10%
         },
-        allow_spillover=True,  # Unused capacity get used by other regions
+        allow_spillover=True,  # Unused capacity get usage by other regions
     )
 
     # Identifier: "region:{region}:user:{id}"
@@ -1993,7 +2006,7 @@ class GeographicDistributionStrategy:
 
     marker: str = "region:"
     """
-    Marker used in keys to identify region segment.
+    Marker usage in keys to identify region segment.
 
     For example, with marker "region:", in key "...:region:us-east-1:...", "us-east-1" is the region.
     """

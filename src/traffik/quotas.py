@@ -23,7 +23,7 @@ from traffik.exceptions import (
     QuotaError,
 )
 from traffik.throttles import Throttle
-from traffik.types import (
+from traffik.typing import (
     ApplyOnError,
     BackoffStrategy,
     HTTPConnectionT,
@@ -136,7 +136,6 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         throttle = self.throttle
         if throttle._uses_cost_func:
             return await throttle.cost(connection, context)  # type: ignore[operator]
-
         return throttle.cost  # type: ignore[return-value]
 
 
@@ -210,6 +209,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         quota(throttle1, cost=2)
         quota(throttle2)
     ```
+
     """
 
     __slots__ = (
@@ -430,7 +430,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
     def consume(
         self,
-        throttle: typing.Optional["Throttle[HTTPConnectionT]"] = None,
+        throttle: typing.Optional[Throttle[HTTPConnectionT]] = None,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         *,
@@ -556,16 +556,13 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             return False
 
         # Backoff strategy must match
-        # Using identity check because backoff objects may not implement __eq__
+        # Use identity check because backoff objects may not implement `__eq__`
         if last_entry.backoff is not backoff:
             return False
 
         # Base delay must match exactly
-        if last_entry.base_delay != base_delay:
-            return False
-
         # If all rules passed, then aggregation is safe
-        return True
+        return last_entry.base_delay == base_delay
 
     def _enqueue(
         self,
@@ -777,7 +774,6 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         # Apply all queued throttles sequentially
         for entry in self._queue:
             await self._hit(entry)
-
         self._consumed = True
 
     async def cancel(self) -> None:
@@ -831,7 +827,6 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
         # Mark as discarded
         self._cancelled = True
-
         # Release lock early if we're holding one
         await self._close_exit_stack()
 

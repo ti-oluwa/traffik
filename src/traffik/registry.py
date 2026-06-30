@@ -6,7 +6,7 @@ import weakref
 from collections.abc import Collection
 
 from traffik.exceptions import ConfigurationError
-from traffik.types import (
+from traffik.typing import (
     HTTPConnectionT,
     Matchable,
     ThrottlePredicate,

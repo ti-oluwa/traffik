@@ -34,7 +34,7 @@ from traffik.registry import (
     _prep_rules,
 )
 from traffik.strategies import DEFAULT_STRATEGY
-from traffik.types import (
+from traffik.typing import (
     EXEMPTED,
     ApplyOnError,
     ConnectionIdentifier,
@@ -1243,13 +1243,13 @@ def _make_throttle_signature(
     if method is None:
         raise ValueError(f"Throttle instance must have a `{target_method}` method")
 
-    method_signature = inspect.signature(method)
-    if connection_param_name not in method_signature.parameters:
+    signature = inspect.signature(method)
+    if connection_param_name not in signature.parameters:
         raise ValueError(
             f"Connection parameter '{connection_param_name}' not found in throttle's `{target_method}` signature"
         )
 
-    connection_param = method_signature.parameters[connection_param_name]
+    connection_param = signature.parameters[connection_param_name]
     param_type = connection_param.annotation
     connection_type = throttle.connection_type
     # If the connection parameter already has a concrete annotation type,
@@ -1668,7 +1668,7 @@ def throttled(
         connection_type = throttle.connection_type
 
     if not issubclass(connection_type, HTTPConnection):
-        raise ValueError("Throttles must be designed for HTTP connections.")
+        raise TypeError("Throttles must be designed for HTTP connections.")
 
     def _decorator(
         route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],

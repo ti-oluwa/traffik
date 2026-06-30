@@ -5,7 +5,7 @@
 from .backends import *  # noqa
 from .rates import Rate  # noqa
 from .throttles import *  # noqa
-from .types import *  # noqa
+from .typing import *  # noqa
 from .config import (  # noqa
     get_lock_blocking,
     get_lock_blocking_timeout,

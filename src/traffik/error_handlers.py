@@ -13,7 +13,7 @@ from traffik.backoff import DEFAULT_BACKOFF
 from traffik.exceptions import _EXEMPT_EXCEPTIONS, BackendError
 from traffik.rates import Rate
 from traffik.throttles import Throttle, ThrottleExceptionInfo
-from traffik.types import BackoffStrategy, HTTPConnectionT, WaitPeriod
+from traffik.typing import BackoffStrategy, HTTPConnectionT, WaitPeriod
 from traffik.utils import CircuitBreaker
 
 __all__ = [

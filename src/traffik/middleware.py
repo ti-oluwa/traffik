@@ -18,7 +18,7 @@ from traffik.exceptions import (
 )
 from traffik.registry import ThrottleRule
 from traffik.throttles import Throttle
-from traffik.types import (
+from traffik.typing import (
     ExceptionHandler,
     HTTPConnectionT,
     Matchable,

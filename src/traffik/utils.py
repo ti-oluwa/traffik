@@ -22,7 +22,7 @@ from traffik.config import (  # noqa
     set_lock_blocking_timeout,
     set_lock_ttl,
 )
-from traffik.types import AwaitableCallable, T
+from traffik.typing import AwaitableCallable, T
 
 
 def get_remote_address(connection: HTTPConnection) -> typing.Optional[str]:

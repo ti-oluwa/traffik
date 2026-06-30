@@ -24,7 +24,7 @@ from traffik.config import (
     get_lock_ttl,
 )
 from traffik.exceptions import BackendError, ConnectionThrottled
-from traffik.types import (
+from traffik.typing import (
     AsyncLock,
     ConnectionIdentifier,
     ConnectionThrottledHandler,

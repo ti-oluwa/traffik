@@ -17,7 +17,7 @@ from traffik.exceptions import (
     LockReleaseError,
     LockTimeoutError,
 )
-from traffik.types import AsyncLock
+from traffik.typing import AsyncLock
 from traffik.utils import TaskTimer
 
 __PREFIX = secrets.token_hex(8)
@@ -837,7 +837,6 @@ class _NamedGateRegistry:
 
     This design means:
     - Low load / diverse keys: nearly every acquire bypasses the gate.
-      Only two fast threading.Lock operations (`get` + `_release`) are paid.
     - High load, same key: gates activate automatically when contention
       reaches the threshold, serializing local tasks so only one races
       on the network at a time.
@@ -846,7 +845,7 @@ class _NamedGateRegistry:
 
     `_waiters[name]` tracks how many tasks are currently inside an acquire
     call for a given name (from `get` until the finally block in
-    `_GatedNamedLock.acquire`). This is distinct from "holding the lock" —
+    `_GatedNamedLock.acquire`). This is distinct from "holding the lock" -
     a task that won the distributed lock has already exited its acquire call
     and decremented the waiter count. The gate only exists during the race
     to acquire, not during the hold.
@@ -1012,7 +1011,7 @@ class _NamedGateRegistry:
 
         Takes effect on next get() call.
         Existing waiters already past the old threshold
-        continue normally — no disruption to in-flight acquires.
+        continue normally - no disruption to in-flight acquires.
         """
         if threshold < 1:
             raise ValueError("`contention_threshold` must be at least 1.")
@@ -1127,7 +1126,7 @@ class _NamedGateHandle:
         """
         Release this handle without raising, intended for GC finalization.
 
-        If the gate was acquired, releases the asyncio.Lock (which may
+        If the gate was acquired, it releases the `asyncio.Lock` (which may
         wake a waiting local task). Always decrements the registry waiter
         count.
 
@@ -1138,7 +1137,7 @@ class _NamedGateHandle:
         means the task that created it has no reference to it, which
         typically means it completed or was cancelled. If the task was
         cancelled after acquiring the gate but before releasing it, this
-        finalizer fires and correctly unblocks the next waiter — but the
+        finalizer fires and correctly unblocks the next waiter - but the
         scheduling may be on the wrong thread. This edge case only occurs
         on improper usage (not using the context manager). Always use the
         async context manager or call `release()` explicitly.
@@ -1257,14 +1256,15 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
 
     **When the gate is active (contention at or above threshold):**
 
-    Local tasks queue behind a per-name asyncio.Lock gate before racing
+    Local tasks queue behind a per-name `asyncio.Lock` gate before racing
     on the distributed lock. Only one task per process makes a network
-    call at a time, reducing network traffic from O(N x spins) to O(N).
+    call at a time, reducing network traffic from `O(N x spins)` to `O(N)`.
+    Where `N` is the number of tasks.
 
     **When the gate is inactive (below contention threshold):**
 
     Tasks bypass the gate entirely and go straight to the underlying
-    distributed lock. Zero gate overhead.
+    distributed lock. (Almost) Zero gate overhead.
 
     **Semantics for `blocking_timeout`:**
 
@@ -1276,12 +1276,12 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
         blocking_timeout = 5.0
         Gate wait:            3.0s  (deadline - loop.time() passed to gate)
         Remaining for lock:   2.0s  (deadline - loop.time() after gate)
-        Total:                5.0s  Correct — the caller's deadline is respected.
+        Total:                5.0s  Correct - the caller's deadline is respected.
 
     Not:
         Gate wait:            3.0s
         Lock wait:            5.0s  (full timeout passed again)
-        Total:                8.0s  Wrong — the caller expected to wait at most 5 seconds total.
+        Total:                8.0s  Wrong - the caller expected to wait at most 5 seconds total.
     """
 
     __slots__ = ("_lock", "_name", "_registry")
@@ -1339,8 +1339,8 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
 
         The timeout is a single deadline. Time spent waiting for the gate
         reduces the time available for the underlying lock acquire. If the
-        deadline expires at any point — before gate acquisition, between
-        gate and lock, or during lock acquire — returns False.
+        deadline expires at any point - before gate acquisition, between
+        gate and lock, or during lock acquire - returns False.
 
         **Blocking without timeout (`blocking=True, blocking_timeout=None`):**
 

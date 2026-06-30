@@ -8,7 +8,7 @@ from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
+from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
@@ -191,7 +191,7 @@ class LeakyBucketStrategy:
             level += cost
             new_state = {"level": level, "last_leak": now}
             await backend.set(state_key, dump_data(new_state), expire=ttl_seconds)
-            return 0.0
+        return 0.0
 
     async def get_stat(
         self,
@@ -218,7 +218,6 @@ class LeakyBucketStrategy:
         now = time() * 1000
         full_key = backend.get_key(str(key))
         state_key = f"{full_key}:leakybucket:state"
-
         leak_rate = rate.limit / rate.expire
 
         old_state_json = await backend.get(state_key)
@@ -404,7 +403,7 @@ class LeakyBucketWithQueueStrategy:
                 last_leak_time = now
 
             # Calculate current total cost in queue
-            current_queue_cost = sum(c for _, c in queue)
+            current_queue_cost = sum(recorded_cost for _, recorded_cost in queue)
 
             # If adding this request would overflow the capacity, reject it
             if current_queue_cost + cost > rate.limit:
@@ -419,7 +418,7 @@ class LeakyBucketWithQueueStrategy:
             queue.append([now, float(cost)])
             new_state = {"queue": queue, "last_leak": last_leak_time}
             await backend.set(state_key, dump_data(new_state), expire=ttl_seconds)
-            return 0.0
+        return 0.0
 
     async def get_stat(
         self,
@@ -494,7 +493,7 @@ class LeakyBucketWithQueueStrategy:
                 break
 
         # Calculate current total cost in queue after simulated leak
-        current_queue_cost = sum(c for _, c in simulated_queue)
+        current_queue_cost = sum(recorded_cost for _, recorded_cost in simulated_queue)
 
         # Calculate remaining capacity
         limit = rate.limit

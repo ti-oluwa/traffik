@@ -8,7 +8,7 @@ from typing_extensions import TypedDict
 
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
+from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
 from traffik.utils import time
 
 __all__ = ["FixedWindow", "FixedWindowStatMetadata", "FixedWindowStrategy"]

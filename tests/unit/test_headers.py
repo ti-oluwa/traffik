@@ -16,7 +16,7 @@ from traffik.headers import (
     _prep_headers,
 )
 from traffik.rates import Rate
-from traffik.types import StrategyStat
+from traffik.typing import StrategyStat
 
 
 def _make_stat(

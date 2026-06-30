@@ -20,7 +20,7 @@ from traffik.exceptions import (
     LockAcquisitionError,
     LockReleaseError,
 )
-from traffik.types import (
+from traffik.typing import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,

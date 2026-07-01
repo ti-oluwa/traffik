@@ -447,7 +447,7 @@ Maintainers follow this process for releases:
 
 ---
 
-Thank you for contributing to Traffik! Your efforts help make rate limiting in Starlette applications better for everyone. 🚀
+Thank you for contributing to Traffik! Your efforts help make rate limiting in Starlette applications better for everyone.
 
 ## Questions?
 

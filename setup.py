@@ -3,7 +3,7 @@ from setuptools import Extension, setup
 setup(
     name="traffik",
     version="1.2.0",
-    description="Distributed rate limiting for FastAPI/Starlette applications.",
+    description="Rate limiting for FastAPI/Starlette applications.",
     readme="README.md",
     authors=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],
     maintainers=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],
@@ -39,7 +39,7 @@ setup(
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Topic :: System :: Networking",
     ],
-    python_requires=">=3.9",
+    python_requires=">=3.9,<3.15",
     install_requires=[
         "starlette>=0.14.0",
         "annotated-types>=0.7.0",
@@ -61,17 +61,6 @@ setup(
         # For backwards compatibility
         "redis": ["traffik[aioredis]"],
         "memcached": ["traffik[aiomcache]"],
-        "test": [
-            "traffik[all]",
-            "fastapi>=0.68.0",
-            "pytest>=8.0.0",
-            "pytest-asyncio>=0.24.0",
-            "pytest-cov>=5.0.0",
-            "pytest-rerunfailures>=16.0.1",
-            "httpx2>=0.28.0",
-            "anyio>=4.0.0",
-            "requests>=2.32.4",
-        ],
     },
     project_urls={
         "Homepage": "https://github.com/ti-oluwa/traffik",

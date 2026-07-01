@@ -46,30 +46,11 @@ services:
     networks:
       - default
 
-  # Test without external dependencies
-  test-native:
-    build:
-      context: .
-      target: test-native
-    volumes:
-      - .:/app
-      - /app/.pytest_cache
-
   # Fast tests
   test-fast:
     build:
       context: .
       target: test-fast
-    depends_on:
-      redis:
-        condition: service_healthy
-      memcached:
-        condition: service_healthy
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - MEMCACHED_HOST=memcached
-      - MEMCACHED_PORT=11211
     volumes:
       - .:/app
       - /app/.pytest_cache
@@ -139,6 +120,15 @@ services:
       target: test
       args:
         PYTHON_VERSION: "3.13"
+
+  # Python 3.14 testing
+  test-py313:
+    <<: *test
+    build:
+      context: .
+      target: test
+      args:
+        PYTHON_VERSION: "3.14"
 
   # Development environment
   dev: &dev

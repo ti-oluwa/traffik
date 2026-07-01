@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Traffik Docker Testing Script
+# Traffik Docker Testing Script (uses docker-compose which in turn the Docker alongside the Makefile)
 # Provides quick commands to test Traffik using Docker
 
 set -e
@@ -47,6 +47,7 @@ Available commands:
   test-py311         Run tests on Python 3.11
   test-py312         Run tests on Python 3.12
   test-py313         Run tests on Python 3.13
+  test-py314         Run tests on Python 3.14
   dev                Start development environment with shell
   redis              Start Redis service only
   quality            Run code quality checks
@@ -104,7 +105,7 @@ run_native_tests() {
 run_tests_matrix() {
     print_info "Running tests across Python versions..."
     docker compose -f compose.yml up --build --abort-on-container-exit \
-        test-py39 test-py310 test-py311 test-py312 test-py313
+        test-py39 test-py310 test-py311 test-py312 test-py313 test-py314
     print_success "Matrix tests completed"
 }
 
@@ -138,6 +139,13 @@ run_py313_tests() {
     print_success "Python 3.13 tests completed"
 }
 
+# Run Python 3.14 tests
+run_py314_tests() {
+    print_info "Running tests on Python 3.14..."
+    docker compose -f compose.yml up --build --abort-on-container-exit test-py314
+    print_success "Python 3.14 tests completed"
+}
+
 # Start development environment
 start_dev() {
     print_info "Starting development environment..."
@@ -149,7 +157,14 @@ start_dev() {
 start_redis() {
     print_info "Starting Redis service..."
     docker compose up -d redis
-    print_info "Redis is running on localhost:6379"
+    print_info "Redis is running..."
+}
+
+# Start Memcached only
+start_memcached() {
+    print_info "Starting Memcached service..."
+    docker compose up -d memcached
+    print_info "Memcached is running..."
 }
 
 # Run quality checks
@@ -228,11 +243,20 @@ test-py311)
 test-py312)
     run_py312_tests
     ;;
+test-py313)
+    run_py313_tests
+    ;;
+test-py314)
+    run_py314_tests
+    ;;
 dev)
     start_dev
     ;;
 redis)
     start_redis
+    ;;
+memcached)
+    start_memcached
     ;;
 quality)
     run_quality

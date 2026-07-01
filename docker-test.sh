@@ -40,7 +40,6 @@ Available commands:
   build              Build all Docker images
   test               Run full test suite
   test-fast          Run fast tests
-  test-native        Run native tests
   test-matrix        Run tests across all Python versions
   test-py39          Run tests on Python 3.9
   test-py310         Run tests on Python 3.10
@@ -83,7 +82,7 @@ build_images() {
 # Run full test suite
 run_tests() {
     print_info "Starting full test suite..."
-    docker compose up -f compose.yml --build --abort-on-container-exit test
+    docker compose -f compose.yml up --build --abort-on-container-exit test
     print_success "Full test suite completed"
 }
 
@@ -92,13 +91,6 @@ run_tests_fast() {
     print_info "Running fast tests..."
     docker compose up --build --abort-on-container-exit test-fast
     print_success "Fast tests completed"
-}
-
-# Run native tests
-run_native_tests() {
-    print_info "Running native tests..."
-    docker compose up --build --abort-on-container-exit test-native
-    print_success "Native tests completed"
 }
 
 # Run tests across all Python versions
@@ -221,9 +213,6 @@ build)
     ;;
 test)
     run_tests
-    ;;
-test-native)
-    run_native_tests
     ;;
 test-fast)
     run_tests_fast

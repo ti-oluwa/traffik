@@ -1,8 +1,15 @@
 # Traffik
 
-Rate limiting for FastAPI and Starlette. One throttle API, swappable storage backends -
-write the throttle once against in-memory storage in dev, point it at Redis or Memcached
-in production without touching the throttle code.
+Rate limiting for FastAPI and Starlette. Write the throttle once, point it at whatever's
+storing your counters - in-memory while you're developing, Redis or Memcached once you
+actually need to share state across processes - without rewriting the throttle itself.
+
+This started as "I need to rate limit an API" and grew into a fairly complete toolkit for it.
+The core (fixed window, sliding window, token bucket, a couple of backends) covers what
+most people need. There's more under the hood if you want it - multi-process shared
+memory so you don't need Redis just to keep two workers honest, GCRA if you care about
+perfectly even request spacing, eight extra strategies for weirder problems. You don't
+need to know any of that exists to use the basics below.
 
 [![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
 [![codecov](https://codecov.io/gh/ti-oluwa/traffik/branch/main/graph/badge.svg)](https://codecov.io/gh/ti-oluwa/traffik)
@@ -13,7 +20,7 @@ in production without touching the throttle code.
 pip install traffik
 ```
 
-That's the in-memory backend - no extra dependencies. For Redis or Memcached, see
+That's all that's need for use with an in-memory backend - no extra dependencies. For Redis or Memcached, see
 [Backends](#backends) below.
 
 ## Quickstart
@@ -38,17 +45,18 @@ contract. Everything below is configuration on top of this.
 
 ## How it fits together
 
-Three pieces, each replaceable on its own:
+Three pieces, each swappable on its own:
 
 - **`Throttle`** - the thing you attach to a route. Holds the rate, the cost function,
   the identifier function, the error policy.
 - **Strategy** - the algorithm (`FixedWindow`, `TokenBucket`, `GCRA`, ...). Decides, given
   a key and a rate, whether to let a request through.
-- **Backend** - where counters live (`InMemoryBackend`, `RedisBackend`, ...). The strategy
-  reads and writes through it; it doesn't know or care what storage is behind it.
+- **Backend** - where counters actually live (`InMemoryBackend`, `RedisBackend`, ...). The
+  strategy reads and writes through it and has no idea what's on the other side.
 
-A throttle built against `InMemoryBackend` and one built against `RedisBackend` behave
-identically from the call site. Swap the backend, keep the throttle.
+This is the whole point of the library, really: a throttle built against
+`InMemoryBackend` in dev and one built against `RedisBackend` in prod behave identically
+from the call site. You change one line, not your route logic.
 
 ## Backends
 
@@ -94,13 +102,17 @@ In a worker that needs to attach to a segment created elsewhere:
 backend = MultiProcessInMemoryBackend.attach(namespace="myapp")
 ```
 
-**Where it's weaker than Redis:** this backend shards keys across `number_of_shards` and
-locks per-shard. A single very hot key (e.g. one IP hammering one endpoint) always lands
-on the same shard, so concurrent requests against *that one key* will contend on the
-shard's lock. Spread keyspaces (many distinct users/IPs) barely touch this - Redis
-doesn't have this failure mode at all, since `INCR` needs no client-side lock. If your
-traffic is dominated by a handful of very hot keys, measure both before picking
-multiprocess over Redis.
+**Where it loses to Redis, honestly:** this backend shards keys across `number_of_shards`
+and locks per-shard. One very hot key (a single IP hammering one endpoint) always lands
+on the same shard, so concurrent requests against *that one key* queue up on the shard's
+lock - and under real load that shows up as a latency cliff, not a graceful slowdown.
+Spread keyspaces (lots of distinct users/IPs) barely notice this, and there it's close to
+in-memory and ahead of Redis. But Redis has no client-side lock at all for a plain
+`INCR` - it just doesn't have this problem, ever, on any keyspace shape. If your traffic
+is one endpoint getting hammered by a small number of clients, measure both before
+reaching for multiprocess over Redis. Don't take my word for the shape of that trade-off
+either - run the benchmarks in `benchmarks/` against something that looks like your
+actual traffic.
 
 ### Redis - `redis.asyncio`
 
@@ -186,25 +198,31 @@ from traffik.strategies import (
 throttle = HTTPThrottle("api", rate="100/min", strategy=SlidingWindowCounter())
 ```
 
-If you don't pick one, you get `FixedWindow` - cheapest option, correct for most APIs.
-Reach for `SlidingWindowCounter` if boundary bursts are a real problem for you,
-`TokenBucket` if you want to allow short bursts on top of a sustained rate, `GCRA` if you
-need perfectly even request spacing (telecom-style SLAs).
+Skip the argument and you get `FixedWindow` - cheapest one, correct for most APIs, and
+it's the default for a reason: it's the only strategy that never needs a lock, so it's
+fast on every backend, including the ones where locking gets expensive (see
+[Performance](#performance)). Reach for `SlidingWindowCounter` if boundary bursts
+actually bite you in practice, `TokenBucket` if you want to allow short bursts on top of
+a sustained rate, `GCRA` if you need genuinely even request spacing (think telecom-style
+SLAs, not "please don't hammer my API").
 
 ### Advanced strategies
 
 `traffik.strategies.custom` has eight more: `TieredRateStrategy`,
 `AdaptiveThrottleStrategy`, `PriorityQueueStrategy`, `QuotaWithRolloverStrategy`,
 `TimeOfDayStrategy`, `CostBasedTokenBucketStrategy`, `DistributedFairnessStrategy`,
-`GeographicDistributionStrategy`. These solve specific, less common problems (per-tier
-limits, load-adaptive throttling, multi-instance fairness, region-aware quotas). Each is
-documented with its own use case and example in the
-[full docs](https://ti-oluwa.github.io/traffik/). Worth knowing they exist, not
-something you need for a typical API - start with the eight above, only reach into
-`custom` if one of these specifically matches a problem you actually have. Note also
-that `DistributedFairnessStrategy` and `GeographicDistributionStrategy` are solving
-problems an API gateway (Envoy, Kong) usually handles better than an in-process Python
-library - consider whether that's the right layer before reaching for these.
+`GeographicDistributionStrategy`. Honest framing: these exist because the problems were
+interesting to solve, not because most APIs need them. Per-tier limits, load-adaptive
+throttling, multi-instance fairness, region-aware quotas - real problems, just not
+*your* problem most of the time. Each has its own docs and example in the
+[full documentation](https://ti-oluwa.github.io/traffik/) if one of these genuinely
+matches something you're dealing with.
+
+One honest caveat on two of them: `DistributedFairnessStrategy` and
+`GeographicDistributionStrategy` are solving problems an API gateway (Envoy, Kong, your
+cloud LB) is usually a better fit for than an in-process Python library. If you're
+reaching for either of these, it's worth asking whether the right fix is one layer down
+the stack instead.
 
 ## Rate formats
 
@@ -508,24 +526,91 @@ if not await throttle.check(request, cost=5):
 
 ## Performance
 
-Backend choice affects two things differently: raw per-request overhead, and behavior
-under concurrent load on the same key. In-memory has neither network nor IPC cost -
-expect sub-millisecond overhead. Redis and Memcached costs are dominated by the network
-round trip, not by traffik's code on top of it. Multi-process shared memory avoids the
-network hop entirely but pays for it on very hot single keys, where its sharded spinlock
-can contend (see [Backends](#backends) above) - it does not have this weakness on
-spread-out keyspaces (many distinct users/IPs), where it's close to in-memory and
-noticeably ahead of Redis.
+Two things determine your actual overhead, and they don't move together: which backend
+you pick, and which strategy you pick.
 
-Don't take any of this on faith - run `benchmarks/` against your own traffic shape
-(key cardinality, concurrency, request size) before picking a backend for production.
-Numbers from a synthetic benchmark on someone else's machine are a starting point, not a
-substitute.
+**Backend** decides your baseline cost. In-memory has no network or IPC involved - sub-
+millisecond, full stop. Redis and Memcached are dominated by the round trip to wherever
+those services live, not by anything traffik itself is doing. Multi-process shared
+memory skips the network entirely, but that's not a free lunch - see below.
+
+**Strategy** decides whether you pay a locking tax on top of that baseline.
+`FixedWindow` does one atomic increment and never takes a lock - cheap on every backend,
+including the ones where locking is expensive. `TokenBucket` and anything else that
+needs to read state, do math, and write it back *has* to hold a lock across all three
+steps, or two concurrent requests can both read "3 tokens left" and both spend one,
+which quietly breaks your rate limit. That's not a bug, it's what correctness costs for
+that class of algorithm - but it means the backend you'd otherwise pick on gut feel can
+behave differently once a real lock is involved.
+
+This is exactly where the multi-process backend gets more expensive than you'd expect:
+every read and every write has to hop through a thread pool (`run_in_executor`) because
+the underlying primitives are blocking, not async. `FixedWindow` pays that tax once per
+request. `TokenBucket` pays it twice - once for the read, once for the write - while
+holding a per-shard lock the whole time. Stack fifty concurrent requests on one hot key
+and that queues up fast. Redis, despite paying real network round trips for the same
+get-lock-read-write-unlock sequence, ends up faster here, because a socket write to
+localhost is cheaper than a thread-pool handoff plus an OS semaphore under contention.
+Not the result I'd have guessed either, and it's a good reminder that "avoids the
+network" doesn't automatically mean "faster."
+
+None of this is something you should take on my word, or the README's word, or anyone's
+word without checking. Run the benchmarks yourself, against your own traffic shape (key
+cardinality, concurrency, strategy). A synthetic number from someone else's laptop is a
+starting point, not a substitute for testing your own workload.
+
+### Running the benchmarks
+
+```bash
+make install-bench   # pulls in the benchmark-only deps
+make bench http                                  # everything, defaults (in-memory, fixed window)
+make bench "http --backend aioredis --strategy token_bucket"
+make bench "middleware --backend multiprocess"
+make bench "http --scenarios hot_key,many_keys -n 5"   # just these two, 5 iterations
+```
+
+`make bench` forwards whatever you type after it straight to the CLI, so anything below
+works the same way with `make bench` in front instead of `uv run -m benchmarks`.
+
+Or skip `make` and call the CLI directly:
+
+```bash
+uv run -m benchmarks http --backend inmemory
+uv run -m benchmarks http --backend aioredis --strategy token_bucket
+uv run -m benchmarks middleware --backend multiprocess
+uv run -m benchmarks websocket --backend inmemory
+```
+
+`--backend` is `inmemory` / `multiprocess` / `aioredis` / `coredis` / `aiomcache` /
+`emcache`. `--strategy` is any of the eight core strategies from
+[Strategies](#strategies) above, lowercased and snake_cased (`fixed_window`,
+`token_bucket`, `gcra`, ...). Redis/Memcached backends need the corresponding service
+running locally - `docker compose up -d redis memcached` handles that if you don't
+already have them.
+
+Results print as a table by default; pass `--output json` if you want to feed them into
+something else. `--concurrency` controls how wide the concurrent-scenario batches are
+(default 50), `-n`/`--iterations` controls how many timed runs you get per scenario
+(default 3, plus one discarded warmup run).
+
+One thing worth knowing before you trust hot-key vs. many-keys comparisons from these
+benchmarks specifically: a couple of the scenarios (`many_keys`, `concurrent`) had
+confounds in how they varied concurrency and client identity that made them less
+apples-to-apples than they looked. Being fixed as of this writing - if you're
+benchmarking key-contention behavior specifically, check `benchmarks/scenarios/http.py`
+against what's described here before drawing conclusions from the numbers.
 
 ## Full documentation
 
 [https://ti-oluwa.github.io/traffik/](https://ti-oluwa.github.io/traffik/) - advanced
 strategies, WebSocket per-message throttling, testing patterns, full API reference.
+Everything that didn't fit here.
+
+## Contributing
+
+Issues and PRs welcome. `make dev-setup` gets you a working dev environment,
+`make test-fast` for a quick sanity check before you push, `make quality` before you
+open a PR. See `CONTRIBUTING.md` for the actual details.
 
 ## License
 

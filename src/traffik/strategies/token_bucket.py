@@ -361,7 +361,7 @@ class TokenBucketWithDebtStrategy:
     - Tokens can range from `-max_debt` to `+burst_size`
 
     **Example:**
-    
+
     ```python
     from traffik.rates import Rate
     from traffik.strategies import TokenBucketWithDebtStrategy

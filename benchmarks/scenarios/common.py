@@ -13,7 +13,10 @@ from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle, is_thro
 
 class ScenarioFunc(typing.Protocol):
     async def __call__(
-        self, config: BenchmarkConfig, iteration: int
+        self,
+        config: BenchmarkConfig,
+        iteration: int,
+        backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
     ) -> ScenarioResult: ...
 
 

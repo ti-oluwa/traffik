@@ -1,4 +1,5 @@
 """Global test configuration and fixtures."""
+
 import datetime
 import logging
 import os
@@ -211,7 +212,6 @@ STRATEGIES = [
 @pytest.fixture(scope="function", params=STRATEGIES)
 def strategy(request) -> ThrottleStrategy[HTTPConnection]:
     return request.param()
-
 
 
 @pytest.fixture(scope="function")

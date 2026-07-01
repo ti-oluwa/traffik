@@ -1958,7 +1958,7 @@ class GeographicDistributionStrategy:
     **Example:**
 
     ```python
-    
+
     strategy = GeographicDistributionStrategy(
         region_multipliers={
             "us-east-1": 0.4,    # 40% of total capacity

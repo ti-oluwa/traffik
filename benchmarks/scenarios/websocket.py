@@ -8,6 +8,7 @@ from benchmarks.backends import create_backend, create_strategy
 from benchmarks.base import BenchmarkConfig, ScenarioResult
 from benchmarks.scenarios.common import ScenarioFunc, make_ws_app
 from traffik import WebSocketThrottle
+from traffik.backends.base import ThrottleBackend
 from traffik.registry import ThrottleRegistry
 
 
@@ -43,9 +44,17 @@ async def send_messages(
     return latencies, successful, throttled
 
 
-async def below_limit(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
+async def below_limit(
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
+) -> ScenarioResult:
     """WS Below-Limit scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -56,7 +65,6 @@ async def below_limit(config: BenchmarkConfig, iteration: int = 1) -> ScenarioRe
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_ws_app(throttle, backend)
 
         async with (
@@ -95,12 +103,21 @@ async def below_limit(config: BenchmarkConfig, iteration: int = 1) -> ScenarioRe
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
-async def over_limit(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
+async def over_limit(
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
+) -> ScenarioResult:
     """WS Over-Limit scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -111,7 +128,6 @@ async def over_limit(config: BenchmarkConfig, iteration: int = 1) -> ScenarioRes
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_ws_app(throttle, backend)
 
         async with (
@@ -150,12 +166,21 @@ async def over_limit(config: BenchmarkConfig, iteration: int = 1) -> ScenarioRes
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
-async def burst(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
+async def burst(
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
+) -> ScenarioResult:
     """WS Burst scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -166,7 +191,6 @@ async def burst(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_ws_app(throttle, backend)
 
         async with (
@@ -205,14 +229,21 @@ async def burst(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
 async def concurrent_connections(
-    config: BenchmarkConfig, iteration: int = 1
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
 ) -> ScenarioResult:
     """WS Concurrent Connections scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -223,7 +254,6 @@ async def concurrent_connections(
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_ws_app(throttle, backend)
 
         all_latencies = []
@@ -279,14 +309,21 @@ async def concurrent_connections(
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
 async def window_boundary(
-    config: BenchmarkConfig, iteration: int = 1
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
 ) -> ScenarioResult:
     """WS Window Boundary scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -297,7 +334,6 @@ async def window_boundary(
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_ws_app(throttle, backend)
 
         async with (
@@ -350,7 +386,8 @@ async def window_boundary(
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
 SCENARIOS: typing.Dict[str, ScenarioFunc] = {

@@ -174,9 +174,9 @@ class TestConcurrencyEdgeCases:
         key = "user:extreme"
 
         # Make 100 concurrent requests
-        results = await asyncio.gather(*[
-            strategy(key, rate, backend) for _ in range(100)
-        ])
+        results = await asyncio.gather(
+            *[strategy(key, rate, backend) for _ in range(100)]
+        )
 
         # Exactly 100 should succeed
         allowed = sum(1 for wait in results if wait == 0.0)
@@ -260,7 +260,9 @@ class TestTimingEdgeCases:
             # Make requests in each window
             for i in range(3):
                 wait = await strategy(key, rate, backend)
-                assert round(wait / 1000) == 0.0, f"Window {window} request {i + 1} should succeed"
+                assert round(wait / 1000) == 0.0, (
+                    f"Window {window} request {i + 1} should succeed"
+                )
 
             # Wait for next window
             await asyncio.sleep(0.05)

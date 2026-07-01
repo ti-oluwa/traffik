@@ -13,15 +13,22 @@ from benchmarks.scenarios.common import (
     run_http_scenario,
     send_sequential,
 )
+from traffik.backends.base import ThrottleBackend
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
 
 async def below_limit_steady(
-    config: BenchmarkConfig, iteration: int = 1
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
 ) -> ScenarioResult:
     """Below-Limit Steady State scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -32,7 +39,6 @@ async def below_limit_steady(
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_http_app(throttle)
         return await run_http_scenario(
             "Below-Limit Steady State",
@@ -58,12 +64,21 @@ async def below_limit_steady(
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
-async def at_limit_edge(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
+async def at_limit_edge(
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
+) -> ScenarioResult:
     """At-Limit Edge scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -74,7 +89,6 @@ async def at_limit_edge(config: BenchmarkConfig, iteration: int = 1) -> Scenario
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_http_app(throttle)
         return await run_http_scenario(
             "At-Limit Edge",
@@ -100,14 +114,21 @@ async def at_limit_edge(config: BenchmarkConfig, iteration: int = 1) -> Scenario
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
 async def over_limit_burst(
-    config: BenchmarkConfig, iteration: int = 1
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
 ) -> ScenarioResult:
     """Over-Limit Burst scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -118,7 +139,6 @@ async def over_limit_burst(
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_http_app(throttle)
         return await run_http_scenario(
             "Over-Limit Burst",
@@ -144,14 +164,21 @@ async def over_limit_burst(
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
 async def concurrent_contention(
-    config: BenchmarkConfig, iteration: int = 1
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
 ) -> ScenarioResult:
     """Concurrent Contention scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -162,7 +189,6 @@ async def concurrent_contention(
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_http_app(throttle)
         return await run_http_scenario(
             "Concurrent Contention",
@@ -188,12 +214,21 @@ async def concurrent_contention(
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
-async def single_hot_key(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
+async def single_hot_key(
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
+) -> ScenarioResult:
     """Single Hot Key scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -204,7 +239,6 @@ async def single_hot_key(config: BenchmarkConfig, iteration: int = 1) -> Scenari
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_http_app(throttle)
         return await run_http_scenario(
             "Single Hot Key",
@@ -231,14 +265,21 @@ async def single_hot_key(config: BenchmarkConfig, iteration: int = 1) -> Scenari
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
 async def many_unique_keys(
-    config: BenchmarkConfig, iteration: int = 1
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
 ) -> ScenarioResult:
     """Many Unique Keys scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -249,7 +290,6 @@ async def many_unique_keys(
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_http_app(throttle)
 
         # Simulate many unique keys by using concurrent requests with different headers
@@ -328,14 +368,21 @@ async def many_unique_keys(
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
 async def window_boundary_burst(
-    config: BenchmarkConfig, iteration: int = 1
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
 ) -> ScenarioResult:
     """Window Boundary Burst scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -346,7 +393,6 @@ async def window_boundary_burst(
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_http_app(throttle)
 
         async with backend(persistent=False, close_on_exit=False, initialized=True):
@@ -406,14 +452,21 @@ async def window_boundary_burst(
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
 async def sustained_high_load(
-    config: BenchmarkConfig, iteration: int = 1
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
 ) -> ScenarioResult:
     """Sustained High Load scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -424,7 +477,6 @@ async def sustained_high_load(
             strategy=strategy,
             registry=registry,
         )
-        await backend.initialize()
         app = make_http_app(throttle)
         return await run_http_scenario(
             "Sustained High Load",
@@ -450,12 +502,21 @@ async def sustained_high_load(
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
-async def error_recovery(config: BenchmarkConfig, iteration: int = 1) -> ScenarioResult:
+async def error_recovery(
+    config: BenchmarkConfig,
+    iteration: int = 1,
+    backend: typing.Optional[ThrottleBackend[typing.Any, typing.Any]] = None,
+) -> ScenarioResult:
     """Error Recovery scenario."""
-    backend = create_backend(config)
+    owns_backend = backend is None
+    if owns_backend:
+        backend = create_backend(config)
+        await backend.initialize()
+
     try:
         strategy = create_strategy(config)
         registry = ThrottleRegistry()
@@ -467,7 +528,6 @@ async def error_recovery(config: BenchmarkConfig, iteration: int = 1) -> Scenari
             registry=registry,
             on_error="allow",
         )
-        await backend.initialize()
         app = make_http_app(throttle)
         return await run_http_scenario(
             "Error Recovery (on_error=allow)",
@@ -493,7 +553,8 @@ async def error_recovery(config: BenchmarkConfig, iteration: int = 1) -> Scenari
             iteration=iteration,
         )
     finally:
-        await backend.close()
+        if owns_backend:
+            await backend.close()
 
 
 SCENARIOS: typing.Dict[str, ScenarioFunc] = {

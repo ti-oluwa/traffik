@@ -24,7 +24,7 @@ from traffik.typing import (
     Matchable,
     ThrottlePredicate,
 )
-from traffik.utils import is_async_callable
+from traffik._utils import is_async_callable
 
 
 class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):

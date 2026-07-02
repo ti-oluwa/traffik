@@ -676,7 +676,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         :return: New value after increment.
         """
         self._assert_ready()
-
         encoded_key = key.encode()
 
         if amount >= 0:

@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 from starlette.requests import HTTPConnection
 from typing_extensions import TypedDict
 
+from traffik._utils import time
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
-from traffik.utils import time
 
 __all__ = ["FixedWindow", "FixedWindowStatMetadata", "FixedWindowStrategy"]
 

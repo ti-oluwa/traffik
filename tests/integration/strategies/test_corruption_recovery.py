@@ -25,7 +25,7 @@ from traffik.strategies.token_bucket import (
     TokenBucketStrategy,
     TokenBucketWithDebtStrategy,
 )
-from traffik.utils import dump_data
+from traffik._utils import _dump_data
 
 GARBAGE_VALUES = [
     "not_valid_base85_data!!!",
@@ -148,13 +148,13 @@ class TestTokenBucketCorruptionRecovery:
         bucket_key = f"{_corrupt_key(backend, key)}:tokenbucket"
 
         # Valid msgpack but wrong structure (string instead of dict)
-        await backend.set(bucket_key, dump_data("just a string"))
+        await backend.set(bucket_key, _dump_data("just a string"))
         wait = await strategy(key, rate, backend)
         assert wait == 0.0, "Should recover from wrong type"
 
         # Valid msgpack dict but wrong value types
         await backend.set(
-            bucket_key, dump_data({"tokens": "not_a_number", "last_refill": []})
+            bucket_key, _dump_data({"tokens": "not_a_number", "last_refill": []})
         )
         wait = await strategy(key, rate, backend)
         assert wait == 0.0, "Should recover from wrong value types"
@@ -257,7 +257,7 @@ class TestSlidingWindowLogCorruptionRecovery:
         log_key = f"{_corrupt_key(backend, key)}:slidinglog"
 
         # Valid msgpack but not a list of [timestamp, cost] pairs
-        await backend.set(log_key, dump_data({"not": "a list"}))
+        await backend.set(log_key, _dump_data({"not": "a list"}))
         wait = await strategy(key, rate, backend)
         assert wait == 0.0, "Should recover from wrong structure"
 
@@ -358,7 +358,7 @@ class TestLeakyBucketCorruptionRecovery:
         state_key = f"{_corrupt_key(backend, key)}:leakybucket:state"
 
         # Valid msgpack dict but missing "level" and "last_leak" keys
-        await backend.set(state_key, dump_data({"foo": "bar"}))
+        await backend.set(state_key, _dump_data({"foo": "bar"}))
         wait = await strategy(key, rate, backend)
         assert wait == 0.0, "Should recover from missing keys"
 
@@ -405,7 +405,7 @@ class TestLeakyBucketWithQueueCorruptionRecovery:
         # Valid structure but queue entries are not [timestamp, cost] pairs
         await backend.set(
             state_key,
-            dump_data({"queue": ["not", "pairs"], "last_leak": 1000.0}),
+            _dump_data({"queue": ["not", "pairs"], "last_leak": 1000.0}),
         )
         wait = await strategy(key, rate, backend)
         assert wait == 0.0, "Should recover from invalid queue entries"

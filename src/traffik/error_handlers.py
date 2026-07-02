@@ -14,7 +14,7 @@ from traffik.exceptions import _EXEMPT_EXCEPTIONS, BackendError
 from traffik.rates import Rate
 from traffik.throttles import Throttle, ThrottleExceptionInfo
 from traffik.typing import BackoffStrategy, HTTPConnectionT, WaitPeriod
-from traffik.utils import CircuitBreaker
+from traffik._utils import CircuitBreaker
 
 __all__ = [
     "backend_fallback",

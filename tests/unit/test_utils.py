@@ -7,16 +7,16 @@ import pytest
 from starlette.requests import HTTPConnection
 
 from tests.utils import make_connection
-from traffik.utils import (
+from traffik._utils import (
     CircuitBreaker,
     CircuitState,
     MsgPackDecodeError,
     TaskTimer,
     _add_parameter_to_signature,
-    dump_data,
+    _dump_data,
     get_remote_address,
     is_async_callable,
-    load_data,
+    _load_data,
     time,
 )
 
@@ -170,20 +170,20 @@ class TestIsAsyncCallable:
 
 
 class TestSerializationUtils:
-    """Tests for dump_data and load_data utilities."""
+    """Tests for _dump_data and _load_data utilities."""
 
     def test_dump_and_load_dict(self):
         """Test serializing and deserializing dictionary."""
         data = {"key": "value", "number": 42, "nested": {"inner": "data"}}
-        serialized = dump_data(data)
-        deserialized = load_data(serialized)
+        serialized = _dump_data(data)
+        deserialized = _load_data(serialized)
         assert deserialized == data
 
     def test_dump_and_load_list(self):
         """Test serializing and deserializing list."""
         data = [1, 2, 3, "four", {"five": 5}]
-        serialized = dump_data(data)
-        deserialized = load_data(serialized)
+        serialized = _dump_data(data)
+        deserialized = _load_data(serialized)
         assert deserialized == data
 
     def test_dump_and_load_various_types(self):
@@ -196,35 +196,36 @@ class TestSerializationUtils:
             "str": "hello",
             "list": [1, 2, 3],
         }
-        serialized = dump_data(data)
-        deserialized = load_data(serialized)
+        serialized = _dump_data(data)
+        deserialized = _load_data(serialized)
         assert deserialized == data
 
     def test_dump_and_load_empty_structures(self):
         """Test serializing and deserializing empty structures."""
         data = {"empty_dict": {}, "empty_list": []}
-        serialized = dump_data(data)
-        deserialized = load_data(serialized)
+        serialized = _dump_data(data)
+        deserialized = _load_data(serialized)
         assert deserialized == data
 
     def test_dump_produces_string(self):
-        """Test that dump_data produces a string."""
-        serialized = dump_data({"key": "value"})
+        """Test that _dump_data produces a string."""
+        serialized = _dump_data({"key": "value"})
         assert isinstance(serialized, str)
 
     def test_dump_produces_consistent_output(self):
-        """Test that dump_data produces consistent output for same input."""
+        """Test that _dump_data produces consistent output for same input."""
         data = {"key": "value", "number": 42}
-        serialized1 = dump_data(data)
-        serialized2 = dump_data(data)
+        serialized1 = _dump_data(data)
+        serialized2 = _dump_data(data)
         assert serialized1 == serialized2
 
     def test_load_raises_on_corrupt_data(self):
-        """Test that load_data raises exception on corrupted data."""
-        with pytest.raises(
-            (MsgPackDecodeError, ValueError)
-        ):  # msgpack.exceptions.UnpackException
-            load_data("not_valid_base85_data!")
+        """Test that _load_data raises exception on corrupted data."""
+        with pytest.raises((
+            MsgPackDecodeError,
+            ValueError,
+        )):  # msgpack.exceptions.UnpackException
+            _load_data("not_valid_base85_data!")
 
 
 class TestTimeFunction:

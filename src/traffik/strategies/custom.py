@@ -12,10 +12,22 @@ from enum import IntEnum
 from starlette.requests import HTTPConnection
 from typing_extensions import TypedDict
 
+from traffik._utils import time
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
+from traffik.strategies._serde import (
+    MsgPackDecodeError,
+    _decode_float_list,
+    _decode_two_floats,
+    _dump_data,
+    _encode_float_list,
+    _encode_three_float_records,
+    _encode_two_floats,
+    _iter_float_list,
+    _iter_three_float_records,
+    _load_data,
+)
 from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
-from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
     "GCRA",
@@ -808,11 +820,11 @@ class PriorityQueueStrategy:
 
         async with backend.lock(f"lock:{queue_key}", **self.lock_config):
             # Get current queue
-            queue_json = await backend.get(queue_key)
-            if queue_json:
+            raw_queue = await backend.get(queue_key)
+            if raw_queue:
                 try:
-                    queue = load_data(queue_json)
-                except MsgPackDecodeError:
+                    queue = _iter_three_float_records(raw_queue)
+                except ValueError:
                     queue = []
             else:
                 queue = []
@@ -858,7 +870,9 @@ class PriorityQueueStrategy:
                 )
 
             # Save updated queue
-            await backend.set(queue_key, dump_data(queue), expire=ttl_seconds)
+            await backend.set(
+                queue_key, _encode_three_float_records(queue), expire=ttl_seconds
+            )
         return 0.0
 
     async def get_stat(
@@ -888,11 +902,11 @@ class PriorityQueueStrategy:
         full_key = backend.get_key(str(key))
         queue_key = f"{full_key}:priority:queue"
 
-        queue_json = await backend.get(queue_key)
-        if queue_json:
+        raw_queue = await backend.get(queue_key)
+        if raw_queue:
             try:
-                queue = load_data(queue_json)
-            except MsgPackDecodeError:
+                queue = _iter_three_float_records(raw_queue)
+            except ValueError:
                 queue = []
         else:
             queue = []
@@ -1378,22 +1392,20 @@ class CostBasedTokenBucketStrategy:
         cost_window = self.cost_window
         async with backend.lock(f"lock:{state_key}", **self.lock_config):
             # Get bucket state and cost history
-            state_json, history_json = await backend.multi_get(state_key, history_key)
-            if state_json:
+            raw_state, raw_history = await backend.multi_get(state_key, history_key)
+            if raw_state:
                 try:
-                    state = load_data(state_json)
-                    tokens = float(state["tokens"])
-                    last_refill = float(state["last_refill"])
-                except (MsgPackDecodeError, KeyError, ValueError):
+                    tokens, last_refill = _decode_two_floats(raw_state)
+                except ValueError:
                     tokens = float(capacity)
                     last_refill = now
             else:
                 tokens = float(capacity)
                 last_refill = now
 
-            if history_json:
+            if raw_history:
                 try:
-                    history = deque(load_data(history_json), maxlen=cost_window)
+                    history = deque(_iter_float_list(raw_history), maxlen=cost_window)
                 except MsgPackDecodeError:
                     history = deque(maxlen=cost_window)
             else:
@@ -1422,11 +1434,11 @@ class CostBasedTokenBucketStrategy:
                 history.append(cost)
 
                 # Save state and history
-                new_state = {"tokens": tokens, "last_refill": now}
+                new_state = _encode_two_floats(tokens, now)
                 await backend.multi_set(
                     {
-                        state_key: dump_data(new_state),
-                        history_key: dump_data(list(history)),
+                        state_key: new_state,
+                        history_key: _encode_float_list(history),
                     },
                     expire=ttl_seconds,
                 )
@@ -1437,8 +1449,8 @@ class CostBasedTokenBucketStrategy:
             wait_ms = tokens_needed / effective_refill_rate
 
             # Save current state
-            new_state = {"tokens": tokens, "last_refill": now}
-            await backend.set(state_key, dump_data(new_state), expire=ttl_seconds)
+            new_state = _encode_two_floats(tokens, now)
+            await backend.set(state_key, new_state, expire=ttl_seconds)
             return wait_ms
 
     async def get_stat(
@@ -1472,23 +1484,21 @@ class CostBasedTokenBucketStrategy:
         state_key = f"{full_key}:costbucket:state"
         history_key = f"{full_key}:costbucket:history"
 
-        state_json, history_json = await backend.multi_get(state_key, history_key)
+        raw_state, raw_history = await backend.multi_get(state_key, history_key)
 
-        if state_json:
+        if raw_state:
             try:
-                state = load_data(state_json)
-                tokens = float(state["tokens"])
-                last_refill = float(state["last_refill"])
-            except (MsgPackDecodeError, KeyError, ValueError):
+                tokens, last_refill = _decode_two_floats(raw_state)
+            except ValueError:
                 tokens = float(capacity)
                 last_refill = now
         else:
             tokens = float(capacity)
             last_refill = now
 
-        if history_json:
+        if raw_history:
             try:
-                history = load_data(history_json)
+                history = _decode_float_list(raw_history)
             except MsgPackDecodeError:
                 history = []
         else:
@@ -1794,7 +1804,7 @@ class DistributedFairnessStrategy:
             instances_json = await backend.get(instances_key)
             if instances_json:
                 try:
-                    instances = load_data(instances_json)
+                    instances = _load_data(instances_json)
                 except MsgPackDecodeError:
                     instances = {}
             else:
@@ -1812,7 +1822,7 @@ class DistributedFairnessStrategy:
                 for instance_id, data in instances.items()
                 if data["last_seen"] > stale_threshold
             }
-            await backend.set(instances_key, dump_data(instances), expire=ttl_seconds)
+            await backend.set(instances_key, _dump_data(instances), expire=ttl_seconds)
 
             # Calculate fair share
             total_weight = sum(data["weight"] for data in instances.values())
@@ -1890,7 +1900,7 @@ class DistributedFairnessStrategy:
         # Parse instances
         if instances_json:
             try:
-                instances = load_data(instances_json)
+                instances = _load_data(instances_json)
             except MsgPackDecodeError:
                 instances = {}
         else:

@@ -35,7 +35,7 @@ from traffik.typing import (
     ThrottleErrorHandler,
     WaitPeriod,
 )
-from traffik.utils import get_remote_address
+from traffik._utils import get_remote_address
 
 
 async def default_identifier(connection: HTTPConnection) -> typing.Any:

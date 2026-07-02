@@ -6,10 +6,16 @@ from dataclasses import dataclass, field
 from starlette.requests import HTTPConnection
 from typing_extensions import TypedDict
 
+from traffik._utils import time
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
+from traffik.strategies._serde import (
+    _decode_two_float_records_and_float,
+    _decode_two_floats,
+    _encode_two_float_records_and_float,
+    _encode_two_floats,
+)
 from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
-from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
     "LeakyBucket",
@@ -159,21 +165,21 @@ class LeakyBucketStrategy:
         ttl_seconds = max(int((2 * rate.expire) / 1000), 1)
 
         async with backend.lock(f"lock:{state_key}", **self.lock_config):
-            old_state_json = await backend.get(state_key)
+            old_state = await backend.get(state_key)
             # If no existing state, initialize with cost as the bucket level
-            if old_state_json is None or old_state_json == "":
-                new_state = {"level": float(cost), "last_leak": now}
-                await backend.set(state_key, dump_data(new_state), expire=ttl_seconds)
+            if old_state is None or old_state == "":
+                await backend.set(
+                    state_key, _encode_two_floats(float(cost), now), expire=ttl_seconds
+                )
                 return 0.0
 
             try:
-                state = load_data(old_state_json)
-                level = float(state["level"])
-                last_leak_time = float(state["last_leak"])
-            except (MsgPackDecodeError, KeyError, ValueError):
+                level, last_leak_time = _decode_two_floats(old_state)
+            except ValueError:
                 # If state is corrupted, reinitialize with cost as the bucket level
-                new_state = {"level": float(cost), "last_leak": now}
-                await backend.set(state_key, dump_data(new_state), expire=ttl_seconds)
+                await backend.set(
+                    state_key, _encode_two_floats(float(cost), now), expire=ttl_seconds
+                )
                 return 0.0
 
             # Calculate how much has leaked since last check
@@ -183,14 +189,15 @@ class LeakyBucketStrategy:
 
             # If adding this request would overflow the bucket, reject it
             if (level + cost) > rate.limit:
-                await backend.set(state_key, old_state_json, expire=ttl_seconds)
+                await backend.set(state_key, old_state, expire=ttl_seconds)
                 wait_ms = (level - rate.limit + cost) / leak_rate
                 return wait_ms
 
             # If bucket has capacity, add request cost to bucket
             level += cost
-            new_state = {"level": level, "last_leak": now}
-            await backend.set(state_key, dump_data(new_state), expire=ttl_seconds)
+            await backend.set(
+                state_key, _encode_two_floats(level, now), expire=ttl_seconds
+            )
         return 0.0
 
     async def get_stat(
@@ -220,9 +227,9 @@ class LeakyBucketStrategy:
         state_key = f"{full_key}:leakybucket:state"
         leak_rate = rate.limit / rate.expire
 
-        old_state_json = await backend.get(state_key)
+        old_state = await backend.get(state_key)
         # If no existing state, bucket is empty
-        if old_state_json is None or old_state_json == "":
+        if old_state is None or old_state == "":
             return StrategyStat(
                 key=key,
                 rate=rate,
@@ -231,10 +238,8 @@ class LeakyBucketStrategy:
             )
 
         try:
-            state = load_data(old_state_json)
-            level = float(state["level"])
-            last_leak_time = float(state["last_leak"])
-        except (MsgPackDecodeError, KeyError, ValueError):
+            level, last_leak_time = _decode_two_floats(old_state)
+        except ValueError:
             # If state is corrupted, assume bucket is empty
             return StrategyStat(
                 key=key,
@@ -361,22 +366,20 @@ class LeakyBucketWithQueueStrategy:
         ttl_seconds = max(int((2 * rate.expire) / 1000), 1)
 
         async with backend.lock(f"lock:{state_key}", **self.lock_config):
-            old_state_json = await backend.get(state_key)
+            old_state = await backend.get(state_key)
             # If no existing state, initialize queue with [timestamp, cost] entry
-            if old_state_json is None or old_state_json == "":
-                new_state = {"queue": [[now, cost]], "last_leak": now}
-                await backend.set(state_key, dump_data(new_state), expire=ttl_seconds)
+            if old_state is None or old_state == "":
+                new_state = _encode_two_float_records_and_float([(now, cost)], now)
+                await backend.set(state_key, new_state, expire=ttl_seconds)
                 return 0.0
 
             try:
-                state = load_data(old_state_json)
                 # Queue contains [timestamp, cost] tuples
-                queue = [[float(ts), float(c)] for ts, c in state["queue"]]
-                last_leak_time = float(state["last_leak"])
-            except (MsgPackDecodeError, KeyError, ValueError, TypeError):
+                queue, last_leak_time = _decode_two_float_records_and_float(old_state)
+            except (ValueError, TypeError):
                 # If state is corrupted, reinitialize queue with [timestamp, cost] entry
-                new_state = {"queue": [[now, cost]], "last_leak": now}
-                await backend.set(state_key, dump_data(new_state), expire=ttl_seconds)
+                new_state = _encode_two_float_records_and_float([(now, cost)], now)
+                await backend.set(state_key, new_state, expire=ttl_seconds)
                 return 0.0
 
             # Calculate how much cost should have leaked based on time elapsed
@@ -394,7 +397,7 @@ class LeakyBucketWithQueueStrategy:
                 else:
                     # Partially leak this entry
                     remaining_cost = entry_cost - (cost_to_leak - leaked_so_far)
-                    queue[0][1] = remaining_cost
+                    queue[0] = (queue[0][0], remaining_cost)
                     leaked_so_far = cost_to_leak
                     break
 
@@ -407,7 +410,7 @@ class LeakyBucketWithQueueStrategy:
 
             # If adding this request would overflow the capacity, reject it
             if current_queue_cost + cost > rate.limit:
-                await backend.set(state_key, old_state_json, expire=ttl_seconds)
+                await backend.set(state_key, old_state, expire=ttl_seconds)
                 # Calculate wait time based on how much needs to leak
                 cost_over = current_queue_cost + cost - rate.limit
                 wait_ms = cost_over / leak_rate
@@ -415,9 +418,9 @@ class LeakyBucketWithQueueStrategy:
                 return wait_ms
 
             # If queue has capacity, add request as [timestamp, cost] entry
-            queue.append([now, float(cost)])
-            new_state = {"queue": queue, "last_leak": last_leak_time}
-            await backend.set(state_key, dump_data(new_state), expire=ttl_seconds)
+            queue.append((now, float(cost)))
+            new_state = _encode_two_float_records_and_float(queue, last_leak_time)
+            await backend.set(state_key, new_state, expire=ttl_seconds)
         return 0.0
 
     async def get_stat(
@@ -448,9 +451,9 @@ class LeakyBucketWithQueueStrategy:
 
         leak_rate = rate.limit / rate.expire
 
-        old_state_json = await backend.get(state_key)
+        old_state = await backend.get(state_key)
         # If no existing state, queue is empty
-        if old_state_json is None or old_state_json == "":
+        if old_state is None or old_state == "":
             return StrategyStat(
                 key=key,
                 rate=rate,
@@ -459,11 +462,9 @@ class LeakyBucketWithQueueStrategy:
             )
 
         try:
-            state = load_data(old_state_json)
             # Queue contains [timestamp, cost] tuples
-            queue = [[float(ts), float(c)] for ts, c in state["queue"]]
-            last_leak_time = float(state["last_leak"])
-        except (MsgPackDecodeError, KeyError, ValueError, TypeError):
+            queue, last_leak_time = _decode_two_float_records_and_float(old_state)
+        except (ValueError, TypeError):
             # If state is corrupted, assume queue is empty
             return StrategyStat(
                 key=key,

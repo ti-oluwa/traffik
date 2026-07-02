@@ -7,10 +7,11 @@ from dataclasses import dataclass, field
 from starlette.requests import HTTPConnection
 from typing_extensions import TypedDict
 
+from traffik._utils import time
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
+from traffik.strategies._serde import _encode_two_float_records, _iter_two_float_records
 from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
-from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
 
 __all__ = [
     "SlidingWindowCounter",
@@ -157,12 +158,12 @@ class SlidingWindowLogStrategy:
         ttl_seconds = max(int(window_duration_ms // 1000), 1)  # At least 1s
 
         async with backend.lock(f"lock:{log_key}", **self.lock_config):
-            old_log_json = await backend.get(log_key)
+            old_log = await backend.get(log_key)
             # If log exists, load and parse entries as [timestamp, cost] tuples
-            if old_log_json and old_log_json != "":
+            if old_log and old_log != "":
                 try:
-                    entries: typing.List[typing.List[float]] = load_data(old_log_json)
-                except (MsgPackDecodeError, ValueError, TypeError):
+                    entries = _iter_two_float_records(old_log)
+                except (ValueError, TypeError):
                     entries = []
             else:
                 entries = []
@@ -188,12 +189,18 @@ class SlidingWindowLogStrategy:
             if current_total_cost + cost > rate.limit:
                 # Use the oldest entry to calculate wait time
                 wait_ms = (oldest_timestamp + window_duration_ms) - now
-                await backend.set(log_key, dump_data(valid_entries), expire=ttl_seconds)
+                await backend.set(
+                    log_key,
+                    _encode_two_float_records(valid_entries),
+                    expire=ttl_seconds,
+                )
                 return wait_ms
 
             # If within limit, add this request as [timestamp, cost] entry
             valid_entries.append([now, float(cost)])
-            await backend.set(log_key, dump_data(valid_entries), expire=ttl_seconds)
+            await backend.set(
+                log_key, _encode_two_float_records(valid_entries), expire=ttl_seconds
+            )
         return 0.0
 
     async def get_stat(
@@ -225,12 +232,12 @@ class SlidingWindowLogStrategy:
         full_key = backend.get_key(str(key))
         log_key = f"{full_key}:slidinglog"
 
-        old_log_json = await backend.get(log_key)
+        old_log = await backend.get(log_key)
         # If log exists, load and parse entries as [timestamp, cost] tuples
-        if old_log_json and old_log_json != "":
+        if old_log and old_log != "":
             try:
-                entries: typing.List[typing.List[float]] = load_data(old_log_json)
-            except (MsgPackDecodeError, ValueError, TypeError):
+                entries = _iter_two_float_records(old_log)
+            except (ValueError, TypeError):
                 entries = []
         else:
             entries = []

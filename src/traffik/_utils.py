@@ -1,7 +1,6 @@
 """Traffik utilities."""
 
 import asyncio
-import base64
 import enum
 import functools
 import inspect
@@ -10,7 +9,6 @@ import time as pytime
 import typing
 from types import TracebackType
 
-import msgpack  # type: ignore[import-untyped]
 from starlette.requests import HTTPConnection
 from typing_extensions import Self, TypeGuard
 
@@ -23,6 +21,14 @@ from traffik.config import (  # noqa
     set_lock_ttl,
 )
 from traffik.typing import AwaitableCallable, T
+
+__all__ = [
+    "CircuitBreaker",
+    "CircuitState",
+    "TaskTimer",
+    "get_remote_address",
+    "time",
+]
 
 
 def get_remote_address(connection: HTTPConnection) -> typing.Optional[str]:
@@ -141,37 +147,6 @@ def is_async_callable(obj: typing.Any) -> typing.Any:
     return inspect.iscoroutinefunction(obj) or (
         callable(obj) and inspect.iscoroutinefunction(obj.__call__)  # type: ignore
     )
-
-
-def dump_data(obj: typing.Any) -> str:
-    """
-    Serialize an object to msgpack bytes, then base64 encode as string.
-
-    Uses msgpack for fast, compact binary serialization.
-    Approximately 5-10x faster and 30-50% smaller than JSON.
-
-    :param obj: Object to serialize (dict, list, int, float, str, bytes, etc.)
-    :return: Base64-encoded msgpack string
-    """
-    packed: bytes = msgpack.packb(obj, use_bin_type=True)  # type: ignore[no-untyped-call]
-    # Encode to base85 for slightly better compression than base64
-    return base64.b85encode(packed).decode("ascii")
-
-
-def load_data(data: str) -> typing.Any:
-    """
-    Deserialize base64-encoded msgpack string to a Python object.
-
-    :param data: Base64-encoded msgpack string to deserialize
-    :return: Deserialized Python object
-    :raises msgpack.exceptions.UnpackException: If data is corrupted
-    """
-    packed = base64.b85decode(data.encode("ascii"))
-    return msgpack.unpackb(packed, raw=False)  # type: ignore[no-any-return, no-untyped-call]
-
-
-MsgPackDecodeError = msgpack.exceptions.UnpackException
-"""Exception raised for data decoding errors from msgpack."""
 
 
 def time() -> float:
@@ -412,7 +387,6 @@ class CircuitBreaker:
         """
         async with self._lock:
             now = pytime.monotonic()
-
             if self._state is CircuitState.CLOSED:
                 return True
 

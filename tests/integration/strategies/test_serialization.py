@@ -10,7 +10,7 @@ from traffik.strategies.custom import GCRAStrategy, QuotaWithRolloverStrategy
 from traffik.strategies.leaky_bucket import LeakyBucketStrategy
 from traffik.strategies.sliding_window import SlidingWindowLogStrategy
 from traffik.strategies.token_bucket import TokenBucketStrategy
-from traffik.utils import load_data
+from traffik._utils import _load_data
 
 
 @pytest.mark.anyio
@@ -35,7 +35,7 @@ class TestStrategyStateSerialization:
         assert stored is not None, "State should be stored"
 
         # Verify it can be deserialized
-        log = load_data(stored)
+        log = _load_data(stored)
         assert isinstance(log, list), "Log should be a list"
         assert len(log) == 3, "Should have 3 entries"
 
@@ -60,7 +60,7 @@ class TestStrategyStateSerialization:
         assert stored is not None, "State should be stored"
 
         # Verify deserialization
-        state = load_data(stored)
+        state = _load_data(stored)
         assert isinstance(state, dict), "State should be a dict"
         assert "tokens" in state, "Should have tokens field"
         assert "last_refill" in state, "Should have last_refill field"
@@ -90,7 +90,7 @@ class TestStrategyStateSerialization:
         assert stored is not None, "State should be stored"
 
         # Verify deserialization
-        state = load_data(stored)
+        state = _load_data(stored)
         assert isinstance(state, dict)
         assert "level" in state
         assert "last_leak" in state
@@ -149,7 +149,7 @@ class TestStrategyStateSerialization:
         state_key = f"{full_key}:tokenbucket:100"
         stored1 = await backend.get(state_key)
         assert stored1 is not None
-        state1 = load_data(stored1)
+        state1 = _load_data(stored1)
         tokens1 = state1["tokens"]
 
         # Create new strategy instance, make more requests
@@ -159,7 +159,7 @@ class TestStrategyStateSerialization:
         # Verify state was persisted
         stored2 = await backend.get(state_key)
         assert stored2 is not None
-        state2 = load_data(stored2)
+        state2 = _load_data(stored2)
         tokens2 = state2["tokens"]
 
         # Tokens should have decreased
@@ -181,7 +181,7 @@ class TestStrategyStateSerialization:
         stored = await backend.get(log_key)
 
         if stored:  # May not exist if all throttled
-            log = load_data(stored)
+            log = _load_data(stored)
             assert isinstance(log, list)
             # Verify each entry is valid
             for entry in log:

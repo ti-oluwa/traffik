@@ -6,15 +6,8 @@ from .backends import *  # noqa
 from .rates import Rate  # noqa
 from .throttles import *  # noqa
 from .typing import *  # noqa
-from .config import (  # noqa
-    get_lock_blocking,
-    get_lock_blocking_timeout,
-    get_lock_ttl,
-    set_lock_blocking,
-    set_lock_blocking_timeout,
-    set_lock_ttl,
-)
-from .utils import get_remote_address  # noqa
+from .config import *  # noqa
+from ._utils import *  # noqa
 from .headers import *  # noqa
 from .registry import *  # noqa
 

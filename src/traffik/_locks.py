@@ -18,7 +18,7 @@ from traffik.exceptions import (
     LockTimeoutError,
 )
 from traffik.typing import AsyncLock
-from traffik.utils import TaskTimer
+from traffik._utils import TaskTimer
 
 __PREFIX = secrets.token_hex(8)
 __PID = f"{os.getpid():08x}"

@@ -9,6 +9,7 @@ import asyncio
 
 import pytest
 
+from traffik._utils import _dump_data
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
 from traffik.strategies.custom import GCRAStrategy
@@ -25,7 +26,6 @@ from traffik.strategies.token_bucket import (
     TokenBucketStrategy,
     TokenBucketWithDebtStrategy,
 )
-from traffik._utils import _dump_data
 
 GARBAGE_VALUES = [
     "not_valid_base85_data!!!",

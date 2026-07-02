@@ -20,12 +20,12 @@ from traffik.config import (  # noqa
     set_lock_blocking_timeout,
     set_lock_ttl,
 )
-from traffik.typing import AwaitableCallable, T
+from traffik.typing import AsyncCallable, T
 
 __all__ = [
     "CircuitBreaker",
     "CircuitState",
-    "TaskTimer",
+    "_TaskTimer",
     "get_remote_address",
     "time",
 ]
@@ -133,11 +133,11 @@ def _add_parameter_to_signature(
 
 # Borrowed from Starlette's `is_async_callable` utility
 @typing.overload
-def is_async_callable(obj: AwaitableCallable[T]) -> TypeGuard[AwaitableCallable[T]]: ...
+def is_async_callable(obj: AsyncCallable[T]) -> TypeGuard[AsyncCallable[T]]: ...
 
 
 @typing.overload
-def is_async_callable(obj: typing.Any) -> TypeGuard[AwaitableCallable[typing.Any]]: ...
+def is_async_callable(obj: typing.Any) -> TypeGuard[AsyncCallable[typing.Any]]: ...
 
 
 def is_async_callable(obj: typing.Any) -> typing.Any:
@@ -159,7 +159,7 @@ def time() -> float:
     return pytime.time()
 
 
-class TaskTimer:
+class _TaskTimer:
     """
     Timer and asynchronous context manager that cancels the current task if the
     block of code after or inside it (depending on usage context), takes longer than a specified timeout.
@@ -251,7 +251,7 @@ class TaskTimer:
         :raises: The timeout error if the timeout was triggered and the exception type matches.
         """
         if sys.version_info[:2] >= (3, 11) and self._task is not None:
-            # Call uncancel to clear cancellation state from TaskTimer
+            # Call uncancel to clear cancellation state from _TaskTimer
             self._task.uncancel()
         if exc_type is asyncio.CancelledError:
             # it's not a real cancellation, was a timeout

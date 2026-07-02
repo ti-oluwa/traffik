@@ -15,6 +15,7 @@ from starlette.types import ASGIApp
 from typing_extensions import Self
 
 from traffik._locks import _AsyncLockContext
+from traffik._utils import get_remote_address
 from traffik.config import (
     ANONYMOUS_IDENTIFIER,
     APP_CONTEXT_ATTR,
@@ -35,7 +36,6 @@ from traffik.typing import (
     ThrottleErrorHandler,
     WaitPeriod,
 )
-from traffik._utils import get_remote_address
 
 
 async def default_identifier(connection: HTTPConnection) -> typing.Any:

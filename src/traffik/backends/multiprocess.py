@@ -545,16 +545,16 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     *Sliding-window log* is the most demanding: it stores one
     `[timestamp, cost]` pair per request inside the current window.
-    Each pair serialises to roughly **25-30 bytes** after msgpack + base-85
+    Each pair serialises to roughly **16 bytes** after serialization
     encoding. A safe lower bound for `max_value_size` is therefore:
 
-        max_value_size >= ceil(rate_limit * 30)
+        max_value_size >= ceil(rate_limit * 20)
 
     Examples:
 
-    * 10 req / min: `max_value_size >= 300`  - default 512 is sufficient.
-    * 50 req / min: `max_value_size >= 1500` - **default is insufficient**.
-    * 100 req / min: `max_value_size >= 3000` - **default is insufficient**.
+    * 10 req / min: `max_value_size >= 200`  - default 512 is sufficient.
+    * 50 req / min: `max_value_size >= 1000` - **default is insufficient**.
+    * 100 req / min: `max_value_size >= 2000` - **default is insufficient**.
 
     Exceeding `max_value_size` raises `traffik.exceptions.BackendError`
     at request time, not at initialisation, so an undersized value will surface
@@ -1419,6 +1419,58 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             )[0]
             yield key_str, slot_idx
 
+    def _hash_table_peek_slot_with_generation(
+        self, buffer: memoryview, shard_base: int, key_bytes: bytes
+    ) -> typing.Optional[typing.Tuple[int, int]]:
+        """
+        Unlocked, best-effort lookup of `(slot_idx, generation)` for *key_bytes*.
+
+        Unlike `_hash_table_get_slot_with_generation`, this is called WITHOUT
+        holding `slot_map_semaphores[shard_idx]`. It's a hint only: a concurrent
+        insert/delete on the same shard may cause it to return a stale or
+        incorrect result (including a false "not found" for a key that exists,
+        or a read of slot data mid-write by another thread).
+
+        Never mutates state, so a bad read here can't corrupt anything -- the
+        generation check the caller performs afterward under
+        `shard_semaphores[shard_idx]` is what makes trusting this hint safe.
+        A wrong peek just causes an unnecessary fallback to the locked path,
+        identical in outcome to a genuine ABA retry.
+
+        :param buffer: The shared memory buffer view.
+        :param shard_base: Byte offset of the shard's start in *buffer*.
+        :param key_bytes: UTF-8 encoded key bytes.
+        :return: `(slot_idx, generation)` if a plausible match was found, else `None`.
+        """
+        try:
+            idx = self._hash_table_lookup(buffer, shard_base, key_bytes)
+        except BackendError:
+            return None
+
+        hash_table_base = shard_base + self._shard_hash_table_base_offset
+        entry_offset = hash_table_base + idx * _HASH_TABLE_ENTRY_SIZE
+        state = _UINT8_STRUCT.unpack_from(
+            buffer, entry_offset + _HASH_TABLE_STATE_OFFSET
+        )[0]
+        if state != _HASH_TABLE_OCCUPIED_STATE:
+            return None
+
+        key_length = _UINT8_STRUCT.unpack_from(
+            buffer, entry_offset + _HASH_TABLE_KEY_LENGTH_OFFSET
+        )[0]
+        if key_length != len(key_bytes):
+            return None
+        key_start = entry_offset + _HASH_TABLE_KEY_OFFSET
+        stored = bytes(buffer[key_start : key_start + key_length])
+        if stored != key_bytes:
+            return None
+
+        slot_idx = _UINT32_STRUCT.unpack_from(
+            buffer, entry_offset + _HASH_TABLE_SLOT_IDX_OFFSET
+        )[0]
+        generation = self._read_slot_generation(buffer, shard_base, slot_idx)
+        return slot_idx, generation
+
     def _free_stack_pop(self, buffer: memoryview, shard_base: int) -> int:
         """
         Pop and return a free slot index from the shard's free stack,
@@ -1754,6 +1806,64 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         finally:
             self._shard_semaphores[shard_idx].release()  # type: ignore[index]
 
+    def _get(self, key: str) -> typing.Optional[str]:
+        """
+        Synchronous get.
+
+        Fast path: an unlocked peek (`_hash_table_peek_slot_with_generation`)
+        skips `slot_map_semaphores[shard_idx]` entirely when the key already has
+        a slot -- the common case for any key past its first request. Falls back
+        to the locked lookup only when the peek finds nothing.
+
+        ABA protection unchanged from before: the generation from whichever path
+        found the slot is verified under `shard_semaphores[shard_idx]`. A
+        mismatch is treated as "key gone," same as it was previously -- no new
+        retry behavior introduced by the fast path.
+
+        :param key: The throttle key.
+        :return: The stored value as a string, or `None` if absent or expired.
+        """
+        buffer = self._buffer
+        assert buffer is not None
+        now = monotonic()
+        key_bytes = key.encode("utf-8")
+        shard_idx = self._shard_idx_for_key(key)
+        shard_base = self._shard_base(shard_idx)
+
+        result = self._hash_table_peek_slot_with_generation(
+            buffer, shard_base, key_bytes
+        )
+        if result is None:
+            self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+            try:
+                result = self._hash_table_get_slot_with_generation(
+                    buffer, shard_base, key_bytes
+                )
+            finally:
+                self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+
+        if result is None:
+            return None
+
+        slot_idx, generation = result
+
+        self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+        try:
+            if self._read_slot_generation(buffer, shard_base, slot_idx) != generation:
+                return None
+
+            str_val, int_val, expires_at, occupied = self._read_slot(
+                buffer, shard_base, slot_idx
+            )
+            if not occupied:
+                return None
+            if expires_at != 0.0 and expires_at <= now:
+                return None
+
+            return str(int_val) if int_val is not None else str_val
+        finally:
+            self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+
     def _set(self, key: str, value: str, expire: typing.Optional[float]) -> None:
         """
         Synchronous set.
@@ -1801,6 +1911,54 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     != generation
                 ):
                     continue
+
+                self._write_string_slot(buffer, shard_base, slot_idx, value, expires_at)
+                return
+            finally:
+                self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+
+        raise BackendError(
+            f"ABA race on key {key!r} not resolved after {self._max_aba_retries} retries."
+        )
+
+    def _set(self, key: str, value: str, expire: typing.Optional[float]) -> None:
+        buffer = self._buffer
+        assert buffer is not None
+        key_bytes = key.encode("utf-8")
+        expires_at = (monotonic() + expire) if expire is not None else 0.0
+        shard_idx = self._shard_idx_for_key(key)
+        shard_base = self._shard_base(shard_idx)
+
+        for _ in range(self._max_aba_retries):
+            result = self._hash_table_peek_slot_with_generation(
+                buffer, shard_base, key_bytes
+            )
+            if result is not None:
+                slot_idx, generation = result
+            else:
+                self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+                try:
+                    hash_table_result = self._hash_table_get_slot_with_generation(
+                        buffer, shard_base, key_bytes
+                    )
+                    if hash_table_result is None:
+                        slot_idx = self._free_stack_pop(buffer, shard_base)
+                        self._hash_table_upsert(buffer, shard_base, key_bytes, slot_idx)
+                        generation = self._read_slot_generation(
+                            buffer, shard_base, slot_idx
+                        )
+                    else:
+                        slot_idx, generation = hash_table_result
+                finally:
+                    self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+
+            self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+            try:
+                if (
+                    self._read_slot_generation(buffer, shard_base, slot_idx)
+                    != generation
+                ):
+                    continue  # peek/lookup went stale -- retry, same as an ordinary ABA race
 
                 self._write_string_slot(buffer, shard_base, slot_idx, value, expires_at)
                 return
@@ -1924,6 +2082,69 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             f"ABA race on key {key!r} not resolved after {self._max_aba_retries} retries."
         )
 
+    def _increment(self, key: str, amount: int) -> int:
+        buffer = self._buffer
+        assert buffer is not None
+        now = monotonic()
+        key_bytes = key.encode("utf-8")
+        shard_idx = self._shard_idx_for_key(key)
+        shard_base = self._shard_base(shard_idx)
+
+        for _ in range(self._max_aba_retries):
+            result = self._hash_table_peek_slot_with_generation(
+                buffer, shard_base, key_bytes
+            )
+            if result is not None:
+                slot_idx, generation = result
+            else:
+                self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+                try:
+                    hash_table_result = self._hash_table_get_slot_with_generation(
+                        buffer, shard_base, key_bytes
+                    )
+                    if hash_table_result is None:
+                        slot_idx = self._free_stack_pop(buffer, shard_base)
+                        self._hash_table_upsert(buffer, shard_base, key_bytes, slot_idx)
+                        generation = self._read_slot_generation(
+                            buffer, shard_base, slot_idx
+                        )
+                    else:
+                        slot_idx, generation = hash_table_result
+                finally:
+                    self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+
+            self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+            try:
+                if (
+                    self._read_slot_generation(buffer, shard_base, slot_idx)
+                    != generation
+                ):
+                    continue
+
+                str_val, int_val, expires_at, occupied = self._read_slot(
+                    buffer, shard_base, slot_idx
+                )
+                if not occupied or (expires_at != 0.0 and expires_at <= now):
+                    new_value = amount
+                    self._write_int_slot(buffer, shard_base, slot_idx, new_value, 0.0)
+                else:
+                    if int_val is not None:
+                        current = int_val
+                    else:
+                        try:
+                            current = int(str_val)  # type: ignore[arg-type]
+                        except (ValueError, TypeError):
+                            current = 0
+                    new_value = current + amount
+                    self._write_int_value_only(buffer, shard_base, slot_idx, new_value)
+                return new_value
+            finally:
+                self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+
+        raise BackendError(
+            f"ABA race on key {key!r} not resolved after {self._max_aba_retries} retries."
+        )
+
     def _expire(self, key: str, seconds: int) -> bool:
         """
         Synchronous expire.
@@ -1951,6 +2172,49 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             )
         finally:
             self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+
+        if result is None:
+            return False
+
+        slot_idx, generation = result
+
+        self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+        try:
+            if self._read_slot_generation(buffer, shard_base, slot_idx) != generation:
+                return False
+
+            _, _, expires_at, occupied = self._read_slot(buffer, shard_base, slot_idx)
+            if not occupied or (expires_at != 0.0 and expires_at <= now):
+                return False
+
+            self._EXPIRY_STRUCT.pack_into(
+                buffer,
+                self._slot_offset(shard_base, slot_idx) + self._expiry_offset,
+                now + seconds,
+            )
+            return True
+        finally:
+            self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+
+    def _expire(self, key: str, seconds: int) -> bool:
+        buffer = self._buffer
+        assert buffer is not None
+        now = monotonic()
+        key_bytes = key.encode("utf-8")
+        shard_idx = self._shard_idx_for_key(key)
+        shard_base = self._shard_base(shard_idx)
+
+        result = self._hash_table_peek_slot_with_generation(
+            buffer, shard_base, key_bytes
+        )
+        if result is None:
+            self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+            try:
+                result = self._hash_table_get_slot_with_generation(
+                    buffer, shard_base, key_bytes
+                )
+            finally:
+                self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
 
         if result is None:
             return False
@@ -2042,6 +2306,79 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                         except (ValueError, TypeError):
                             current = 0
 
+                    new_value = current + amount
+                    effective_expiry = expires_at if expires_at != 0.0 else now + ttl
+                    self._write_int_slot(
+                        buffer, shard_base, slot_idx, new_value, effective_expiry
+                    )
+                return new_value
+            finally:
+                self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+
+        raise BackendError(
+            f"ABA race on key {key!r} not resolved after {self._max_aba_retries} retries."
+        )
+
+    def _increment_with_ttl(self, key: str, amount: int, ttl: int) -> int:
+        buffer = self._buffer
+        assert buffer is not None
+        now = monotonic()
+        key_bytes = key.encode("utf-8")
+        shard_idx = self._shard_idx_for_key(key)
+        shard_base = self._shard_base(shard_idx)
+
+        for _ in range(self._max_aba_retries):
+            result = self._hash_table_peek_slot_with_generation(
+                buffer, shard_base, key_bytes
+            )
+            if result is not None:
+                slot_idx, generation = result
+            else:
+                self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+                try:
+                    hash_table_result = self._hash_table_get_slot_with_generation(
+                        buffer, shard_base, key_bytes
+                    )
+                    if hash_table_result is None:
+                        slot_idx = self._free_stack_pop(buffer, shard_base)
+                        self._hash_table_upsert(buffer, shard_base, key_bytes, slot_idx)
+                        generation = self._read_slot_generation(
+                            buffer, shard_base, slot_idx
+                        )
+                    else:
+                        slot_idx, generation = hash_table_result
+                finally:
+                    self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+
+            self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+            try:
+                if (
+                    self._read_slot_generation(buffer, shard_base, slot_idx)
+                    != generation
+                ):
+                    # Peek (or lookup) went stale -- retry through the loop,
+                    # same as an ordinary ABA race today.
+                    continue
+
+                str_val, int_val, expires_at, occupied = self._read_slot(
+                    buffer, shard_base, slot_idx
+                )
+                is_new = not occupied or (expires_at != 0.0 and expires_at <= now)
+                if is_new:
+                    new_value = amount
+                    self._write_int_slot(
+                        buffer, shard_base, slot_idx, new_value, now + ttl
+                    )
+                else:
+                    current = (
+                        int_val
+                        if int_val is not None
+                        else (
+                            int(str_val)
+                            if str_val and str_val.lstrip("-").isdigit()
+                            else 0
+                        )
+                    )
                     new_value = current + amount
                     effective_expiry = expires_at if expires_at != 0.0 else now + ttl
                     self._write_int_slot(

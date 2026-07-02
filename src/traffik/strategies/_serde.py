@@ -1,10 +1,7 @@
 """Stratgies' serialization and deserialization utils"""
 
-import base64
 import struct
 import typing
-
-import msgpack  # type: ignore[import-untyped]
 
 _FLOAT = struct.Struct("=d")
 _TWO_FLOATS = struct.Struct("=dd")
@@ -292,34 +289,3 @@ def _decode_two_floats(raw: str) -> typing.Tuple[float, float]:
     :returns: A tuple containing the two decoded floating-point values.
     """
     return _TWO_FLOATS.unpack(memoryview(raw.encode("latin-1")))
-
-
-def _dump_data(obj: typing.Any) -> str:
-    """
-    Serialize an object to msgpack bytes, then base64 encode as string.
-
-    Uses msgpack for fast, compact binary serialization.
-    Approximately 5-10x faster and 30-50% smaller than JSON.
-
-    :param obj: Object to serialize (dict, list, int, float, str, bytes, etc.)
-    :return: Base64-encoded msgpack string
-    """
-    packed: bytes = msgpack.packb(obj, use_bin_type=True)  # type: ignore[no-untyped-call]
-    # Encode to base85 for slightly better compression than base64
-    return base64.b85encode(packed).decode("ascii")
-
-
-def _load_data(data: str) -> typing.Any:
-    """
-    Deserialize base64-encoded msgpack string to a Python object.
-
-    :param data: Base64-encoded msgpack string to deserialize
-    :return: Deserialized Python object
-    :raises msgpack.exceptions.UnpackException: If data is corrupted
-    """
-    packed = base64.b85decode(data.encode("ascii"))
-    return msgpack.unpackb(packed, raw=False)  # type: ignore[no-any-return, no-untyped-call]
-
-
-MsgPackDecodeError = msgpack.exceptions.UnpackException
-"""Exception raised for data decoding errors from msgpack."""

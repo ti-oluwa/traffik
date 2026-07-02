@@ -14,9 +14,9 @@ from traffik._utils import (
     TaskTimer,
     _add_parameter_to_signature,
     _dump_data,
+    _load_data,
     get_remote_address,
     is_async_callable,
-    _load_data,
     time,
 )
 
@@ -221,10 +221,12 @@ class TestSerializationUtils:
 
     def test_load_raises_on_corrupt_data(self):
         """Test that _load_data raises exception on corrupted data."""
-        with pytest.raises((
-            MsgPackDecodeError,
-            ValueError,
-        )):  # msgpack.exceptions.UnpackException
+        with pytest.raises(
+            (
+                MsgPackDecodeError,
+                ValueError,
+            )
+        ):  # msgpack.exceptions.UnpackException
             _load_data("not_valid_base85_data!")
 
 

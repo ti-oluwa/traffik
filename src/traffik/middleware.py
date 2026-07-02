@@ -9,6 +9,7 @@ from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
+from traffik._utils import is_async_callable
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import (
     _EXEMPT_EXCEPTIONS,
@@ -24,7 +25,6 @@ from traffik.typing import (
     Matchable,
     ThrottlePredicate,
 )
-from traffik._utils import is_async_callable
 
 
 class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):

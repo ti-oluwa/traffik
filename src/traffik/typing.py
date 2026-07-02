@@ -51,13 +51,22 @@ HTTPConnectionTcon = TypeVar(
 )
 WaitPeriod: TypeAlias = float
 
-Matchable: TypeAlias = typing.Union[str, typing.Pattern[str]]
+
+class Stringable(typing.Protocol):
+    """Protocol for objects that can be converted to a string."""
+
+    def __str__(self) -> str:
+        """Return a string representation of the object."""
+        ...
+
+
+Matchable: TypeAlias = typing.Union[str, typing.Pattern[str], Stringable]
 """A type alias for a matchable path, which can be a string or a compiled regex pattern."""
 ExceptionHandler: TypeAlias = typing.Callable[
     [HTTPConnectionT, Exception], typing.Union[Response, typing.Awaitable[Response]]
 ]
 
-AwaitableCallable = typing.Callable[..., typing.Awaitable[T]]
+AsyncCallable = typing.Callable[..., typing.Awaitable[T]]
 
 MappingT = TypeVar("MappingT", bound=typing.Mapping[typing.Any, typing.Any])
 ThrottleErrorHandler = typing.Callable[
@@ -86,14 +95,6 @@ class LockConfig(TypedDict, total=False):
     """Whether to enforce the TTL locally by cancelling the task in the lock's context when the TTL expires."""
     local_ttl_factor: float
     """Factor to apply to the TTL for local enforcement. Should be between 0 and 1 exclusive."""
-
-
-class Stringable(typing.Protocol):
-    """Protocol for objects that can be converted to a string."""
-
-    def __str__(self) -> str:
-        """Return a string representation of the object."""
-        ...
 
 
 ConnectionIdentifier = typing.Callable[

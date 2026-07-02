@@ -8,13 +8,13 @@ import warnings
 
 from starlette.requests import HTTPConnection
 
+from traffik._utils import CircuitBreaker
 from traffik.backends.base import ThrottleBackend
 from traffik.backoff import DEFAULT_BACKOFF
 from traffik.exceptions import _EXEMPT_EXCEPTIONS, BackendError
 from traffik.rates import Rate
 from traffik.throttles import Throttle, ThrottleExceptionInfo
 from traffik.typing import BackoffStrategy, HTTPConnectionT, WaitPeriod
-from traffik._utils import CircuitBreaker
 
 __all__ = [
     "backend_fallback",

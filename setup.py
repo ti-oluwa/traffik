@@ -40,11 +40,7 @@ setup(
         "Topic :: System :: Networking",
     ],
     python_requires=">=3.9,<3.15",
-    install_requires=[
-        "starlette>=0.14.0",
-        "annotated-types>=0.7.0",
-        "msgpack>=1.1.2",
-    ],
+    install_requires=["starlette>=0.14.0", "annotated-types>=0.7.0"],
     extras_require={
         "all": [
             "traffik[aioredis]",

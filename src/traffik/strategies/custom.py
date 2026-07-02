@@ -16,16 +16,13 @@ from traffik._utils import time
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.strategies._serde import (
-    MsgPackDecodeError,
     _decode_float_list,
     _decode_two_floats,
-    _dump_data,
     _encode_float_list,
     _encode_three_float_records,
     _encode_two_floats,
     _iter_float_list,
     _iter_three_float_records,
-    _load_data,
 )
 from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
 
@@ -37,14 +34,8 @@ __all__ = [
     "CostBasedTokenBucket",
     "CostBasedTokenBucketStatMetadata",
     "CostBasedTokenBucketStrategy",
-    "DistributedFairness",
-    "DistributedFairnessStatMetadata",
-    "DistributedFairnessStrategy",
     "GCRAStatMetadata",
     "GCRAStrategy",
-    "GeographicDistribution",
-    "GeographicDistributionStatMetadata",
-    "GeographicDistributionStrategy",
     "PriorityQueue",
     "PriorityQueueStatMetadata",
     "PriorityQueueStrategy",
@@ -259,81 +250,6 @@ class GCRAStatMetadata(TypedDict):
 
     conformant: bool
     """Whether the current state would allow a request (True) or not (False)."""
-
-
-class DistributedFairnessStatMetadata(TypedDict):
-    """
-    Metadata for `DistributedFairnessStrategy` statistics.
-
-    The distributed fairness strategy ensures fair rate limit distribution
-    across multiple application instances using deficit round-robin.
-    """
-
-    strategy: typing.Literal["distributed_fairness"]
-    """Strategy identifier, always "distributed_fairness"."""
-
-    instance_id: str
-    """Unique identifier of this application instance."""
-
-    instance_weight: float
-    """Weight assigned to this instance for weighted fair queuing."""
-
-    fair_share: int
-    """Calculated fair share of the global limit for this instance."""
-
-    quantum: int
-    """Current quantum (fair_share + deficit) for this instance."""
-
-    instance_usage: int
-    """Number of requests made by this instance in the current window."""
-
-    global_usage: int
-    """Total requests made by all instances in the current window."""
-
-    deficit: int
-    """Deficit counter for this instance (unused quota carried forward)."""
-
-    active_instances: int
-    """Number of active instances sharing the rate limit."""
-
-    window_start_ms: float
-    """Start timestamp of the current fairness window in milliseconds since epoch."""
-
-
-class GeographicDistributionStatMetadata(TypedDict):
-    """
-    Metadata for `GeographicDistributionStrategy` statistics.
-
-    The geographic distribution strategy distributes rate limits across
-    geographic regions with optional spillover support.
-    """
-
-    strategy: typing.Literal["geographic_distribution"]
-    """Strategy identifier, always "geographic_distribution"."""
-
-    region: str
-    """Region extracted from the key (e.g., "us-east-1", "eu-west-1")."""
-
-    region_multiplier: float
-    """Capacity multiplier for this region."""
-
-    region_limit: int
-    """Calculated rate limit for this region (global_limit * region_multiplier)."""
-
-    region_count: int
-    """Number of requests from this region in the current window."""
-
-    spillover_count: int
-    """Number of requests using spillover capacity."""
-
-    allow_spillover: bool
-    """Whether spillover to unused capacity from other regions is enabled."""
-
-    window_id: int
-    """Identifier of the current time window."""
-
-    window_start_ms: float
-    """Start timestamp of the current window in milliseconds since epoch."""
 
 
 @dataclass(frozen=True)
@@ -601,7 +517,7 @@ class AdaptiveThrottleStrategy:
         full_key = backend.get_key(str(key))
         counter_key = f"{full_key}:adaptive:{current_window}:counter"
         limit_key = f"{full_key}:adaptive:{current_window}:limit"
-        prev_limit_key = f"{full_key}:adaptive:{current_window - 1}:limit"
+        previous_limit_key = f"{full_key}:adaptive:{current_window - 1}:limit"
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
 
         async with backend.lock(f"lock:{counter_key}", **self.lock_config):
@@ -615,12 +531,12 @@ class AdaptiveThrottleStrategy:
                 effective_limit = float(limit_str)
             else:
                 # Check previous window's limit for continuity
-                prev_limit_str = await backend.get(prev_limit_key)
-                if prev_limit_str:
-                    prev_limit = float(prev_limit_str)
+                previous_limit_str = await backend.get(previous_limit_key)
+                if previous_limit_str:
+                    previous_limit = float(previous_limit_str)
                     # Recover slightly from previous limit
                     effective_limit = min(
-                        rate.limit, prev_limit + (rate.limit * self.recovery_rate)
+                        rate.limit, previous_limit + (rate.limit * self.recovery_rate)
                     )
                 else:
                     effective_limit = float(rate.limit)
@@ -1406,7 +1322,7 @@ class CostBasedTokenBucketStrategy:
             if raw_history:
                 try:
                     history = deque(_iter_float_list(raw_history), maxlen=cost_window)
-                except MsgPackDecodeError:
+                except ValueError:
                     history = deque(maxlen=cost_window)
             else:
                 history = deque(maxlen=cost_window)
@@ -1499,7 +1415,7 @@ class CostBasedTokenBucketStrategy:
         if raw_history:
             try:
                 history = _decode_float_list(raw_history)
-            except MsgPackDecodeError:
+            except ValueError:
                 history = []
         else:
             history = []
@@ -1701,482 +1617,6 @@ class GCRAStrategy:
         )
 
 
-@dataclass(frozen=True)
-class DistributedFairnessStrategy:
-    """
-    Distributed fair queuing using deficit round-robin.
-
-    Ensures fair distribution of rate limit across multiple application instances.
-    Prevents any single instance from hogging the shared rate limit.
-
-    **Use case:** Multi-instance deployments with shared backend
-
-    **How it works:**
-    - Each app instance gets equal share of global limit
-    - Uses deficit counter to handle fractional shares
-    - Instances that underutilize donate capacity to others
-    - Weighted fair queuing for priority instances
-
-    **Example:**
-
-    ```python
-    import socket
-
-    strategy = DistributedFairnessStrategy(
-        instance_id=socket.gethostname(),  # Unique per instance
-        instance_weight=1.0,                # Equal weight
-        fairness_window_ms=60000,          # 1 minute fairness window
-    )
-
-    throttle = HTTPThrottle(
-        uid="distributed_api",
-        rate="1000/minute",  # Shared across all instances
-        strategy=strategy,
-        backend=RedisBackend("redis://shared:6379"),
-    )
-    ```
-
-    **Scenario:**
-    - 3 instances, 900 req/min limit
-    - Each gets: 300 req/min quota
-    - Instance A only uses 200 and donates 100
-    - Instances B & C can use extra capacity
-
-    **Storage:**
-    - `{key}:dfq:instances` - Active instance registry
-    - `{key}:dfq:usage:{instance}` - Per-instance usage
-    - `{key}:dfq:deficit:{instance}` - Deficit counter
-    """
-
-    instance_id: str
-    """Unique identifier for this application instance"""
-
-    instance_weight: float = 1.0
-    """Weight for weighted fair queuing (higher = more quota)"""
-
-    fairness_window_ms: float = 60000
-    """
-    Window for fairness calculation (1 minute). 
-    
-    Fairness is calculated per this interval. Think of it as the "round duration" for
-    deficit round-robin.
-
-    60000 ms = 1 minute is typical.
-    10000 ms = 10 seconds for more responsive balancing.
-    300000 ms = 5 minutes for very stable balancing.
-    0 ms is not allowed.
-    """
-
-    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]
-
-    def __post_init__(self) -> None:
-        if not self.instance_id:
-            raise ValueError("`instance_id` must be a non-empty string")
-
-        if self.instance_weight <= 0:
-            raise ValueError("`instance_weight` must be a positive number")
-
-        if self.fairness_window_ms <= 0:
-            raise ValueError("`fairness_window_ms` must be a positive number")
-
-    async def __call__(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend[typing.Any, HTTPConnection],
-        cost: int = 1,
-    ) -> WaitPeriod:
-        if rate.unlimited:
-            return 0.0
-
-        now = time() * 1000
-        current_window = int(now // self.fairness_window_ms)
-
-        full_key = backend.get_key(str(key))
-        instances_key = f"{full_key}:dfq:instances"
-        usage_key = f"{full_key}:dfq:usage:{self.instance_id}:{current_window}"
-        deficit_key = f"{full_key}:dfq:deficit:{self.instance_id}:{current_window}"
-        global_usage_key = f"{full_key}:dfq:global:{current_window}"
-        ttl_seconds = max(int((self.fairness_window_ms * 2) // 1000), 1)
-
-        async with backend.lock(f"lock:{instances_key}", **self.lock_config):
-            # Register this instance
-            instances_json = await backend.get(instances_key)
-            if instances_json:
-                try:
-                    instances = _load_data(instances_json)
-                except MsgPackDecodeError:
-                    instances = {}
-            else:
-                instances = {}
-
-            instances[self.instance_id] = {
-                "weight": self.instance_weight,
-                "last_seen": now,
-            }
-
-            # Remove stale instances (not seen in 2 windows)
-            stale_threshold = now - (self.fairness_window_ms * 2)
-            instances = {
-                instance_id: data
-                for instance_id, data in instances.items()
-                if data["last_seen"] > stale_threshold
-            }
-            await backend.set(instances_key, _dump_data(instances), expire=ttl_seconds)
-
-            # Calculate fair share
-            total_weight = sum(data["weight"] for data in instances.values())
-            fair_share = int((rate.limit * self.instance_weight) / total_weight)
-
-            # Get current usage, deficit, and global usage
-            usage_str, deficit_str, global_usage_str = await backend.multi_get(
-                usage_key, deficit_key, global_usage_key
-            )
-            usage = int(usage_str) if usage_str else 0
-            deficit = int(deficit_str) if deficit_str else 0
-            global_usage = int(global_usage_str) if global_usage_str else 0
-
-            # Deficit round-robin
-            quantum = fair_share + deficit
-            if usage + cost <= quantum and global_usage + cost <= rate.limit:
-                # Allow and update counters
-                await backend.increment_with_ttl(
-                    usage_key, amount=cost, ttl=ttl_seconds
-                )
-                await backend.increment_with_ttl(
-                    global_usage_key, amount=cost, ttl=ttl_seconds
-                )
-
-                # Update deficit
-                new_deficit = quantum - (usage + cost)
-                await backend.set(deficit_key, str(new_deficit), expire=ttl_seconds)
-                return 0.0
-
-            # Deny and calculate the wait period
-            time_in_window = now % self.fairness_window_ms
-            wait_ms = self.fairness_window_ms - time_in_window
-            return max(wait_ms, 0.0)
-
-    async def get_stat(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend[typing.Any, HTTPConnection],
-    ) -> StrategyStat[DistributedFairnessStatMetadata]:
-        """
-        Get current statistics for the rate limit.
-
-        :param key: The throttling key (e.g., user ID, IP address).
-        :param rate: The rate limit definition.
-        :param backend: The throttle backend instance.
-        :return: `StrategyStat` with current hits remaining and wait time.
-        """
-        if rate.unlimited:
-            return StrategyStat(
-                key=key,
-                rate=rate,
-                hits_remaining=float("inf"),
-                wait_ms=0.0,
-            )
-
-        now = time() * 1000
-        current_window = int(now // self.fairness_window_ms)
-
-        full_key = backend.get_key(str(key))
-        instances_key = f"{full_key}:dfq:instances"
-        usage_key = f"{full_key}:dfq:usage:{self.instance_id}:{current_window}"
-        deficit_key = f"{full_key}:dfq:deficit:{self.instance_id}:{current_window}"
-        global_usage_key = f"{full_key}:dfq:global:{current_window}"
-
-        (
-            instances_json,
-            usage_str,
-            deficit_str,
-            global_usage_str,
-        ) = await backend.multi_get(
-            instances_key, usage_key, deficit_key, global_usage_key
-        )
-
-        # Parse instances
-        if instances_json:
-            try:
-                instances = _load_data(instances_json)
-            except MsgPackDecodeError:
-                instances = {}
-        else:
-            instances = {}
-
-        # Calculate fair share
-        total_weight = (
-            sum(data.get("weight", 1.0) for data in instances.values())
-            or self.instance_weight
-        )
-        fair_share = int((rate.limit * self.instance_weight) / total_weight)
-
-        usage = int(usage_str) if usage_str else 0
-        deficit = int(deficit_str) if deficit_str else 0
-        global_usage = int(global_usage_str) if global_usage_str else 0
-
-        quantum = fair_share + deficit
-        instance_remaining = max(quantum - usage, 0)
-        global_remaining = max(rate.limit - global_usage, 0)
-        hits_remaining = min(instance_remaining, global_remaining)
-
-        if usage >= quantum or global_usage >= rate.limit:
-            time_in_window = now % self.fairness_window_ms
-            wait_ms = self.fairness_window_ms - time_in_window
-            wait_ms = max(wait_ms, 0.0)
-        else:
-            wait_ms = 0.0
-
-        window_start_ms = current_window * self.fairness_window_ms
-        return StrategyStat(
-            key=key,
-            rate=rate,
-            hits_remaining=hits_remaining,
-            wait_ms=wait_ms,
-            metadata=DistributedFairnessStatMetadata(
-                strategy="distributed_fairness",
-                instance_id=self.instance_id,
-                instance_weight=self.instance_weight,
-                fair_share=fair_share,
-                quantum=quantum,
-                instance_usage=usage,
-                global_usage=global_usage,
-                deficit=deficit,
-                active_instances=len(instances),
-                window_start_ms=window_start_ms,
-            ),
-        )
-
-
-@dataclass(frozen=True)
-class GeographicDistributionStrategy:
-    """
-    Geographic rate limiting with region-specific limits.
-
-    Distribute rate limits across geographic regions, useful for
-    CDN-like scenarios or multi-region deployments.
-
-    **Use case:** Global applications with region-specific capacity
-
-    **How it works:**
-    - Extract region from key or connection metadata
-    - Apply region-specific limit multiplier
-    - Optional spillover to other regions
-
-    **Example:**
-
-    ```python
-
-    strategy = GeographicDistributionStrategy(
-        region_multipliers={
-            "us-east-1": 0.4,    # 40% of total capacity
-            "us-west-2": 0.3,    # 30%
-            "eu-west-1": 0.2,    # 20%
-            "ap-southeast-1": 0.1,  # 10%
-        },
-        allow_spillover=True,  # Unused capacity get usage by other regions
-    )
-
-    # Identifier: "region:{region}:user:{id}"
-    throttle = HTTPThrottle(
-        uid="global_api",
-        rate="1000/minute",  # Total global capacity
-        strategy=strategy,
-    )
-    ```
-
-    **Use cases:**
-    - CDN request routing
-    - Multi-region deployments
-    - Compliance with data residency
-    - Cost optimization per region
-
-    **Storage:**
-    - `{key}:geo:{region}:{window}` - Per-region counters
-    - `{key}:geo:spillover:{window}` - Spillover pool
-    """
-
-    region_multipliers: typing.Dict[str, float] = field(
-        default_factory=lambda: {
-            "default": 1.0,
-        }
-    )
-    """Capacity multiplier per region (sums should = 1.0)"""
-
-    allow_spillover: bool = True
-    """Allow regions to use unused capacity from others"""
-
-    default_region: str = "default"
-    """Fallback region if not specified"""
-
-    lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]
-    """Configuration for backend locking during rate limit checks."""
-
-    marker: str = "region:"
-    """
-    Marker usage in keys to identify region segment.
-
-    For example, with marker "region:", in key "...:region:us-east-1:...", "us-east-1" is the region.
-    """
-
-    def __post_init__(self) -> None:
-        if not all(v >= 0.0 for v in self.region_multipliers.values()):
-            raise ValueError("All region multipliers must be non-negative")
-
-        if sum(self.region_multipliers.values()) > 1.0:
-            raise ValueError("Sum of region multipliers must not exceed 1.0")
-
-        if not self.marker.endswith(":"):
-            object.__setattr__(self, "marker", self.marker + ":")
-
-    def _get_region(self, key: str) -> str:
-        """Extract region from key format: '...:region:{region}:...'"""
-        marker = self.marker
-        idx = key.find(marker)
-        if idx == -1:
-            return self.default_region
-
-        start = idx + len(marker)
-        end = key.find(":", start)
-        region = key[start:end] if end != -1 else key[start:]
-        return region or self.default_region
-
-    async def __call__(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend[typing.Any, HTTPConnection],
-        cost: int = 1,
-    ) -> WaitPeriod:
-        if rate.unlimited:
-            return 0.0
-
-        now = time() * 1000
-        window_duration_ms = rate.expire
-        current_window = int(now // window_duration_ms)
-
-        region = self._get_region(str(key))
-        multiplier = self.region_multipliers.get(
-            region, self.region_multipliers.get("default", 1.0)
-        )
-        region_limit = int(rate.limit * multiplier)
-
-        full_key = backend.get_key(str(key))
-        region_key = f"{full_key}:geo:{region}:{current_window}"
-        spillover_key = f"{full_key}:geo:spillover:{current_window}"
-        ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
-
-        async with backend.lock(f"lock:{region_key}", **self.lock_config):
-            # Increment region counter
-            region_count = await backend.increment_with_ttl(
-                region_key, amount=cost, ttl=ttl_seconds
-            )
-            if region_count <= region_limit:
-                # Within region limit
-                return 0.0
-
-            if self.allow_spillover:
-                # Try spillover pool
-                spillover_count = await backend.increment_with_ttl(
-                    spillover_key, amount=cost, ttl=ttl_seconds
-                )
-                # Calculate total spillover capacity (sum of unused regional capacity)
-                total_used = region_count  # Just this region for simplicity
-                spillover_capacity = max(0, rate.limit - total_used)
-
-                if spillover_count <= spillover_capacity:
-                    return 0.0
-
-            # Exceeded limits
-            time_in_window = now % window_duration_ms
-            wait_ms = window_duration_ms - time_in_window
-            return max(wait_ms, 0.0)
-
-    async def get_stat(
-        self,
-        key: Stringable,
-        rate: Rate,
-        backend: ThrottleBackend[typing.Any, HTTPConnection],
-    ) -> StrategyStat[GeographicDistributionStatMetadata]:
-        """
-        Get current statistics for the rate limit.
-
-        :param key: The throttling key (e.g., user ID, IP address).
-        :param rate: The rate limit definition.
-        :param backend: The throttle backend instance.
-        :return: `StrategyStat` with current hits remaining and wait time.
-        """
-        if rate.unlimited:
-            return StrategyStat(
-                key=key,
-                rate=rate,
-                hits_remaining=float("inf"),
-                wait_ms=0.0,
-            )
-
-        now = time() * 1000
-        window_duration_ms = rate.expire
-        current_window = int(now // window_duration_ms)
-
-        region = self._get_region(str(key))
-        multiplier = self.region_multipliers.get(
-            region, self.region_multipliers.get("default", 1.0)
-        )
-        region_limit = int(rate.limit * multiplier)
-
-        full_key = backend.get_key(str(key))
-        region_key = f"{full_key}:geo:{region}:{current_window}"
-        spillover_key = f"{full_key}:geo:spillover:{current_window}"
-
-        region_count_str, spillover_count_str = await backend.multi_get(
-            region_key, spillover_key
-        )
-        region_count = int(region_count_str) if region_count_str else 0
-        spillover_count = int(spillover_count_str) if spillover_count_str else 0
-
-        # Calculate remaining hits
-        region_remaining = max(region_limit - region_count, 0)
-        if self.allow_spillover and region_remaining <= 0:
-            spillover_capacity = max(0, rate.limit - region_count)
-            spillover_remaining = max(spillover_capacity - spillover_count, 0)
-            hits_remaining = spillover_remaining
-        else:
-            hits_remaining = region_remaining
-
-        if region_count > region_limit:
-            if not self.allow_spillover or spillover_count > (
-                rate.limit - region_count
-            ):
-                time_in_window = now % window_duration_ms
-                wait_ms = window_duration_ms - time_in_window
-                wait_ms = max(wait_ms, 0.0)
-            else:
-                wait_ms = 0.0
-        else:
-            wait_ms = 0.0
-
-        window_start_ms = current_window * window_duration_ms
-        return StrategyStat(
-            key=key,
-            rate=rate,
-            hits_remaining=hits_remaining,
-            wait_ms=wait_ms,
-            metadata=GeographicDistributionStatMetadata(
-                strategy="geographic_distribution",
-                region=region,
-                region_multiplier=multiplier,
-                region_limit=region_limit,
-                region_count=region_count,
-                spillover_count=spillover_count,
-                allow_spillover=self.allow_spillover,
-                window_id=current_window,
-                window_start_ms=window_start_ms,
-            ),
-        )
-
-
 TieredRate = TieredRateStrategy
 AdaptiveThrottle = AdaptiveThrottleStrategy
 TimeOfDay = TimeOfDayStrategy
@@ -2184,5 +1624,3 @@ PriorityQueue = PriorityQueueStrategy
 QuotaWithRollover = QuotaWithRolloverStrategy
 CostBasedTokenBucket = CostBasedTokenBucketStrategy
 GCRA = GCRAStrategy
-DistributedFairness = DistributedFairnessStrategy
-GeographicDistribution = GeographicDistributionStrategy

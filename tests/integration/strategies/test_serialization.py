@@ -4,13 +4,13 @@ import asyncio
 
 import pytest
 
+from traffik._utils import _load_data
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
 from traffik.strategies.custom import GCRAStrategy, QuotaWithRolloverStrategy
 from traffik.strategies.leaky_bucket import LeakyBucketStrategy
 from traffik.strategies.sliding_window import SlidingWindowLogStrategy
 from traffik.strategies.token_bucket import TokenBucketStrategy
-from traffik._utils import _load_data
 
 
 @pytest.mark.anyio

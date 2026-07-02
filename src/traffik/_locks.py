@@ -11,6 +11,7 @@ from types import TracebackType
 
 from typing_extensions import Self
 
+from traffik._utils import _TaskTimer
 from traffik.exceptions import (
     LockAcquisitionError,
     LockPoolError,
@@ -18,7 +19,6 @@ from traffik.exceptions import (
     LockTimeoutError,
 )
 from traffik.typing import AsyncLock
-from traffik._utils import TaskTimer
 
 __PREFIX = secrets.token_hex(8)
 __PID = f"{os.getpid():08x}"
@@ -717,7 +717,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         self._blocking = blocking
         self._blocking_timeout = blocking_timeout
         self._acquired = False
-        self._timer: typing.Optional[TaskTimer] = None
+        self._timer: typing.Optional[_TaskTimer] = None
 
     async def _acquire(self) -> None:
         """
@@ -765,12 +765,12 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         self._acquired = True
 
         # Start the lock hold-time watchdog after the lock is confirmed acquired.
-        # `TaskTimer` schedules task.cancel() via `call_later`. The `CancelledError`
+        # `_TaskTimer` schedules task.cancel() via `call_later`. The `CancelledError`
         # that bubbles up through the body is then converted to `LockTimeoutError`
         # inside `__aexit__` before the lock is released.
         if self._ttl is not None:
             loop = asyncio.get_running_loop()
-            self._timer = TaskTimer(
+            self._timer = _TaskTimer(
                 timeout=self._ttl,
                 loop=loop,
                 error=LockTimeoutError(
@@ -788,7 +788,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> None:
-        # First and most important, we need to exit `TaskTimer`
+        # First and most important, we need to exit `_TaskTimer`
         # This must happen before the lock release so that:
         # - A normal exit cancels the `call_later` handle (hence no spurious fire).
         # - A TTL-fired exit converts `CancelledError` to `LockTimeoutError`.
@@ -803,7 +803,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
                 # TTL watchdog fired. Stash and release first.
                 timeout_exc = ltexc
             except BaseException as bexc:
-                # We got and unexpected error from `TaskTimer` itself. Release then propagate.
+                # We got and unexpected error from `_TaskTimer` itself. Release then propagate.
                 if self._acquired:
                     await self._release(exc_type=type(bexc))
                 raise

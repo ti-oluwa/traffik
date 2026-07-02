@@ -7,13 +7,13 @@ import pytest
 from starlette.requests import HTTPConnection
 
 from tests.utils import make_connection, requires_throttle_type
+from traffik._utils import CircuitBreaker
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.error_handlers import failover, fallback, retry
 from traffik.exceptions import BackendConnectionError, BackendError
 from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import Throttle, ThrottleExceptionInfo
-from traffik._utils import CircuitBreaker
 
 new_connection = functools.partial(make_connection, HTTPConnection)
 

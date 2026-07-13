@@ -293,10 +293,7 @@ class _AsyncRedisLock:
                 await asyncio.sleep(0)
             else:
                 # Exponential backoff
-                exponent = min(
-                    attempts - max_spins,
-                    6,
-                )
+                exponent = min(attempts - max_spins, 6)
                 delay = min(0.0005 * (1 << exponent), spin_max_delay)
                 await asyncio.sleep(delay)
 
@@ -677,9 +674,10 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             nodes = []
             for item in raw:
                 if isinstance(item, dict):
-                    nodes.append(
-                        {"host": item["host"], "port": int(item.get("port", 6379))}
-                    )
+                    nodes.append({
+                        "host": item["host"],
+                        "port": int(item.get("port", 6379)),
+                    })
                 elif isinstance(item, (list, tuple)) and len(item) == 2:
                     nodes.append({"host": item[0], "port": int(item[1])})
                 else:

@@ -289,3 +289,7 @@ def _decode_two_floats(raw: str) -> typing.Tuple[float, float]:
     :returns: A tuple containing the two decoded floating-point values.
     """
     return _TWO_FLOATS.unpack(memoryview(raw.encode("latin-1")))
+
+
+SERDE_ERRORS = (ValueError, TypeError, MemoryError, struct.error, AttributeError)
+"""Errors that may be raised by any of the struct-based se/deserializers in `traffik.strategies._serde`"""

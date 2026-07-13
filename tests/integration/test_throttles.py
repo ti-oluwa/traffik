@@ -1,21 +1,29 @@
+"""
+Tests for core `HTTPThrottle`/`WebSocketThrottle` behavior: initialization, enable/disable,
+`update_*` methods, and end-to-end throttling across all backend implementations.
+"""
+
 import asyncio
 import typing
 from itertools import repeat
 
 import anyio
 import pytest
-from httpx2 import ASGITransport, AsyncClient, Response
-
-from starlette.applications import Starlette
+from httpx2 import Response
 from starlette.exceptions import HTTPException
 from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse
-from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
-from tests.asynctestclient import AsyncTestClient
+
 from tests.conftest import BackendGen
+from tests.frameworks import (
+    ASGIFramework,
+    HTTPRoute,
+    WSRoute,
+)
 from tests.utils import (
     default_client_identifier,
+    make_client,
     requires_throttle_type,
     unlimited_identifier,
 )
@@ -28,64 +36,62 @@ from traffik.strategies.sliding_window import SlidingWindowLogStrategy
 from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 
 
-@pytest.mark.anyio
 @pytest.mark.throttle
 @requires_throttle_type
 class TestThrottleBasic:
     async def test_throttle_initialization(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         with pytest.raises(ValueError):
             throttle_type(
-                "test-init-1",
-                rate=Rate(limit=-1),
-                registry=ThrottleRegistry(),
+                "test-init-1", rate=Rate(limit=-1), registry=ThrottleRegistry()
             )
 
         async def _throttle_handler(
             connection: HTTPConnection, wait_ms: float, *args, **kwargs
         ) -> None:
-            # do nothing, just a placeholder for testing
             return
 
-        # Test initialization behaviour
-        throttle = throttle_type(
-            "test-init-2-sl",
-            rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
-            handle_throttled=_throttle_handler,
-            registry=ThrottleRegistry(),
-        )
-        time_in_ms = 10 + (50 * 1000) + (2 * 60 * 1000) + (1 * 3600 * 1000)
-        assert throttle.rate.expire == time_in_ms  # type: ignore[attr-defined]
-        assert throttle.backend is backend
-        assert throttle.identifier is backend.identifier
-        # Test that provided throttle handler is used
-        assert throttle.handle_throttled is not backend.handle_throttled
+        # Opened inline (not via a fixture) so the ambient backend context and the
+        # throttle construction below run in the same task -- see module docstring
+        # in test_throttle_cost.py for why that distinction matters here.
+        async with inmemory_backend(close_on_exit=True):
+            throttle = throttle_type(
+                "test-init-2",
+                rate=Rate(limit=2, milliseconds=10, seconds=50, minutes=2, hours=1),
+                handle_throttled=_throttle_handler,
+                registry=ThrottleRegistry(),
+            )
+            time_in_ms = 10 + (50 * 1000) + (2 * 60 * 1000) + (1 * 3600 * 1000)
+            assert throttle.rate.expire == time_in_ms  # type: ignore[union-attr]
+            assert throttle.backend is inmemory_backend
+            assert throttle.identifier is inmemory_backend.identifier
+            assert throttle.handle_throttled is not inmemory_backend.handle_throttled
 
     async def test_throttle_is_disabled_default_false(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="dis-default",
             rate="5/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
         assert throttle.is_disabled is False
 
     async def test_throttle_disable_sets_flag(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="dis-flag",
             rate="5/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
         await throttle.disable()
@@ -93,13 +99,13 @@ class TestThrottleBasic:
 
     async def test_throttle_enable_clears_flag(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="dis-enable",
             rate="5/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
         await throttle.disable()
@@ -108,14 +114,13 @@ class TestThrottleBasic:
 
     async def test_update_rate_string(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
-        """update_rate() should parse a rate string and update _uses_rate_func."""
         throttle = throttle_type(
             uid="upd-rate-str",
             rate="5/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
         await throttle.update_rate("100/s")
@@ -124,13 +129,13 @@ class TestThrottleBasic:
 
     async def test_update_rate_rate_object(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-rate-obj",
             rate="5/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
         new_rate = Rate.parse("200/h")
@@ -140,13 +145,13 @@ class TestThrottleBasic:
 
     async def test_update_rate_callable(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-rate-fn",
             rate="5/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
 
@@ -158,13 +163,13 @@ class TestThrottleBasic:
 
     async def test_update_cost_static(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-cost",
             rate="10/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
         await throttle.update_cost(3)
@@ -173,13 +178,13 @@ class TestThrottleBasic:
 
     async def test_update_cost_callable(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-cost-fn",
             rate="10/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
 
@@ -191,13 +196,13 @@ class TestThrottleBasic:
 
     async def test_update_min_wait_period(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-mwp",
             rate="10/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
         await throttle.update_min_wait_period(500)
@@ -207,13 +212,13 @@ class TestThrottleBasic:
 
     async def test_update_identifier(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-ident",
             rate="10/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
 
@@ -225,13 +230,13 @@ class TestThrottleBasic:
 
     async def test_update_headers_none_clears(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-hdrs",
             rate="10/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
             headers=DEFAULT_HEADERS_ALWAYS,
         )
@@ -240,13 +245,13 @@ class TestThrottleBasic:
 
     async def test_update_strategy(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-strategy",
             rate="10/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
         new_strategy = SlidingWindowLogStrategy()
@@ -255,13 +260,13 @@ class TestThrottleBasic:
 
     async def test_update_backend(
         self,
-        backend: InMemoryBackend,
+        inmemory_backend: InMemoryBackend,
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-backend",
             rate="10/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
         new_backend = InMemoryBackend(persistent=False)
@@ -269,35 +274,61 @@ class TestThrottleBasic:
         assert throttle.backend is new_backend
 
 
-@pytest.mark.anyio
 @pytest.mark.throttle
+@pytest.mark.anyio
+async def test_disabled_http_throttle_skips_hit() -> None:
+    """A disabled throttle passes all requests through, even past the rate limit.
+
+    No app needed -- `.hit()` just needs *some* HTTPConnection to key off of.
+    """
+    throttle = HTTPThrottle(
+        uid="dis-skip-hit",
+        rate="1/min",
+        backend=InMemoryBackend(),
+        identifier=default_client_identifier,
+    )
+    await throttle.disable()
+
+    req = Request(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "path": "/test",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+    for _ in range(5):
+        result = await throttle.hit(req)
+        assert result is req
+
+
+@pytest.mark.throttle
+@pytest.mark.anyio
 class TestHTTPThrottle:
-    async def test_http_throttle(self, backends: BackendGen) -> None:
+    async def test_http_throttle(
+        self, backends: BackendGen, web_framework: ASGIFramework
+    ) -> None:
         for backend in backends(persistent=False, namespace="http_throttle_test"):
             async with backend(close_on_exit=True):
                 throttle = HTTPThrottle(
-                    "test-http-throttle-sl",
+                    f"test-http-throttle-{web_framework.name}",
                     rate="3/3500ms",
                     registry=ThrottleRegistry(),
                 )
                 sleep_time = 3.5
 
-                async def ping_endpoint(request: Request) -> JSONResponse:
+                async def endpoint(request: Request) -> JSONResponse:
                     await throttle(request)
                     name = request.path_params.get("name", "unknown")
                     return JSONResponse({"message": f"PONG: {name}"})
 
-                routes = [Route("/{name}", ping_endpoint, methods=["GET"])]
-                app = Starlette(routes=routes)
+                app = web_framework.build_app(
+                    http_routes=[HTTPRoute("/{name}", endpoint)]
+                )
 
-                base_url = "http://0.0.0.0"
-                async with AsyncClient(
-                    transport=ASGITransport(app=app),
-                    base_url=base_url,
-                ) as client:
-                    for count, name in enumerate(
-                        repeat("test-client", times=5), start=1
-                    ):
+                async with make_client(app, base_url="http://test") as client:
+                    for count, name in enumerate(repeat("test-client", 5), start=1):
                         if count == 4:
                             await anyio.sleep(sleep_time)
                         response = await client.get(f"/{name}")
@@ -305,10 +336,8 @@ class TestHTTPThrottle:
                         assert response.json() == {"message": f"PONG: {name}"}
 
                     await backend.reset()
-                    # await backend.initialize()
-                    for count, name in enumerate(
-                        repeat("test-client", times=5), start=1
-                    ):
+                    await backend.initialize()
+                    for count, name in enumerate(repeat("test-client", 5), start=1):
                         response = await client.get(f"/{name}")
                         if count > 3:
                             assert response.status_code == 429
@@ -316,138 +345,94 @@ class TestHTTPThrottle:
                         else:
                             assert response.status_code == 200
 
-    async def test_http_throttle_with_lifespan(self, backend: InMemoryBackend) -> None:
+    async def test_http_throttle_with_lifespan(
+        self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
+    ) -> None:
+        """
+        Sync test, `starlette.testclient.TestClient` -- needs the app's lifespan
+        to actually run so the throttle can resolve its backend, which neither
+        `httpx2.AsyncClient`+`ASGITransport` nor `make_client` do for plain
+        HTTP (see module docstring in test_throttle_dynamic_backend.py).
+        """
         throttle = HTTPThrottle(
-            "test-throttle-app-lifespan-sl",
+            f"test-throttle-app-lifespan-{web_framework.name}",
             rate="2/s",
             identifier=default_client_identifier,
             registry=ThrottleRegistry(),
         )
 
-        async def ping_endpoint(request: Request) -> JSONResponse:
+        async def endpoint(request: Request) -> JSONResponse:
             await throttle(request)
             return JSONResponse({"message": "PONG"})
 
-        routes = [Route("/", ping_endpoint, methods=["GET"])]
-        app = Starlette(routes=routes, lifespan=backend.lifespan)
+        app = web_framework.build_app(
+            http_routes=[HTTPRoute("/", endpoint)], lifespan=inmemory_backend.lifespan
+        )
 
-        base_url = "http://0.0.0.0"
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url=base_url
-        ) as client:
-            # First request should succeed
-            response = await client.get("/")
-            assert response.status_code == 200
-            assert response.json() == {"message": "PONG"}
+        async with make_client(app, base_url="http://0.0.0.0") as client:
+            for _ in range(2):
+                response = await client.get("/")
+                assert response.status_code == 200
+                assert response.json() == {"message": "PONG"}
 
-            # Second request should also succeed
-            response = await client.get("/")
-            assert response.status_code == 200
-            assert response.json() == {"message": "PONG"}
-
-            # Third request should be throttled
             response = await client.get("/")
             assert response.status_code == 429
             assert response.headers["Retry-After"] is not None
 
     async def test_http_throttle_exemption_with_unlimited_identifier(
-        self, backend: InMemoryBackend
+        self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
     ) -> None:
         throttle = HTTPThrottle(
-            "test-throttle-exemption-sl",
+            f"test-throttle-exemption-{web_framework.name}",
             rate="2/s",
             identifier=unlimited_identifier,
-            backend=backend,
+            backend=inmemory_backend,
             registry=ThrottleRegistry(),
         )
 
-        async def ping_endpoint(request: Request) -> JSONResponse:
+        async def endpoint(request: Request) -> JSONResponse:
             await throttle(request)
             return JSONResponse({"message": "PONG"})
 
-        routes = [Route("/", ping_endpoint, methods=["GET"])]
-        app = Starlette(routes=routes)
+        app = web_framework.build_app(http_routes=[HTTPRoute("/", endpoint)])
 
-        base_url = "http://0.0.0.0"
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url=base_url
-        ) as client:
-            # First request should succeed
-            response = await client.get("/")
-            assert response.status_code == 200
-            assert response.json() == {"message": "PONG"}
+        async with make_client(app, base_url="http://test") as client:
+            for _ in range(2):
+                response = await client.get("/")
+                assert response.status_code == 200
+                assert response.json() == {"message": "PONG"}
 
-            # Second request should also succeed
-            response = await client.get("/")
-            assert response.status_code == 200
-            assert response.json() == {"message": "PONG"}
-
-            # Third request should be throttled but since the identifier is EXEMPTED,
-            # it should not be throttled and should succeed
+            # 3rd would normally be throttled, but EXEMPTED identifiers bypass it
             response = await client.get("/")
             assert response.status_code == 200
             assert response.headers.get("Retry-After", None) is None
 
-    async def test_disabled_http_throttle_skips_hit(
-        self, backend: InMemoryBackend
-    ) -> None:
-        """A disabled throttle should pass all requests through, even past the rate limit."""
-        throttle = HTTPThrottle(
-            uid="dis-skip-hit",
-            rate="1/min",
-            backend=backend,
-            identifier=default_client_identifier,
-        )
-        await throttle.disable()
-
-        transport = ASGITransport(
-            app=Starlette(
-                routes=[Route("/test", lambda req: JSONResponse({"ok": True}))]
-            )
-        )
-        async with AsyncClient(transport=transport, base_url="http://test"):
-            req = Request(
-                scope={
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/test",
-                    "query_string": b"",
-                    "headers": [],
-                }
-            )
-            # Fire 5 requests — all should pass because the throttle is disabled
-            for _ in range(5):
-                result = await throttle.hit(req)
-                assert result is req
-
     @pytest.mark.concurrent
-    async def test_http_throttle_concurrent(self, backends: BackendGen) -> None:
+    async def test_http_throttle_concurrent(
+        self, backends: BackendGen, web_framework: ASGIFramework
+    ) -> None:
         for backend in backends(persistent=False, namespace="http_throttle_concurrent"):
             async with backend(close_on_exit=True):
                 throttle = HTTPThrottle(
-                    "http-throttle-concurrent-sl",
-                    rate="3/1050ms",
+                    f"http-throttle-concurrent-{web_framework.name}",
+                    rate="3/s",
                     strategy=strategies.TokenBucketStrategy(),
                     registry=ThrottleRegistry(),
                 )
 
-                async def ping_endpoint(request: Request) -> JSONResponse:
-                    nonlocal throttle
+                async def endpoint(request: Request) -> JSONResponse:
                     await throttle(request)
                     name = request.path_params.get("name", "unknown")
                     return JSONResponse({"message": f"PONG: {name}"})
 
-                routes = [Route("/{name}", ping_endpoint, methods=["GET"])]
-                app = Starlette(routes=routes)
+                app = web_framework.build_app(
+                    http_routes=[HTTPRoute("/{name}", endpoint)]
+                )
 
-                base_url = "http://0.0.0.0"
-                async with AsyncClient(
-                    transport=ASGITransport(app=app),
-                    base_url=base_url,
-                ) as client:
+                async with make_client(app, base_url="http://test") as client:
 
                     async def make_request(name: str) -> Response:
-                        return await client.get(f"{base_url}/{name}")
+                        return await client.get(f"/{name}")
 
                     responses = await asyncio.gather(
                         *(make_request(name) for name in repeat("test-client", 5))
@@ -457,15 +442,17 @@ class TestHTTPThrottle:
                     assert status_codes.count(429) == 2
 
 
-@pytest.mark.anyio
 @pytest.mark.throttle
 @pytest.mark.websocket
+@pytest.mark.anyio
 class TestWebSocketThrottle:
-    async def test_websocket_throttle(self, backends: BackendGen) -> None:
+    async def test_websocket_throttle(
+        self, backends: BackendGen, web_framework: ASGIFramework
+    ) -> None:
         for backend in backends(persistent=False, namespace="ws_throttle_test"):
             async with backend(close_on_exit=True):
                 throttle = WebSocketThrottle(
-                    "test-websocket-throttle-inmemory-sl",
+                    f"test-websocket-throttle-{web_framework.name}",
                     rate="3/5005ms",
                     identifier=default_client_identifier,
                     registry=ThrottleRegistry(),
@@ -473,9 +460,7 @@ class TestWebSocketThrottle:
 
                 async def ws_endpoint(websocket: WebSocket) -> None:
                     await websocket.accept()
-                    print("ACCEPTED WEBSOCKET CONNECTION")
-                    close_code = 1000  # Normal closure
-                    close_reason = "Normal closure"
+                    close_code, close_reason = 1000, "Normal closure"
                     while True:
                         try:
                             data = await websocket.receive_json()
@@ -484,60 +469,46 @@ class TestWebSocketThrottle:
                                 {
                                     "status": "success",
                                     "status_code": 200,
-                                    "headers": {},
                                     "detail": "Request successful",
                                     "data": data,
                                 }
                             )
                         except HTTPException as exc:
-                            print("HTTP EXCEPTION:", exc)
                             await websocket.send_json(
                                 {
                                     "status": "error",
                                     "status_code": exc.status_code,
                                     "detail": exc.detail,
-                                    "headers": exc.headers,
                                     "data": None,
                                 }
                             )
                             close_reason = exc.detail
                             break
-                        except Exception as exc:
-                            print("WEBSOCKET ERROR:", exc)
+                        except Exception:
                             await websocket.send_json(
                                 {
                                     "status": "error",
                                     "status_code": 500,
                                     "detail": "Operation failed",
-                                    "headers": {},
                                     "data": None,
                                 }
                             )
-                            close_code = 1011  # Internal error
-                            close_reason = "Internal error"
+                            close_code, close_reason = 1011, "Internal error"
                             break
 
-                    # Allow time for the message put in the queue to be processed
-                    # and received by the client before closing the websocket
+                    # Let the last message flush before closing.
                     await asyncio.sleep(1)
                     await websocket.close(code=close_code, reason=close_reason)
 
-                routes = [WebSocketRoute("/ws/", ws_endpoint)]
-                app = Starlette(routes=routes)
+                app = web_framework.build_app(ws_routes=[WSRoute("/ws/", ws_endpoint)])
 
                 base_url = "http://0.0.0.0"
                 running_loop = asyncio.get_running_loop()
                 async with (
-                    AsyncTestClient(
-                        app=app,
-                        base_url=base_url,
-                        loop=running_loop,
-                    ) as client,
+                    make_client(app, base_url=base_url, loop=running_loop) as client,
                     client.websocket_connect(url="/ws/") as ws,
                 ):
-                    # Reset the backend before starting the test
-                    # as connecting to the websocket already counts as a request
-                    # and we want to start fresh.
+                    # Connecting already counts as a request -- reset for a clean budget.
                     await backend.reset()
                     await backend.initialize()
 
@@ -546,8 +517,7 @@ class TestWebSocketThrottle:
                             await ws.send_json({"message": "ping"})
                             response = await ws.receive_json()
                             return response["status"], response["status_code"]
-                        except WebSocketDisconnect as exc:
-                            print("WEBSOCKET DISCONNECT:", exc)
+                        except WebSocketDisconnect:
                             return "disconnected", 1000
 
                     for count in range(1, 6):
@@ -555,21 +525,15 @@ class TestWebSocketThrottle:
                         assert result[0] == "success"
                         assert result[1] == 200
                         if count == 3:
-                            sleep_time = (
-                                5.5  # For the last request, we wait a bit longer
-                            )
-                            await asyncio.sleep(sleep_time)
+                            await asyncio.sleep(5.5)
 
-                    # Clear backend to ensure the throttle is cleared
                     await backend.reset()
                     await backend.initialize()
-
                     await asyncio.sleep(0.01)
+
                     for count in range(1, 4):
                         result = await make_ws_request()
                         if count > 3:
-                            # After the third request, the throttle should kick in
-                            # and subsequent requests should fail
                             assert result[0] == "error"
                             assert result[1] == 429
                         else:
@@ -577,10 +541,10 @@ class TestWebSocketThrottle:
                             assert result[1] == 200
 
     async def test_websocket_throttle_with_lifespan(
-        self, backend: InMemoryBackend
+        self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
     ) -> None:
         throttle = WebSocketThrottle(
-            "test-ws-throttle-lifespan-sl",
+            f"test-ws-throttle-lifespan-{web_framework.name}",
             rate="2/s",
             identifier=default_client_identifier,
             registry=ThrottleRegistry(),
@@ -592,43 +556,32 @@ class TestWebSocketThrottle:
             await websocket.send_json({"message": "PONG"})
             await websocket.close()
 
-        routes = [WebSocketRoute("/ws/", ws_endpoint)]
-        app = Starlette(routes=routes, lifespan=backend.lifespan)
+        app = web_framework.build_app(
+            ws_routes=[WSRoute("/ws/", ws_endpoint)], lifespan=inmemory_backend.lifespan
+        )
 
-        base_url = "http://0.0.0.0"
-        async with AsyncTestClient(
-            app=app,
-            base_url=base_url,
-            loop=asyncio.get_running_loop(),
+        async with make_client(
+            app, base_url="http://0.0.0.0", loop=asyncio.get_running_loop()
         ) as client:
-            # First request should succeed
-            async with client.websocket_connect(url="/ws/") as ws:
-                response = await ws.receive_json()
-                assert response == {"message": "PONG"}
-
-            # Second request should also succeed
-            async with client.websocket_connect(url="/ws/") as ws:
-                response = await ws.receive_json()
-                assert response == {"message": "PONG"}
-
-            # Third request should be throttled and disconnect
-            try:
+            for _ in range(2):
                 async with client.websocket_connect(url="/ws/") as ws:
-                    await ws.receive_json()
-                    # Should not reach here
-                    assert False
-            except WebSocketDisconnect:
-                # Expected - throttled connection
-                pass
+                    response = await ws.receive_json()
+                    assert response == {"message": "PONG"}
+
+            # 3rd connection is throttled -- sent a rate_limit message, not dropped.
+            async with client.websocket_connect(url="/ws/") as ws:
+                response = await ws.receive_json()
+                assert response["type"] == "rate_limit"
+                assert "retry_after" in response
 
     async def test_websocket_throttle_exemption_with_unlimited_identifier(
-        self, backend: InMemoryBackend
+        self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
     ) -> None:
         throttle = WebSocketThrottle(
-            "test-ws-throttle-exemption-sl",
+            f"test-ws-throttle-exemption-{web_framework.name}",
             rate="2/s",
             identifier=unlimited_identifier,
-            backend=backend,
+            backend=inmemory_backend,
             registry=ThrottleRegistry(),
         )
 
@@ -638,40 +591,24 @@ class TestWebSocketThrottle:
             await websocket.send_json({"message": "PONG"})
             await websocket.close()
 
-        routes = [WebSocketRoute("/ws/", ws_endpoint)]
-        app = Starlette(routes=routes)
+        app = web_framework.build_app(ws_routes=[WSRoute("/ws/", ws_endpoint)])
 
-        base_url = "http://0.0.0.0"
-        running_loop = asyncio.get_running_loop()
-        async with AsyncTestClient(
-            app=app,
-            base_url=base_url,
-            loop=running_loop,
+        async with make_client(
+            app, base_url="http://0.0.0.0", loop=asyncio.get_running_loop()
         ) as client:
-            # First request should succeed
-            async with client.websocket_connect(url="/ws/") as ws:
-                response = await ws.receive_json()
-                assert response == {"message": "PONG"}
-
-            # Second request should also succeed
-            async with client.websocket_connect(url="/ws/") as ws:
-                response = await ws.receive_json()
-                assert response == {"message": "PONG"}
-
-            # Third request should succeed (not throttled due to EXEMPTED identifier)
-            async with client.websocket_connect(url="/ws/") as ws:
-                response = await ws.receive_json()
-                assert response == {"message": "PONG"}
+            for _ in range(3):
+                async with client.websocket_connect(url="/ws/") as ws:
+                    response = await ws.receive_json()
+                    assert response == {"message": "PONG"}
 
     async def test_disabled_websocket_throttle_skips_hit(
-        self,
-        backend: InMemoryBackend,
+        self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
     ) -> None:
-        """A disabled throttle should pass all connections through, even past the rate limit."""
+        """A disabled throttle passes all connections through, even past the limit."""
         throttle = WebSocketThrottle(
-            uid="dis-ws-skip-hit",
+            uid=f"dis-ws-skip-hit-{web_framework.name}",
             rate="1/min",
-            backend=backend,
+            backend=inmemory_backend,
             identifier=default_client_identifier,
         )
         await throttle.disable()
@@ -683,28 +620,24 @@ class TestWebSocketThrottle:
             await websocket.send_json({"ok": True})
             await websocket.close()
 
-        routes = [WebSocketRoute("/ws/", ws_endpoint)]
-        app = Starlette(routes=routes)
+        app = web_framework.build_app(ws_routes=[WSRoute("/ws/", ws_endpoint)])
 
-        base_url = "http://0.0.0.0"
-        running_loop = asyncio.get_running_loop()
-        async with AsyncTestClient(
-            app=app,
-            base_url=base_url,
-            loop=running_loop,
+        async with make_client(
+            app, base_url="http://0.0.0.0", loop=asyncio.get_running_loop()
         ) as client:
-            # Fire 5 connections — all should succeed because the throttle is disabled
             for _ in range(5):
                 async with client.websocket_connect(url="/ws/") as ws:
                     response = await ws.receive_json()
                     assert response == {"ok": True}
 
     @pytest.mark.concurrent
-    async def test_websocket_throttle_concurrent(self, backends: BackendGen) -> None:
+    async def test_websocket_throttle_concurrent(
+        self, backends: BackendGen, web_framework: ASGIFramework
+    ) -> None:
         for backend in backends(persistent=False, namespace="ws_throttle_concurrent"):
             async with backend(close_on_exit=True):
                 throttle = WebSocketThrottle(
-                    "ws-throttle-concurrent-sl",
+                    f"ws-throttle-concurrent-{web_framework.name}",
                     rate="3/1050ms",
                     strategy=strategies.TokenBucketStrategy(),
                     registry=ThrottleRegistry(),
@@ -716,19 +649,17 @@ class TestWebSocketThrottle:
                     await websocket.send_json({"message": "PONG"})
                     await websocket.close()
 
-                routes = [WebSocketRoute("/ws/", ws_endpoint)]
-                app = Starlette(routes=routes)
+                app = web_framework.build_app(ws_routes=[WSRoute("/ws/", ws_endpoint)])
 
                 base_url = "http://0.0.0.0"
                 running_loop = asyncio.get_running_loop()
 
                 async def make_ws_connection() -> bool:
+                    nonlocal app, base_url, running_loop
                     try:
                         async with (
-                            AsyncTestClient(
-                                app=app,
-                                base_url=base_url,
-                                loop=running_loop,
+                            make_client(
+                                app, base_url=base_url, loop=running_loop
                             ) as client,
                             client.websocket_connect(url="/ws/") as ws,
                         ):

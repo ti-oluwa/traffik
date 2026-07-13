@@ -286,7 +286,7 @@ class TestTokenBucketWithDebtStrategy:
             else:
                 break
 
-        # Should allow 2-3 requests (bucket -7 → -10)
+        # Should allow 2-3 requests (bucket -7 -> -10)
         assert allowed_count >= 2, (
             f"Should allow 2-3 requests after partial refill, got {allowed_count}"
         )

@@ -563,7 +563,10 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
     async def close(self) -> None:
         """
-        Close the backend connection and perform cleanup.
+        Close the backend (client) connection(s) and perform cleanup.
+
+        Closing should advisably not clear the backend data.
+        That should be done by `reset`.
 
         This should always set `connection` to None.
 
@@ -688,6 +691,7 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
             await backend.initialize()
             if not await backend.ready():
                 raise BackendError("Throttle backend is not ready for operations.")
+            self._initialized = True
 
         self._token = _backend_ctx.set(backend)
         return backend
@@ -702,7 +706,7 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
         # Store any exception that occurs during reset/close to raise later
         # This is to ensure that we atleast call `close()` even if `reset()` fails.
         exit_exc: typing.Optional[BaseException] = None
-        if not self.persistent and await backend.ready():
+        if not self.persistent and self._initialized:
             try:
                 await backend.reset()
                 # Should raise `BackendError` due to wrap,

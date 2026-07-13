@@ -7,6 +7,7 @@ from starlette.types import ASGIApp, Receive, Send
 from starlette.websockets import WebSocket
 from typing_extensions import TypeVar
 
+from tests.client import AsyncTestClient
 from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 from traffik.typing import EXEMPTED
 
@@ -107,3 +108,7 @@ def make_connection(
     if typ is HTTPConnection:
         return typ(scope=scope, receive=receive)
     return typ(scope=scope, receive=receive, send=send)  # type: ignore
+
+
+def make_client(app: ASGIApp, base_url: str, **kwargs) -> AsyncTestClient:
+    return AsyncTestClient(app, base_url=base_url, **kwargs)

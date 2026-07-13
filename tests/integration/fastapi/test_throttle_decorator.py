@@ -4,12 +4,10 @@ import typing
 
 import anyio
 import pytest
-from httpx2 import ASGITransport, AsyncClient
 from starlette.websockets import WebSocketDisconnect
 
 from fastapi import Depends, FastAPI, WebSocket
-from fastapi.testclient import TestClient
-from tests.utils import default_client_identifier
+from tests.utils import default_client_identifier, make_client
 from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.decorators import throttled
@@ -19,8 +17,8 @@ from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
 @pytest.fixture(scope="function")
-async def app() -> FastAPI:
-    app = FastAPI()
+async def app(inmemory_backend: InMemoryBackend) -> FastAPI:
+    app = FastAPI(lifespan=inmemory_backend.lifespan)
     return app
 
 
@@ -28,10 +26,8 @@ async def app() -> FastAPI:
 @pytest.mark.throttle
 @pytest.mark.decorator
 @pytest.mark.fastapi
-async def test_throttle_decorator_only(
-    app: FastAPI, inmemory_backend: InMemoryBackend
-) -> None:
-    async with inmemory_backend(app, persistent=True, close_on_exit=True):
+class TestThrottleDecorator:
+    async def test_throttle_decorator_only(self, app: FastAPI) -> None:
         throttle = HTTPThrottle(
             uid="test-decorator-fa",
             rate=Rate(limit=3, seconds=5),
@@ -45,9 +41,7 @@ async def test_throttle_decorator_only(
             return {"message": "Hello, World!"}
 
         base_url = "http://0.0.0.0"
-        async with AsyncClient(
-            base_url=base_url, transport=ASGITransport(app=app)
-        ) as client:
+        async with make_client(app, base_url=base_url) as client:
             for _ in range(3):
                 response = await client.get("/throttled")
                 print(response.json())
@@ -58,15 +52,7 @@ async def test_throttle_decorator_only(
             assert response.status_code == 429
             assert response.headers["Retry-After"] is not None
 
-
-@pytest.mark.anyio
-@pytest.mark.throttle
-@pytest.mark.decorator
-@pytest.mark.fastapi
-async def test_throttle_decorator_with_dependency(
-    app: FastAPI, inmemory_backend: InMemoryBackend
-) -> None:
-    async with inmemory_backend(app, persistent=False, close_on_exit=True):
+    async def test_throttle_decorator_with_dependency(self, app: FastAPI) -> None:
         burst_throttle = HTTPThrottle(
             uid="test-burst-fa",
             rate=Rate(limit=3, seconds=5),
@@ -87,7 +73,9 @@ async def test_throttle_decorator_with_dependency(
             return "random_value"
 
         @app.get(
-            "/throttled", status_code=200, dependencies=[Depends(sustained_throttle)]
+            "/throttled",
+            status_code=200,
+            dependencies=[Depends(sustained_throttle)],
         )
         @throttled(burst_throttle)
         async def throttled_endpoint(
@@ -96,10 +84,8 @@ async def test_throttle_decorator_with_dependency(
             return {"message": value}
 
         base_url = "http://0.0.0.0"
-        async with AsyncClient(
-            base_url=base_url, transport=ASGITransport(app=app)
-        ) as client:
-            # Burst limit test — 3 allowed, 4th should fail
+        async with make_client(app, base_url=base_url) as client:
+            # Burst limit test - 3 allowed, 4th should fail
             for _ in range(3):
                 response = await client.get("/throttled")
                 assert response.status_code == 200
@@ -115,7 +101,7 @@ async def test_throttle_decorator_with_dependency(
             print(f"Waiting {wait_period}s for {mode} window to clear...")
             await anyio.sleep(wait_period)
 
-            # Sustained rate test — allow 1 more (total: 5 in 10s)
+            # Sustained rate test - allow 1 more (total: 5 in 10s)
             response = await client.get("/throttled")
             assert response.status_code == 200
 
@@ -124,17 +110,11 @@ async def test_throttle_decorator_with_dependency(
             assert response.status_code == 429
             assert response.headers.get("Retry-After") is not None
 
-
-@pytest.mark.anyio
-@pytest.mark.throttle
-@pytest.mark.decorator
-@pytest.mark.fastapi
-@pytest.mark.flaky(reruns=3, reruns_delay=2)
-async def test_throttled_decorator_with_multiple_throttles(
-    app: FastAPI, inmemory_backend: InMemoryBackend
-) -> None:
-    """Test `@throttled` decorator with multiple throttles applied sequentially."""
-    async with inmemory_backend(app, persistent=False, close_on_exit=True):
+    @pytest.mark.flaky(reruns=3, reruns_delay=2)
+    async def test_throttled_decorator_with_multiple_throttles(
+        self, app: FastAPI
+    ) -> None:
+        """Test `@throttled` decorator with multiple throttles applied sequentially."""
         # Burst throttle: 5 per 2 seconds
         burst_throttle = HTTPThrottle(
             uid="multi-burst-fa",
@@ -156,9 +136,7 @@ async def test_throttled_decorator_with_multiple_throttles(
             return {"status": "ok"}
 
         base_url = "http://0.0.0.0"
-        async with AsyncClient(
-            base_url=base_url, transport=ASGITransport(app=app)
-        ) as client:
+        async with make_client(app, base_url=base_url) as client:
             # First 5 requests should pass both throttles
             for i in range(5):
                 response = await client.get("/multi-throttled")
@@ -192,16 +170,10 @@ async def test_throttled_decorator_with_multiple_throttles(
                 f"Should be able to make at least 1 request after burst clears, got {success_count}"
             )
 
-
-@pytest.mark.anyio
-@pytest.mark.throttle
-@pytest.mark.decorator
-@pytest.mark.fastapi
-async def test_throttled_decorator_multiple_throttles_short_circuit(
-    app: FastAPI, inmemory_backend: InMemoryBackend
-) -> None:
-    """Test that when first throttle blocks, second isn't checked (short-circuit)."""
-    async with inmemory_backend(app, persistent=False, close_on_exit=True):
+    async def test_throttled_decorator_multiple_throttles_short_circuit(
+        self, app: FastAPI
+    ) -> None:
+        """Test that when first throttle blocks, second isn't checked (short-circuit)."""
         # Very restrictive first throttle
         first_throttle = HTTPThrottle(
             uid="first-limit-fa",
@@ -223,9 +195,7 @@ async def test_throttled_decorator_multiple_throttles_short_circuit(
             return {"status": "ok"}
 
         base_url = "http://0.0.0.0"
-        async with AsyncClient(
-            base_url=base_url, transport=ASGITransport(app=app)
-        ) as client:
+        async with make_client(app, base_url=base_url) as client:
             # First 2 requests pass
             for i in range(2):
                 response = await client.get("/short-circuit")
@@ -236,16 +206,8 @@ async def test_throttled_decorator_multiple_throttles_short_circuit(
             assert response.status_code == 429
             assert response.headers.get("Retry-After") is not None
 
-
-@pytest.mark.anyio
-@pytest.mark.throttle
-@pytest.mark.decorator
-@pytest.mark.fastapi
-async def test_throttled_decorator_websocket(
-    app: FastAPI, inmemory_backend: InMemoryBackend
-) -> None:
-    """Test `@throttled` decorator with WebSocketThrottle on a WebSocket route."""
-    async with inmemory_backend(app, persistent=True, close_on_exit=True):
+    async def test_throttled_decorator_websocket(self, app: FastAPI) -> None:
+        """Test `@throttled` decorator with WebSocketThrottle on a WebSocket route."""
         ws_throttle = WebSocketThrottle(
             uid="test-ws-decorator-fa",
             rate=Rate(limit=2, seconds=5),
@@ -260,28 +222,22 @@ async def test_throttled_decorator_websocket(
             await websocket.send_json({"message": "connected"})
             await websocket.close()
 
-        with TestClient(app, base_url="http://0.0.0.0") as client:
+        async with make_client(app, base_url="http://0.0.0.0") as client:
             # First 2 connections should succeed
             for _ in range(2):
-                with client.websocket_connect("/ws") as websocket:
-                    data = websocket.receive_json()
+                async with client.websocket_connect("/ws") as websocket:
+                    data = await websocket.receive_json()
                     assert data == {"message": "connected"}
 
             # 3rd connection should be throttled
             with pytest.raises((WebSocketDisconnect, Exception)):
-                with client.websocket_connect("/ws") as websocket:
-                    websocket.receive_json()
+                async with client.websocket_connect("/ws") as websocket:
+                    await websocket.receive_json()
 
-
-@pytest.mark.anyio
-@pytest.mark.throttle
-@pytest.mark.decorator
-@pytest.mark.fastapi
-async def test_throttled_decorator_websocket_multiple_throttles(
-    app: FastAPI, inmemory_backend: InMemoryBackend
-) -> None:
-    """Test `@throttled` decorator with multiple WebSocketThrottles."""
-    async with inmemory_backend(app, persistent=True, close_on_exit=True):
+    async def test_throttled_decorator_websocket_multiple_throttles(
+        self, app: FastAPI
+    ) -> None:
+        """Test `@throttled` decorator with multiple WebSocketThrottles."""
         burst = WebSocketThrottle(
             uid="ws-burst-fa",
             rate=Rate(limit=2, seconds=5),
@@ -302,14 +258,14 @@ async def test_throttled_decorator_websocket_multiple_throttles(
             await websocket.send_json({"message": "ok"})
             await websocket.close()
 
-        with TestClient(app, base_url="http://0.0.0.0") as client:
+        async with make_client(app, base_url="http://0.0.0.0") as client:
             # First 2 connections pass (burst limit)
             for _ in range(2):
-                with client.websocket_connect("/ws") as websocket:
-                    data = websocket.receive_json()
+                async with client.websocket_connect("/ws") as websocket:
+                    data = await websocket.receive_json()
                     assert data == {"message": "ok"}
 
             # 3rd connection blocked by burst throttle
             with pytest.raises((WebSocketDisconnect, Exception)):
-                with client.websocket_connect("/ws") as websocket:
-                    websocket.receive_json()
+                async with client.websocket_connect("/ws") as websocket:
+                    await websocket.receive_json()

@@ -1,24 +1,39 @@
+"""
+Fully async test client for ASGI applications.
+
+HTTP is handled by an internal `httpx2.AsyncClient` over `ASGITransport`with
+async `get`/`post`/`put`/`patch`/`delete`/`head`/`options`, all going through
+`request()` underneath, same as `httpx` itself.
+
+WebSocket connections use a and-rolled queue-driven session (`AsyncWebSocketTestSession`)
+since httpx doesn't implement the WebSocket half of ASGI. Both HTTP and WebSocket calls run
+against the same app instance and share the same ASGI *lifespan* (startup on
+`__aenter__`, shutdown on `__aexit__`).
+"""
+
 import asyncio
 import json
+import logging
 import typing
 from urllib.parse import unquote, urljoin, urlsplit
 
-import requests
-from requests.adapters import HTTPAdapter
-from requests.sessions import Session
-from starlette.testclient import ASGI3App, _Upgrade
+from httpx2 import ASGITransport, AsyncClient, Response
+from starlette.testclient import ASGI3App
 from starlette.types import Message, Scope
 from starlette.websockets import WebSocketDisconnect
+from typing_extensions import Self
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_bytes(
     val: typing.Union[str, bytes], /, *, encoding: str = "utf-8"
 ) -> bytes:
-    return val if isinstance(val, bytes) else val.encode(encoding=encoding)
+    return val if isinstance(val, bytes) else str(val).encode(encoding=encoding)
 
 
 def _ensure_str(val: typing.Union[str, bytes], /, *, encoding: str = "utf-8") -> str:
-    return val if isinstance(val, str) else val.decode(encoding=encoding)
+    return val if isinstance(val, str) else bytes(val).decode(encoding=encoding)
 
 
 class AsyncWebSocketTestSession:
@@ -54,7 +69,7 @@ class AsyncWebSocketTestSession:
         self._send_queue = send_queue
         self._task: typing.Optional[asyncio.Task[None]] = None
 
-    async def __aenter__(self) -> "AsyncWebSocketTestSession":
+    async def __aenter__(self) -> Self:
         self._task = self.loop.create_task(self._run())
         await asyncio.sleep(0)  # Allow task to start
         await self.send({"type": "websocket.connect"})
@@ -187,7 +202,10 @@ class AsyncWebSocketTestSession:
             return await self.send({"type": "websocket.receive", "text": text})
 
         return await self.send(
-            {"type": "websocket.receive", "bytes": text.encode("utf-8")}
+            {
+                "type": "websocket.receive",
+                "bytes": text.encode("utf-8"),
+            }
         )
 
     async def receive_text(self) -> str:
@@ -229,119 +247,22 @@ class AsyncWebSocketTestSession:
         return json.loads(text)
 
 
-class _ASGIAdapter(HTTPAdapter):
-    """
-    Adapter for `requests` to talk to ASGI applications over asyncio.
-
-    Only supports WebSocket connections.
-    """
-
-    def __init__(
-        self,
-        app: ASGI3App,
-        loop: asyncio.AbstractEventLoop,
-        root_path: str = "",
-        raise_server_exceptions: bool = True,
-    ) -> None:
-        """
-        Initialize the ASGI adapter.
-
-        :param app: The ASGI application to connect to.
-        :param loop: The asyncio event loop to use.
-        :param root_path: The root path for the application.
-        :param raise_server_exceptions: Whether to raise server exceptions.
-        """
-        self.loop = loop
-        self.app = app
-        self.raise_server_exceptions = raise_server_exceptions
-        self.root_path = root_path
-
-    def send(  # type: ignore[override]
-        self, request: requests.PreparedRequest, *args: typing.Any, **kwargs: typing.Any
-    ) -> AsyncWebSocketTestSession:
-        """
-        Send a request to upgrade to a WebSocket session.
-
-        :param request: The prepared request.
-        :return: An `AsyncWebSocketTestSession` for the WebSocket connection.
-        """
-        scheme, netloc, path, query, fragment = (
-            str(item) for item in urlsplit(request.url)
-        )
-        if scheme not in {"ws", "wss"}:
-            raise ValueError("Available only for websockets connection")
-
-        default_port = {"http": 80, "ws": 80, "https": 443, "wss": 443}[scheme]
-
-        if ":" in netloc:
-            host, port_string = netloc.split(":", 1)
-            port = int(port_string)
-        else:
-            host = netloc
-            port = default_port
-
-        # Include the 'host' header.
-        request_headers = request.headers or {}
-        if "host" in request_headers:
-            headers: typing.List[typing.Tuple[bytes, bytes]] = []
-        elif port == default_port:
-            headers = [(b"host", host.encode())]
-        else:
-            headers = [(b"host", (f"{host}:{port}").encode())]
-
-        # Include other request headers.
-        headers += [
-            (
-                key.lower().encode(encoding="utf-8"),
-                _ensure_bytes(value, encoding="utf-8"),
-            )
-            for key, value in request_headers.items()
-        ]
-
-        subprotocol = request_headers.get("sec-websocket-protocol", None)
-        if subprotocol is None:
-            subprotocols = []
-        else:
-            subprotocols = [
-                value.strip() for value in _ensure_str(subprotocol).split(",")
-            ]
-
-        scope = {
-            "type": "websocket",
-            "path": unquote(path),
-            "root_path": self.root_path,
-            "scheme": scheme,
-            "query_string": query.encode(),
-            "headers": headers,
-            "client": ["testclient", 50000],
-            "server": [host, port],
-            "subprotocols": subprotocols,
-        }
-
-        # Create new queues for each WebSocket connection
-        receive_queue: asyncio.Queue[Message] = asyncio.Queue()
-        send_queue: asyncio.Queue[Message] = asyncio.Queue()
-        session = AsyncWebSocketTestSession(
-            app=self.app,
-            scope=scope,
-            loop=self.loop,
-            receive_queue=receive_queue,
-            send_queue=send_queue,
-        )
-        raise _Upgrade(session)  # type: ignore[arg-type]
-
-
 class LifespanStartupError(Exception):
     """Exception raised when lifespan startup fails."""
 
     pass
 
 
-class AsyncTestClient(Session):
+class AsyncTestClient:
     """
     Asynchronous test client for ASGI applications.
 
-    Async version of Starlette's `TestClient` supporting WebSocket connections.
+    HTTP requests (`get`/`post`/`put`/`patch`/`delete`/`head`/`options`, are
+    routed through `request()`), backed by `httpx2.AsyncClient`
+    over `ASGITransport`.
+
+    WebSocket connections use `websocket_connect()` backed by `AsyncWebSocketTestSession`.
+    Both share the same app and the same lifespan.
     """
 
     __test__ = False  # For pytest to not discover this up.
@@ -353,6 +274,7 @@ class AsyncTestClient(Session):
         raise_server_exceptions: bool = True,
         root_path: str = "",
         loop: typing.Optional[asyncio.AbstractEventLoop] = None,
+        headers: typing.Optional[typing.Mapping[str, str]] = None,
     ) -> None:
         """
         Initialize the asynchronous test client.
@@ -362,110 +284,155 @@ class AsyncTestClient(Session):
         :param raise_server_exceptions: Whether to raise server exceptions.
         :param root_path: The root path for the application.
         :param loop: The asyncio event loop to use.
+        :param headers: Extra default headers to send with every HTTP request.
         """
-        super().__init__()
-
-        # Separate queues for lifespan
-        self.loop = loop or asyncio.get_running_loop()
-        self.lifespan_receive_queue: asyncio.Queue[Message] = asyncio.Queue()
-        self.lifespan_send_queue: asyncio.Queue[Message] = asyncio.Queue()
-
-        adapter = _ASGIAdapter(
-            app,
-            raise_server_exceptions=raise_server_exceptions,
-            root_path=root_path,
-            loop=self.loop,
-        )
-        self.mount("http://", adapter)
-        self.mount("https://", adapter)
-        self.mount("ws://", adapter)
-        self.mount("wss://", adapter)
-        self.headers.update({"user-agent": "testclient"})
         self.app = app
         self.base_url = base_url
-        self._lifespan_task = None
+        self.root_path = root_path
+        self.raise_server_exceptions = raise_server_exceptions
+        self.loop = loop or asyncio.get_running_loop()
 
-    def request(  # type: ignore
+        self._http_client = AsyncClient(
+            transport=ASGITransport(
+                app=app,
+                raise_app_exceptions=raise_server_exceptions,
+                root_path=root_path,
+            ),
+            base_url=base_url,
+            headers={"user-agent": "testclient", **(headers or {})},
+        )
+
+        # Separate queues for lifespan
+        self.lifespan_receive_queue: asyncio.Queue[Message] = asyncio.Queue()
+        self.lifespan_send_queue: asyncio.Queue[Message] = asyncio.Queue()
+        self._lifespan_task: typing.Optional[asyncio.Task] = None
+
+    async def request(
         self,
         method: str,
         url: str,
-        params=None,
-        data=None,
-        headers: typing.Optional[typing.MutableMapping[str, str]] = None,
-        cookies=None,
-        files=None,
-        auth=None,
-        timeout=None,
-        allow_redirects: bool = True,
-        proxies: typing.Optional[typing.MutableMapping[str, str]] = None,
-        hooks: typing.Any = None,
-        stream: typing.Optional[bool] = None,
-        verify: typing.Optional[typing.Union[bool, str]] = None,
-        cert: typing.Optional[typing.Union[str, typing.Tuple[str, str]]] = None,
-        json: typing.Any = None,
-    ) -> requests.Response:
-        url = urljoin(self.base_url, url)
-        return super().request(
-            method,
-            url,
-            params=params,
-            data=data,
-            headers=headers,
-            cookies=cookies,
-            files=files,
-            auth=auth,
-            timeout=timeout,
-            allow_redirects=allow_redirects,
-            proxies=dict(proxies) if proxies else None,
-            hooks=hooks,
-            stream=stream,
-            verify=verify,
-            cert=cert,
-            json=json,
-        )
+        **kwargs: typing.Any,
+    ) -> Response:
+        """
+        Send an HTTP request to the ASGI application.
+
+        :param method: The HTTP method (e.g. "GET", "POST").
+        :param url: The URL to request. May be relative to `base_url`.
+        :param kwargs: Any other keyword arguments `httpx2.AsyncClient.request`
+            accepts (`params`, `json`, `data`, `content`, `files`, `headers`,
+            `cookies`, `auth`, `follow_redirects`, `timeout`, ...).
+        :return: The `httpx2.Response`.
+        """
+        return await self._http_client.request(method, url, **kwargs)
+
+    async def get(self, url: str, **kwargs: typing.Any) -> Response:
+        return await self.request("GET", url, **kwargs)
+
+    async def post(self, url: str, **kwargs: typing.Any) -> Response:
+        return await self.request("POST", url, **kwargs)
+
+    async def put(self, url: str, **kwargs: typing.Any) -> Response:
+        return await self.request("PUT", url, **kwargs)
+
+    async def patch(self, url: str, **kwargs: typing.Any) -> Response:
+        return await self.request("PATCH", url, **kwargs)
+
+    async def delete(self, url: str, **kwargs: typing.Any) -> Response:
+        return await self.request("DELETE", url, **kwargs)
+
+    async def head(self, url: str, **kwargs: typing.Any) -> Response:
+        return await self.request("HEAD", url, **kwargs)
+
+    async def options(self, url: str, **kwargs: typing.Any) -> Response:
+        return await self.request("OPTIONS", url, **kwargs)
 
     def websocket_connect(
         self,
         url: str,
         subprotocols: typing.Optional[typing.Sequence[str]] = None,
+        headers: typing.Optional[typing.MutableMapping[str, str]] = None,
         **kwargs: typing.Any,
     ) -> AsyncWebSocketTestSession:
         """
         Establish a WebSocket connection to the ASGI application.
 
-        :param url: The WebSocket URL to connect to.
+        :param url: The WebSocket URL to connect to (`ws://`/`wss://`, or a
+            path/`http(s)://` URL, the scheme is normalized to `ws`/`wss`).
         :param subprotocols: Optional list of subprotocols to use.
-        :param kwargs: Additional arguments to pass to the request.
-        :return: An `AsyncWebSocketTestSession` for the connection.
+        :param headers: Optional extra headers for the upgrade request.
+        :param kwargs: Extra ASGI scope fields (merged in as-is).
+        :return: An `AsyncWebSocketTestSession` for the connection, used as an
+            async context manager: `async with client.websocket_connect(url) as ws:`.
         """
         host = self.base_url.split("://")[1]
         url = urljoin(f"ws://{host}", url)
 
-        headers = kwargs.get("headers", {})
-        headers.setdefault("connection", "upgrade")
-        headers.setdefault("sec-websocket-key", "testserver==")
-        headers.setdefault("sec-websocket-version", "13")
+        scheme, netloc, path, query, _fragment = (str(item) for item in urlsplit(url))
+        if scheme not in {"ws", "wss"}:
+            raise ValueError(
+                f"`websocket_connect(...)` requires a ws/wss URL, got scheme {scheme!r}"
+            )
 
-        if subprotocols is not None:
-            headers.setdefault("sec-websocket-protocol", ", ".join(subprotocols))
-
-        kwargs["headers"] = headers
-        try:
-            super().request("GET", url, **kwargs)
-        except _Upgrade as exc:
-            session = exc.session
-            if not isinstance(session, AsyncWebSocketTestSession):
-                raise RuntimeError(  # noqa
-                    f"Expected `AsyncWebSocketTestSession`, got {type(session)}"
-                ) from exc
+        default_port = {"ws": 80, "wss": 443}[scheme]
+        if ":" in netloc:
+            connection_host, port_string = netloc.split(":", 1)
+            port = int(port_string)
         else:
-            raise RuntimeError("Expected WebSocket upgrade")  # pragma: no cover
-        return session
+            connection_host = netloc
+            port = default_port
+
+        request_headers = dict(headers or {})
+        header_pairs: typing.List[typing.Tuple[bytes, bytes]] = []
+        if "host" not in {k.lower() for k in request_headers}:
+            if port == default_port:
+                header_pairs.append((b"host", connection_host.encode()))
+            else:
+                header_pairs.append((b"host", f"{connection_host}:{port}".encode()))
+
+        header_pairs.append((b"connection", b"upgrade"))
+        header_pairs.append((b"sec-websocket-key", b"testserver=="))
+        header_pairs.append((b"sec-websocket-version", b"13"))
+        if subprotocols:
+            header_pairs.append(
+                (
+                    b"sec-websocket-protocol",
+                    ", ".join(subprotocols).encode(),
+                )
+            )
+        header_pairs += [
+            (
+                key.lower().encode(encoding="utf-8"),
+                _ensure_bytes(value, encoding="utf-8"),
+            )
+            for key, value in request_headers.items()
+            if key.lower() != "host"
+        ]
+
+        scope: Scope = {
+            "type": "websocket",
+            "path": unquote(path),
+            "root_path": self.root_path,
+            "scheme": scheme,
+            "query_string": query.encode(),
+            "headers": header_pairs,
+            "client": ["testclient", 50000],
+            "server": [connection_host, port],
+            "subprotocols": list(subprotocols) if subprotocols else [],
+            **kwargs,
+        }
+
+        receive_queue: asyncio.Queue[Message] = asyncio.Queue()
+        send_queue: asyncio.Queue[Message] = asyncio.Queue()
+        return AsyncWebSocketTestSession(
+            app=self.app,
+            scope=scope,
+            loop=self.loop,
+            receive_queue=receive_queue,
+            send_queue=send_queue,
+        )
 
     async def __lifespan_receive(self) -> Message:
-        """
-        Receive a message from the lifespan receive queue.
-        """
+        """Receive a message from the lifespan receive queue."""
         while True:
             try:
                 return self.lifespan_receive_queue.get_nowait()
@@ -500,7 +467,9 @@ class AsyncTestClient(Session):
         """
         await self.lifespan_receive_queue.put(message)
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
+        await self._http_client.__aenter__()
+
         # Create lifespan task
         self._lifespan_task = self.loop.create_task(
             self.app(
@@ -513,8 +482,19 @@ class AsyncTestClient(Session):
         # Confirm startup complete
         message = await self.__receive_from_lifespan()
 
-        # If startup failed, raise the error
+        # If startup failed, raise the error. The lifespan task also raised
+        # internally (that's how the ASGI app reports the failure). Retrieve
+        # it so asyncio doesn't complain about an exception nobody looked at.
         if message["type"] == "lifespan.startup.failed":
+            if self._lifespan_task is not None:
+                try:
+                    await asyncio.wait_for(self._lifespan_task, timeout=1.0)
+                except asyncio.TimeoutError:
+                    self._lifespan_task.cancel()
+                except BaseException:
+                    logger.exception(
+                        "An error occurred when waiting on lifespan task on startup failure"
+                    )
             raise LifespanStartupError(
                 message.get("message", "Lifespan startup failed")
             )
@@ -525,29 +505,33 @@ class AsyncTestClient(Session):
         )
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        # Only send shutdown if startup was successful
-        if exc_type is None or not issubclass(exc_type, LifespanStartupError):
-            await self.__send_to_lifespan({"type": "lifespan.shutdown"})
-            message = await self.__receive_from_lifespan()
-            if message["type"] not in (
-                "lifespan.shutdown.complete",
-                "lifespan.shutdown.failed",
-            ):
-                raise RuntimeError(
-                    f"Expected shutdown complete or shutdown failed, got {message['type']}"
-                )
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> typing.Optional[bool]:
+        try:
+            # Only send shutdown if startup was successful
+            if exc_type is None or not issubclass(exc_type, LifespanStartupError):
+                await self.__send_to_lifespan({"type": "lifespan.shutdown"})
+                message = await self.__receive_from_lifespan()
+                if message["type"] not in (
+                    "lifespan.shutdown.complete",
+                    "lifespan.shutdown.failed",
+                ):
+                    raise RuntimeError(
+                        f"Expected shutdown complete or shutdown failed, got {message['type']}"
+                    )
 
-        # Wait for lifespan task to complete
-        if self._lifespan_task and not self._lifespan_task.done():
-            try:
-                await asyncio.wait_for(self._lifespan_task, timeout=1.0)
-            except asyncio.TimeoutError:
-                self._lifespan_task.cancel()
+            # Wait for lifespan task to complete
+            if self._lifespan_task and not self._lifespan_task.done():
                 try:
-                    await self._lifespan_task
-                except asyncio.CancelledError:
-                    pass
+                    await asyncio.wait_for(self._lifespan_task, timeout=1.0)
+                except asyncio.TimeoutError:
+                    self._lifespan_task.cancel()
+                    try:
+                        await self._lifespan_task
+                    except asyncio.CancelledError:
+                        pass
+        finally:
+            await self._http_client.__aexit__(exc_type, exc_val, exc_tb)
 
         if exc_type is not None:
             return False  # Propagate exception
+        return None

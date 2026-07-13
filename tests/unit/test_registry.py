@@ -21,7 +21,7 @@ from traffik.throttles import Throttle
 RULE_TYPES = [ThrottleRule, BypassThrottleRule]
 
 
-@pytest.mark.parametrize(["rule_type"], RULE_TYPES)
+@pytest.mark.parametrize("rule_type", RULE_TYPES)
 class TestThrottleRuleBasic:
     def test_no_args(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
@@ -107,41 +107,40 @@ class TestThrottleRuleBasic:
         with pytest.raises(AttributeError, match="immutable"):
             rule.predicate = lambda c: True  # type: ignore
 
-    # TestThrottleRuleHash:
     def test_same_args_same_hash(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:
-        r1 = ThrottleRule(path="/api/", methods={"GET"})
-        r2 = ThrottleRule(path="/api/", methods={"GET"})
+        r1 = rule_type(path="/api/", methods={"GET"})
+        r2 = rule_type(path="/api/", methods={"GET"})
         assert hash(r1) == hash(r2)
 
     def test_different_path_different_hash(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:
-        r1 = ThrottleRule(path="/api/")
-        r2 = ThrottleRule(path="/other/")
+        r1 = rule_type(path="/api/")
+        r2 = rule_type(path="/other/")
         assert hash(r1) != hash(r2)
 
     def test_different_methods_different_hash(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:
-        r1 = ThrottleRule(methods={"GET"})
-        r2 = ThrottleRule(methods={"POST"})
+        r1 = rule_type(methods={"GET"})
+        r2 = rule_type(methods={"POST"})
         assert hash(r1) != hash(r2)
 
     def test_same_instance_deduplicates_in_set(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:
         """Same object instance deduplicates in a set."""
-        r = ThrottleRule(path="/api/", methods={"GET"})
+        r = rule_type(path="/api/", methods={"GET"})
         assert len({r, r}) == 1
 
     def test_distinct_instances_not_deduplicated(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:
         """Two instances with same args are distinct (identity-based equality)."""
-        r1 = ThrottleRule(path="/api/", methods={"GET"})
-        r2 = ThrottleRule(path="/api/", methods={"GET"})
+        r1 = rule_type(path="/api/", methods={"GET"})
+        r2 = rule_type(path="/api/", methods={"GET"})
         assert len({r1, r2}) == 2
 
 
@@ -445,7 +444,7 @@ class TestThrottleRegistryBasic:
         registry = ThrottleRegistry()
         registry.unregister("nonexistent")  # Should not raise
 
-    @pytest.mark.parametrize(["rule_type"], RULE_TYPES)
+    @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_to_registered_uid(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:
@@ -455,7 +454,7 @@ class TestThrottleRegistryBasic:
         registry.add_rules("foo", rule)
         assert rule in registry.get_rules("foo")
 
-    @pytest.mark.parametrize(["rule_type"], RULE_TYPES)
+    @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_to_unregistered_uid_raises(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:
@@ -480,7 +479,7 @@ class TestThrottleRegistryBasic:
         registry = ThrottleRegistry()
         assert registry.get_rules("unknown") == []
 
-    @pytest.mark.parametrize(["rule_type"], RULE_TYPES)
+    @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_deduplicates(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:
@@ -490,7 +489,7 @@ class TestThrottleRegistryBasic:
         registry.add_rules("foo", rule, rule)
         assert len(registry.get_rules("foo")) == 1
 
-    @pytest.mark.parametrize(["rule_type"], RULE_TYPES)
+    @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_multiple_calls_accumulate(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:
@@ -505,7 +504,7 @@ class TestThrottleRegistryBasic:
         assert r1 in rules
         assert r2 in rules
 
-    @pytest.mark.parametrize(["rule_type"], RULE_TYPES)
+    @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_unregister_removes_rules(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:
@@ -515,7 +514,7 @@ class TestThrottleRegistryBasic:
         registry.unregister("foo")
         assert registry.get_rules("foo") == []
 
-    @pytest.mark.parametrize(["rule_type"], RULE_TYPES)
+    @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_rules_isolated_between_uids(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:
@@ -527,7 +526,7 @@ class TestThrottleRegistryBasic:
         assert rule in registry.get_rules("a")
         assert rule not in registry.get_rules("b")
 
-    @pytest.mark.parametrize(["rule_type"], RULE_TYPES)
+    @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_get_rules_returns_list_copy(
         self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
     ) -> None:

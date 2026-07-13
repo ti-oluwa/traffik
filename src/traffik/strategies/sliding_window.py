@@ -10,7 +10,11 @@ from typing_extensions import TypedDict
 from traffik._utils import time
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.strategies._serde import _encode_two_float_records, _iter_two_float_records
+from traffik.strategies._serde import (
+    SERDE_ERRORS,
+    _encode_two_float_records,
+    _iter_two_float_records,
+)
 from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
 
 __all__ = [
@@ -163,7 +167,7 @@ class SlidingWindowLogStrategy:
             if old_log and old_log != "":
                 try:
                     entries = _iter_two_float_records(old_log)
-                except (ValueError, TypeError):
+                except SERDE_ERRORS:
                     entries = []
             else:
                 entries = []
@@ -237,7 +241,7 @@ class SlidingWindowLogStrategy:
         if old_log and old_log != "":
             try:
                 entries = _iter_two_float_records(old_log)
-            except (ValueError, TypeError):
+            except SERDE_ERRORS:
                 entries = []
         else:
             entries = []

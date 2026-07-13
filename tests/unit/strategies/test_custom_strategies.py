@@ -11,29 +11,13 @@ from traffik.rates import Rate
 from traffik.strategies.custom import (
     AdaptiveThrottleStrategy,
     CostBasedTokenBucketStrategy,
-    DistributedFairnessStrategy,
     GCRAStrategy,
-    GeographicDistributionStrategy,
     PriorityQueueStrategy,
     QuotaWithRolloverStrategy,
     TieredRateStrategy,
     TimeOfDayStrategy,
 )
 from traffik.throttles import ThrottleStrategy
-
-CUSTOM_STRATEGIES = [
-    pytest.param(TieredRateStrategy(), id="tiered_rate"),
-    pytest.param(GCRAStrategy(), id="gcra"),
-    pytest.param(AdaptiveThrottleStrategy(), id="adaptive"),
-    pytest.param(PriorityQueueStrategy(), id="priority_queue"),
-    pytest.param(QuotaWithRolloverStrategy(), id="quota_with_rollover"),
-    pytest.param(TimeOfDayStrategy(), id="time_of_day"),
-    pytest.param(CostBasedTokenBucketStrategy(), id="cost_based_token_bucket"),
-    pytest.param(
-        DistributedFairnessStrategy(instance_id="test"), id="distributed_fairness"
-    ),
-    pytest.param(GeographicDistributionStrategy(), id="geographic_distribution"),
-]
 
 
 @pytest.mark.anyio
@@ -715,239 +699,17 @@ class TestCostBasedTokenBucketStrategy:
 
 @pytest.mark.anyio
 @pytest.mark.strategy
-class TestDistributedFairnessStrategy:
-    """Tests for `DistributedFairnessStrategy`."""
-
-    async def test_equal_weight_fair_sharing(self, backend: InMemoryBackend):
-        """Test instances with equal weights get equal shares."""
-        strategy1 = DistributedFairnessStrategy(
-            instance_id="instance1", instance_weight=1.0
-        )
-        strategy2 = DistributedFairnessStrategy(
-            instance_id="instance2", instance_weight=1.0
-        )
-        rate = Rate.parse("100/s")  # 100 total limit
-        key = "global:limit"
-
-        # With 2 equal-weight instances, each gets 50 requests (fair share)
-        # Test that both instances can make requests
-        requests_inst1 = 0
-        requests_inst2 = 0
-
-        # Alternate requests to test fair sharing
-        for _ in range(50):
-            wait1 = await strategy1(key, rate, backend)
-            if wait1 == 0.0:
-                requests_inst1 += 1
-
-            wait2 = await strategy2(key, rate, backend)
-            if wait2 == 0.0:
-                requests_inst2 += 1
-
-        # Both instances should have been allowed requests
-        assert requests_inst1 >= 25, (
-            f"Instance1 should get at least 25 requests, got {requests_inst1}"
-        )
-        assert requests_inst2 >= 25, (
-            f"Instance2 should get at least 25 requests, got {requests_inst2}"
-        )
-
-        # Total should not exceed global limit
-        assert requests_inst1 + requests_inst2 <= 100, (
-            "Total requests should not exceed global limit"
-        )
-
-    async def test_weighted_proportional_sharing(self, backend: InMemoryBackend):
-        """Test weighted instances get proportional shares."""
-        # High weight instance (weight=3)
-        high_weight = DistributedFairnessStrategy(
-            instance_id="heavy", instance_weight=3.0
-        )
-        # Low weight instance (weight=1)
-        low_weight = DistributedFairnessStrategy(
-            instance_id="light", instance_weight=1.0
-        )
-        rate = Rate.parse("80/s")  # 80 total limit for cleaner division
-        key = "weighted:limit"
-
-        # Total weight = 3 + 1 = 4
-        # Heavy gets: 80 * (3/4) = 60 requests (fair share)
-        # Light gets: 80 * (1/4) = 20 requests (fair share)
-
-        # Test each instance independently to avoid deficit interference
-        # First, verify heavy instance can make more requests
-        heavy_requests = 0
-        for _ in range(65):
-            wait = await high_weight(key, rate, backend, cost=1)
-            if wait == 0.0:
-                heavy_requests += 1
-            else:
-                break
-
-        # Heavy should be allowed significantly more than 20 (light's fair share)
-        assert heavy_requests >= 40, (
-            f"Heavy weight instance should get at least 40 requests, "
-            f"got {heavy_requests}"
-        )
-
-        # Now test with fresh key for light instance
-        key2 = "weighted:limit2"
-        light_requests = 0
-        for _ in range(30):
-            wait = await low_weight(key2, rate, backend, cost=1)
-            if wait == 0.0:
-                light_requests += 1
-            else:
-                break
-
-        # Light should be throttled before heavy's count
-        assert light_requests < heavy_requests, (
-            f"Light weight (1.0) should get fewer requests than heavy (3.0), "
-            f"got light={light_requests}, heavy={heavy_requests}"
-        )
-
-    async def test_global_limit_enforcement(self, backend: InMemoryBackend):
-        """Test that global limit is enforced across all instances."""
-        strategy1 = DistributedFairnessStrategy(
-            instance_id="inst1", instance_weight=1.0
-        )
-        strategy2 = DistributedFairnessStrategy(
-            instance_id="inst2", instance_weight=1.0
-        )
-        rate = Rate.parse("60/s")  # 60 total, 30 each
-        key = "global:enforcement"
-
-        # Each instance can use up to 30, but global limit is 60
-        # Use 30 from instance1
-        for _ in range(30):
-            await strategy1(key, rate, backend)
-
-        # Use 30 from instance2 (now at global limit of 60)
-        for _ in range(30):
-            await strategy2(key, rate, backend)
-
-        # Both instances should now be throttled (global limit reached)
-        wait1 = await strategy1(key, rate, backend)
-        wait2 = await strategy2(key, rate, backend)
-
-        assert wait1 > 0, "Instance1 should be throttled at global limit"
-        assert wait2 > 0, "Instance2 should be throttled at global limit"
-
-
-@pytest.mark.anyio
-@pytest.mark.strategy
-class TestGeographicDistributionStrategy:
-    """Tests for `GeographicDistributionStrategy`."""
-
-    async def test_region_extraction(self, backend: InMemoryBackend):
-        """Test extracts region from key."""
-        strategy = GeographicDistributionStrategy(
-            region_multipliers={
-                "us-east-1": 0.5,  # 50% of capacity
-                "eu-west-1": 0.3,  # 30% of capacity
-            },
-            default_region="default",
-            allow_spillover=False,  # Disable spillover for strict region isolation
-        )
-        rate = Rate.parse("100/s")
-
-        # US East should get 50 requests
-        for i in range(50):
-            wait = await strategy("region:us-east-1:user:123", rate, backend)
-            assert wait == 0.0, f"US East request {i + 1} should be allowed"
-
-        wait = await strategy("region:us-east-1:user:123", rate, backend)
-        assert wait > 0, "US East should be throttled after 50"
-
-        # EU West should still have capacity
-        wait = await strategy("region:eu-west-1:user:456", rate, backend)
-        assert wait == 0.0
-
-    async def test_spillover_uses_unused_capacity(self, backend: InMemoryBackend):
-        """Test spillover allows using unused capacity from other regions."""
-        strategy = GeographicDistributionStrategy(
-            region_multipliers={
-                "us-east-1": 0.6,  # 60 requests
-                "eu-west-1": 0.4,  # 40 requests (unused)
-            },
-            allow_spillover=True,
-        )
-        rate = Rate.parse("100/s")
-        key_us = "region:us-east-1:user:123"
-
-        # Use full US capacity (60 requests)
-        for i in range(60):
-            wait = await strategy(key_us, rate, backend)
-            assert wait == 0.0, (
-                f"US request {i + 1} should be allowed within region limit"
-            )
-
-        # With spillover enabled, should be able to use some unused capacity
-        # Since EU region (40 requests) is unused, spillover pool has capacity
-        # Try a few more requests - at least some should succeed with spillover
-        spillover_allowed = 0
-        for _ in range(10):
-            wait = await strategy(key_us, rate, backend)
-            if wait == 0.0:
-                spillover_allowed += 1
-
-        # Should allow at least 1 request via spillover (exact amount depends on implementation)
-        assert spillover_allowed >= 1, (
-            f"With spillover enabled, should allow some requests beyond regional limit, "
-            f"got {spillover_allowed}"
-        )
-
-    async def test_no_spillover_strict_isolation(self, backend: InMemoryBackend):
-        """Test that disabling spillover enforces strict regional limits."""
-        strategy = GeographicDistributionStrategy(
-            region_multipliers={
-                "us-east-1": 0.6,  # 60 requests
-                "eu-west-1": 0.4,  # 40 requests
-            },
-            allow_spillover=False,  # Strict isolation
-        )
-        rate = Rate.parse("100/s")
-        key_us = "region:us-east-1:user:123"
-
-        # Use full US capacity (60 requests)
-        for i in range(60):
-            wait = await strategy(key_us, rate, backend)
-            assert wait == 0.0, f"US request {i + 1} should be allowed"
-
-        # With spillover disabled, 61st request should be throttled
-        # even though EU region capacity is unused
-        wait = await strategy(key_us, rate, backend)
-        assert wait > 0, (
-            "Without spillover, should be throttled at regional limit "
-            "even with unused capacity in other regions"
-        )
-
-    async def test_default_region_fallback(self, backend: InMemoryBackend):
-        """Test uses default region when not specified."""
-        strategy = GeographicDistributionStrategy(region_multipliers={"default": 1.0})
-        rate = Rate.parse("10/s")
-
-        # Key without region marker
-        for _ in range(10):
-            wait = await strategy("user:123", rate, backend)
-            assert wait == 0.0
-
-        wait = await strategy("user:123", rate, backend)
-        assert wait > 0
-
-
-@pytest.mark.parametrize(["strategy"], CUSTOM_STRATEGIES)
-@pytest.mark.anyio
-@pytest.mark.strategy
 async def test_all_strategies_handle_unlimited_rate(
-    backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
+    backend: InMemoryBackend, custom_strategy: ThrottleStrategy[HTTPConnection]
 ):
     """Test all strategies handle unlimited rates correctly."""
     rate = Rate(limit=0, seconds=0)  # Unlimited
     key = "user:unlimited"
     for _ in range(20):
-        wait = await strategy(key, rate, backend)
-        assert wait == 0.0, f"{strategy.__class__.__name__} should allow unlimited"
+        wait = await custom_strategy(key, rate, backend)
+        assert wait == 0.0, (
+            f"{custom_strategy.__class__.__name__} should allow unlimited"
+        )
 
 
 @pytest.mark.anyio
@@ -1120,89 +882,34 @@ class TestCustomStrategiesGetStat:
         stat = await strategy.get_stat(key, rate, backend)
         assert stat.metadata["tat_ms"] > 0  # type: ignore
 
-    async def test_distributed_fairness_strategy_get_stat(
-        self, backend: InMemoryBackend
-    ):
-        """Test DistributedFairnessStrategy get_stat method."""
-        strategy = DistributedFairnessStrategy(
-            instance_id="test-instance",
-            instance_weight=1.0,
-        )
-        rate = Rate.parse("100/s")
-        key = "user:fairness_stat"
-
-        # Initial stat
-        stat = await strategy.get_stat(key, rate, backend)
-        assert stat.key == key
-        assert stat.metadata is not None
-        assert stat.metadata["strategy"] == "distributed_fairness"
-        assert stat.metadata["instance_id"] == "test-instance"
-        assert stat.metadata["instance_weight"] == 1.0
-
-        # Make some requests
-        for _ in range(10):
-            await strategy(key, rate, backend)
-
-        stat = await strategy.get_stat(key, rate, backend)
-        assert stat.metadata["instance_usage"] == 10  # type: ignore
-
-    @pytest.mark.flaky(reruns=3, reruns_delay=2)
-    async def test_geographic_distribution_strategy_get_stat(
-        self, backend: InMemoryBackend
-    ):
-        """Test GeographicDistributionStrategy get_stat method."""
-        strategy = GeographicDistributionStrategy(
-            region_multipliers={
-                "us-east": 0.6,
-                "eu-west": 0.4,
-            },
-            default_region="us-east",
-        )
-        rate = Rate.parse("50/s")
-        key = "region:eu-west:user:stat"
-
-        # Initial stat
-        stat = await strategy.get_stat(key, rate, backend)
-        assert stat.key == key
-        assert stat.metadata is not None
-        assert stat.metadata["strategy"] == "geographic_distribution"
-        assert stat.metadata["region"] == "eu-west"
-        assert stat.metadata["region_multiplier"] == 0.4
-        assert stat.metadata["region_limit"] == 20  # 50 * 0.4
-
-        # Make some requests
-        for _ in range(10):
-            await strategy(key, rate, backend)
-
-        stat = await strategy.get_stat(key, rate, backend)
-        assert stat.metadata["region_count"] == 10  # type: ignore
-
-    @pytest.mark.parametrize(["strategy"], CUSTOM_STRATEGIES)
     async def test_all_custom_strategies_get_stat_unlimited(
-        self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
+        self,
+        backend: InMemoryBackend,
+        custom_strategy: ThrottleStrategy[HTTPConnection],
     ):
         """Test all custom strategies handle unlimited rate in get_stat."""
         rate = Rate(limit=0, seconds=0)  # Unlimited
         key = "user:stat_unlimited"
 
-        stat = await strategy.get_stat(key, rate, backend)  # type: ignore
+        stat = await custom_strategy.get_stat(key, rate, backend)  # type: ignore
         assert stat.hits_remaining == float("inf"), (
-            f"{strategy.__class__.__name__} should return inf for unlimited"
+            f"{custom_strategy.__class__.__name__} should return inf for unlimited"
         )
         assert stat.wait_ms == 0.0, (
-            f"{strategy.__class__.__name__} should have no wait for unlimited"
+            f"{custom_strategy.__class__.__name__} should have no wait for unlimited"
         )
 
-    @pytest.mark.parametrize(["strategy"], CUSTOM_STRATEGIES)
     async def test_all_custom_strategies_get_stat_has_required_fields(
-        self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
+        self,
+        backend: InMemoryBackend,
+        custom_strategy: ThrottleStrategy[HTTPConnection],
     ):
         """Test all custom strategies return stats with required fields."""
         rate = Rate.parse("100/s")
         key = "user:stat_fields"
 
-        stat = await strategy.get_stat(key, rate, backend)  # type: ignore
-        name = strategy.__class__.__name__
+        stat = await custom_strategy.get_stat(key, rate, backend)  # type: ignore
+        name = custom_strategy.__class__.__name__
 
         # Check required fields
         assert hasattr(stat, "key"), f"{name} stat missing 'key'"

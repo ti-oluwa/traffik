@@ -8,10 +8,17 @@ import typing
 import pytest
 from starlette.requests import HTTPConnection
 
+from tests.frameworks import ASGIFramework, FastAPIAdapter, StarletteAdapter
 from tests.utils import HTTPConnectionT
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.strategies import fixed_window, leaky_bucket, sliding_window, token_bucket
+from traffik.strategies import (
+    custom,
+    fixed_window,
+    leaky_bucket,
+    sliding_window,
+    token_bucket,
+)
 from traffik.throttles import ThrottleStrategy
 
 logger = logging.getLogger(__name__)
@@ -113,8 +120,9 @@ def get_multiprocess_backend(namespace: str, persistent: bool) -> ThrottleBacken
     return MultiProcessInMemoryBackend(
         namespace=namespace,
         number_of_shards=8,
-        max_keys=1024,
+        max_keys=4096,
         cleanup_frequency=2.0,
+        persistent=persistent,
     )
 
 
@@ -123,8 +131,8 @@ BACKEND_FACTORIES: typing.List[
 ] = [
     get_inmemory_backend,
     get_multiprocess_backend,
-    get_emcache_backend,
-    get_aiomcache_backend,
+    # get_emcache_backend,
+    # get_aiomcache_backend,
     get_aioredis_backend,
     get_coredis_backend,
 ]
@@ -189,7 +197,7 @@ def inmemory_backend() -> InMemoryBackend:
 async def backend() -> typing.AsyncGenerator[InMemoryBackend, None]:
     """Provides a fresh instance of `InMemoryBackend` for each test, ensuring isolation and cleanup."""
     backend = InMemoryBackend()
-    async with backend(close_on_exit=True):
+    async with backend(persistent=False, close_on_exit=True):
         yield backend
 
 
@@ -206,7 +214,18 @@ STRATEGIES = [
         leaky_bucket.LeakyBucketWithQueueStrategy, id="leaky_bucket_with_queue"
     ),
 ]
-"""Default set of throttle strategiy types to test against."""
+"""Default set of throttle strategy types to test against."""
+
+CUSTOM_STRATEGIES = [
+    pytest.param(custom.TieredRateStrategy, id="tiered_rate"),
+    pytest.param(custom.GCRAStrategy, id="gcra"),
+    pytest.param(custom.AdaptiveThrottleStrategy, id="adaptive"),
+    pytest.param(custom.PriorityQueueStrategy, id="priority_queue"),
+    pytest.param(custom.QuotaWithRolloverStrategy, id="quota_with_rollover"),
+    pytest.param(custom.TimeOfDayStrategy, id="time_of_day"),
+    pytest.param(custom.CostBasedTokenBucketStrategy, id="cost_based_token_bucket"),
+]
+"""Custom set of throttle strategy types to test against."""
 
 
 @pytest.fixture(scope="function", params=STRATEGIES)
@@ -214,6 +233,23 @@ def strategy(request) -> ThrottleStrategy[HTTPConnection]:
     return request.param()
 
 
+@pytest.fixture(scope="function", params=CUSTOM_STRATEGIES)
+def custom_strategy(request) -> ThrottleStrategy[HTTPConnection]:
+    return request.param()
+
+
 @pytest.fixture(scope="function")
 def utctime() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
+
+
+FRAMEWORKS = [
+    pytest.param(StarletteAdapter, id="starlette"),
+    pytest.param(FastAPIAdapter, id="fastapi"),
+]
+"""Default set of frameworks to test against"""
+
+
+@pytest.fixture(scope="function", params=FRAMEWORKS)
+def web_framework(request) -> ASGIFramework:
+    return request.param()

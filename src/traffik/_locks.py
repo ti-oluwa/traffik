@@ -710,7 +710,6 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         :param blocking: If `False`, fail immediately when the lock is busy.
         :param blocking_timeout: Maximum seconds to wait during acquire.
             Takes priority over `ttl` for the acquire-wait bound.
-        :param
         """
         self._lock = lock
         self._ttl = ttl
@@ -732,7 +731,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         )
         if not acquired:
             raise LockAcquisitionError(
-                f"Could not acquire {type(self._lock).__qualname__!r} lock (non-blocking)."
+                f"Could not acquire {type(self._lock).__qualname__!r} lock {'(blocking)' if self._blocking else '(non-blocking)'}."
             )
 
     async def _release(self, exc_type: typing.Optional[type[BaseException]]) -> None:

@@ -33,6 +33,7 @@ class TestQuotaContext:
             "test-bound-quota",
             rate="5/s",
             registry=ThrottleRegistry(),
+            backend=backend,
         )
         connection = new_connection(throttle_type.connection_type)  # type: ignore
 
@@ -92,9 +93,7 @@ class TestQuotaContext:
         assert quota.applied_cost == 3
 
     async def test_quota_context_unbound_requires_throttle(
-        self,
-        backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
     ):
         """Test that unbound context requires throttle argument."""
         connection = new_connection(throttle_type.connection_type)  # type: ignore

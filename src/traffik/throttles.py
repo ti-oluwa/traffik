@@ -324,6 +324,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self.use_fixed_backend = not dynamic_backend
         self.strategy = strategy or DEFAULT_STRATEGY
         self.min_wait_period = min_wait_period
+
+        registry.register(uid, self)
         self.registry = registry
         self._rules: typing.Tuple[ThrottleRule[HTTPConnectionT], ...] = (
             _prep_rules(set(rules)) if rules else ()
@@ -334,7 +336,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self.cache_ids = cache_ids
         self._disabled = False
         self._guard = asyncio.Lock()
-        self.registry.register(uid, self)
 
         # Ensure that we copy the context to avoid potential mutation issues from outside after initialization
         # Never modify `_default_context` after initialization. It's unsafe.
@@ -1663,6 +1664,7 @@ def throttled(
             for t in throttles:
                 await t(connection)
             return connection
+
     else:
         throttle = throttles[0]  # type: ignore[assignment]
         connection_type = throttle.connection_type
@@ -1746,7 +1748,7 @@ async def _resolve_headers(
     that dynamically resolves based on the throttle's state.
     It retrieves the current throttling statistics for the connection if not provided, and uses them to resolve any dynamic headers.
 
-    NOTE! If the throttling statistics cannot be gotten and it is not explcitly provided, then `Header`
+    NOTE: If the throttling statistics cannot be gotten and it is not explcitly provided, then `Header`
     instances which need to be resolved are skipped.
 
     :param headers: A mapping of header keys to either static string values or `Header` instances.

@@ -10,6 +10,7 @@ from traffik._utils import time
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.strategies._serde import (
+    SERDE_ERRORS,
     _decode_two_float_records_and_float,
     _decode_two_floats,
     _encode_two_float_records_and_float,
@@ -175,7 +176,7 @@ class LeakyBucketStrategy:
 
             try:
                 level, last_leak_time = _decode_two_floats(old_state)
-            except ValueError:
+            except SERDE_ERRORS:
                 # If state is corrupted, reinitialize with cost as the bucket level
                 await backend.set(
                     state_key, _encode_two_floats(float(cost), now), expire=ttl_seconds
@@ -239,7 +240,7 @@ class LeakyBucketStrategy:
 
         try:
             level, last_leak_time = _decode_two_floats(old_state)
-        except ValueError:
+        except SERDE_ERRORS:
             # If state is corrupted, assume bucket is empty
             return StrategyStat(
                 key=key,
@@ -376,7 +377,7 @@ class LeakyBucketWithQueueStrategy:
             try:
                 # Queue contains [timestamp, cost] tuples
                 queue, last_leak_time = _decode_two_float_records_and_float(old_state)
-            except (ValueError, TypeError):
+            except SERDE_ERRORS:
                 # If state is corrupted, reinitialize queue with [timestamp, cost] entry
                 new_state = _encode_two_float_records_and_float([(now, cost)], now)
                 await backend.set(state_key, new_state, expire=ttl_seconds)
@@ -464,7 +465,7 @@ class LeakyBucketWithQueueStrategy:
         try:
             # Queue contains [timestamp, cost] tuples
             queue, last_leak_time = _decode_two_float_records_and_float(old_state)
-        except (ValueError, TypeError):
+        except SERDE_ERRORS:
             # If state is corrupted, assume queue is empty
             return StrategyStat(
                 key=key,

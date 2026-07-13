@@ -3,7 +3,7 @@ import sys
 import time
 import typing
 
-from benchmarks.asynctestclient import AsyncTestClient, AsyncWebSocketTestSession
+from benchmarks.client import AsyncTestClient, AsyncWebSocketTestSession
 from benchmarks.backends import create_backend, create_strategy
 from benchmarks.base import BenchmarkConfig, ScenarioResult
 from benchmarks.scenarios.common import ScenarioFunc, make_ws_app

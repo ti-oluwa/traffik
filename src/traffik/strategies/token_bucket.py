@@ -9,7 +9,11 @@ from typing_extensions import TypedDict
 from traffik._utils import time
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.strategies._serde import _decode_two_floats, _encode_two_floats
+from traffik.strategies._serde import (
+    SERDE_ERRORS,
+    _decode_two_floats,
+    _encode_two_floats,
+)
 from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
 
 __all__ = [
@@ -193,7 +197,7 @@ class TokenBucketStrategy:
             if old_state and old_state != "":
                 try:
                     tokens, last_refill = _decode_two_floats(old_state)
-                except (ValueError, AttributeError):
+                except SERDE_ERRORS:
                     # If state is corrupted, reinitialize bucket at full capacity
                     tokens = float(capacity)
                     last_refill = now
@@ -259,7 +263,7 @@ class TokenBucketStrategy:
         if old_state and old_state != "":
             try:
                 tokens, last_refill = _decode_two_floats(old_state)
-            except (ValueError, AttributeError):
+            except SERDE_ERRORS:
                 # If state is corrupted, assume bucket is at full capacity
                 tokens = float(capacity)
                 last_refill = now
@@ -435,7 +439,7 @@ class TokenBucketWithDebtStrategy:
             if old_state and old_state != "":
                 try:
                     tokens, last_refill = _decode_two_floats(old_state)
-                except (ValueError, AttributeError):
+                except SERDE_ERRORS:
                     # If state is corrupted, reinitialize bucket at full capacity
                     tokens = float(capacity)
                     last_refill = now
@@ -502,7 +506,7 @@ class TokenBucketWithDebtStrategy:
         if old_state and old_state != "":
             try:
                 tokens, last_refill = _decode_two_floats(old_state)
-            except (ValueError, AttributeError):
+            except SERDE_ERRORS:
                 # If state is corrupted, assume bucket is at full capacity
                 tokens = float(capacity)
                 last_refill = now

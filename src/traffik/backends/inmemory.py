@@ -632,8 +632,6 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         if not self._initialized:
             return
 
-        # Clear all keys
-        await self.clear()
         self._initialized = False
 
         # Stop cleanup task
@@ -655,3 +653,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         if self._non_reentrant_lock_pool is not None:
             self._non_reentrant_lock_pool.close()
             self._non_reentrant_lock_pool = None
+
+        # TODO: May need to delete shards and shard locks here.
+        # But that conflict with th role of the `close` method
+        # as defined on the base class, which is to close client
+        # connections which this backend doesnt have (not clear the
+        # backend data which is to be done by `clear`/`reset`)

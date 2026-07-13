@@ -9,7 +9,6 @@ import asyncio
 
 import pytest
 
-from traffik._utils import _dump_data
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
 from traffik.strategies.custom import GCRAStrategy

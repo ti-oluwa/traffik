@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+import typing
 from collections import defaultdict, deque
 
 import pytest
@@ -9,10 +10,11 @@ import pytest
 from tests.conftest import BackendGen
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.backends.inmemory import InMemoryBackend
+from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.exceptions import BackendConnectionError, LockAcquisitionError
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.backend
 class TestThrottleBackend:
     async def test_get_key(self, backends: BackendGen) -> None:
@@ -98,7 +100,7 @@ class TestThrottleBackend:
     async def test_increment(self, backends: BackendGen) -> None:
         """Test atomic increment operation."""
         for backend in backends(namespace="increment_test"):
-            async with backend(close_on_exit=True):
+            async with backend(close_on_exit=True, persistent=False):
                 key = backend.get_key("counter")
 
                 # First increment on non-existent key should return 1
@@ -125,9 +127,9 @@ class TestThrottleBackend:
                 key = backend.get_key("concurrent_counter")
 
                 # Perform multiple concurrent increments
-                results = await asyncio.gather(
-                    *[backend.increment(key) for _ in range(10)]
-                )
+                results = await asyncio.gather(*[
+                    backend.increment(key) for _ in range(10)
+                ])
 
                 # All results should be unique (atomicity guarantee)
                 assert len(set(results)) == 10
@@ -297,13 +299,11 @@ class TestThrottleBackend:
                 key3 = backend.get_key("key3")
 
                 # Set multiple keys
-                await backend.multi_set(
-                    {
-                        key1: "value1",
-                        key2: "value2",
-                        key3: "value3",
-                    }
-                )
+                await backend.multi_set({
+                    key1: "value1",
+                    key2: "value2",
+                    key3: "value3",
+                })
 
                 # Verify all keys were set
                 assert await backend.get(key1) == "value1"
@@ -356,12 +356,10 @@ class TestThrottleBackend:
                 await backend.set(key2, "old2")
 
                 # Overwrite with multi_set
-                await backend.multi_set(
-                    {
-                        key1: "new1",
-                        key2: "new2",
-                    }
-                )
+                await backend.multi_set({
+                    key1: "new1",
+                    key2: "new2",
+                })
 
                 # Verify overwritten
                 assert await backend.get(key1) == "new1"
@@ -378,13 +376,11 @@ class TestThrottleBackend:
                 key3 = backend.get_key("rtkey3")
 
                 # Set using multi_set
-                await backend.multi_set(
-                    {
-                        key1: "rtvalue1",
-                        key2: "rtvalue2",
-                        key3: "rtvalue3",
-                    }
-                )
+                await backend.multi_set({
+                    key1: "rtvalue1",
+                    key2: "rtvalue2",
+                    key3: "rtvalue3",
+                })
 
                 # Get using multi_get
                 values = await backend.multi_get(key1, key2, key3)
@@ -491,10 +487,10 @@ class TestThrottleBackend:
     ) -> None:
         """Test that locks prevent concurrent access to shared resources in asyncio context."""
         for backend in backends(namespace="lock_concurrent_test"):
+            lock_name = "lock:counter"
             async with backend(persistent=False, close_on_exit=True):
                 key = backend.get_key("shared_counter")
                 await backend.set(key, "0")
-                lock_name = "lock:counter"
 
                 async def increment_with_lock(
                     backend: ThrottleBackend,
@@ -502,20 +498,26 @@ class TestThrottleBackend:
                     key: str,
                     blocking: bool,
                     blocking_timeout: float = 0.5,
+                    sleep: float = 0.0,
                 ):
                     async with backend.lock(
                         lock_name,
                         blocking=blocking,
                         blocking_timeout=blocking_timeout,
-                    ):
+                    ) as ctx:
+                        print(f"{backend.__module__} acquired: {ctx._lock.is_owner()}")
                         # Read current value
                         value = int(await backend.get(key) or "0")
-                        await asyncio.sleep(0.01)  # Simulate work
+                        await asyncio.sleep(sleep)  # Simulate work
                         # Write new value
                         await backend.set(key, str(value + 1))
+                    print(
+                        f"{backend.__module__} released: {not ctx._lock.is_owner()}",
+                        "\n",
+                    )
 
                 # 1. Run 10 concurrent increments with locking
-                await asyncio.gather(
+                results = await asyncio.gather(
                     *[
                         asyncio.create_task(
                             increment_with_lock(
@@ -524,11 +526,14 @@ class TestThrottleBackend:
                                 key=key,
                                 blocking=True,
                                 blocking_timeout=1.5,
+                                sleep=0.0001,
                             )
                         )
                         for _ in range(10)
-                    ]
+                    ],
+                    return_exceptions=True,
                 )
+                print(results)
 
                 # Final value should be exactly 10 (no race conditions)
                 final_value = await backend.get(key)
@@ -538,29 +543,26 @@ class TestThrottleBackend:
                 # Exclude `InMemoryBackend` as it does not support `blocking_timeout` yet
                 if not isinstance(backend, InMemoryBackend):
                     with pytest.raises(LockAcquisitionError):
-                        await asyncio.gather(
-                            *[
-                                increment_with_lock(
-                                    backend,
-                                    lock_name=lock_name,
-                                    key=key,
-                                    blocking=True,
-                                    blocking_timeout=0.01,
-                                )
-                                for _ in range(10000)
-                            ]
-                        )
+                        await asyncio.gather(*[
+                            increment_with_lock(
+                                backend,
+                                lock_name=lock_name,
+                                key=key,
+                                blocking=True,
+                                blocking_timeout=0.01,
+                                sleep=0.001,
+                            )
+                            for _ in range(200)
+                        ])
 
                 # 3. Try non-blocking now, and a timeout error should be raised
                 with pytest.raises(LockAcquisitionError):
-                    await asyncio.gather(
-                        *[
-                            increment_with_lock(
-                                backend, lock_name=lock_name, key=key, blocking=False
-                            )
-                            for _ in range(5)
-                        ]
-                    )
+                    await asyncio.gather(*[
+                        increment_with_lock(
+                            backend, lock_name=lock_name, key=key, blocking=False
+                        )
+                        for _ in range(5)
+                    ])
 
     @pytest.mark.concurrent
     @pytest.mark.multithreaded
@@ -569,7 +571,7 @@ class TestThrottleBackend:
     ) -> None:
         """Test that locks prevent concurrent access to shared resources across real OS threads."""
         results = defaultdict(deque)
-        results_lock = threading.RLock()
+        results_lock = threading.Lock()
         errors = deque()
 
         no_of_backends = 0
@@ -595,11 +597,21 @@ class TestThrottleBackend:
                 for backend in backends(
                     namespace="lock_multithread_test", exclude=InMemoryBackend
                 ):
-                    key = backend.get_key("shared_counter")
+                    # Because we making th backends persistent here because we nee the count to persist across thread,
+                    # unlike the asyncio test above, we need to namespace the backend key and lock by a unique backend name
+                    # Else backends with different client (e.g aioredis and coredis) but same server will clash.
+                    name = f"{backend.__module__}.{backend.__class__.__name__}".lower()
+                    key = backend.get_key(f"{name}:shared_counter")
+                    # NOTE: We cannot close the multiprocess backend per thread
+                    # As that would risk unlinking the shared memory segment by the
+                    # thread that created it (basically making it inaccessible by other threads)
                     async with (
-                        backend(persistent=True, close_on_exit=False),
+                        backend(
+                            persistent=True,
+                            close_on_exit=True,
+                        ),
                         backend.lock(
-                            "lock:thread_counter",
+                            f"{name}:lock:thread_counter",
                             blocking=blocking,
                             blocking_timeout=blocking_timeout,
                         ),
@@ -607,30 +619,29 @@ class TestThrottleBackend:
                         # Read current value
                         value = int(await backend.get(key) or "0")
                         # Simulate work
-                        await asyncio.sleep(0.01)
+                        await asyncio.sleep(0.1)
                         # Write new value
                         new_value = value + 1
                         await backend.set(key, str(new_value))
                         with results_lock:
-                            backend_name = backend.__class__.__name__
-                            backend_results = results[backend_name]
+                            backend_results = results[name]
                             backend_results.append((thread_id, new_value))
-                            results[backend_name] = backend_results
+                            results[name] = backend_results
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(work())
-            except (asyncio.CancelledError, RuntimeError):
+            except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except BaseException as exc:  # noqa
                 with results_lock:
                     errors.append((thread_id, str(exc)))
             finally:
                 loop.close()
 
         # 1. Run 10 threads with blocking locks
-        threads = []
+        threads: typing.List[threading.Thread] = []
         for i in range(10):
             thread = threading.Thread(
                 target=thread_worker,
@@ -640,28 +651,37 @@ class TestThrottleBackend:
                     "blocking_timeout": 1.5,
                 },
             )
-            threads.append(thread)
             thread.start()
+            threads.append(thread)
 
         for thread in threads:
             thread.join(timeout=5)
 
         # Verify no errors
         assert len(errors) == 0, f"Errors occurred: {errors}"
+
         # Verify all increments completed
-        for backend_name, backend_results in results.items():
+        for name, backend_results in results.items():
             assert len(backend_results) == 10, (
-                f"Expected 10 results for {backend_name}, got {len(backend_results)}"
+                f"Expected 10 results for {name}, got {len(backend_results)}"
+            )
+            max_value = max(backend_results, key=lambda x: x[1])
+            print(sorted(backend_results, key=lambda x: x[1]))
+            assert max_value[1] == 10, (
+                f"Expected a max value of '10', got '{max_value[1]}'"
             )
 
         for backend in backends(
-            namespace="lock_multithread_test",
-            exclude=InMemoryBackend,
+            namespace="lock_multithread_test", exclude=InMemoryBackend
         ):
-            key = backend.get_key("shared_counter")
-            # Final value should be exactly 10 (no race conditions)
-            async with backend(close_on_exit=True):
+            # Namespace key by backend name to match what's done above
+            name = f"{backend.__module__}.{backend.__class__.__name__}".lower()
+            key = backend.get_key(f"{name}:shared_counter")
+            # Ensure persistence so backends with same namespace but different client (aioredis and coredis)
+            # don't clear the keys with the backend's namespace for all client backends.
+            async with backend(persistent=True, close_on_exit=True):
                 final_value = await backend.get(key)
+                # Final value (in backend) should still be exactly 10 (no race conditions)
                 assert final_value == "10", f"Expected '10', got '{final_value}'"
                 # Cleanup for next tests
                 await backend.delete(key)

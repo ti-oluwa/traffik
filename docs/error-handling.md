@@ -169,10 +169,10 @@ throttle = HTTPThrottle(
 
 **State transitions:**
 
-- `CLOSED` → `OPEN`: `failure_threshold` consecutive failures
-- `OPEN` → `HALF_OPEN`: after `recovery_timeout` seconds
-- `HALF_OPEN` → `CLOSED`: `success_threshold` consecutive successes
-- `HALF_OPEN` → `OPEN`: any failure during recovery test
+- `CLOSED` -> `OPEN`: `failure_threshold` consecutive failures
+- `OPEN` -> `HALF_OPEN`: after `recovery_timeout` seconds
+- `HALF_OPEN` -> `CLOSED`: `success_threshold` consecutive successes
+- `HALF_OPEN` -> `OPEN`: any failure during recovery test
 
 ---
 

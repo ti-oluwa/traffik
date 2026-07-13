@@ -10,11 +10,8 @@ from tests.utils import make_connection
 from traffik._utils import (
     CircuitBreaker,
     CircuitState,
-    MsgPackDecodeError,
-    TaskTimer,
     _add_parameter_to_signature,
-    _dump_data,
-    _load_data,
+    _TaskTimer,
     get_remote_address,
     is_async_callable,
     time,
@@ -169,67 +166,6 @@ class TestIsAsyncCallable:
         assert is_async_callable(len) is False
 
 
-class TestSerializationUtils:
-    """Tests for _dump_data and _load_data utilities."""
-
-    def test_dump_and_load_dict(self):
-        """Test serializing and deserializing dictionary."""
-        data = {"key": "value", "number": 42, "nested": {"inner": "data"}}
-        serialized = _dump_data(data)
-        deserialized = _load_data(serialized)
-        assert deserialized == data
-
-    def test_dump_and_load_list(self):
-        """Test serializing and deserializing list."""
-        data = [1, 2, 3, "four", {"five": 5}]
-        serialized = _dump_data(data)
-        deserialized = _load_data(serialized)
-        assert deserialized == data
-
-    def test_dump_and_load_various_types(self):
-        """Test serializing and deserializing various types."""
-        data = {
-            "int": 42,
-            "float": 3.14,
-            "bool": True,
-            "none": None,
-            "str": "hello",
-            "list": [1, 2, 3],
-        }
-        serialized = _dump_data(data)
-        deserialized = _load_data(serialized)
-        assert deserialized == data
-
-    def test_dump_and_load_empty_structures(self):
-        """Test serializing and deserializing empty structures."""
-        data = {"empty_dict": {}, "empty_list": []}
-        serialized = _dump_data(data)
-        deserialized = _load_data(serialized)
-        assert deserialized == data
-
-    def test_dump_produces_string(self):
-        """Test that _dump_data produces a string."""
-        serialized = _dump_data({"key": "value"})
-        assert isinstance(serialized, str)
-
-    def test_dump_produces_consistent_output(self):
-        """Test that _dump_data produces consistent output for same input."""
-        data = {"key": "value", "number": 42}
-        serialized1 = _dump_data(data)
-        serialized2 = _dump_data(data)
-        assert serialized1 == serialized2
-
-    def test_load_raises_on_corrupt_data(self):
-        """Test that _load_data raises exception on corrupted data."""
-        with pytest.raises(
-            (
-                MsgPackDecodeError,
-                ValueError,
-            )
-        ):  # msgpack.exceptions.UnpackException
-            _load_data("not_valid_base85_data!")
-
-
 class TestTimeFunction:
     """Tests for time utility."""
 
@@ -263,7 +199,7 @@ class TestTaskTimer:
     async def test_task_timer_without_timeout(self):
         """Test TaskTimer with None timeout allows execution."""
         loop = asyncio.get_event_loop()
-        async with TaskTimer(timeout=None, loop=loop) as timer:
+        async with _TaskTimer(timeout=None, loop=loop) as timer:
             # Should complete without timing out
             await anyio.sleep(0.01)
         assert timer.done()
@@ -272,7 +208,7 @@ class TestTaskTimer:
     async def test_task_timer_allows_fast_execution(self):
         """Test TaskTimer allows execution within timeout."""
         loop = asyncio.get_event_loop()
-        async with TaskTimer(timeout=0.1, loop=loop) as timer:
+        async with _TaskTimer(timeout=0.1, loop=loop) as timer:
             await anyio.sleep(0.01)
         assert timer.done()
         assert not timer.timed_out()
@@ -281,7 +217,7 @@ class TestTaskTimer:
         """Test TaskTimer times out on slow execution."""
         loop = asyncio.get_event_loop()
         with pytest.raises(asyncio.TimeoutError):
-            async with TaskTimer(timeout=0.05, loop=loop):
+            async with _TaskTimer(timeout=0.05, loop=loop):
                 await anyio.sleep(0.2)
 
     async def test_task_timer_sets_timed_out_flag(self):
@@ -289,7 +225,7 @@ class TestTaskTimer:
         loop = asyncio.get_event_loop()
         timer = None
         try:
-            async with TaskTimer(timeout=0.05, loop=loop) as timer:
+            async with _TaskTimer(timeout=0.05, loop=loop) as timer:
                 await anyio.sleep(0.2)
         except asyncio.TimeoutError:
             assert timer is not None
@@ -298,7 +234,7 @@ class TestTaskTimer:
     async def test_task_timer_cancelled_state(self):
         """Test TaskTimer cancelled() returns True when stopped normally."""
         loop = asyncio.get_event_loop()
-        async with TaskTimer(timeout=None, loop=loop) as timer:
+        async with _TaskTimer(timeout=None, loop=loop) as timer:
             pass
         assert timer.done()
         assert timer.cancelled()
@@ -308,13 +244,13 @@ class TestTaskTimer:
         loop = asyncio.get_event_loop()
         custom_error = RuntimeError("Custom timeout error")
         with pytest.raises(RuntimeError, match="Custom timeout error"):
-            async with TaskTimer(timeout=0.05, loop=loop, error=custom_error):
+            async with _TaskTimer(timeout=0.05, loop=loop, error=custom_error):
                 await anyio.sleep(0.2)
 
     async def test_task_timer_cannot_restart(self):
         """Test TaskTimer cannot be restarted after completion."""
         loop = asyncio.get_event_loop()
-        timer = TaskTimer(timeout=None, loop=loop)
+        timer = _TaskTimer(timeout=None, loop=loop)
         timer.start()
         timer.stop()
         with pytest.raises(RuntimeError, match="already cancelled or timed out"):

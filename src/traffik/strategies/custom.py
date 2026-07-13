@@ -16,6 +16,7 @@ from traffik._utils import time
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
 from traffik.strategies._serde import (
+    SERDE_ERRORS,
     _decode_float_list,
     _decode_two_floats,
     _encode_float_list,
@@ -740,7 +741,7 @@ class PriorityQueueStrategy:
             if raw_queue:
                 try:
                     queue = _iter_three_float_records(raw_queue)
-                except ValueError:
+                except SERDE_ERRORS:
                     queue = []
             else:
                 queue = []
@@ -822,7 +823,7 @@ class PriorityQueueStrategy:
         if raw_queue:
             try:
                 queue = _iter_three_float_records(raw_queue)
-            except ValueError:
+            except SERDE_ERRORS:
                 queue = []
         else:
             queue = []
@@ -1312,7 +1313,7 @@ class CostBasedTokenBucketStrategy:
             if raw_state:
                 try:
                     tokens, last_refill = _decode_two_floats(raw_state)
-                except ValueError:
+                except SERDE_ERRORS:
                     tokens = float(capacity)
                     last_refill = now
             else:
@@ -1322,7 +1323,7 @@ class CostBasedTokenBucketStrategy:
             if raw_history:
                 try:
                     history = deque(_iter_float_list(raw_history), maxlen=cost_window)
-                except ValueError:
+                except SERDE_ERRORS:
                     history = deque(maxlen=cost_window)
             else:
                 history = deque(maxlen=cost_window)
@@ -1405,7 +1406,7 @@ class CostBasedTokenBucketStrategy:
         if raw_state:
             try:
                 tokens, last_refill = _decode_two_floats(raw_state)
-            except ValueError:
+            except SERDE_ERRORS:
                 tokens = float(capacity)
                 last_refill = now
         else:
@@ -1415,7 +1416,7 @@ class CostBasedTokenBucketStrategy:
         if raw_history:
             try:
                 history = _decode_float_list(raw_history)
-            except ValueError:
+            except SERDE_ERRORS:
                 history = []
         else:
             history = []

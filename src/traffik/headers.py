@@ -72,11 +72,12 @@ class Header(typing.Generic[HTTPConnectionT]):
     the request and the state of the throttle.
 
     Example usage:
+
     ```python
-    def custom_header_resolver(connection, stat, context):
+    def resolver(connection, stat, context):
         return f"Custom-{stat.rate.limit}"
 
-    def custom_when_func(connection, stat, context):
+    def when_func(connection, stat, context):
         return stat.hits_remaining < 5
 
     headers = {
@@ -88,7 +89,7 @@ class Header(typing.Generic[HTTPConnectionT]):
         "X-RateLimit-Reset": Header.RESET_SECONDS(when="throttled"),
 
         # Custom header that is included when hits remaining is less than 5
-        "X-Custom-Header": Header(custom_header_resolver, when=custom_when_func),
+        "X-Custom-Header": Header(resolver, when=when_func),
     }
     ```
     """
@@ -227,6 +228,7 @@ class Header(typing.Generic[HTTPConnectionT]):
         This allows for chaining header definitions with different conditions for when they should be included in the response.
 
         Example usage:
+
         ```python
         # Create a header that is always included
         header = Header.REMAINING(when="always")
@@ -337,13 +339,13 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
     # Disable a header for a single hit by using the sentinel identity
     overrides = {"X-RateLimit-Remaining": Header.DISABLE}
 
-    # Merge the resolver uses an identity check to interpret
+    # Merge override. The resolver uses an identity check to interpret
     # `Header.DISABLE` and will skip that header when resolving.
     merged = base | overrides
     ```
 
     Note: `Header.DISABLE` is a module-level sentinel; disabling requires
-    passing that exact object (checked with ``is``). A plain string with
+    passing that exact object (checked with `is` - identity check). A plain string with
     the same contents will not disable the header.
     """
 

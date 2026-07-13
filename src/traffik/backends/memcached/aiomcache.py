@@ -11,7 +11,12 @@ from types import TracebackType
 import aiomcache
 from aiomcache.exceptions import ClientException
 
-from traffik._locks import _GatedNamedLock, _NamedGateRegistry, get_token
+from traffik._locks import (
+    _AsyncLockContext,
+    _GatedNamedLock,
+    _NamedGateRegistry,
+    get_token,
+)
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.memcached._utils import _parse_memcached_url
 from traffik.exceptions import (
@@ -21,6 +26,7 @@ from traffik.exceptions import (
     LockReleaseError,
 )
 from traffik.typing import (
+    AsyncLock,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
@@ -261,8 +267,8 @@ class _AsyncMemcachedLock:
         token = self._token
         try:
             # Ensure we only release/delete if we own the lock (token matches)
-            current = await self._client.get(name_bytes)
-            if current and current.decode("utf-8") == token:
+            item = await self._client.get(name_bytes)
+            if item is not None and item.decode("utf-8") == token:
                 await self._client.delete(name_bytes)
             else:
                 sys.stderr.write(f"Warning: Lock '{self._name}' expired or stolen\n")
@@ -275,6 +281,7 @@ class _AsyncMemcachedLock:
             self._owner = None
             self._token = None
             self._reentry_count = 0
+            print("Released")
             sys.stderr.flush()
 
     async def __aenter__(self):
@@ -837,7 +844,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         for key, result in zip(keys, results):
             if isinstance(result, Exception):
                 raise BackendError(
-                    f"Failed to clear key '{key}': {str(result)}"
+                    f"Failed to clear key '{key}': {result!s}"
                 ) from result
 
     async def reset(self) -> None:

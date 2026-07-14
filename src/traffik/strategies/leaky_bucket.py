@@ -1,5 +1,6 @@
 """Leaky Bucket rate limiting strategies."""
 
+import math
 import typing
 from dataclasses import dataclass, field
 
@@ -182,6 +183,14 @@ class LeakyBucketStrategy:
                     state_key, _encode_two_floats(float(cost), now), expire=ttl_seconds
                 )
                 return 0.0
+            else:
+                if not (math.isfinite(level) and math.isfinite(last_leak_time)):
+                    await backend.set(
+                        state_key,
+                        _encode_two_floats(float(cost), now),
+                        expire=ttl_seconds,
+                    )
+                    return 0.0
 
             # Calculate how much has leaked since last check
             time_passed = now - last_leak_time
@@ -248,6 +257,11 @@ class LeakyBucketStrategy:
                 hits_remaining=rate.limit,
                 wait_ms=0.0,
             )
+        else:
+            if not (math.isfinite(level) and math.isfinite(last_leak_time)):
+                return StrategyStat(
+                    key=key, rate=rate, hits_remaining=rate.limit, wait_ms=0.0
+                )
 
         # Calculate current level after leakage
         time_passed = now - last_leak_time

@@ -1,12 +1,12 @@
-"""Tests for msgpack serialization in strategies."""
+"""Tests for strategy state serialization (struct-based, via traffik.strategies._serde)."""
 
 import asyncio
 
 import pytest
 
-from traffik._utils import _load_data
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
+from traffik.strategies._serde import _decode_two_float_records, _decode_two_floats
 from traffik.strategies.custom import GCRAStrategy, QuotaWithRolloverStrategy
 from traffik.strategies.leaky_bucket import LeakyBucketStrategy
 from traffik.strategies.sliding_window import SlidingWindowLogStrategy
@@ -16,7 +16,13 @@ from traffik.strategies.token_bucket import TokenBucketStrategy
 @pytest.mark.anyio
 @pytest.mark.strategy
 class TestStrategyStateSerialization:
-    """Test strategy state persistence with `msgpack`."""
+    """
+    Test strategy state persistence via `traffik.strategies._serde`.
+
+    TokenBucket/LeakyBucket store `(value, timestamp)` tuples via
+    `_decode_two_floats`; SlidingWindowLog stores a list of `(timestamp, cost)`
+    pairs via `_decode_two_float_records`.
+    """
 
     async def test_sliding_window_log_state_persistence(self, backend: InMemoryBackend):
         """Test SlidingWindowLog stores and retrieves state correctly."""
@@ -35,16 +41,21 @@ class TestStrategyStateSerialization:
         assert stored is not None, "State should be stored"
 
         # Verify it can be deserialized
-        log = _load_data(stored)
+        log = _decode_two_float_records(stored)
         assert isinstance(log, list), "Log should be a list"
         assert len(log) == 3, "Should have 3 entries"
 
-        # Verify structure: [[timestamp, cost], ...]
+        # Verify structure: [(timestamp, cost), ...]
         for entry in log:
-            assert isinstance(entry, list), "Each entry should be a list"
-            assert len(entry) == 2, "Each entry should have [timestamp, cost]"
+            assert isinstance(entry, tuple), (
+                "Each entry should be a (timestamp, cost) tuple"
+            )
+            assert len(entry) == 2, "Each entry should have (timestamp, cost)"
             assert isinstance(entry[0], (int, float)), "Timestamp should be numeric"
-        assert isinstance(entry[1], (int, float)), "Cost should be numeric"  # type: ignore
+            assert isinstance(entry[1], (int, float)), "Cost should be numeric"
+
+    async def test_token_bucket_state_persistence(self, backend: InMemoryBackend):
+        """Test TokenBucket stores and retrieves state correctly."""
         strategy = TokenBucketStrategy(burst_size=100)
         rate = Rate.parse("10/s")
         key = "user:bucket"
@@ -59,19 +70,14 @@ class TestStrategyStateSerialization:
 
         assert stored is not None, "State should be stored"
 
-        # Verify deserialization
-        state = _load_data(stored)
-        assert isinstance(state, dict), "State should be a dict"
-        assert "tokens" in state, "Should have tokens field"
-        assert "last_refill" in state, "Should have last_refill field"
-
-        # Verify types
-        assert isinstance(state["tokens"], (int, float))
-        assert isinstance(state["last_refill"], (int, float))
+        # Verify deserialization -- (tokens, last_refill), not a dict
+        tokens, last_refill = _decode_two_floats(stored)
+        assert isinstance(tokens, float)
+        assert isinstance(last_refill, float)
 
         # Verify values make sense
-        assert 0 <= state["tokens"] <= 100, "Tokens should be in valid range"
-        assert state["last_refill"] > 0, "Last refill should be positive timestamp"
+        assert 0 <= tokens <= 100, "Tokens should be in valid range"
+        assert last_refill > 0, "Last refill should be positive timestamp"
 
     async def test_leaky_bucket_state_persistence(self, backend: InMemoryBackend):
         """Test LeakyBucket stores and retrieves state correctly."""
@@ -89,16 +95,12 @@ class TestStrategyStateSerialization:
 
         assert stored is not None, "State should be stored"
 
-        # Verify deserialization
-        state = _load_data(stored)
-        assert isinstance(state, dict)
-        assert "level" in state
-        assert "last_leak" in state
-
-        assert isinstance(state["level"], (int, float))
-        assert isinstance(state["last_leak"], (int, float))
-        assert state["level"] >= 0
-        assert state["last_leak"] > 0
+        # Verify deserialization -- (level, last_leak), not a dict
+        level, last_leak = _decode_two_floats(stored)
+        assert isinstance(level, float)
+        assert isinstance(last_leak, float)
+        assert level >= 0
+        assert last_leak > 0
 
     async def test_gcra_state_persistence(self, backend: InMemoryBackend):
         """Test GCRA stores TAT correctly as string (simple value)."""
@@ -116,7 +118,7 @@ class TestStrategyStateSerialization:
 
         assert tat_str is not None, "TAT should be stored"
 
-        # GCRA stores as simple string, not msgpack
+        # GCRA stores as simple string, not through _serde
         tat = float(tat_str)
         assert tat > 0, "TAT should be positive"
 
@@ -149,8 +151,7 @@ class TestStrategyStateSerialization:
         state_key = f"{full_key}:tokenbucket:100"
         stored1 = await backend.get(state_key)
         assert stored1 is not None
-        state1 = _load_data(stored1)
-        tokens1 = state1["tokens"]
+        tokens1, _ = _decode_two_floats(stored1)
 
         # Create new strategy instance, make more requests
         strategy2 = TokenBucketStrategy(burst_size=100)
@@ -159,8 +160,7 @@ class TestStrategyStateSerialization:
         # Verify state was persisted
         stored2 = await backend.get(state_key)
         assert stored2 is not None
-        state2 = _load_data(stored2)
-        tokens2 = state2["tokens"]
+        tokens2, _ = _decode_two_floats(stored2)
 
         # Tokens should have decreased
         assert tokens2 < tokens1, "State should persist across strategy instances"
@@ -181,7 +181,7 @@ class TestStrategyStateSerialization:
         stored = await backend.get(log_key)
 
         if stored:  # May not exist if all throttled
-            log = _load_data(stored)
+            log = _decode_two_float_records(stored)
             assert isinstance(log, list)
             # Verify each entry is valid
             for entry in log:

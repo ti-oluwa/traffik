@@ -1,5 +1,6 @@
 """Token Bucket rate limiting strategies."""
 
+import math
 import typing
 from dataclasses import dataclass, field
 
@@ -201,6 +202,10 @@ class TokenBucketStrategy:
                     # If state is corrupted, reinitialize bucket at full capacity
                     tokens = float(capacity)
                     last_refill = now
+                else:
+                    if not (math.isfinite(tokens) and math.isfinite(last_refill)):
+                        tokens = float(capacity)
+                        last_refill = now
             else:
                 # If no existing state, initialize bucket at full capacity
                 tokens = float(capacity)
@@ -267,6 +272,10 @@ class TokenBucketStrategy:
                 # If state is corrupted, assume bucket is at full capacity
                 tokens = float(capacity)
                 last_refill = now
+            else:
+                if not (math.isfinite(tokens) and math.isfinite(last_refill)):
+                    tokens = float(capacity)
+                    last_refill = now
         else:
             # If no existing state, bucket is at full capacity
             tokens = float(capacity)
@@ -443,6 +452,10 @@ class TokenBucketWithDebtStrategy:
                     # If state is corrupted, reinitialize bucket at full capacity
                     tokens = float(capacity)
                     last_refill = now
+                else:
+                    if not (math.isfinite(tokens) and math.isfinite(last_refill)):
+                        tokens = float(capacity)
+                        last_refill = now
             else:
                 # If no existing state, initialize bucket at full capacity
                 tokens = float(capacity)
@@ -510,6 +523,10 @@ class TokenBucketWithDebtStrategy:
                 # If state is corrupted, assume bucket is at full capacity
                 tokens = float(capacity)
                 last_refill = now
+            else:
+                if not (math.isfinite(tokens) and math.isfinite(last_refill)):
+                    tokens = float(capacity)
+                    last_refill = now
         else:
             # If no existing state, bucket is at full capacity
             tokens = float(capacity)

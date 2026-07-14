@@ -131,8 +131,8 @@ BACKEND_FACTORIES: typing.List[
 ] = [
     get_inmemory_backend,
     get_multiprocess_backend,
-    # get_emcache_backend,
-    # get_aiomcache_backend,
+    get_emcache_backend,
+    get_aiomcache_backend,
     get_aioredis_backend,
     get_coredis_backend,
 ]

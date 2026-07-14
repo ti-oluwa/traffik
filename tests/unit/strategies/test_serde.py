@@ -1,12 +1,4 @@
-"""
-Tests for `traffik.strategies._serde`.
-
-This module replaced the old generic `_dump_data`/`_load_data` (msgpack-based)
-helpers that used to live in `traffik._utils` with purpose-built, schema-specific
-struct codecs. Each strategy now encodes exactly the shape of data it needs
-instead of round-tripping arbitrary Python objects, so these tests exercise
-each codec pair directly rather than a single generic round-trip.
-"""
+"""Tests for `traffik.strategies._serde`'s struct-based codecs."""
 
 import struct
 

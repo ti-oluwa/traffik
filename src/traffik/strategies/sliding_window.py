@@ -184,7 +184,7 @@ class SlidingWindowLogStrategy:
                         valid_entries.append([timestamp, recorded_cost])
                         current_total_cost += recorded_cost
                         oldest_timestamp = min(timestamp, oldest_timestamp)
-            except (ValueError, TypeError):
+            except SERDE_ERRORS:
                 valid_entries = []
                 current_total_cost = 0.0
                 oldest_timestamp = float("inf")
@@ -259,7 +259,7 @@ class SlidingWindowLogStrategy:
                     current_total_cost += recorded_cost
                     if oldest_timestamp is None or timestamp < oldest_timestamp:
                         oldest_timestamp = timestamp
-        except (ValueError, TypeError):
+        except SERDE_ERRORS:
             valid_entries = []
             current_total_cost = 0.0
             oldest_timestamp = None

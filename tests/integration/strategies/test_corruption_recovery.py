@@ -260,30 +260,30 @@ class TestLeakyBucketCorruptionRecovery:
         assert wait == 0.0, "Should recover from NaN state, not return NaN itself"
 
 
-# @pytest.mark.anyio
-# @pytest.mark.strategy
-# class TestLeakyBucketWithQueueCorruptionRecovery:
-#     async def test_corrupted_state_allows_request(self, backend: InMemoryBackend):
-#         strategy = LeakyBucketWithQueueStrategy()
-#         rate = Rate.parse("10/s")
-#         key = "user:corrupt-lbq"
-#         state_key = f"{_corrupt_key(backend, key)}:leakybucketqueue:state"
-#         for garbage in GARBAGE_VALUES:
-#             await backend.set(state_key, garbage)
-#             wait = await strategy(key, rate, backend)
-#             assert wait == 0.0, (
-#                 f"Should allow request after corruption with {garbage!r}"
-#             )
+@pytest.mark.anyio
+@pytest.mark.strategy
+class TestLeakyBucketWithQueueCorruptionRecovery:
+    async def test_corrupted_state_allows_request(self, backend: InMemoryBackend):
+        strategy = LeakyBucketWithQueueStrategy()
+        rate = Rate.parse("10/s")
+        key = "user:corrupt-lbq"
+        state_key = f"{_corrupt_key(backend, key)}:leakybucketqueue:state"
+        for garbage in GARBAGE_VALUES:
+            await backend.set(state_key, garbage)
+            wait = await strategy(key, rate, backend)
+            assert wait == 0.0, (
+                f"Should allow request after corruption with {garbage!r}"
+            )
 
-#     async def test_corrupted_stat_returns_full_capacity(self, backend: InMemoryBackend):
-#         strategy = LeakyBucketWithQueueStrategy()
-#         rate = Rate.parse("10/s")
-#         key = "user:corrupt-lbq-stat"
-#         state_key = f"{_corrupt_key(backend, key)}:leakybucketqueue:state"
-#         await backend.set(state_key, "garbage!!!")
+    async def test_corrupted_stat_returns_full_capacity(self, backend: InMemoryBackend):
+        strategy = LeakyBucketWithQueueStrategy()
+        rate = Rate.parse("10/s")
+        key = "user:corrupt-lbq-stat"
+        state_key = f"{_corrupt_key(backend, key)}:leakybucketqueue:state"
+        await backend.set(state_key, "garbage!!!")
 
-#         stat = await strategy.get_stat(key, rate, backend)
-#         assert stat.hits_remaining == float(rate.limit)
+        stat = await strategy.get_stat(key, rate, backend)
+        assert stat.hits_remaining == float(rate.limit)
 
 
 @pytest.mark.anyio

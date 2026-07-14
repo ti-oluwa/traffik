@@ -49,8 +49,11 @@ def _decode_two_float_records(raw: str) -> typing.List[typing.Tuple[float, float
     """
     view = memoryview(raw.encode("latin-1"))
     (count,) = _UINT32.unpack_from(view, 0)
-    records: typing.List[typing.Tuple[float, float]] = [None] * count  # type: ignore[list-item]
+    expected_size = _UINT32.size + count * _TWO_FLOATS.size
+    if len(view) < expected_size:
+        raise struct.error(f"buffer too small for {count} records")
 
+    records: typing.List[typing.Tuple[float, float]] = [None] * count  # type: ignore[list-item]
     offset = _UINT32.size
     for index in range(count):
         records[index] = _TWO_FLOATS.unpack_from(view, offset)
@@ -72,6 +75,9 @@ def _iter_two_float_records(raw: str) -> typing.Iterator[tuple[float, float]]:
     """
     view = memoryview(raw.encode("latin-1"))
     (count,) = _UINT32.unpack_from(view, 0)
+    expected_size = _UINT32.size + count * _TWO_FLOATS.size
+    if len(view) < expected_size:
+        raise struct.error(f"buffer too small for {count} records")
 
     offset = _UINT32.size
     for _ in range(count):
@@ -118,8 +124,11 @@ def _decode_three_float_records(
     """
     view = memoryview(raw.encode("latin-1"))
     (count,) = _UINT32.unpack_from(view, 0)
-    records: typing.List[typing.Tuple[float, float, float]] = [None] * count  # type: ignore[list-item]
+    expected_size = _UINT32.size + count * _THREE_FLOATS.size
+    if len(view) < expected_size:
+        raise struct.error(f"buffer too small for {count} records")
 
+    records: typing.List[typing.Tuple[float, float, float]] = [None] * count  # type: ignore[list-item]
     offset = _UINT32.size
     for index in range(count):
         records[index] = _THREE_FLOATS.unpack_from(view, offset)
@@ -140,6 +149,9 @@ def _iter_three_float_records(
     """
     view = memoryview(raw.encode("latin-1"))
     (count,) = _UINT32.unpack_from(view, 0)
+    expected_size = _UINT32.size + count * _THREE_FLOATS.size
+    if len(view) < expected_size:
+        raise struct.error(f"buffer too small for {count} records")
 
     offset = _UINT32.size
     for _ in range(count):
@@ -195,8 +207,14 @@ def _decode_two_float_records_and_float(
     """
     view = memoryview(raw.encode("latin-1"))
     (count,) = _UINT32.unpack_from(view, 0)
-    entries: typing.List[typing.Tuple[float, float]] = [None] * count  # type: ignore[list-item]
 
+    expected_size = _UINT32.size + count * _TWO_FLOATS.size + _FLOAT.size
+    if len(view) < expected_size:
+        raise struct.error(
+            f"buffer too small for {count} records: need {expected_size} bytes, got {len(view)}"
+        )
+
+    entries: typing.List[typing.Tuple[float, float]] = [None] * count  # type: ignore[list-item]
     offset = _UINT32.size
     for index in range(count):
         entries[index] = _TWO_FLOATS.unpack_from(view, offset)
@@ -241,8 +259,11 @@ def _decode_float_list(raw: str) -> typing.List[float]:
     """
     view = memoryview(raw.encode("latin-1"))
     (count,) = _UINT32.unpack_from(view, 0)
-    values: typing.List[float] = [0.0] * count
+    expected_size = _UINT32.size + count * _FLOAT.size
+    if len(view) < expected_size:
+        raise struct.error(f"buffer too small for {count} values")
 
+    values: typing.List[float] = [0.0] * count
     offset = _UINT32.size
     for index in range(count):
         (values[index],) = _FLOAT.unpack_from(view, offset)
@@ -261,6 +282,10 @@ def _iter_float_list(raw: str) -> typing.Iterator[float]:
     """
     view = memoryview(raw.encode("latin-1"))
     (count,) = _UINT32.unpack_from(view, 0)
+    expected_size = _UINT32.size + count * _FLOAT.size
+    if len(view) < expected_size:
+        raise struct.error(f"buffer too small for {count} values")
+
     offset = _UINT32.size
     for _ in range(count):
         yield _FLOAT.unpack_from(view, offset)[0]
@@ -288,7 +313,11 @@ def _decode_two_floats(raw: str) -> typing.Tuple[float, float]:
         `_encode_two_floats`.
     :returns: A tuple containing the two decoded floating-point values.
     """
-    return _TWO_FLOATS.unpack(memoryview(raw.encode("latin-1")))
+    view = memoryview(raw.encode("latin-1"))
+    expected_size = _TWO_FLOATS.size
+    if len(view) < expected_size:
+        raise struct.error("buffer too small for values")
+    return _TWO_FLOATS.unpack(view)
 
 
 SERDE_ERRORS = (ValueError, TypeError, MemoryError, struct.error, AttributeError)

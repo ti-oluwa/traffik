@@ -1302,6 +1302,60 @@ def is_throttled(connection: HTTPConnection) -> bool:
     """
     Check if the connection has been throttled.
 
+    This is especially important to check if a connection has been throttled and/or disconnected.
+    You will mostlikely need to call this function immediately after every throttle hit 
+    especially for websocket connections.
+
+    **NOTE**:
+        For websockets, never attempt to send or receive frames once the connection
+        is throttled as the connected as mostlikely been closed by the server 
+        (by send a close frame or raising a discnnect exception), or by the
+        client (by send a disconnect frame to the server - as an acknowledgement or not).
+        Attempting to send/receive will likely lead to a `RuntimeError` been raised 
+        (by the ASGI app).
+
+    Example Usage:
+    ```
+    async def ws_throttled(
+        connection: WebSocket,
+        wait_ms: float,
+        throttle: WebSocketThrottle,
+        context: typing.Mapping[str, typing.Any],
+    ) -> None:
+        await connection.send_text("Throttled")
+        await asyncio.sleep(0.1)  # Let the message flush before closing
+        await connection.close(code=1008, reason="Throttled")
+
+    ws_throttle = WebSocketThrottle(
+        ...,
+        handle_throttled=ws_throttled,
+    )
+
+    @app.websocket("/ws/...")
+    async def endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        while True:
+            try:
+                data = await websocket.receive_text()
+                await ws_throttle(websocket)
+                # If throttled, break immediately (since the handler closed the connection)
+                # If not, the next `send_text(...)` will raise a runtime error.
+                if is_throttled(websocket): 
+                    break
+                
+                await websocket.send_text(f"Echo: {data}")
+            except WebSocketDisconnect:
+                # Throttle handler may have already closed the connection
+                break
+            except WebSocketException:
+                if websocket.client_state.value != 3:  # 3 == DISCONNECTED
+                    try:
+                        await websocket.send_text("Internal error")
+                    except WebSocketException:
+                        pass
+                break
+    ```
+
     :param connection: The HTTP connection to check.
     :return: True if the connection has been throttled, False otherwise.
     """
@@ -1509,16 +1563,14 @@ async def websocket_throttled(
 
     wait_seconds = math.ceil(wait_ms / 1000)
     try:
-        await connection.send_json(
-            {
-                "type": "rate_limit",
-                "error": "Too many messages",
-                "retry_after": wait_seconds,
-                **context.get("extras", {}),
-            }
-        )
+        await connection.send_json({
+            "type": "rate_limit",
+            "error": "Too many messages",
+            "retry_after": wait_seconds,
+            **context.get("extras", {}),
+        })
     except RuntimeError as exc:
-        # Connection was closed between check and send
+        # Connection was closed (by client) between check and send
         # Silently ignore since client is already disconnected
         sys.stderr.write(f"An error occurred while sending throttled message: {exc}\n")
         sys.stderr.flush()

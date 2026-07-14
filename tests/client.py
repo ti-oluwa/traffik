@@ -77,7 +77,7 @@ class AsyncWebSocketTestSession:
         message = await self.receive()
         if message["type"] not in ("websocket.accept", "websocket.close"):
             raise RuntimeError(
-                f"Expected 'websocket.accept' or 'websocket.close', got {message['type']}"
+                f"Expected 'websocket.accept' or 'websocket.close', got {message['type']!r}"
             )
 
         self._raise_on_close(message)
@@ -88,6 +88,7 @@ class AsyncWebSocketTestSession:
         if exc_type is None:
             await self.close(1000)
         elif issubclass(exc_type, WebSocketDisconnect):
+            # Acknowledge close frame by sending disconnect
             await self.close(exc_val.code)
         else:
             await self.close(1011)
@@ -99,7 +100,7 @@ class AsyncWebSocketTestSession:
                 raise message
 
         # Wait for task to complete
-        if self._task and not self._task.done():
+        if self._task is not None and not self._task.done():
             try:
                 await asyncio.wait_for(self._task, timeout=1.0)
             except asyncio.TimeoutError:
@@ -160,6 +161,7 @@ class AsyncWebSocketTestSession:
                 message = self._send_queue.get_nowait()
                 if isinstance(message, BaseException):
                     raise message
+                self._raise_on_close(message)
 
                 return message
             except asyncio.queues.QueueEmpty:
@@ -213,7 +215,6 @@ class AsyncWebSocketTestSession:
         :return: The text data received.
         """
         message = await self.receive()
-        self._raise_on_close(message)
         return message["text"]
 
     async def receive_bytes(self) -> bytes:
@@ -223,7 +224,6 @@ class AsyncWebSocketTestSession:
         :return: The binary data received.
         """
         message = await self.receive()
-        self._raise_on_close(message)
         return message["bytes"]
 
     async def receive_json(self, mode: str = "text") -> typing.Any:
@@ -235,13 +235,11 @@ class AsyncWebSocketTestSession:
         """
         assert mode in ["text", "binary"]
         message = await self.receive()
-        self._raise_on_close(message)
 
         if mode == "text":
             text = message["text"]
         else:
             text = message["bytes"].decode("utf-8")
-
         return json.loads(text)
 
 

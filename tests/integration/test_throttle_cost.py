@@ -23,7 +23,7 @@ from tests.frameworks import (
 from tests.utils import default_client_identifier, make_client
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.registry import ThrottleRegistry
-from traffik.throttles import HTTPThrottle, WebSocketThrottle
+from traffik.throttles import HTTPThrottle, WebSocketThrottle, is_throttled
 
 
 @pytest.mark.throttle
@@ -217,6 +217,8 @@ class TestWebSocketThrottleCost:
                     try:
                         data = await websocket.receive_text()
                         await ws_throttle(websocket)
+                        if is_throttled(websocket):
+                            break
                         await websocket.send_text(f"Echo: {data}")
                     except WebSocketDisconnect:
                         # Throttle handler may have already closed the connection

@@ -160,6 +160,7 @@ class TokenBucketStrategy:
 
     burst_size: typing.Optional[int] = None
     """Maximum bucket capacity (positive tokens). If None, defaults to `rate.limit`."""
+
     lock_config: LockConfig = field(default_factory=LockConfig)  # type: ignore[arg-type]  # type: ignore[arg-type]
     """Configuration for backend locking during rate limit checks."""
 
@@ -290,8 +291,9 @@ class TokenBucketStrategy:
         hits_remaining = max(tokens, 0.0)
 
         # If tokens are zero or negative (shouldn't happen but safe guard), calculate wait time
-        if tokens <= 0.0:
-            wait_ms = abs(tokens) / refill_rate
+        if tokens < 1.0:
+            tokens_needed = 1 - tokens
+            wait_ms = tokens_needed / refill_rate
         else:
             wait_ms = 0.0
 
@@ -541,8 +543,8 @@ class TokenBucketWithDebtStrategy:
         hits_remaining = max(tokens + max_debt, 0.0)
 
         # If tokens are below or equal to negative debt limit, calculate wait time
-        if tokens <= -max_debt:
-            tokens_needed = -max_debt - tokens
+        if tokens < -max_debt + 1:
+            tokens_needed = -max_debt + 1 - tokens
             wait_ms = tokens_needed / refill_rate
         else:
             wait_ms = 0.0

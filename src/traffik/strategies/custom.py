@@ -410,7 +410,7 @@ class TieredRateStrategy:
         count = int(counter_str) if counter_str else 0
 
         hits_remaining = max(effective_limit - count, 0)
-        if count > effective_limit:
+        if count >= effective_limit:
             time_in_window = now % window_duration_ms
             wait_ms = window_duration_ms - time_in_window
             wait_ms = max(wait_ms, 0.0)
@@ -601,7 +601,7 @@ class AdaptiveThrottleStrategy:
         hits_remaining = max(effective_limit - count, 0.0)
         load = count / effective_limit if effective_limit > 0 else 0.0
 
-        if count > effective_limit:
+        if count >= effective_limit:
             time_in_window = now % window_duration_ms
             wait_ms = window_duration_ms - time_in_window
             wait_ms = max(wait_ms, 0.0)
@@ -1017,7 +1017,7 @@ class QuotaWithRolloverStrategy:
         effective_limit = rate.limit + rollover
         hits_remaining = max(effective_limit - usage, 0)
 
-        if usage > effective_limit:
+        if usage >= effective_limit:
             time_in_period = now % window_duration_ms
             wait_ms = window_duration_ms - time_in_period
             wait_ms = max(wait_ms, 0.0)
@@ -1209,7 +1209,7 @@ class TimeOfDayStrategy:
         count = int(counter_str) if counter_str else 0
 
         hits_remaining = max(effective_limit - count, 0)
-        if count > effective_limit:
+        if count >= effective_limit:
             time_in_window = now % window_duration_ms
             wait_ms = window_duration_ms - time_in_window
             wait_ms = max(wait_ms, 0.0)
@@ -1436,8 +1436,9 @@ class CostBasedTokenBucketStrategy:
         tokens = min(tokens + tokens_to_add, float(capacity))
 
         hits_remaining = max(tokens, 0.0)
-        if tokens < 0:
-            wait_ms = abs(tokens) / effective_refill_rate
+        if tokens < 1:
+            tokens_needed = 1 - tokens
+            wait_ms = tokens_needed / effective_refill_rate
         else:
             wait_ms = 0.0
 

@@ -1269,17 +1269,18 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
     When `blocking_timeout` is set and a gate is active, the timeout is
     treated as a single deadline spanning both the gate wait and the
     underlying lock acquire. This preserves the caller's expectation that
-    the total wait will not exceed `blocking_timeout` seconds:
+    the total wait will not exceed `blocking_timeout` seconds.
 
+    Hence if:
         blocking_timeout = 5.0
-        Gate wait:            3.0s  (deadline - loop.time() passed to gate)
-        Remaining for lock:   2.0s  (deadline - loop.time() after gate)
-        Total:                5.0s  Correct - the caller's deadline is respected.
+        Gate wait:            3.0s  (`deadline - loop.time()` passed to gate)
+        Remaining for lock:   2.0s  (`deadline - loop.time()` after gate)
+        Total:                5.0s  **Correct** - the caller's deadline is respected.
 
     Not:
         Gate wait:            3.0s
         Lock wait:            5.0s  (full timeout passed again)
-        Total:                8.0s  Wrong - the caller expected to wait at most 5 seconds total.
+        Total:                8.0s  **Wrong** - the caller expected to wait at most 5 seconds total.
     """
 
     __slots__ = ("_lock", "_name", "_registry")
@@ -1355,7 +1356,7 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
         # and delegate the ability to reenter the underlying lock to the underlying lock.
         # That is, if the lock is reentrant, the task can reenter it as many times as it wants
         # without going through the gate again. Else, the underlying lock will most likely
-        # raise on the reentrant acquire attempt.
+        # raise on reentry.
         if self._lock.is_owner():
             return await self._lock.acquire(
                 blocking=blocking,

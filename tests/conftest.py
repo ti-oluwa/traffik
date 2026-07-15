@@ -177,7 +177,7 @@ def _backend_gen(
         try:
             backend = backend_factory(namespace, persistent)
         except SkipBackend as exc:
-            logger.debug(f"Skipping backend: {exc}")
+            logger.debug(f"Skipping backend: {exc!s}")
             continue
         yield backend
 

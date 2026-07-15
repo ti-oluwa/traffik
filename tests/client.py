@@ -5,8 +5,8 @@ HTTP is handled by an internal `httpx2.AsyncClient` over `ASGITransport`with
 async `get`/`post`/`put`/`patch`/`delete`/`head`/`options`, all going through
 `request()` underneath, same as `httpx` itself.
 
-WebSocket connections use a and-rolled queue-driven session (`AsyncWebSocketTestSession`)
-since httpx doesn't implement the WebSocket half of ASGI. Both HTTP and WebSocket calls run
+WebSocket connections use a hand-rolled queue-driven session (`AsyncWebSocketTestSession`)
+since `httpx` doesn't implement the WebSocket half of ASGI. Both HTTP and WebSocket calls run
 against the same app instance and share the same ASGI *lifespan* (startup on
 `__aenter__`, shutdown on `__aexit__`).
 """
@@ -32,15 +32,11 @@ def _ensure_bytes(
     return val if isinstance(val, bytes) else str(val).encode(encoding=encoding)
 
 
-def _ensure_str(val: typing.Union[str, bytes], /, *, encoding: str = "utf-8") -> str:
-    return val if isinstance(val, str) else bytes(val).decode(encoding=encoding)
-
-
 class AsyncWebSocketTestSession:
     """
     Asynchronous test session for WebSocket connections to ASGI applications.
 
-    This class provides methods to send and receive messages over a WebSocket
+    This class provides methods to send and receive messages over a `WebSocket`
     connection in an asynchronous context.
     """
 
@@ -49,8 +45,8 @@ class AsyncWebSocketTestSession:
         app: ASGI3App,
         scope: Scope,
         loop: asyncio.AbstractEventLoop,
-        receive_queue: asyncio.Queue,
-        send_queue: asyncio.Queue,
+        receive_queue: asyncio.Queue[Message],
+        send_queue: asyncio.Queue[typing.Union[Message, BaseException]],
     ) -> None:
         """
         Initialize the WebSocket test session.
@@ -243,7 +239,17 @@ class AsyncWebSocketTestSession:
         return json.loads(text)
 
 
-class LifespanStartupError(Exception):
+class LifespanError(RuntimeError):
+    """Exception raised when lifespan event fails."""
+
+
+class LifespanStartupError(LifespanError):
+    """Exception raised when lifespan startup fails."""
+
+    pass
+
+
+class LifespanShutdownError(LifespanError):
     """Exception raised when lifespan startup fails."""
 
     pass
@@ -271,6 +277,7 @@ class AsyncTestClient:
         root_path: str = "",
         loop: typing.Optional[asyncio.AbstractEventLoop] = None,
         headers: typing.Optional[typing.Mapping[str, str]] = None,
+        **http_kwargs: typing.Any,
     ) -> None:
         """
         Initialize the asynchronous test client.
@@ -296,6 +303,7 @@ class AsyncTestClient:
             ),
             base_url=base_url,
             headers={"user-agent": "testclient", **(headers or {})},
+            **http_kwargs,
         )
 
         # Separate queues for lifespan
@@ -410,8 +418,8 @@ class AsyncTestClient:
             **kwargs,
         }
 
-        receive_queue: asyncio.Queue[Message] = asyncio.Queue()
-        send_queue: asyncio.Queue[Message] = asyncio.Queue()
+        receive_queue = asyncio.Queue()
+        send_queue = asyncio.Queue()
         return AsyncWebSocketTestSession(
             app=self.app,
             scope=scope,
@@ -420,7 +428,7 @@ class AsyncTestClient:
             send_queue=send_queue,
         )
 
-    async def __lifespan_receive(self) -> Message:
+    async def _lifespan_receive(self) -> Message:
         """Receive a message from the lifespan receive queue."""
         while True:
             try:
@@ -428,7 +436,7 @@ class AsyncTestClient:
             except asyncio.queues.QueueEmpty:
                 await asyncio.sleep(0)
 
-    async def __lifespan_send(self, message: Message) -> None:
+    async def _lifespan_send(self, message: Message) -> None:
         """
         Send a message to the lifespan send queue.
 
@@ -436,7 +444,7 @@ class AsyncTestClient:
         """
         await self.lifespan_send_queue.put(message)
 
-    async def __receive_from_lifespan(self) -> Message:
+    async def _receive_from_lifespan(self) -> Message:
         """
         Receive a message from the lifespan send queue.
 
@@ -448,7 +456,7 @@ class AsyncTestClient:
             except asyncio.queues.QueueEmpty:
                 await asyncio.sleep(0)
 
-    async def __send_to_lifespan(self, message: Message) -> None:
+    async def _send_to_lifespan(self, message: Message) -> None:
         """
         Send a message to the lifespan receive queue.
 
@@ -461,50 +469,57 @@ class AsyncTestClient:
 
         # Create lifespan task
         self._lifespan_task = self.loop.create_task(
-            self.app(
-                {"type": "lifespan"}, self.__lifespan_receive, self.__lifespan_send
-            )  # type: ignore[arg-type]
+            self.app(  # type: ignore[arg-type]
+                {"type": "lifespan"}, self._lifespan_receive, self._lifespan_send
+            )
         )
 
         # Send startup event
-        await self.__send_to_lifespan({"type": "lifespan.startup"})
+        await self._send_to_lifespan({"type": "lifespan.startup"})
         # Confirm startup complete
-        message = await self.__receive_from_lifespan()
+        message = await self._receive_from_lifespan()
 
         # If startup failed, raise the error. The lifespan task also raised
         # internally (that's how the ASGI app reports the failure). Retrieve
         # it so asyncio doesn't complain about an exception nobody looked at.
+        cause: typing.Optional[BaseException] = None
         if message["type"] == "lifespan.startup.failed":
             if self._lifespan_task is not None:
                 try:
                     await asyncio.wait_for(self._lifespan_task, timeout=1.0)
                 except asyncio.TimeoutError:
                     self._lifespan_task.cancel()
-                except BaseException:
+                    try:
+                        await self._lifespan_task
+                    except asyncio.CancelledError:
+                        pass
+                except BaseException as exc:
+                    cause = exc
                     logger.exception(
-                        "An error occurred when waiting on lifespan task on startup failure"
+                        "An error occurred when waiting on lifespan task after startup failure"
                     )
             raise LifespanStartupError(
                 message.get("message", "Lifespan startup failed")
-            )
+            ) from cause
 
         # Ensure startup complete
-        assert message["type"] == "lifespan.startup.complete", (
-            f"Expected startup complete, got {message['type']}"
-        )
+        if message["type"] != "lifespan.startup.complete":
+            raise LifespanStartupError(
+                f"Expected startup complete, got {message['type']}"
+            )
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> typing.Optional[bool]:
         try:
             # Only send shutdown if startup was successful
-            if exc_type is None or not issubclass(exc_type, LifespanStartupError):
-                await self.__send_to_lifespan({"type": "lifespan.shutdown"})
-                message = await self.__receive_from_lifespan()
+            if exc_type is None or not issubclass(exc_type, LifespanError):
+                await self._send_to_lifespan({"type": "lifespan.shutdown"})
+                message = await self._receive_from_lifespan()
                 if message["type"] not in (
                     "lifespan.shutdown.complete",
                     "lifespan.shutdown.failed",
                 ):
-                    raise RuntimeError(
+                    raise LifespanShutdownError(
                         f"Expected shutdown complete or shutdown failed, got {message['type']}"
                     )
 
@@ -518,6 +533,10 @@ class AsyncTestClient:
                         await self._lifespan_task
                     except asyncio.CancelledError:
                         pass
+                except BaseException as exc:
+                    raise LifespanShutdownError(
+                        "An error occurred when waiting on lifespan task after shutdown failure"
+                    ) from exc
         finally:
             await self._http_client.__aexit__(exc_type, exc_val, exc_tb)
 

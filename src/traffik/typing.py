@@ -216,7 +216,10 @@ class StrategyStat(typing.Generic[MapT]):
     hits_remaining: float
     """Number of hits remaining in the current period."""
     wait_ms: WaitPeriod
-    """Time to wait (in milliseconds) before the next allowed request."""
+    """
+    Time to wait (in milliseconds) before the next allowed request. 
+    If next request will go over limit, `wait_ms` shuld be > 0
+    """
     metadata: typing.Optional[MapT] = None
     """Additional metadata related to the strategy."""
 

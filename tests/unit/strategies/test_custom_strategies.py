@@ -813,7 +813,7 @@ class TestCustomStrategiesGetStat:
             await strategy(key, rate, backend)
 
         stat = await strategy.get_stat(key, rate, backend)
-        assert stat.metadata["used"] == 5  # type: ignore
+        assert stat.metadata["usage"] == 5  # type: ignore
 
     async def test_time_of_day_strategy_get_stat(self, backend: InMemoryBackend):
         """Test TimeOfDayStrategy get_stat method."""

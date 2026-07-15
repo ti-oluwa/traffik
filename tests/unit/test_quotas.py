@@ -726,7 +726,6 @@ class TestQuotaContext:
         throttle_type: typing.Type[Throttle[HTTPConnection]],
     ):
         """Test that nested contexts detect potential deadlocks."""
-
         throttle = throttle_type(
             "test-deadlock",
             rate="10/s",
@@ -735,9 +734,9 @@ class TestQuotaContext:
         )
         connection = new_connection(throttle_type.connection_type)  # type: ignore
         async with throttle.quota(connection, lock=True) as parent:
-            # Child using same lock key should raise error
+            # Child using same lock key should raise error and the lock is not reentrant
             with pytest.raises(QuotaError, match="same lock key"):
-                async with parent.nested(lock=True):
+                async with parent.nested(lock=True, lock_config={"reentrant": False}):
                     pass
 
     async def test_quota_context_nested_lock_reentrant(

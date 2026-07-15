@@ -234,7 +234,7 @@ class FixedWindowStrategy:
                 counter = int(stored_counter) if stored_counter else 0
 
         hits_remaining = max(rate.limit - counter, 0)
-        if counter > rate.limit:
+        if counter >= rate.limit:
             time_in_window = now - current_window_start
             wait_ms = window_duration_ms - time_in_window
             wait_ms = max(wait_ms, 0.0)

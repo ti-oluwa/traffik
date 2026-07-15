@@ -290,7 +290,7 @@ class TokenBucketStrategy:
         hits_remaining = max(tokens, 0.0)
 
         # If tokens are zero or negative (shouldn't happen but safe guard), calculate wait time
-        if tokens <= 0:
+        if tokens <= 0.0:
             wait_ms = abs(tokens) / refill_rate
         else:
             wait_ms = 0.0
@@ -540,8 +540,8 @@ class TokenBucketWithDebtStrategy:
         # Hits remaining includes debt allowance: tokens can go to -max_debt
         hits_remaining = max(tokens + max_debt, 0.0)
 
-        # If tokens are below negative debt limit, calculate wait time
-        if tokens < -max_debt:
+        # If tokens are below or equal to negative debt limit, calculate wait time
+        if tokens <= -max_debt:
             tokens_needed = -max_debt - tokens
             wait_ms = tokens_needed / refill_rate
         else:

@@ -767,7 +767,10 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             return
 
         # First, merge all children that haven't been applied
-        for child in self._children.values():
+        # Make sure to make copy as `_merge_into_parent` may mutate
+        # `self._children`
+        children = self._children.copy()
+        for child in children.values():
             if not child._consumed:
                 child._merge_into_parent(mark_as_consumed=True)
 
@@ -989,8 +992,8 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         ):
             raise QuotaError(
                 f"Nested quota context is using the same lock key as its parent "
-                f"({child_lock_key!r}). This will cause a deadlock if the parent lock is not re-entrant, "
-                f"because the parent already holds this lock. Use a different lock key or "
+                f"({child_lock_key!r}). This will cause a deadlock as the parent lock is not re-entrant, "
+                f"and the parent already holds this lock. Use a different lock key or "
                 f"set lock=None to operate under the parent's lock context.",
             )
 

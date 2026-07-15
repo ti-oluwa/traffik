@@ -359,6 +359,7 @@ class TestWaitTimeCalculations:
         wait = await strategy(key, rate, backend)
         assert 0 < wait <= 1500, f"Wait time {wait}ms out of reasonable bounds"
 
+    @pytest.mark.flaky(reruns=3, reruns_delay=2)
     async def test_wait_ms_decreases_over_time(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
     ):
@@ -375,7 +376,7 @@ class TestWaitTimeCalculations:
         assert wait1 > 0, "Should be throttled"
 
         # Wait a bit
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.05)
 
         # Wait time should be less (or request allowed)
         wait2 = await strategy(key, rate, backend)

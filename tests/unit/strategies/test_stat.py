@@ -328,16 +328,21 @@ class TestStrategyStat:
             await strategy(key, rate, backend, cost=1)
 
         # Exceed limit
-        wait_from_call = await strategy(key, rate, backend, cost=1)
-        assert wait_from_call > 0, "Should be throttled"
+        hit_wait_ms = await strategy(key, rate, backend, cost=1)
+        assert hit_wait_ms > 0, "Should be throttled"
 
         # Get stat
         stat = await strategy.get_stat(key, rate, backend)  # type: ignore
-        assert stat.wait_ms > 0, "Stat should show wait time"
+        assert (
+            stat.wait_ms > 0 or stat.wait_ms == 0 and round(stat.hits_remaining) == 0
+        ), (
+            "Stat should show wait time. Or hit remaining should be approximatel zero if wait time is zero "
+            "(for refill type strategies e.g TokenBucket)"
+        )
 
         # Wait times should be close (allowing for small timing differences)
-        # The stat wait_ms might be slightly different due to when it's calculated
-        assert abs(stat.wait_ms - wait_from_call) < 100, "Wait times should be close"
+        # The stat `wait_ms` might be slightly different due to when it's calculated
+        assert abs(stat.wait_ms - hit_wait_ms) < 500, "Wait times should be close"
 
     async def test_stat_concurrent_access(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]

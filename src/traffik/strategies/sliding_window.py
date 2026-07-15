@@ -268,10 +268,9 @@ class SlidingWindowLogStrategy:
         limit = rate.limit
         hits_remaining = max(limit - current_total_cost, 0.0)
 
-        # If over limit, calculate wait time
-        if current_total_cost > limit and oldest_timestamp is not None:
-            wait_ms = (oldest_timestamp + window_duration_ms) - now
-            wait_ms = max(wait_ms, 0.0)
+        # Will next request over limit? calculate wait time
+        if current_total_cost >= limit and oldest_timestamp is not None:
+            wait_ms = max((oldest_timestamp + window_duration_ms) - now, 0.0)
         else:
             wait_ms = 0.0
 
@@ -474,8 +473,8 @@ class SlidingWindowCounterStrategy:
         limit = rate.limit
         hits_remaining = max(limit - weighted_count, 0.0)
 
-        # If over limit, calculate wait time
-        if weighted_count > limit:
+        # Will next request go over limit? calculate wait time
+        if weighted_count >= limit:
             requests_excess = weighted_count - limit
             if previous_count > 0:
                 wait_ratio = requests_excess / previous_count

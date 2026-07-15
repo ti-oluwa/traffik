@@ -253,7 +253,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             - Testing: Nested context managers with different backends
 
             **Requirements:**
-            - Backend must be set via lifespan or context manager in middleware **before** throttle is called
+            - Backend must be set via lifespan or context manager (in middleware) **before** throttle is called
             - Cannot be combined with explicit `backend` parameter
 
             **Trade-offs:**
@@ -978,7 +978,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> bool:
         """
-        **Best-effort** check if there's sufficient quota to proceed without consuming quota.
+        **Best-effort** check if there's sufficient quota to proceed (without consuming quota).
 
         This performs a non-consuming check of the throttle's current state.
         Useful for pre-checking before expensive operations.
@@ -1303,15 +1303,15 @@ def is_throttled(connection: HTTPConnection) -> bool:
     Check if the connection has been throttled.
 
     This is especially important to check if a connection has been throttled and/or disconnected.
-    You will mostlikely need to call this function immediately after every throttle hit 
+    You will mostlikely need to call this function immediately after every throttle hit
     especially for websocket connections.
 
     **NOTE**:
         For websockets, never attempt to send or receive frames once the connection
-        is throttled as the connected as mostlikely been closed by the server 
+        is throttled as the connected as mostlikely been closed by the server
         (by send a close frame or raising a discnnect exception), or by the
         client (by send a disconnect frame to the server - as an acknowledgement or not).
-        Attempting to send/receive will likely lead to a `RuntimeError` been raised 
+        Attempting to send/receive will likely lead to a `RuntimeError` been raised
         (by the ASGI app).
 
     Example Usage:
@@ -1340,9 +1340,9 @@ def is_throttled(connection: HTTPConnection) -> bool:
                 await ws_throttle(websocket)
                 # If throttled, break immediately (since the handler closed the connection)
                 # If not, the next `send_text(...)` will raise a runtime error.
-                if is_throttled(websocket): 
+                if is_throttled(websocket):
                     break
-                
+
                 await websocket.send_text(f"Echo: {data}")
             except WebSocketDisconnect:
                 # Throttle handler may have already closed the connection
@@ -1563,12 +1563,14 @@ async def websocket_throttled(
 
     wait_seconds = math.ceil(wait_ms / 1000)
     try:
-        await connection.send_json({
-            "type": "rate_limit",
-            "error": "Too many messages",
-            "retry_after": wait_seconds,
-            **context.get("extras", {}),
-        })
+        await connection.send_json(
+            {
+                "type": "rate_limit",
+                "error": "Too many messages",
+                "retry_after": wait_seconds,
+                **context.get("extras", {}),
+            }
+        )
     except RuntimeError as exc:
         # Connection was closed (by client) between check and send
         # Silently ignore since client is already disconnected
@@ -1727,7 +1729,7 @@ def throttled(
     def _decorator(
         route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
     ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
-        if asyncio.iscoroutinefunction(route):
+        if inspect.iscoroutinefunction(route):
             route = typing.cast(typing.Callable[P, typing.Awaitable[R]], route)
 
             @functools.wraps(route)

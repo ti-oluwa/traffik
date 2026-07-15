@@ -11,9 +11,9 @@ the `web_framework` fixture. What's left here specifically exercises the
 import typing
 
 import pytest
+from fastapi import Depends, FastAPI
 from pydantic import BaseModel
 
-from fastapi import Depends, FastAPI
 from tests.utils import default_client_identifier, make_client, unlimited_identifier
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.decorators import throttled

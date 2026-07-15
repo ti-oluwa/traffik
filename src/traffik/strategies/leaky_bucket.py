@@ -272,7 +272,7 @@ class LeakyBucketStrategy:
         limit = rate.limit
         hits_remaining = max(limit - level, 0)
 
-        # If bucket is at or over capacity, calculate wait time
+        # If bucket is at/over capacity, or if next request will go over, calculate wait time
         if level >= limit:
             wait_ms = (level - limit + 1) / leak_rate
         else:
@@ -517,7 +517,7 @@ class LeakyBucketWithQueueStrategy:
 
         # Will next request go over limit? calculate wait time
         if current_queue_cost >= limit:
-            cost_over = current_queue_cost - limit
+            cost_over = current_queue_cost - limit + 1
             wait_ms = max(cost_over / leak_rate, 0.0)
         else:
             wait_ms = 0.0

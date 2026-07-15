@@ -3,9 +3,9 @@ import sys
 import time
 import typing
 
-from benchmarks.client import AsyncTestClient, AsyncWebSocketTestSession
 from benchmarks.backends import create_backend, create_strategy
 from benchmarks.base import BenchmarkConfig, ScenarioResult
+from benchmarks.client import AsyncTestClient, AsyncWebSocketTestSession
 from benchmarks.scenarios.common import ScenarioFunc, make_ws_app
 from traffik import WebSocketThrottle
 from traffik.backends.base import ThrottleBackend

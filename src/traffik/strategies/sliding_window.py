@@ -475,7 +475,7 @@ class SlidingWindowCounterStrategy:
 
         # Will next request go over limit? calculate wait time
         if weighted_count >= limit:
-            requests_excess = weighted_count - limit
+            requests_excess = weighted_count - limit + 1
             if previous_count > 0:
                 wait_ratio = requests_excess / previous_count
                 wait_ms = wait_ratio * time_in_current_window

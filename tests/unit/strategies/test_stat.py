@@ -46,7 +46,7 @@ class TestStrategyStat:
 
         # Check stat after requests
         stat = await strategy.get_stat(key, rate, backend)
-        assert round(stat.hits_remaining) == 7, "Should have 7 hits remaining"
+        assert round(stat.hits_remaining) == 7, "Should have about 7 hits remaining"
         assert stat.wait_ms == 0.0, "Should still have no wait time"
 
         # Use up all remaining hits
@@ -56,7 +56,7 @@ class TestStrategyStat:
         # Check stat when at limit
         stat = await strategy.get_stat(key, rate, backend)
         assert round(stat.hits_remaining) == 0, "Should have 0 hits remaining"
-        assert stat.wait_ms == 0.0, "At limit but not exceeded"
+        assert stat.wait_ms > 0.0, "Wait should be greater than zero at limit since next request exceeded"
 
         # Try one more (will be throttled)
         wait = await strategy(key, rate, backend, cost=1)
@@ -294,7 +294,7 @@ class TestStrategyStat:
         stat = await strategy.get_stat(key, rate, backend)  # type: ignore
         # Some strategies like sliding window may not have the full hits remaining
         # Due to its (obvious) sliding nature and the use of window sleep
-        assert 3 <= round(stat.hits_remaining) <= 5, "Should be reset to full limit"
+        assert 3 <= round(stat.hits_remaining) <= 5, "Should be reset to (approx.) full limit"
         assert stat.wait_ms == 0.0, "Should have no wait time"
 
     async def test_stat_keys_isolation(

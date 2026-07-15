@@ -12,7 +12,6 @@ import aiomcache
 from aiomcache.exceptions import ClientException
 
 from traffik._locks import (
-    _AsyncLockContext,
     _GatedNamedLock,
     _NamedGateRegistry,
     get_token,
@@ -26,7 +25,6 @@ from traffik.exceptions import (
     LockReleaseError,
 )
 from traffik.typing import (
-    AsyncLock,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,

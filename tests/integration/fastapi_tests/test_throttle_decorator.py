@@ -4,9 +4,9 @@ import typing
 
 import anyio
 import pytest
+from fastapi import Depends, FastAPI, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from fastapi import Depends, FastAPI, WebSocket
 from tests.utils import default_client_identifier, make_client
 from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend

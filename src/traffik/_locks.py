@@ -4,6 +4,7 @@ import asyncio
 import itertools
 import os
 import secrets
+import threading
 import typing
 from collections import deque
 from contextlib import asynccontextmanager, contextmanager
@@ -64,8 +65,12 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
     This allows temporary bursts above the reusable cache size while still
     preventing unbounded memory growth.
 
-    **Note:** This is not thread-safe and is designed to be used within a single `asyncio` event loop.
-        If you need thread safety, consider holding an external lock around the pool ops.
+    **Note:** Bookkeeping (`get`/`_release`/`populate`/`close`) is guarded by an
+        internal `threading.RLock`, so a single pool instance can safely be
+        shared across multiple OS threads (each running its own event loop),
+        not just within one event loop. The underlying locks it hands out still
+        need to be safe for that usage themselves -- this only protects the
+        pool's own bookkeeping.
     """
 
     __slots__ = (
@@ -75,6 +80,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         "_headroom",
         "_idle",
         "_in_use",
+        "_lock",
         "_max_capacity",
         "_max_size",
     )
@@ -106,6 +112,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         self._headroom = headroom
         self._max_capacity = max_size * headroom
         self._allocated = 0
+        self._lock = threading.RLock()
 
         self._idle: typing.List[AsyncLockT] = []
         """Idle reusable lock instances."""
@@ -115,7 +122,8 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
 
     def get(self, name: str, /) -> "_NamedLockHandle[AsyncLockT]":
         """
-        Retrieve a named lock handle.
+        Retrieve a named lock handle.if self._closed:
+                raise LockPoolError("Cannot get lock handle from closed pool.")
 
         Multiple handles retrieved for the same name share the same
         underlying lock instance.
@@ -130,23 +138,24 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         if self._closed:
             raise LockPoolError("Cannot get lock handle from closed pool.")
 
-        entry = self._in_use.get(name)
-        if entry is not None:
-            lock, refcount = entry
-            self._in_use[name] = (lock, refcount + 1)
+        with self._lock:
+            entry = self._in_use.get(name)
+            if entry is not None:
+                lock, refcount = entry
+                self._in_use[name] = (lock, refcount + 1)
+                return _NamedLockHandle(pool=self, name=name, lock=lock)
+
+            if self._idle:
+                lock = self._idle.pop()
+            else:
+                if self._allocated >= self._max_capacity:
+                    raise LockPoolError("Named lock pool maximum capacity exceeded.")
+
+                lock = self._factory()
+                self._allocated += 1
+
+            self._in_use[name] = (lock, 1)
             return _NamedLockHandle(pool=self, name=name, lock=lock)
-
-        if self._idle:
-            lock = self._idle.pop()
-        else:
-            if self._allocated >= self._max_capacity:
-                raise LockPoolError("Named lock pool maximum capacity exceeded.")
-
-            lock = self._factory()
-            self._allocated += 1
-
-        self._in_use[name] = (lock, 1)
-        return _NamedLockHandle(pool=self, name=name, lock=lock)
 
     @asynccontextmanager
     async def lock(
@@ -188,23 +197,24 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         if self._closed:
             return
 
-        entry = self._in_use.get(name)
-        if entry is None:
-            return
+        with self._lock:
+            entry = self._in_use.get(name)
+            if entry is None:
+                return
 
-        lock, refcount = entry
-        if refcount > 1:
-            self._in_use[name] = (lock, refcount - 1)
-            return
+            lock, refcount = entry
+            if refcount > 1:
+                self._in_use[name] = (lock, refcount - 1)
+                return
 
-        del self._in_use[name]
+            del self._in_use[name]
 
-        if len(self._idle) < self._max_size:
-            self._idle.append(lock)
-            return
+            if len(self._idle) < self._max_size:
+                self._idle.append(lock)
+                return
 
-        # Discard the lock if it can't be recycled
-        self._discard_lock(lock)
+            # Discard the lock if it can't be recycled
+            self._discard_lock(lock)
 
     def _discard_lock(self, lock: AsyncLockT, /) -> None:
         """
@@ -217,9 +227,10 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         :param lock: Lock instance to discard.
         """
         discard = getattr(lock, "discard", None)
-        if callable(discard):
-            discard()
-        self._allocated -= 1
+        with self._lock:
+            if callable(discard):
+                discard()
+            self._allocated -= 1
 
     def populate(self, n: typing.Optional[int] = None, /) -> None:
         """
@@ -232,16 +243,17 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         if self._closed:
             raise LockPoolError("Cannot populate locks in closed registry.")
 
-        if n is None:
-            n = self._max_size - len(self._idle)
-        else:
-            n = min(n, self._max_size - len(self._idle))
+        with self._lock:
+            if n is None:
+                n = self._max_size - len(self._idle)
+            else:
+                n = min(n, self._max_size - len(self._idle))
 
-        remaining_capacity = self._max_capacity - self._allocated
-        n = min(n, remaining_capacity)
-        for _ in range(n):
-            self._idle.append(self._factory())
-            self._allocated += 1
+            remaining_capacity = self._max_capacity - self._allocated
+            n = min(n, remaining_capacity)
+            for _ in range(n):
+                self._idle.append(self._factory())
+                self._allocated += 1
 
     @property
     def max_size(self) -> int:
@@ -302,15 +314,15 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         """
         if self._closed:
             return
+        with self._lock:
+            self._closed = True
+            for lock, _ in self._in_use.values():
+                self._discard_lock(lock)
+            self._in_use.clear()
 
-        self._closed = True
-        for lock, _ in self._in_use.values():
-            self._discard_lock(lock)
-        self._in_use.clear()
-
-        for lock in self._idle:
-            self._discard_lock(lock)
-        self._idle.clear()
+            for lock in self._idle:
+                self._discard_lock(lock)
+            self._idle.clear()
 
 
 @typing.final
@@ -457,6 +469,9 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         """Release the lock during async context manager exit."""
         await self.release()
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(name={self._name!r}, lock={self._lock!r}, acquired={self._acquired}, released={self._released})"
+
 
 class _AsyncFairRLock:
     """
@@ -602,12 +617,12 @@ class _AsyncRLock:
         and give the caller (intended) task in `release`, cause a mismatch
         when ownership is check later on.
         """
-        current = asyncio.current_task()
-        if current is None:
+        current_task = asyncio.current_task()
+        if current_task is None:
             raise RuntimeError("Must be called from within a task")
 
         # Reentrant fast-path
-        if self._owner is current:
+        if self._owner is current_task:
             self._count += 1
             return True
 
@@ -615,17 +630,17 @@ class _AsyncRLock:
         await self._lock.acquire()
 
         # Become owner
-        self._owner = current
+        self._owner = current_task
         self._count = 1
         return True
 
     def release(self) -> None:
         """Release the lock"""
-        current = asyncio.current_task()
-        if current is None:
+        current_task = asyncio.current_task()
+        if current_task is None:
             raise RuntimeError("Must be called from within a task")
 
-        if self._owner is not current:
+        if self._owner is not current_task:
             raise RuntimeError("Cannot release a lock not owned by current task")
 
         self._count -= 1
@@ -731,7 +746,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         )
         if not acquired:
             raise LockAcquisitionError(
-                f"Could not acquire {type(self._lock).__qualname__!r} lock {'(blocking)' if self._blocking else '(non-blocking)'}."
+                f"Could not acquire {self._lock!r} lock {'(blocking)' if self._blocking else '(non-blocking)'}."
             )
 
     async def _release(self, exc_type: typing.Optional[type[BaseException]]) -> None:
@@ -747,7 +762,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         except (RuntimeError, TimeoutError) as release_exc:
             if exc_type is None:
                 raise LockReleaseError(
-                    f"Failed to release {type(self._lock).__qualname__!r} lock."
+                    f"Failed to release {self._lock!r} lock."
                 ) from release_exc
         finally:
             self._acquired = False
@@ -755,8 +770,8 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
     async def __aenter__(self) -> Self:
         if self._acquired:
             raise LockAcquisitionError(
-                f"Lock context for {type(self._lock).__qualname__!r} is already "
-                f"acquired. {self.__class__.__name__} is not re-entrant; create a new "
+                f"Lock context for {self._lock!r} is already "
+                f"acquired. {self.__class__.__name__!r} is not re-entrant; create a new "
                 f"context instance for nested locking."
             )
 
@@ -773,7 +788,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
                 timeout=self._ttl,
                 loop=loop,
                 error=LockTimeoutError(
-                    f"{type(self._lock).__qualname__!r} lock TTL of {self._ttl}s "
+                    f"{self._lock!r} lock TTL of {self._ttl}s "
                     "expired while the lock was held. The body was cancelled to "
                     "prevent unsafe execution without mutual exclusion."
                 ),
@@ -820,6 +835,9 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         if timeout_exc is not None:
             raise timeout_exc
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(lock={self._lock!r}, ttl={self._ttl}, acquired={self._acquired}, blocking={self._blocking}, blocking_timeout={self._blocking_timeout})"
+
 
 @typing.final
 class _NamedGateRegistry:
@@ -860,15 +878,13 @@ class _NamedGateRegistry:
     paired with exactly one decrement, which happens either via
     `_NamedGateHandle.release` or via `_release` directly in the None path.
     The `gate` context manager handles this automatically.
-
-    **Note:** This is not thread-safe and is designed to be used within a single `asyncio` event loop.
-        If you need thread safety, consider holding an external lock around the registry ops.
     """
 
     __slots__ = (
         "_closed",
         "_contention_threshold",
         "_gates",
+        "_lock",
         "_waiters",
     )
 
@@ -894,10 +910,12 @@ class _NamedGateRegistry:
         """
         if contention_threshold < 1:
             raise ValueError("`contention_threshold` must be at least 1.")
+
         self._contention_threshold = contention_threshold
         self._gates: typing.Dict[str, asyncio.Lock] = {}
         self._waiters: typing.Dict[str, int] = {}
         self._closed = False
+        self._lock = threading.RLock()
 
     def get(self, name: str) -> typing.Optional["_NamedGateHandle"]:
         """
@@ -925,17 +943,18 @@ class _NamedGateRegistry:
             # The gate registry is essentially a gate pool, hence the use of the `LockPoolError` here
             raise LockPoolError("Cannot get gate handle from closed registry.")
 
-        count = self._waiters.get(name, 0)
-        self._waiters[name] = count + 1
+        with self._lock:
+            count = self._waiters.get(name, 0)
+            self._waiters[name] = count + 1
 
-        if count < self._contention_threshold:
-            # Below threshold. This task races on the network directly.
-            return None
+            if count < self._contention_threshold:
+                # Below threshold. This task races on the network directly.
+                return None
 
-        # At or above threshold. Gate this task locally.
-        if name not in self._gates:
-            self._gates[name] = asyncio.Lock()
-        return _NamedGateHandle(registry=self, name=name, lock=self._gates[name])
+            # At or above threshold. Gate this task locally.
+            if name not in self._gates:
+                self._gates[name] = asyncio.Lock()
+            return _NamedGateHandle(registry=self, name=name, lock=self._gates[name])
 
     @contextmanager
     def gate(self, name: str) -> typing.Iterator[typing.Optional["_NamedGateHandle"]]:
@@ -996,24 +1015,27 @@ class _NamedGateRegistry:
             # already cleared and no new ones can be created.
             return
 
-        count = self._waiters.get(name, 0) - 1
-        if count <= 0:
-            self._waiters.pop(name, None)
-            self._gates.pop(name, None)
-        else:
-            self._waiters[name] = count
+        with self._lock:
+            count = self._waiters.get(name, 0) - 1
+            if count <= 0:
+                self._waiters.pop(name, None)
+                self._gates.pop(name, None)
+            else:
+                self._waiters[name] = count
 
     def set_contention_threshold(self, threshold: int) -> None:
         """
         Update threshold at runtime.
 
-        Takes effect on next get() call.
+        Takes effect on next `get()` call.
         Existing waiters already past the old threshold
         continue normally - no disruption to in-flight acquires.
         """
         if threshold < 1:
             raise ValueError("`contention_threshold` must be at least 1.")
-        self._contention_threshold = threshold
+
+        with self._lock:
+            self._contention_threshold = threshold
 
     @property
     def size(self) -> int:
@@ -1047,9 +1069,10 @@ class _NamedGateRegistry:
         if self._closed:
             return
 
-        self._closed = True
-        self._gates.clear()
-        self._waiters.clear()
+        with self._lock:
+            self._closed = True
+            self._gates.clear()
+            self._waiters.clear()
 
 
 @typing.final
@@ -1236,6 +1259,9 @@ class _NamedGateHandle:
             # our slot in the registry's waiter count.
             self._registry._release(self._name)
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(name={self._name!r}, lock={self._lock!r}, acquired={self._acquired}, released={self._released})"
+
 
 @typing.final
 class _GatedNamedLock(typing.Generic[AsyncLockT]):
@@ -1420,3 +1446,6 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
         traceback: typing.Optional[TracebackType],
     ) -> None:
         await self.release()
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(name={self._name!r}, lock={self._lock!r})"

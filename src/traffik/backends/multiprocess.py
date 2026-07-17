@@ -1,4 +1,6 @@
 """
+**EXPERIMENTAL!**
+
 Multi-process in-memory throttle backend using shared memory.
 
 Designed for multi-worker single-machine deployments (e.g. gunicorn/uvicorn
@@ -358,14 +360,14 @@ class _AsyncSharedMemoryLock:
             Only applicable to the initial acquire attempt, not reentrant attempts.
         :return: `True` if the lock was acquired, `False` otherwise.
         """
-        current = asyncio.current_task()
-        if current is None:
+        current_task = asyncio.current_task()
+        if current_task is None:
             raise LockAcquisitionError(
                 "Lock must be acquired from within an `asyncio.Task`."
             )
 
         # Reentrant. Current task already holds the lock
-        if self.is_owner(task=current):
+        if self.is_owner(task=current_task):
             if not self._reentrant:
                 raise LockAcquisitionError(
                     "Lock is already acquired by the current task "
@@ -382,7 +384,7 @@ class _AsyncSharedMemoryLock:
         while True:
             if test_and_set_byte(self._buffer, self._byte_index) == 0:
                 # Old value was 0. We already atomically set it to 1 and own the lock
-                self._owner = current
+                self._owner = current_task
                 self._reentry_count = 1
                 return True
 
@@ -413,9 +415,9 @@ class _AsyncSharedMemoryLock:
         :raises RuntimeError: If the current task does not own the lock.
         """
         if not self.is_owner():
-            current = asyncio.current_task()
+            current_task = asyncio.current_task()
             raise LockReleaseError(
-                f"Cannot release lock: current task {current!r} does not own "
+                f"Cannot release lock: current task {current_task!r} does not own "
                 f"the lock (owner: {self._owner!r})."
             )
 
@@ -467,6 +469,8 @@ class _AsyncSharedMemoryLock:
 
 class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     """
+    **EXPERIMENTAL!**
+
     Multi-process shared-memory throttle backend.
 
     All state (hash tables, slot data, free-slot stacks) lives in a single

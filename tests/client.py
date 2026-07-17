@@ -199,10 +199,12 @@ class AsyncWebSocketTestSession:
         if mode == "text":
             return await self.send({"type": "websocket.receive", "text": text})
 
-        return await self.send({
-            "type": "websocket.receive",
-            "bytes": text.encode("utf-8"),
-        })
+        return await self.send(
+            {
+                "type": "websocket.receive",
+                "bytes": text.encode("utf-8"),
+            }
+        )
 
     async def receive_text(self) -> str:
         """
@@ -392,10 +394,12 @@ class AsyncTestClient:
         header_pairs.append((b"sec-websocket-key", b"testserver=="))
         header_pairs.append((b"sec-websocket-version", b"13"))
         if subprotocols:
-            header_pairs.append((
-                b"sec-websocket-protocol",
-                ", ".join(subprotocols).encode(),
-            ))
+            header_pairs.append(
+                (
+                    b"sec-websocket-protocol",
+                    ", ".join(subprotocols).encode(),
+                )
+            )
         header_pairs += [
             (
                 key.lower().encode(encoding="utf-8"),

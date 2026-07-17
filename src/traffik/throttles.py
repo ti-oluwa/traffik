@@ -1155,13 +1155,14 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             ]
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        **throttle_kwargs: typing.Any,
     ) -> Middleware:
-        from traffik.middleware import ThrottleMiddleware
+        from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
 
         return Middleware(
             ThrottleMiddleware,
             backend=backend if backend is not None else self.backend,  # type: ignore[arg-type]
-            middleware_throttles=[self],
+            middleware_throttles=[MiddlewareThrottle(self, **throttle_kwargs)],
             exception_handler_getter=exception_handler_getter,
             context=context,
             sort=None,

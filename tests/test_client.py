@@ -100,10 +100,12 @@ class TestHTTP:
         """Extra headers passed to the constructor apply to every request."""
 
         async def endpoint(request: Request) -> JSONResponse:
-            return JSONResponse({
-                "user-agent": request.headers.get("user-agent"),
-                "x-tenant": request.headers.get("x-tenant"),
-            })
+            return JSONResponse(
+                {
+                    "user-agent": request.headers.get("user-agent"),
+                    "x-tenant": request.headers.get("x-tenant"),
+                }
+            )
 
         app = Starlette(routes=[Route("/", endpoint)])
         async with AsyncTestClient(

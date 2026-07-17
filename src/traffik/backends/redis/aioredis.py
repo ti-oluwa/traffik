@@ -225,14 +225,14 @@ class _AsyncRedisLock:
             Only applicable to the initial acquire attempt, not reentrant attempts.
         :return: True if lock acquired, False otherwise.
         """
-        current = asyncio.current_task()
-        if current is None:
+        current_task = asyncio.current_task()
+        if current_task is None:
             raise LockAcquisitionError(
-                f"Lock '{self._name}' must be acquired from within an asyncio Task."
+                f"Lock '{self._name}' must be acquired from within an `asyncio.Task`."
             )
 
         # Reentrant. Current task already holds the lock
-        if self.is_owner(task=current):
+        if self.is_owner(task=current_task):
             if not self._reentrant:
                 raise LockAcquisitionError(
                     f"Lock '{self._name}' is already acquired by the current task "
@@ -277,7 +277,7 @@ class _AsyncRedisLock:
                 ) from exc
 
             if token:
-                self._owner = current
+                self._owner = current_task
                 self._token = token
                 self._reentry_count = 1
                 return True
@@ -303,11 +303,11 @@ class _AsyncRedisLock:
 
         Only when the reentrancy count reaches zero will the underlying Redis lock actually be released.
         """
-        current = asyncio.current_task()
-        if not self.is_owner(task=current):
+        current_task = asyncio.current_task()
+        if not self.is_owner(task=current_task):
             raise LockReleaseError(
                 f"Cannot release lock '{self._name}': "
-                f"current task {current!r} does not own the lock "
+                f"current task {current_task!r} does not own the lock "
                 f"(owner: {self._owner!r})."
             )
 
@@ -448,14 +448,14 @@ class _AsyncRedLock:
             Only applicable to the initial acquire attempt, not reentrant attempts.
         :return: True if lock acquired, False otherwise.
         """
-        current = asyncio.current_task()
-        if current is None:
+        current_task = asyncio.current_task()
+        if current_task is None:
             raise LockAcquisitionError(
-                f"Lock '{self._name}' must be acquired from within an asyncio Task."
+                f"Lock '{self._name}' must be acquired from within an `asyncio.Task`."
             )
 
         # Reentrant. Current task already holds the lock
-        if self.is_owner(task=current):
+        if self.is_owner(task=current_task):
             if not self._reentrant:
                 raise LockAcquisitionError(
                     f"Lock '{self._name}' is already acquired by the current task "
@@ -475,7 +475,7 @@ class _AsyncRedLock:
             ) from exc
 
         if acquired:
-            self._owner = current
+            self._owner = current_task
             self._reentry_count = 1
             return True
         return False
@@ -487,11 +487,11 @@ class _AsyncRedLock:
         Only when the reentrancy count reaches zero will the underlying Redis lock
         actually be released.
         """
-        current = asyncio.current_task()
-        if not self.is_owner(task=current):
+        current_task = asyncio.current_task()
+        if not self.is_owner(task=current_task):
             raise LockReleaseError(
                 f"Cannot release lock '{self._name}': "
-                f"current task {current!r} does not own the lock "
+                f"current task {current_task!r} does not own the lock "
                 f"(owner: {self._owner!r})."
             )
 

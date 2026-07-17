@@ -34,8 +34,6 @@ MEMCACHED_POOL_SIZE = int(os.getenv("MEMCACHED_POOL_SIZE", "2"))
 class SkipBackend(Exception):
     """Raised to skip a backend test if the backend is not available."""
 
-    pass
-
 
 def get_inmemory_backend(namespace: str, persistent: bool) -> InMemoryBackend:
     return InMemoryBackend(

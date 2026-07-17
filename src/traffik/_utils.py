@@ -301,10 +301,10 @@ class _TaskTimer:
         return False
 
 
-class CircuitState(str, enum.Enum):
-    CLOSED = "closed"
-    OPEN = "open"
-    HALF_OPEN = "half_open"
+class CircuitState(enum.IntEnum):
+    CLOSED = 0
+    OPEN = 1
+    HALF_OPEN = 2
 
 
 class CircuitBreaker:

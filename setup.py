@@ -3,7 +3,7 @@ from setuptools import Extension, setup
 setup(
     name="traffik",
     version="1.2.0",
-    description="Rate limiting for FastAPI/Starlette applications.",
+    description="Rate limiting for Starlette applications.",
     readme="README.md",
     authors=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],
     maintainers=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],

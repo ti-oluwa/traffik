@@ -89,7 +89,7 @@ class TestThrottlesDepedencyInjection:
             assert response.status_code == 200
             assert response.headers.get("Retry-After", None) is None
 
-    def test_throttle_dependency_not_in_openapi_schema(self, app: FastAPI) -> None:
+    async def test_throttle_dependency_not_in_openapi_schema(self, app: FastAPI) -> None:
         """
         Regression test: Using a throttle as a dependency (via Depends) should not
         leak its internal parameters (cost, context, etc.) into the OpenAPI schema.

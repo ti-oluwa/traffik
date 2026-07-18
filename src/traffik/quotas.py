@@ -10,7 +10,7 @@ from types import TracebackType
 from starlette.exceptions import HTTPException
 from typing_extensions import Self
 
-from traffik.backoff import (
+from traffik.backoff import (  # noqa
     DEFAULT_BACKOFF,
     ConstantBackoff,
     ExponentialBackoff,
@@ -23,7 +23,7 @@ from traffik.exceptions import (
     QuotaError,
 )
 from traffik.throttles import Throttle
-from traffik.types import (
+from traffik.typing import (
     ApplyOnError,
     BackoffStrategy,
     HTTPConnectionT,
@@ -41,12 +41,6 @@ _NON_RETRYABLE_EXCEPTIONS: typing.Tuple[typing.Type[BaseException], ...] = (
     SystemExit,
 )
 """Tuple of exceptions that should not be retried. They are considered non-retryable signals."""
-
-# Aliases for backwards compatibility
-ConstantBackoff = ConstantBackoff
-LinearBackoff = LinearBackoff
-LogarithmicBackoff = LogarithmicBackoff
-ExponentialBackoff = ExponentialBackoff
 
 
 def _resolve_lock_key(
@@ -76,16 +70,16 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
     """A quota entry queued for deferred consumption."""
 
     __slots__ = (
-        "throttle",
-        "cost",
-        "resolved_cost",
-        "context",
-        "retry",
-        "retry_on",
+        "_retry_type",
         "backoff",
         "base_delay",
+        "context",
+        "cost",
         "max_attempts",
-        "_retry_type",
+        "resolved_cost",
+        "retry",
+        "retry_on",
+        "throttle",
     )
 
     def __init__(
@@ -119,9 +113,9 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         # Determine retry_on type for fast checks during retries
         if retry_on is None:
             self._retry_type: typing.Optional[str] = None
-        elif isinstance(retry_on, tuple) and all(isinstance(t, type) for t in retry_on):
-            self._retry_type = "exception_type"
-        elif isinstance(retry_on, type):
+        elif isinstance(retry_on, type) or (
+            isinstance(retry_on, tuple) and all(isinstance(t, type) for t in retry_on)
+        ):
             self._retry_type = "exception_type"
         elif callable(retry_on) and inspect.iscoroutinefunction(retry_on):
             self._retry_type = "coroutine"
@@ -142,7 +136,6 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         throttle = self.throttle
         if throttle._uses_cost_func:
             return await throttle.cost(connection, context)  # type: ignore[operator]
-
         return throttle.cost  # type: ignore[return-value]
 
 
@@ -187,10 +180,11 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
     - Retry with backoff: Configurable retry logic per quota entry
     - Context-wide locking: Lock acquired on entry, released on exit
 
-    Note:
+    **Note:**
         When locking is enabled, the lock is held for the entire duration of the
         context. Keep operations within the context fast to avoid blocking other
-        requests waiting for the same lock.
+        requests waiting for the same lock. As this functions as a serialization
+        primitive, not just a quota guard.
 
     Example (bound mode with cost aggregation):
 
@@ -202,9 +196,9 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         raise ConnectionThrottled()
 
     async with throttle.quota(conn, lock=True) as quota:
-        await quota(cost=2)          # Entry 1: cost=2
-        await quota(cost=3)          # Aggregated into Entry 1: cost=5
-        await quota(other_throttle)  # Entry 2: different throttle
+        quota(cost=2)          # Entry 1: cost=2
+        quota(cost=3)          # Aggregated into Entry 1: cost=5
+        quota(other_throttle)  # Entry 2: different throttle
     ```
 
     Example (unbound mode):
@@ -212,30 +206,30 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
     ```python
 
     async with QuotaContext(conn, lock=True) as quota:
-        await quota(throttle1, cost=2)
-        await quota(throttle2)
+        quota(throttle1, cost=2)
+        quota(throttle2)
     ```
+
     """
 
     __slots__ = (
-        "connection",
-        "_default_context",
-        "owner",
-        "apply_on_error",
-        "apply_on_exit",
-        "lock_config",
-        "parent",
-        "_lock_key",
-        "_queue",
+        "_applied_cost",
+        "_cancelled",
         "_children",
         "_consumed",
-        "_cancelled",
+        "_default_context",
+        "_depth",
         "_entered",
-        "_bound",
-        "_nested",
-        "_queued_cost",
-        "_applied_cost",
         "_exit_stack",
+        "_lock_key",
+        "_queue",
+        "_queued_cost",
+        "apply_on_error",
+        "apply_on_exit",
+        "connection",
+        "lock_config",
+        "owner",
+        "parent",
     )
 
     def __init__(
@@ -275,6 +269,10 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             **Important:** Keep operations within the context fast since the lock
             is held for the entire duration.
         :param lock_config: Configuration for lock acquisition. See `LockConfig`.
+            It is advised that either the lock TTL and blocking timeout are set here, on the backend or
+            on the strategy itself to prevent deadlocks. If not set, the lock will use the backend's default configuration,
+            and if that is unset, the lock will have no TTL and block indefinitely until acquired, which can lead to deadlocks
+            if locks are not released properly.
         :param parent: Parent quota context for nesting.
         """
         self.connection = connection
@@ -288,12 +286,11 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
         self._lock_key = _resolve_lock_key(lock, owner)
         self._queue: typing.Deque[_QuotaEntry[HTTPConnectionT]] = deque()
-        self._children: typing.List["QuotaContext[HTTPConnectionT]"] = []
+        self._children: typing.Dict[int, "QuotaContext[HTTPConnectionT]"] = {}
         self._consumed = False
         self._cancelled = False
         self._entered = False
-        self._bound = owner is not None
-        self._nested = parent is not None
+        self._depth: int = (parent._depth + 1) if parent is not None else 0
 
         self._queued_cost = 0
         self._applied_cost = 0
@@ -301,7 +298,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         # For managing context-wide lock
         self._exit_stack: typing.Optional[AsyncExitStack] = None
         if parent is not None:
-            parent._children.append(self)
+            parent._children[id(self)] = self
 
     @property
     def consumed(self) -> bool:
@@ -321,12 +318,12 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
     @property
     def is_bound(self) -> bool:
         """Whether this quota context is bound to an owner throttle."""
-        return self._bound
+        return self.owner is not None
 
     @property
     def is_nested(self) -> bool:
         """Whether this quota context has a parent. Is this context nested?"""
-        return self._nested
+        return self.parent is not None
 
     @property
     def queued_cost(self) -> int:
@@ -334,9 +331,9 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         **Estimated** cost of all queued quota entries (including children).
 
         Note: This is an estimate since some throttles may use cost functions.
-        In those cases, we assume the throttle's defined cost or 1 as a fallback.
+        In those cases, we assume the throttle's defined cost is 1 as a fallback.
         """
-        child_cost = sum(child.queued_cost for child in self._children)
+        child_cost = sum(child.queued_cost for child in self._children.values())
         return self._queued_cost + child_cost
 
     @property
@@ -347,21 +344,16 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
     @property
     def depth(self) -> int:
         """How deep this quota context is nested."""
-        depth = 0
-        ctx: typing.Optional[QuotaContext[HTTPConnectionT]] = self
-        while ctx is not None:
-            ctx = ctx.parent
-            depth += 1
-        return depth - 1
+        return self._depth
 
     async def __aenter__(self) -> Self:
         self._entered = True
 
         # Acquire lock for the entire context if configured
-        if self._lock_key and self.owner and not self._nested:
+        if self._lock_key and self.owner and not self.is_nested:
             backend = self.owner.get_backend(self.connection)
             self._exit_stack = AsyncExitStack()
-            lock_ctx = await backend.lock(self._lock_key, **self.lock_config)
+            lock_ctx = backend.lock(self._lock_key, **self.lock_config)
             await self._exit_stack.enter_async_context(lock_ctx)
 
         return self
@@ -396,18 +388,22 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                     await self.apply()
             return None
 
-        except BaseException as exc:
+        except BaseException as exc:  # noqa
             # Store exception to raise after lock release
             exit_exc = exc
         finally:
-            if self._exit_stack is not None:
-                await self._exit_stack.aclose()
-                self._exit_stack = None
+            await self._close_exit_stack()
 
         # Raise stored exception after lock is released. This ensures we don't
         # hold the lock while propagating exceptions.
         if exit_exc is not None:
             raise exit_exc
+
+    async def _close_exit_stack(self) -> None:
+        """Close the exit stack if it was created for locking. This effectively releases the lock if it was held."""
+        if self._exit_stack is not None:
+            await self._exit_stack.aclose()
+            self._exit_stack = None
 
     def _merge_into_parent(self, mark_as_consumed: bool = True) -> None:
         """
@@ -419,17 +415,22 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             return
 
         parent = self.parent
+        # Entries are transferred by reference, not copied. The parent and child
+        # queues share the same `_QuotaEntry` instances after this point. This is
+        # intentional as copying would be O(N) allocations for no runtime benefit
+        # since the child is marked consumed immediately after and its queue
+        # should not be inspected post-merge.
         parent._queue.extend(self._queue)
         parent._queued_cost += self._queued_cost
         self._consumed = mark_as_consumed
 
         # Clean up parent reference to prevent memory leaks
-        if self in parent._children:
-            parent._children.remove(self)
+        if id(self) in parent._children:
+            parent._children.pop(id(self), None)
 
-    async def __call__(
+    def consume(
         self,
-        throttle: typing.Optional["Throttle[HTTPConnectionT]"] = None,
+        throttle: typing.Optional[Throttle[HTTPConnectionT]] = None,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         *,
@@ -462,17 +463,18 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
         ```python
         async with throttle.quota(conn) as quota:
-            await quota(cost=2)        # Entry 1: cost=2
-            await quota(cost=3)        # Aggregated into Entry 1: cost=5
-            await quota(other, cost=1) # Entry 2: different throttle
+            quota.consume(cost=2)        # Entry 1: cost=2
+            # `__call__` is alias for `consume`
+            quota(cost=3)        # Aggregated into Entry 1: cost=5
+            quota(other_throttle, cost=1) # Entry 2: different throttle
         ```
 
         Example (with retry on specific exceptions):
 
         ```python
         async with QuotaContext(conn) as quota:
-            await quota(throttle1, cost=2, retry=3, retry_on=(TimeoutError,))
-            await quota(throttle2)
+            quota.consume(throttle1, cost=2, retry=3, retry_on=(TimeoutError,))
+            quota.consume(throttle2)
         ```
         """
         return self._enqueue(
@@ -485,8 +487,8 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             base_delay=base_delay,
         )
 
-    # Aliases for `__call__(...)` method
-    consume = __call__
+    # Aliases for `consume(...)` method
+    __call__ = consume
 
     def _can_aggregate(
         self,
@@ -507,9 +509,9 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         improves performance.
 
         Rules for aggregation:
-        1. Both entries must use the SAME throttle instance (identity check)
-        2. Both entries must have the SAME context (exact dict equality)
-        3. Both entries must have FIXED costs (no cost functions)
+        1. Both entries must use the **same** throttle instance (identity check)
+        2. Both entries must have the **same** context (exact dict equality)
+        3. Both entries must have **fixed** costs (no cost functions)
         4. All retry configuration must match exactly:
            - `retry` count
            - `retry_on` condition (identity check for callables)
@@ -527,12 +529,11 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         :return: True if aggregation is possible, False otherwise.
         """
         # Both must be the exact same throttle instance
-        # Using `is` instead of `==` ensures we're checking identity, not equality
         if last_entry.throttle is not throttle:
             return False
 
         # Both must have identical context dictionaries
-        # Note: This checks exact equality - {"a": 1} != {"a": 1, "b": None}
+        # Note: This checks exact equality; {"a": 1} != {"a": 1, "b": None}
         if last_entry.context != context:
             return False
 
@@ -549,22 +550,19 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         # For callables, we use identity check (`is`) because:
         # - Different lambda instances are never equal even with same code
         # - We want to ensure the exact same retry logic applies
-        if last_entry.retry_on is not retry_on:
-            # Special case: both None is OK
-            if not (last_entry.retry_on is None and retry_on is None):
-                return False
+        if last_entry.retry_on is not retry_on and not (
+            last_entry.retry_on is None and retry_on is None
+        ):  # Special case: both None is OK
+            return False
 
         # Backoff strategy must match
-        # Using identity check because backoff objects may not implement __eq__
+        # Use identity check because backoff objects may not implement `__eq__`
         if last_entry.backoff is not backoff:
             return False
 
         # Base delay must match exactly
-        if last_entry.base_delay != base_delay:
-            return False
-
         # If all rules passed, then aggregation is safe
-        return True
+        return last_entry.base_delay == base_delay
 
     def _enqueue(
         self,
@@ -669,7 +667,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
         This performs a non-consuming check of the throttle's current state.
 
-        Note:
+        **Note:**
         This should be used as a best-effort pre-check only. The actual
         quota may change between this check and the eventual consumption
         (classic Time-of-Check to Time-of-Use issue).
@@ -717,11 +715,13 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 return False
         return True
 
+    test = check  # Alias for convenience
+
     async def stat(
         self,
         throttle: typing.Optional[Throttle[HTTPConnectionT]] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-    ) -> typing.Optional[StrategyStat]:
+    ) -> typing.Optional[StrategyStat[typing.Any]]:
         """
         Get the current throttle strategy statistics for the connection.
 
@@ -767,14 +767,16 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             return
 
         # First, merge all children that haven't been applied
-        for child in self._children:
+        # Make sure to make copy as `_merge_into_parent` may mutate
+        # `self._children`
+        children = self._children.copy()
+        for child in children.values():
             if not child._consumed:
                 child._merge_into_parent(mark_as_consumed=True)
 
-        # Apply all queued throttles
+        # Apply all queued throttles sequentially
         for entry in self._queue:
             await self._hit(entry)
-
         self._consumed = True
 
     async def cancel(self) -> None:
@@ -796,10 +798,10 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         Example:
         ```python
         async with throttle.quota(conn, apply_on_exit=False) as quota:
-            await quota(cost=5)
-            await quota(throttle2, cost=3)
+            quota(cost=5)
+            quota(throttle2, cost=3)
 
-            if not await validate_operation():
+            if not await some_validation():
                 await quota.cancel()  # Cancel queued quota entries
                 return error_response()
 
@@ -814,7 +816,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             return  # Already discarded, idempotent
 
         # Discard all unapplied children first
-        for child in self._children:
+        for child in self._children.values():
             if child.active:
                 await child.cancel()
 
@@ -823,16 +825,13 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         self._queued_cost = 0
 
         # Detach from parent if nested
-        if self._nested and self in self.parent._children:  # type: ignore[union-attr]
-            self.parent._children.remove(self)  # type: ignore[union-attr]
+        if self.is_nested and self in self.parent._children:  # type: ignore[union-attr]
+            self.parent._children.pop(id(self), None)  # type: ignore[union-attr]
 
         # Mark as discarded
         self._cancelled = True
-
         # Release lock early if we're holding one
-        if self._exit_stack is not None:
-            await self._exit_stack.aclose()
-            self._exit_stack = None
+        await self._close_exit_stack()
 
     discard = cancel  # alias
 
@@ -858,7 +857,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             return isinstance(exc, entry.retry_on)  # type: ignore[arg-type]
 
         # Retry type is a callable here. Use precomputed `resolved_cost`
-        exc_info = dict(
+        exc_info = dict(  # noqa
             connection=self.connection,
             exception=exc,
             attempt=attempt,
@@ -914,7 +913,6 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         apply_on_exit: bool = True,
         lock: typing.Union[bool, str, None] = None,
         lock_config: typing.Optional[LockConfig] = None,
-        reentrant_lock: bool = True,
     ) -> Self:
         """
         Create a nested child quota context.
@@ -935,13 +933,23 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             **Pitfalls of nested quota context locks:**
 
             1. **Deadlock Risk**: If you use the same lock key as the parent,
-                and the owner's (throttle) backend return a non re-entrant lock,
+                and the owner's (throttle) backend returns a non re-entrant lock,
                 the child will deadlock waiting for a lock the parent holds.
                 An error is raised if this is detected.
 
-            2. **Lock Ordering**: If parent holds lock "A" and child acquires "B",
-                while another context holds "B" and wants "A", deadlock occurs.
-                Always acquire locks in a consistent order across your application.
+            2. **Lock Ordering**: Deadlock can occur when two concurrent operations
+                acquire the same two locks in opposite order. For example:
+
+                    Task 1 (parent context): holds lock "A", waiting for lock "B"
+                    Task 2 (some other code): holds lock "B", waiting for lock "A"
+                    -> Deadlock.
+
+                This can happen if your application has other code paths (outside of
+                quota contexts) that acquire locks in a different order than your nested
+                contexts do. To avoid this, always acquire locks in a consistent order
+                across your entire application. For example, always acquire the broader
+                resource lock before the narrower one, or establish a canonical ordering
+                by lock name.
 
             3. **Partial Atomicity**: The child releases its lock on exit, but the
                 parent may fail later. This means the child's protected resources
@@ -951,30 +959,28 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 *different* resource than the parent and needs independent protection.
 
         :param lock_config: Configuration for lock acquisition (ttl, blocking, etc.).
-        :param reentrant_lock: If True, allows same lock key as parent (for re-entrant locks).
-            Else, raises an error if child lock key is the same as parent to prevent deadlocks.
         :return: A new child quota context.
 
         Example (no lock - default, safest):
 
         ```python
         async with throttle_a.quota(conn) as parent:
-            await parent(cost=1)
+            parent.consume(cost=1)
 
             async with parent.nested() as child:
                 # Child operates under parent's lock
-                await child(cost=2)
+                child.consume(cost=2)
         ```
 
         Example (child with different lock for different resource):
 
         ```python
         async with throttle_a.quota(conn) as parent:
-            await parent(cost=1)
+            parent.consume(cost=1)
 
             # Child protects a different resource
             async with parent.nested(lock="other_resource") as child:
-                await child(throttle_b, cost=2)
+                child.consume(throttle_b, cost=2)
         ```
         """
         child_lock_key = _resolve_lock_key(lock, self.owner)
@@ -982,12 +988,12 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         if (
             child_lock_key is not None
             and child_lock_key == self._lock_key
-            and not reentrant_lock
+            and (lock_config and not lock_config.get("reentrant", False))
         ):
             raise QuotaError(
                 f"Nested quota context is using the same lock key as its parent "
-                f"({child_lock_key!r}). This will cause a deadlock if the parent lock is not re-entrant, "
-                f"because the parent already holds this lock. Use a different lock key or "
+                f"({child_lock_key!r}). This will cause a deadlock as the parent lock is not re-entrant, "
+                f"and the parent already holds this lock. Use a different lock key or "
                 f"set lock=None to operate under the parent's lock context.",
             )
 

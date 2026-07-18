@@ -7,14 +7,14 @@ from collections.abc import Mapping
 
 from typing_extensions import Self
 
-from traffik.types import HTTPConnectionT, StrategyStat
+from traffik.typing import HTTPConnectionT, StrategyStat
 
-__all__ = ["Header", "Headers", "DEFAULT_HEADERS_ALWAYS", "DEFAULT_HEADERS_THROTTLED"]
+__all__ = ["DEFAULT_HEADERS_ALWAYS", "DEFAULT_HEADERS_THROTTLED", "Header", "Headers"]
 
 HeaderResolver = typing.Callable[
     [
         HTTPConnectionT,
-        StrategyStat[typing.Mapping],
+        StrategyStat[typing.Mapping[typing.Hashable, typing.Any]],
         typing.Optional[typing.Mapping[str, typing.Any]],
     ],
     str,
@@ -38,7 +38,7 @@ Type definition for a header value, which can be either:
 WhenFunc = typing.Callable[
     [
         HTTPConnectionT,
-        StrategyStat[typing.Mapping],
+        StrategyStat[typing.Mapping[typing.Hashable, typing.Any]],
         typing.Optional[typing.Mapping[str, typing.Any]],
     ],
     bool,
@@ -72,11 +72,12 @@ class Header(typing.Generic[HTTPConnectionT]):
     the request and the state of the throttle.
 
     Example usage:
+
     ```python
-    def custom_header_resolver(connection, stat, context):
+    def resolver(connection, stat, context):
         return f"Custom-{stat.rate.limit}"
 
-    def custom_when_func(connection, stat, context):
+    def when_func(connection, stat, context):
         return stat.hits_remaining < 5
 
     headers = {
@@ -88,7 +89,7 @@ class Header(typing.Generic[HTTPConnectionT]):
         "X-RateLimit-Reset": Header.RESET_SECONDS(when="throttled"),
 
         # Custom header that is included when hits remaining is less than 5
-        "X-Custom-Header": Header(custom_header_resolver, when=custom_when_func),
+        "X-Custom-Header": Header(resolver, when=when_func),
     }
     ```
     """
@@ -120,12 +121,12 @@ class Header(typing.Generic[HTTPConnectionT]):
     """
 
     __slots__ = (
+        "_check",
+        "_hash",
+        "_is_static",
         "_raw",
         "_resolver",
-        "_check",
         "_when",
-        "_is_static",
-        "_hash",
     )
 
     def __init__(
@@ -183,7 +184,7 @@ class Header(typing.Generic[HTTPConnectionT]):
     def check(
         self,
         connection: HTTPConnectionT,
-        stat: StrategyStat[typing.Mapping],
+        stat: StrategyStat[typing.Mapping[typing.Hashable, typing.Any]],
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> bool:
         """
@@ -205,7 +206,7 @@ class Header(typing.Generic[HTTPConnectionT]):
     def resolve(
         self,
         connection: HTTPConnectionT,
-        stat: StrategyStat[typing.Mapping],
+        stat: StrategyStat[typing.Mapping[typing.Hashable, typing.Any]],
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> str:
         """
@@ -227,6 +228,7 @@ class Header(typing.Generic[HTTPConnectionT]):
         This allows for chaining header definitions with different conditions for when they should be included in the response.
 
         Example usage:
+
         ```python
         # Create a header that is always included
         header = Header.REMAINING(when="always")
@@ -266,22 +268,22 @@ class Header(typing.Generic[HTTPConnectionT]):
         return self.when("throttled")
 
     @classmethod
-    def LIMIT(cls, when: HeaderWhen[typing.Any]) -> Self:
+    def LIMIT(cls, *, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the maximum number of hits allowed in the current period."""
         return cls(lambda _, stat, __: f"{stat.rate.limit}", when=when)
 
     @classmethod
-    def REMAINING(cls, when: HeaderWhen[typing.Any]) -> Self:
+    def REMAINING(cls, *, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the number of hits remaining in the current period."""
         return cls(lambda _, stat, __: f"{stat.hits_remaining}", when=when)
 
     @classmethod
-    def RESET_MILLISECONDS(cls, when: HeaderWhen[typing.Any]) -> Self:
+    def RESET_MILLISECONDS(cls, *, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the time to wait (in milliseconds) before the next allowed request."""
         return cls(lambda _, stat, __: f"{stat.wait_ms}", when=when)
 
     @classmethod
-    def RESET_SECONDS(cls, when: HeaderWhen[typing.Any]) -> Self:
+    def RESET_SECONDS(cls, *, when: HeaderWhen[typing.Any]) -> Self:
         """Resolves to the time to wait (in seconds) before the next allowed request."""
         return cls(lambda _, stat, __: f"{math.ceil(stat.wait_ms / 1000)}", when=when)
 
@@ -337,17 +339,17 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
     # Disable a header for a single hit by using the sentinel identity
     overrides = {"X-RateLimit-Remaining": Header.DISABLE}
 
-    # Merge the resolver uses an identity check to interpret
+    # Merge override. The resolver uses an identity check to interpret
     # `Header.DISABLE` and will skip that header when resolving.
     merged = base | overrides
     ```
 
     Note: `Header.DISABLE` is a module-level sentinel; disabling requires
-    passing that exact object (checked with ``is``). A plain string with
+    passing that exact object (checked with `is` - identity check). A plain string with
     the same contents will not disable the header.
     """
 
-    __slots__ = ("_raw", "_is_static")
+    __slots__ = ("_is_static", "_raw")
 
     def __init__(
         self,

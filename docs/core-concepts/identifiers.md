@@ -23,7 +23,7 @@ The fallback when none of those are available is `ANONYMOUS_IDENTIFIER` (`"__ano
 ```python
 from traffik import HTTPThrottle
 
-# No identifier → defaults to IP address
+# No identifier -> defaults to IP address
 throttle = HTTPThrottle(uid="my-api", rate="100/min")
 ```
 

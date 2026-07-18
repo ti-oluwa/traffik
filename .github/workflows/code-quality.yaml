@@ -32,13 +32,13 @@ jobs:
           python-version: "3.9"
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --group dev
 
       - name: Run security analysis
         run: |
           echo "Running Bandit security analysis..."
-          uv run bandit -r src/ -f json -o bandit-report.json || true
-          uv run bandit -r src/
+          uv run bandit -r src/ -s B101 -f json -o bandit-report.json || true
+          uv run bandit -r src/ -s B101
         continue-on-error: false
 
       - name: Upload security reports
@@ -69,10 +69,10 @@ jobs:
           python-version: "3.9"
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --group dev
 
       - name: Run type checking
         run: |
           echo "Running mypy type checking..."
           uv run python -m mypy src/ --ignore-missing-imports --no-strict-optional
-        continue-on-error: true  # Optional since you might not have mypy setup yet
+        continue-on-error: true 

@@ -1,6 +1,14 @@
 import os
 import typing
 
+__all__ = [
+    "get_lock_blocking",
+    "get_lock_blocking_timeout",
+    "get_lock_ttl",
+    "set_lock_blocking",
+    "set_lock_blocking_timeout",
+    "set_lock_ttl",
+]
 ###################
 # Backend Configs #
 ###################

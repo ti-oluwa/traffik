@@ -1,6 +1,6 @@
 # Traffik Testing Guide
 
-This comprehensive guide covers all testing approaches for the library, including Docker-based cross-platform testing and local development options.
+This comprehensive guide covers all testing approaches for the library, including Docker-based testing and local development options.
 
 ## Quick Start
 
@@ -13,9 +13,7 @@ git clone https://github.com/ti-oluwa/traffik.git
 
 cd traffik
 
-uv sync --extra test
-
-make test-fast
+make install-test test-fast
 ```
 
 ### Option 2: Docker Testing (Full Features)
@@ -37,7 +35,7 @@ git clone https://github.com/ti-oluwa/traffik.git
 
 cd traffik
 
-uv sync --extra test
+uv sync --group test
 
 uv run pytest -v -k "not backend"  # Skip throttle backend tests
 ```
@@ -65,7 +63,7 @@ uv run pytest -v -k "not backend"  # Skip throttle backend tests
 # Run full CI pipeline
 ./docker-test.sh ci
 
-# Development workflow
+# Start development environment
 ./docker-test.sh dev
 ```
 
@@ -111,9 +109,9 @@ Available targets:
   install         Install the package
   install-dev     Install development dependencies
   install-test    Install test dependencies
-  test            Run full test suite (requires all depencies)
-  test-fast       Run tests without Redis dependency
-  test-native     Run test without external dependencies
+  install-docs    Install documentation dependencies
+  test            Run full test suite (requires all dependencies)
+  test-fast       Run fast tests and without external dependencies
   test-coverage   Run tests with coverage
   lint            Run linting
   lint-fix        Run linting with auto-fix
@@ -144,7 +142,7 @@ For manual testing without automation tools:
 
 ```bash
 # Install and test
-uv sync --extra test
+uv sync --group test
 uv run python -c "import traffik; print('✅ Import successful')"
 ```
 
@@ -208,7 +206,7 @@ make test m=decorator  # Decorator functionality
 
 ### 3. Integration Testing
 
-Full system testing:
+Full system testing (with Docker):
 
 ```bash
 ./docker-test.sh test
@@ -231,7 +229,7 @@ make ci             # Full CI simulation
 Before releasing:
 
 ```bash
-make release-check        # Pre-release validation
+make release-check       # Pre-release validation
 ./docker-test.sh ci      # Full Docker CI
 make build               # Package building
 ```
@@ -251,7 +249,7 @@ make build               # Package building
 
    ```bash
    # Reinstall dependencies
-   uv sync --extra test
+   uv sync --group test
    make debug-env
    ```
 

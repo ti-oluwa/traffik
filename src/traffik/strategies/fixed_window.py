@@ -3,14 +3,15 @@
 import typing
 from dataclasses import dataclass, field
 
+from starlette.requests import HTTPConnection
 from typing_extensions import TypedDict
 
+from traffik._utils import time
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
-from traffik.utils import time
+from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
 
-__all__ = ["FixedWindowStrategy", "FixedWindow", "FixedWindowStatMetadata"]
+__all__ = ["FixedWindow", "FixedWindowStatMetadata", "FixedWindowStrategy"]
 
 
 class FixedWindowStatMetadata(TypedDict):
@@ -91,7 +92,11 @@ class FixedWindowStrategy:
     """Configuration for backend locking during rate limit checks."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         """
         Apply fixed window rate limiting strategy.
@@ -138,7 +143,7 @@ class FixedWindowStrategy:
         # 1 second minimum, which is not ideal, assuming the throttling supports sub-second wait times,
         # or we manually manage the window start time separately. Which is what we do here.
         window_start_key = f"{base_key}:start"
-        async with await backend.lock(f"lock:{base_key}", **self.lock_config):
+        async with backend.lock(f"lock:{base_key}", **self.lock_config):
             # Get the stored window start time
             stored_window_start = await backend.get(window_start_key)
 
@@ -229,7 +234,7 @@ class FixedWindowStrategy:
                 counter = int(stored_counter) if stored_counter else 0
 
         hits_remaining = max(rate.limit - counter, 0)
-        if counter > rate.limit:
+        if counter >= rate.limit:
             time_in_window = now - current_window_start
             wait_ms = window_duration_ms - time_in_window
             wait_ms = max(wait_ms, 0.0)

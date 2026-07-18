@@ -1,5 +1,6 @@
 """`traffik` exceptions and exception handling utilities."""
 
+import asyncio
 import http
 import typing
 
@@ -9,7 +10,7 @@ from starlette.middleware.exceptions import ExceptionMiddleware
 from starlette.status import HTTP_429_TOO_MANY_REQUESTS
 from starlette.types import ExceptionHandler as StarletteExceptionHandler
 
-from traffik.types import ExceptionHandler as TraffikExceptionHandler
+from traffik.typing import ExceptionHandler as TraffikExceptionHandler
 
 
 class TraffikException(Exception):
@@ -52,8 +53,32 @@ class BackendConnectionError(BackendError):
     pass
 
 
-class LockTimeoutError(BackendError, TimeoutError):
+class LockError(BackendError, RuntimeError):
+    """Base exception for lock-related errors, such as acquisition or release failures."""
+
+    pass
+
+
+class LockAcquisitionError(LockError):
+    """Raised when a lock cannot be acquired within the specified timeout."""
+
+    pass
+
+
+class LockReleaseError(LockError):
+    """Raised when a lock cannot be released, possibly due to ownership issues or backend errors."""
+
+    pass
+
+
+class LockTimeoutError(LockError, TimeoutError):
     """Exception raised when a lock timeout occurs"""
+
+    pass
+
+
+class LockPoolError(LockError):
+    """Exception raised for lock pool errors"""
 
     pass
 
@@ -152,3 +177,7 @@ def _build_exception_handler_getter(
         return typing.cast(typing.Optional[TraffikExceptionHandler], handler)
 
     return handler_getter
+
+
+_EXEMPT_EXCEPTIONS = (asyncio.CancelledError, SystemExit, KeyboardInterrupt)
+"""Exceptions that should almost never be caught as they affect program control flow or termination."""

@@ -17,7 +17,7 @@ Benchmarks were run on:
 - **Python**: 3.9.22
 - **Backend versions**: Redis v6.2, aiomcache v0.8.2
 - **Comparison**: [SlowAPI](https://github.com/laurentS/slowapi) — a popular FastAPI rate limiter
-- **Test client**: `httpx.AsyncClient` with `ASGITransport` (in-process, no real network)
+- **Test client**: `httpx2.AsyncClient` with `ASGITransport` (in-process, no real network)
 - **Iterations**: 5 per scenario (results averaged)
 - **Concurrency**: batches of 50 concurrent requests unless noted otherwise
 

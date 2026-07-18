@@ -1,0 +1,143 @@
+import sys
+import typing
+
+from starlette.requests import Request
+
+from benchmarks.base import BenchmarkConfig
+from traffik.backends.base import ThrottleBackend
+from traffik.backends.inmemory import InMemoryBackend
+from traffik.backends.memcached.aiomcache import MemcachedBackend as AiomcacheBackend
+from traffik.backends.multiprocess import MultiProcessInMemoryBackend
+from traffik.backends.redis.aioredis import RedisBackend as AioredisBackend
+from traffik.backends.redis.coredis import RedisBackend as CoredisBackend
+from traffik.strategies.custom import GCRAStrategy
+from traffik.strategies.fixed_window import FixedWindowStrategy
+from traffik.strategies.leaky_bucket import (
+    LeakyBucketStrategy,
+    LeakyBucketWithQueueStrategy,
+)
+from traffik.strategies.sliding_window import (
+    SlidingWindowCounterStrategy,
+    SlidingWindowLogStrategy,
+)
+from traffik.strategies.token_bucket import (
+    TokenBucketStrategy,
+    TokenBucketWithDebtStrategy,
+)
+
+HAS_EMCACHE: bool = False
+
+if sys.platform not in ("win32", "cygwin"):
+    try:
+        from traffik.backends.memcached.emcache import (
+            MemcachedBackend as EmcacheBackend,
+        )
+
+        HAS_EMCACHE = True
+    except ImportError:
+        HAS_EMCACHE = False
+
+
+STRATEGIES = {
+    "fixed_window": FixedWindowStrategy,
+    "sliding_window_counter": SlidingWindowCounterStrategy,
+    "sliding_window_log": SlidingWindowLogStrategy,
+    "token_bucket": TokenBucketStrategy,
+    "token_bucket_debt": TokenBucketWithDebtStrategy,
+    "leaky_bucket": LeakyBucketStrategy,
+    "leaky_bucket_queue": LeakyBucketWithQueueStrategy,
+    "gcra": GCRAStrategy,
+}
+
+
+async def get_identifier(connection: Request) -> str:
+    """
+    Default benchmark identifier: uses `X-Client-ID` header or falls back to IP.
+
+    :param connection: The HTTP connection.
+    :return: A string identifier for the connection.
+    """
+    client_id = connection.headers.get("X-Client-ID")
+    if client_id:
+        return client_id
+    return connection.client[0] if connection.client else "anonymous"
+
+
+def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typing.Any]:
+    """
+    Instantiate the backend specified by config.backend_kind.
+
+    :param config: Benchmark configuration.
+    :return: An uninitialized backend instance.
+    :raises ValueError: If backend_kind is unknown or unavailable on this platform.
+    """
+    kind = config.backend_kind.lower()
+    if kind == "inmemory":
+        return InMemoryBackend(
+            namespace="bench",
+            identifier=get_identifier,
+            persistent=False,
+            number_of_shards=8,
+        )
+    elif kind == "multiprocess":
+        return MultiProcessInMemoryBackend(
+            namespace="bench",
+            identifier=get_identifier,
+            persistent=False,
+            number_of_shards=config.multiprocess_shards,
+            max_keys=config.multiprocess_max_keys,
+        )
+    elif kind == "aioredis":
+        return AioredisBackend(
+            connection=config.redis_url,
+            namespace="bench",
+            identifier=get_identifier,
+            persistent=False,
+        )
+    elif kind == "coredis":
+        return CoredisBackend(
+            connection=config.redis_url,
+            namespace="bench",
+            identifier=get_identifier,
+            persistent=False,
+        )
+    elif kind == "aiomcache":
+        return AiomcacheBackend(
+            host=config.memcached_host,
+            port=config.memcached_port,
+            namespace="bench",
+            identifier=get_identifier,
+            persistent=False,
+        )
+    elif kind == "emcache":
+        if not HAS_EMCACHE:
+            raise ValueError(
+                f"Backend '{kind}' is not available on this platform. "
+                "EmCache requires a POSIX system."
+            )
+        return EmcacheBackend(  # type: ignore
+            host=config.memcached_host,
+            port=config.memcached_port,
+            namespace="bench",
+            identifier=get_identifier,
+            persistent=False,
+        )
+    else:
+        raise ValueError(f"Unknown backend kind: {kind}")
+
+
+def create_strategy(config: BenchmarkConfig):
+    """
+    Instantiate the strategy specified by config.strategy_kind.
+
+    :param config: Benchmark configuration.
+    :return: An instantiated strategy object.
+    :raises ValueError: If strategy_kind is unknown.
+    """
+    strategy_kind = config.strategy_kind.lower()
+
+    if strategy_kind not in STRATEGIES:
+        raise ValueError(f"Unknown strategy kind: {strategy_kind}")
+
+    strategy_class = STRATEGIES[strategy_kind]
+    return strategy_class()

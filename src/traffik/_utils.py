@@ -1,0 +1,476 @@
+"""Traffik utilities."""
+
+import asyncio
+import enum
+import functools
+import inspect
+import sys
+import time as pytime
+import typing
+from types import TracebackType
+
+from starlette.requests import HTTPConnection
+from typing_extensions import Self, TypeGuard
+
+from traffik.config import (  # noqa
+    get_lock_blocking,
+    get_lock_blocking_timeout,
+    get_lock_ttl,
+    set_lock_blocking,
+    set_lock_blocking_timeout,
+    set_lock_ttl,
+)
+from traffik.typing import AsyncCallable, T
+
+__all__ = [
+    "CircuitBreaker",
+    "CircuitState",
+    "_TaskTimer",
+    "get_remote_address",
+    "time",
+]
+
+
+def get_remote_address(connection: HTTPConnection) -> typing.Optional[str]:
+    """
+    Returns the Remote/IP address of the connection client.
+
+    This function attempts to extract the IP address from the `x-forwarded-for` header
+    or the `remote-addr` header. If neither is present, it falls back to the `client.host`
+    attribute of the connection.
+
+    :param connection: The HTTP connection
+    :return: The Remote/IP address of the connection client, or None if it cannot be determined.
+    """
+    x_forwarded_for = connection.headers.get(
+        "x-forwarded-for"
+    ) or connection.headers.get("remote-addr")
+    if x_forwarded_for:
+        return x_forwarded_for.split(",")[0].strip()
+
+    if connection.client:
+        return connection.client.host
+    return None
+
+
+def _add_parameter_to_signature(
+    func: typing.Callable, parameter: inspect.Parameter, index: int = -1
+) -> typing.Callable:
+    """
+    Adds a parameter to the function's signature at the specified index.
+
+    Useful when you need to modify the signature of a function
+    dynamically, such as when adding a new parameter to a function (via a decorator/wrapper).
+
+    :param func: The function to update.
+    :param parameter: The parameter to add.
+    :param index: The index at which to add the parameter. Negative indices are supported.
+        Default is -1, which adds the parameter at the end.
+        If the index greater than the number of parameters, a ValueError is raised.
+    :return: The updated function.
+
+    Example Usage:
+
+    ```python
+    import inspect
+    import typing
+    import functools
+    from typing_extensions import ParamSpec
+
+    P = ParamSpec("P")
+    R = TypeVar("R")
+
+
+    def my_func(a: int, b: str = "default"):
+        pass
+
+    def decorator(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
+        def _wrapper(new_param: str, *args: P.args, **kwargs: P.kwargs) -> R:
+            return func(*args, **kwargs)
+
+        return functools.wraps(func)(_wrapper)
+
+    wrapped_func = decorator(my_func) # returns wrapper function
+    assert "new_param" in inspect.signature(wrapped_func).parameters
+    # False
+
+    # This will fail because the signature of the wrapper function is overridden by the original function's signature,
+    # when functools.wraps is used. To fix this, we can use the `_add_parameter_to_signature` function.
+
+    wrapped_func = _add_parameter_to_signature(
+        func=wrapped_func,
+        parameter=inspect.Parameter(
+            name="new_param",
+            kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            annotation=str
+        ),
+        index=0 # Add the new parameter at the beginning
+    )
+    assert "new_param" in inspect.signature(wrapped_func).parameters
+    # True
+
+    # This way any new parameters added to the wrapper function will be preserved and logic using the
+    # function's signature will respect the new parameters.
+    ```
+    """
+    sig = inspect.signature(func)
+    params = list(sig.parameters.values())
+
+    # Check if the index is valid
+    if index < 0:
+        index = len(params) + index + 1
+    elif index > len(params):
+        raise ValueError(
+            f"Index {index} is out of bounds for the function's signature. Maximum index is {len(params)}. "
+            "Use a '-1' index to add the parameter at the end, if needed."
+        )
+
+    params.insert(index, parameter)
+    new_sig = sig.replace(parameters=params)
+    func.__signature__ = new_sig  # type: ignore
+    return func
+
+
+# Borrowed from Starlette's `is_async_callable` utility
+@typing.overload
+def is_async_callable(obj: AsyncCallable[T]) -> TypeGuard[AsyncCallable[T]]: ...
+
+
+@typing.overload
+def is_async_callable(obj: typing.Any) -> TypeGuard[AsyncCallable[typing.Any]]: ...
+
+
+def is_async_callable(obj: typing.Any) -> typing.Any:
+    while isinstance(obj, functools.partial):
+        obj = obj.func
+
+    return inspect.iscoroutinefunction(obj) or (
+        callable(obj) and inspect.iscoroutinefunction(obj.__call__)  # type: ignore
+    )
+
+
+def time() -> float:
+    """
+    Return the current UTC time as a Unix timestamp in seconds.
+
+    Uses wall-clock time (`time.time()`) to ensure window calculations
+    remain consistent across process restarts and multiple servers/processes.
+    """
+    return pytime.time()
+
+
+class _TaskTimer:
+    """
+    Timer and asynchronous context manager that cancels the current task if the
+    block of code after or inside it (depending on usage context), takes longer than a specified timeout.
+
+    Adapted from `emcache.timeout.OpTimeout` in the `emcache` library (MIT License).
+    Copyright (c) 2020-2024 Pau Freixes
+    """
+
+    __slots__ = (
+        "_done",
+        "_error",
+        "_loop",
+        "_task",
+        "_timed_out",
+        "_timeout",
+        "_timer_handler",
+    )
+
+    def __init__(
+        self,
+        timeout: typing.Optional[float],
+        loop: asyncio.AbstractEventLoop,
+        error: typing.Optional[BaseException] = None,
+    ):
+        """
+        Initialize the timer.
+
+        :param timeout: The timeout duration in seconds. If None, no timeout is applied.
+        :param loop: The asyncio event loop to use for scheduling the timeout.
+        :param error: Optional custom exception to raise on timeout.
+            If None, defaults to `asyncio.TimeoutError`.
+        """
+        self._timed_out = False
+        self._timeout = timeout
+        self._loop = loop
+        self._error = (
+            asyncio.TimeoutError("Operation timed out") if error is None else error
+        )
+        # Will be set to the current task when the timer is started
+        self._task: typing.Optional[asyncio.Task[typing.Any]] = None
+        self._timer_handler: typing.Optional[asyncio.TimerHandle] = None
+        self._done = False
+
+    def timed_out(self) -> bool:
+        """Indicates whether the timeout was triggered."""
+        return self._timed_out
+
+    def done(self) -> bool:
+        """Indicates whether the timeout has been stopped or triggered."""
+        return self._done
+
+    def cancelled(self) -> bool:
+        """Indicates whether the timeout was cancelled (i.e. stopped without being triggered)."""
+        return self._done and not self._timed_out
+
+    def _on_timeout(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._timed_out = True
+            self._task.cancel()
+
+    def start(self) -> None:
+        """
+        Start the timer.
+
+        Calling this once will start the timer. If the timer is already running, this method does nothing.
+        """
+        if self._done or self._timed_out:
+            raise RuntimeError(
+                f"Cannot start {self.__class__.__name__}: already cancelled or timed out."
+            )
+        if self._timeout is not None and self._timer_handler is None:
+            task = asyncio.current_task(loop=self._loop)
+            if not task:
+                raise RuntimeError(
+                    f"{self.__class__.__name__} must be used within an active asyncio task"
+                )
+            self._task = task
+            self._timer_handler = self._loop.call_later(self._timeout, self._on_timeout)
+
+    def _handle_timed_out(self, exc_type: typing.Type[BaseException]) -> None:
+        """
+        Handle the case where the timeout was triggered.
+
+        If the timeout was triggered and the current exception matches the specified type (or any type if None),
+        it will be treated as a timeout cancellation. This method will raise the timeout error and suppress
+        the context of the cancellation.
+
+        :param exc_type: The type of the current exception being handled, or None if not currently handling an exception.
+        :raises: The timeout error if the timeout was triggered and the exception type matches.
+        """
+        if sys.version_info[:2] >= (3, 11) and self._task is not None:
+            # Call uncancel to clear cancellation state from _TaskTimer
+            self._task.uncancel()
+        if exc_type is asyncio.CancelledError:
+            # it's not a real cancellation, was a timeout
+            raise self._error from None  # suppress context of cancellation
+
+    def stop(
+        self, exc_type: typing.Optional[typing.Type[BaseException]] = None
+    ) -> None:
+        """
+        Stop (and cancel) the timer, handling any timeout cancellation and propagation
+        if the timer was triggered.
+
+        Once this method is called, the timer is considered done and cannot be restarted.
+
+        :param exc_type: Optional exception type to check for cancellation.
+            If the timeout was triggered and the current exception matches this type,
+            it will be treated as a timeout cancellation. Defaults to None, which means
+            any exception will be treated as a timeout cancellation if the timeout was triggered.
+        :raises: The timeout error if the timeout was triggered and the exception type matches.
+        """
+        if self._done:
+            raise RuntimeError(
+                f"Cannot stop {self.__class__.__name__}: already cancelled or timed out."
+            )
+
+        self._done = True
+        if self._timed_out and exc_type is not None:
+            self._handle_timed_out(exc_type)
+
+        # Cancel the timer if it's still active
+        if self._timer_handler is not None and not self._timer_handler.cancelled():
+            self._timer_handler.cancel()
+            self._timer_handler = None
+
+    async def __aenter__(self) -> Self:
+        self.start()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[typing.Type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ) -> bool:
+        if not self._done:
+            self.stop(exc_type)
+        return False
+
+
+class CircuitState(enum.IntEnum):
+    CLOSED = 0
+    OPEN = 1
+    HALF_OPEN = 2
+
+
+class CircuitBreaker:
+    """
+    Process-local asyncio-safe circuit breaker.
+
+    **States**:
+
+    - `CLOSED`: Normal operation. Executions are allowed through.
+
+    - `OPEN`: The protected operation is considered unhealthy.
+        Executions are rejected until the recovery timeout expires.
+
+    - `HALF_OPEN`: A single probe execution is allowed through to test
+        recovery. All other executions continue to be rejected until
+        the probe completes.
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 60.0,
+        success_threshold: int = 2,
+    ) -> None:
+        """
+        Initialize circuit breaker.
+
+        :param failure_threshold: Number of consecutive failures required to open the circuit.
+        :param recovery_timeout: Seconds to remain open before allowing a recovery probe.
+        :param success_threshold: Number of successful probe requests required to
+            fully close the circuit.
+        """
+        if failure_threshold < 1:
+            raise ValueError("failure_threshold must be >= 1")
+
+        if success_threshold < 1:
+            raise ValueError("success_threshold must be >= 1")
+
+        if recovery_timeout <= 0:
+            raise ValueError("recovery_timeout must be > 0")
+
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.success_threshold = success_threshold
+        self._lock = asyncio.Lock()
+        self._state: CircuitState = CircuitState.CLOSED
+        self._failure_count = 0
+        self._success_count = 0
+        self._opened_at: typing.Optional[float] = None
+
+        # Use this flag to track so only one task may probe during HALF_OPEN.
+        self._probe_in_progress = False
+
+    @property
+    def state(self) -> CircuitState:
+        """Current circuit state."""
+        return self._state
+
+    @property
+    def is_open(self) -> bool:
+        """Whether the circuit is currently open."""
+        return self._state is CircuitState.OPEN
+
+    @property
+    def is_closed(self) -> bool:
+        """Whether the circuit is currently closed."""
+        return self._state is CircuitState.CLOSED
+
+    @property
+    def is_half_open(self) -> bool:
+        """Whether the circuit is currently half-open."""
+        return self._state is CircuitState.HALF_OPEN
+
+    async def allow_execution(self) -> bool:
+        """
+        Determine whether an operation may be attempted.
+
+        :return: True if the operation may be executed. False if the caller should
+            immediately use an alternative path or fail fast.
+        """
+        async with self._lock:
+            now = pytime.monotonic()
+            if self._state is CircuitState.CLOSED:
+                return True
+
+            if self._state is CircuitState.OPEN:
+                assert self._opened_at is not None
+
+                if now - self._opened_at < self.recovery_timeout:
+                    return False
+
+                self._state = CircuitState.HALF_OPEN
+                self._success_count = 0
+                self._probe_in_progress = True
+
+                return True
+
+            # HALF_OPEN
+            if self._probe_in_progress:
+                return False
+
+            self._probe_in_progress = True
+            return True
+
+    async def record_success(self) -> None:
+        """Record a successful backend operation."""
+        async with self._lock:
+            if self._state is CircuitState.CLOSED:
+                self._failure_count = 0
+                return
+
+            if self._state is CircuitState.HALF_OPEN:
+                self._probe_in_progress = False
+                self._success_count += 1
+
+                if self._success_count >= self.success_threshold:
+                    self._close()
+
+    async def record_failure(self) -> None:
+        """Record a failed backend operation."""
+        async with self._lock:
+            if self._state is CircuitState.CLOSED:
+                self._failure_count += 1
+
+                if self._failure_count >= self.failure_threshold:
+                    self._open()
+
+                return
+
+            if self._state is CircuitState.HALF_OPEN:
+                self._probe_in_progress = False
+                self._open()
+
+    async def force_open(self) -> None:
+        """Force the circuit into the OPEN state."""
+        async with self._lock:
+            self._open()
+
+    async def force_close(self) -> None:
+        """Force the circuit into the CLOSED state."""
+        async with self._lock:
+            self._close()
+
+    async def info(self) -> typing.Dict[str, typing.Any]:
+        """Return current breaker information."""
+        async with self._lock:
+            return {
+                "state": self._state.value,
+                "failure_count": self._failure_count,
+                "success_count": self._success_count,
+                "opened_at": self._opened_at,
+                "probe_in_progress": self._probe_in_progress,
+            }
+
+    def _open(self) -> None:
+        """Transition to OPEN."""
+        self._state = CircuitState.OPEN
+        self._opened_at = pytime.monotonic()
+        self._failure_count = 0
+        self._success_count = 0
+        self._probe_in_progress = False
+
+    def _close(self) -> None:
+        """Transition to CLOSED."""
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._success_count = 0
+        self._opened_at = None
+        self._probe_in_progress = False

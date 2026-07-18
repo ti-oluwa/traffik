@@ -7,6 +7,7 @@ import inspect
 import math
 import sys
 import typing
+import warnings
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
 
@@ -15,6 +16,7 @@ from starlette.types import ASGIApp
 from typing_extensions import Self
 
 from traffik._locks import _AsyncLockContext
+from traffik._utils import get_remote_address
 from traffik.config import (
     ANONYMOUS_IDENTIFIER,
     APP_CONTEXT_ATTR,
@@ -24,7 +26,7 @@ from traffik.config import (
     get_lock_ttl,
 )
 from traffik.exceptions import BackendError, ConnectionThrottled
-from traffik.types import (
+from traffik.typing import (
     AsyncLock,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
@@ -35,7 +37,6 @@ from traffik.types import (
     ThrottleErrorHandler,
     WaitPeriod,
 )
-from traffik.utils import get_remote_address
 
 
 async def default_identifier(connection: HTTPConnection) -> typing.Any:
@@ -147,10 +148,11 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     - get(key): Get value for key (Must not implement implicit locking).
     - set(key, value, expire): Set value for key with optional expiration (Must not implement implicit locking).
     - delete(key): Remove key (Must not implement implicit locking).
-    - get_lock(key, timeout): Acquire a distributed lock for key
+    - get_lock(key, ttl, reentrant): Acquire a distributed lock for the given key with optional TTL and reentrancy.
     - increment(key, amount): Atomically increment counter
     - decrement(key, amount): Atomically decrement counter
     - expire(key, seconds): Set expiration on existing key
+    - close(): Close backend connection and cleanup resources
     - reset(): Clear all throttling data
 
     Optionally, backends can also override the following methods for better performance:
@@ -162,9 +164,16 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     The `get()`, `set()`, and `delete()` methods need explicit locking when utilized in racy conditions.
     Hence, locks should not be implemented implicitly in these methods.
 
-    Note! All backend operation must be done as fast and efficient as possible and should not block the event loop.
-    Operations like logging should not be done on critical paths to prevent deadlocks or performance issues.
-    Logging degrades performance significantly and should be avoided in backend operations.
+    **Note:** All backend operation must be done as fast and efficient as possible and should not block the event loop.
+        Operations like logging should not be done on critical paths to prevent deadlocks or performance issues.
+        Logging degrades performance significantly and should be avoided in backend operations.
+
+    **Warning:** Backend operations are not guaranteed to be thread-safe or process-safe.
+        Ensure to use locks for operations that require safety across concurrent contexts,
+        especially in multi-threaded or multi-process environments.
+        Backend initialization and connection management should also be done with care to avoid race conditions.
+        Initilization  and connection management (closing connections) should ideally be done at startup (in the ASGI lifespan event)
+        or before entering and/or after leaving a concurrent context to ensure safety and proper resource handling.
     """
 
     base_exception_type: typing.ClassVar[typing.Type[BaseException]] = BaseException
@@ -267,6 +276,20 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         )
         self.lock_ttl = lock_ttl if lock_ttl is not None else get_lock_ttl()
 
+    def closed(self) -> bool:
+        """
+        Check if the backend connection is closed.
+
+        **Note:** This only checks if the `connection` attribute is None.
+        Subclasses that manage their own connection state should override
+        this method to provide an accurate status.
+
+        Ideally, `close` should set `connection` to None to maintain consistency with this method.
+
+        :return: True if connection is closed, False otherwise.
+        """
+        return self.connection is None
+
     def get_key(self, key: str, *args, **kwargs) -> str:
         """
         Return a backend namespaced key.
@@ -290,6 +313,10 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     async def initialize(self) -> None:
         """
         Initialize the throttle backend ensuring it is ready for use.
+
+        This method should be a no-op if the backend is already initialized and ready.
+        `ready()` is the API available for checking if the backend is initialized ans
+        ready for use.
 
         Subclasses must implement this method to set up connections,
         create tables/collections, or perform any necessary setup.
@@ -328,21 +355,29 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         raise NotImplementedError("`delete(...)` must be implemented by the backend.")
 
-    async def get_lock(self, name: str) -> AsyncLock:
+    def get_lock(
+        self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
+    ) -> AsyncLock:
         """
         Get a distributed lock with the given name.
 
         :param name: The name of the lock.
+        :param ttl: How long the lock should live in seconds before auto-release. If None, uses backend default.
+        :param reentrant: Whether the lock should be reentrant for the same task/context. If True, the same task can acquire the
+            lock multiple times without deadlocking itself. If False, acquiring the lock again in the same task will cause a deadlock.
         :return: An asynchronous lock object that implements the `traffik.types.AsyncLock` protocol.
         """
         raise NotImplementedError("`get_lock(...)` must be implemented by the backend.")
 
-    async def lock(
+    def lock(
         self,
         name: str,
         ttl: typing.Optional[float] = None,
         blocking: typing.Optional[bool] = None,
         blocking_timeout: typing.Optional[float] = None,
+        reentrant: bool = False,
+        enforce_ttl_locally: bool = False,
+        local_ttl_factor: float = 0.8,
     ) -> _AsyncLockContext[AsyncLock]:
         """
         Context manager to acquire a distributed lock for the given key.
@@ -352,7 +387,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         are provided, they override the backend's defaults for this lock acquisition.
 
         `ttl` and `blocking_timeout` settings here only affect the lock context (`_AsyncLockContext`)
-        returned and do not modify the underlying lock  returned by `get_lock(...)`. This allows
+        returned and do not modify the underlying lock returned by `get_lock(...)`. This allows
         multiple lock contexts with different settings to be created from the same lock.
 
         If `get_lock(...)` needs `ttl` or `blocking_timeout` to create the lock, it should
@@ -360,12 +395,24 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
         :param name: The name of the lock.
         :param ttl: How long the lock should live in seconds before auto-release. If None, uses backend default.
+            The release TTL passed here should not be greater than backend default, as this can cause
         :param blocking: If False, do not wait for the lock if it's already held, raise a timeout error instead.
         :param blocking_timeout: Maximum time in seconds to wait for the lock if blocking is True. None means wait indefinitely.
+        :param reentrant: Whether the lock should be reentrant for the same task/context. If True, the same task can acquire the
+            lock multiple times without deadlocking itself. If False, acquiring the lock again in the same task will cause a deadlock.
+        :param enforce_ttl_locally: Whether to enforce the TTL locally by cancelling the task when the TTL expires.
+            This is important to prevent unsafe execution without mutual exclusion when using distributed
+            locks with server-side TTL. Although this is not required if the (auto) release TTL is set to a high enough value
+            that exceeds the maximum expected execution time of the body, it is generally recommended to set this to `True`.
+            But this add some overhead of scheduling a local timer and cancelling the task, so it is optional to
+            allow for use cases that do not require strict local TTL enforcement.
+        :param local_ttl_factor: A factor to apply to the TTL for local enforcement when `enforce_ttl_locally` is True.
+            Should be a value between 0 and 1 (boundary exclusive). This is to ensure the local TTL is slightly more conservative
+            than the server TTL to account for clock skew and network latency. For example, if the TTL is 10 seconds and the
+            factor is 0.8, then the local TTL will be 8 seconds. If the body is still running after 8 seconds, it will be cancelled,
+            even if the server lock has not yet expired.
         :return: An asynchronous context manager that acquires/releases the lock.
         """
-        lock_name = self.get_key(name)
-        lock = await self.get_lock(lock_name)
         ttl = ttl if ttl is not None else self.lock_ttl
         blocking = blocking if blocking is not None else self.lock_blocking
         blocking_timeout = (
@@ -373,9 +420,18 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             if blocking_timeout is not None
             else self.lock_blocking_timeout
         )
+        local_ttl = None
+        if enforce_ttl_locally and ttl is not None:
+            if not (0.0 < local_ttl_factor < 1.0):
+                raise ValueError("`local_ttl_factor` must be between 0 and 1 exclusive")
+            local_ttl = ttl * local_ttl_factor
+
+        # Ensure to use a namespaced lock key so reset on backend clears locks too
+        lock_name = self.get_key(name)
+        lock = self.get_lock(name=lock_name, ttl=ttl, reentrant=reentrant)
         return _AsyncLockContext(
             lock,
-            ttl=ttl,
+            ttl=local_ttl,
             blocking=blocking,
             blocking_timeout=blocking_timeout,
         )
@@ -412,7 +468,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         Atomically decrement a counter and return the NEW value.
 
-        This operation MUST be atomic (thread-safe across processes).
+        This operation must be atomic (thread-safe across processes).
         If key doesn't exist, initialize to 0 then decrement.
 
         :param key: Counter key
@@ -471,7 +527,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :param keys: Sequence of keys to retrieve
         :return: List of values (None for missing keys), same order as keys
 
-        Note: This is different from non-atomic batch get - values should be
+        Note: This is different from non-atomic batch get. Values should be
         consistent snapshot, not interleaved with writes.
         """
         tasks = [self.get(key) for key in keys]
@@ -494,13 +550,25 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         :param items: Mapping of keys to values to set
         :param expire: Optional expiration time in seconds for all keys
         """
-        tasks = [self.set(key, value, expire=expire) for key, value in items.items()]
-        await asyncio.gather(*tasks)
-        return None
+        tasks = [
+            asyncio.create_task(self.set(key, value, expire=expire))
+            for key, value in items.items()
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception:
+            # Any exception should cancel any ongoing task.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            raise
 
     async def close(self) -> None:
         """
-        Close the backend connection and perform cleanup.
+        Close the backend (client) connection(s) and perform cleanup.
+
+        Closing should advisably not clear the backend data.
+        That should be done by `reset`.
 
         This should always set `connection` to None.
 
@@ -524,6 +592,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         app: typing.Optional[ASGIApp] = None,
         persistent: typing.Optional[bool] = None,
         close_on_exit: typing.Optional[bool] = None,
+        initialized: bool = False,
     ) -> "_BackendContext[Self]":
         """
         Create a throttle context for the backend.
@@ -532,7 +601,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         same backend. This could lead to unexpected behaviour and data loss due to nested non-persistence.
 
         :param app: The ASGI application to assign the backend to.
-        :param persistent: Whether to keep the backend state across application restarts.
+        :param persistent: Whether to keep the backend state on context exit.
             This overrides the backend's persistent setting if set.
             If None, for non-nested contexts, the backend's persistence settings is used.
             For nested contexts, context is persistent if outer context's backend
@@ -541,7 +610,10 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
         :param close_on_exit: Whether to close the backend when exiting the context.
             If None, context will auto-close on exit, except if nested within another context.
-        :return: A context manager for the throttle backend.
+        :param initialized: Whether the backend is already initialized and initialization
+            and readiness check should be skipped. This is useful if you have already called `initialize()`
+            on the backend instance before creating the context, such as during application startup.
+        :return: A context manager in which this throttle backend is set as the current context's backend.
         """
         if app is not None:
             # Ensure app context attribute exists and set the backend in
@@ -574,6 +646,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             backend=self,
             persistent=persistent_ctx,
             close_on_exit=close_ctx_on_exit,
+            initialized=initialized,
         )
 
 
@@ -585,36 +658,65 @@ ThrottleBackendTco = typing.TypeVar(
 class _BackendContext(typing.Generic[ThrottleBackendTco]):
     """
     Context manager for throttle backends.
+
+    The context sets the given backend as the current context's throttle backend
+    on enter and resets it on exit.
     """
 
-    __slots__ = ("backend", "persistent", "close_on_exit", "_ctx_token")
+    __slots__ = ("_initialized", "_token", "backend", "close_on_exit", "persistent")
 
     def __init__(
         self,
         backend: ThrottleBackendTco,
         persistent: bool = False,
         close_on_exit: bool = True,
+        initialized: bool = False,
     ) -> None:
+        """
+        Initialize the backend context
+
+        :param backend: The throttle backend instance to manage in this context
+        :param persistent: Whether to keep the backend state on context exit
+        :param close_on_exit: Whether to close the backend connection on context exit
+        :param initialized: Whether the backend is already initialized and initialization
+            and readiness check should be skipped.
+        """
         self.backend = backend
         self.persistent = persistent
         self.close_on_exit = close_on_exit
-        self._ctx_token: typing.Optional[Token[typing.Optional[ThrottleBackend]]] = None
+        self._token: typing.Optional[Token[typing.Optional[ThrottleBackend]]] = None
+        self._initialized = initialized
 
     async def __aenter__(self) -> ThrottleBackendTco:
         backend = self.backend
-        await backend.initialize()
-        if not await backend.ready():
-            raise BackendError("Throttle backend is not ready for operations.")
+        if not self._initialized:
+            await backend.initialize()
+            if not await backend.ready():
+                raise BackendError("Throttle backend is not ready for operations.")
+            self._initialized = True
 
-        self._ctx_token = _backend_ctx.set(backend)
+        self._token = _backend_ctx.set(backend)
         return backend
 
     async def __aexit__(self, exc_type, exc_value, traceback) -> None:
-        if self._ctx_token is not None:
-            _backend_ctx.reset(self._ctx_token)
-            self._ctx_token = None
+        if self._token is not None:
+            _backend_ctx.reset(self._token)
+            self._token = None
 
         backend = self.backend
+        if backend.closed():
+            if not self.persistent:
+                warnings.warn(
+                    "Context non-persistence (`persistent=False`) cannot be enforced on exit. "
+                    "Backend was closed before exit.",
+                    source=RuntimeWarning,
+                )
+            return
+
+        if not self._initialized:
+            # Just return here if backend was not initialized on context entry
+            # for some reason to avoid errors by attempting to reset or close the backend.
+            return
 
         # Store any exception that occurs during reset/close to raise later
         # This is to ensure that we atleast call `close()` even if `reset()` fails.
@@ -622,7 +724,9 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
         if not self.persistent:
             try:
                 await backend.reset()
-            except BaseException as exc:
+                # Should raise `BackendError` due to wrap,
+                # but catch all to prevent context exit failure
+            except BaseException as exc:  # noqa
                 sys.stderr.write(
                     f"Error resetting throttle backend during context exit: {exc}\n"
                 )
@@ -632,7 +736,7 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
         if self.close_on_exit:
             try:
                 await backend.close()
-            except BaseException as exc:
+            except BaseException as exc:  # noqa  # Same here
                 sys.stderr.write(
                     f"Error closing throttle backend during context exit: {exc}\n"
                 )

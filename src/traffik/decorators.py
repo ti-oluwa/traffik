@@ -1,25 +1,27 @@
 """Throttle decorator. For FastAPI only."""
 
-import asyncio
 import functools
 import inspect
 import typing
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi.params import Depends
 from starlette.requests import Request as StarletteRequest
 from starlette.websockets import WebSocket as StarletteWebSocket
 
+from traffik._utils import _add_parameter_to_signature
 from traffik.throttles import Throttle
-from traffik.types import Dependency, HTTPConnectionT, P, Q, R, S
-from traffik.utils import _add_parameter_to_signature
+from traffik.typing import Dependency, HTTPConnectionT, P, Q, R, S
 
 ThrottleT = typing.TypeVar("ThrottleT", bound=Throttle)
 
 __all__ = ["throttled"]
 
 
-class _DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
+@typing.final
+@dataclass(frozen=True)
+class _DecoratorDepends(Depends, typing.Generic[P, R, Q, S]):
     """
     `fastapi.params.Depends` subclass that allows instances to be used as decorators.
 
@@ -33,28 +35,30 @@ class _DecoratorDepends(typing.Generic[P, R, Q, S], Depends):
     with the dish (decorated object), making a dish with the sauce or without it.
     """
 
-    def __init__(
-        self,
-        dependency_decorator: typing.Callable[
+    dependency_decorator: typing.Optional[
+        typing.Callable[
             [
                 typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
                 Dependency[Q, S],
             ],
             typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
-        ],
-        dependency: typing.Optional[Dependency[Q, S]] = None,
-        *,
-        use_cache: bool = True,
-    ) -> None:
-        self.dependency_decorator = dependency_decorator
-        super().__init__(dependency, use_cache=use_cache)
+        ]
+    ] = None
+    dependency: typing.Optional[Dependency[Q, S]] = None
+    use_cache: bool = True
+
+    def __post_init__(self) -> None:
+        if self.dependency_decorator is None:
+            raise ValueError(
+                f"`dependency_decorator` is required for {self.__class__.__name__} initialization"
+            )
 
     def __call__(
         self, decorated: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]
     ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
         if self.dependency is None:
             return decorated
-        return self.dependency_decorator(decorated, self.dependency)
+        return self.dependency_decorator(decorated, self.dependency)  # type: ignore[union-attr]
 
 
 # Is this worth it? I mean! Just because of the `@throttled(...)` decorator?
@@ -81,7 +85,7 @@ def _apply_throttle(
     # We need the throttle dependency to be the first parameter of the route
     # So that the rate limit check is done before any other operations or dependencies
     # are resolved/executed, improving the efficiency of implementation.
-    if asyncio.iscoroutinefunction(route):
+    if inspect.iscoroutinefunction(route):
         wrapper_code = f"""
 async def route_wrapper(
     {throttle_dep_param_name}: Annotated[typing.Any, Depends(throttle)],
@@ -221,7 +225,7 @@ def throttled(
         connection_type = _throttle.connection_type
 
     if not issubclass(connection_type, (StarletteRequest, StarletteWebSocket)):
-        raise ValueError(
+        raise TypeError(
             "Throttles must be designed for HTTP connections (`Request` or `WebSocket`)."
         )
 
@@ -240,6 +244,8 @@ def throttled(
     decorator_dependency = _DecoratorDepends[P, R, Q, HTTPConnectionT](
         dependency_decorator=decorator,
         dependency=dependency,
+        use_cache=False,
+        scope="function",
     )
     if route is not None:
         decorated = decorator_dependency(route)

@@ -434,8 +434,6 @@ We follow a structured Git workflow inspired by Git Flow to manage code changes 
 
 ---
 
-This workflow ensures a clean separation between development, staging, and production environments, improving collaboration and automation reliability.
-
 ## Release Process
 
 Maintainers follow this process for releases:
@@ -449,7 +447,7 @@ Maintainers follow this process for releases:
 
 ---
 
-Thank you for contributing to Traffik! Your efforts help make rate limiting in Starlette applications better for everyone. 🚀
+Thank you for contributing to Traffik! Your efforts help make rate limiting in Starlette applications better for everyone.
 
 ## Questions?
 

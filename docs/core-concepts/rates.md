@@ -162,7 +162,7 @@ throttle = HTTPThrottle(
 To explicitly mark something as unlimited (no throttling at all), use either:
 
 ```python
-Rate()                # no arguments → unlimited
+Rate()                # no arguments -> unlimited
 Rate.parse("0/0")    # string form
 ```
 

@@ -59,7 +59,7 @@ throttle = HTTPThrottle("api", rate="100/min", on_error="raise")
 
 ---
 
-## `backend_fallback` — Automatic Failover
+## `fallback` — Automatic Failover
 
 Switch to a backup backend when the primary fails:
 
@@ -67,7 +67,7 @@ Switch to a backup backend when the primary fails:
 from traffik import HTTPThrottle
 from traffik.backends.redis import RedisBackend
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.error_handlers import backend_fallback
+from traffik.error_handlers import fallback
 from traffik.exceptions import BackendError
 
 primary = RedisBackend("redis://primary:6379", namespace="myapp")
@@ -77,7 +77,7 @@ throttle = HTTPThrottle(
     "api",
     rate="100/min",
     backend=primary,
-    on_error=backend_fallback(
+    on_error=fallback(
         backend=fallback,
         fallback_on=(BackendError, TimeoutError),
     )
@@ -169,10 +169,10 @@ throttle = HTTPThrottle(
 
 **State transitions:**
 
-- `CLOSED` → `OPEN`: `failure_threshold` consecutive failures
-- `OPEN` → `HALF_OPEN`: after `recovery_timeout` seconds
-- `HALF_OPEN` → `CLOSED`: `success_threshold` consecutive successes
-- `HALF_OPEN` → `OPEN`: any failure during recovery test
+- `CLOSED` -> `OPEN`: `failure_threshold` consecutive failures
+- `OPEN` -> `HALF_OPEN`: after `recovery_timeout` seconds
+- `HALF_OPEN` -> `CLOSED`: `success_threshold` consecutive successes
+- `HALF_OPEN` -> `OPEN`: any failure during recovery test
 
 ---
 
@@ -251,7 +251,7 @@ throttle = HTTPThrottle(
 | Development / low stakes | `on_error="allow"` — fail open, keep dev experience smooth |
 | Security-sensitive API | `on_error="throttle"` — fail closed, protect the resource |
 | Debugging backend issues | `on_error="raise"` — propagate exceptions for visibility |
-| Redis down, InMemory fallback | `backend_fallback(fallback_backend)` |
+| Redis down, InMemory fallback | `fallback(fallback_backend)` |
 | Transient network blips | `retry(max_retries=3, retry_on=(TimeoutError,))` |
 | Production with HA requirements | `failover(fallback, breaker=CircuitBreaker(...))` |
 | Custom logic + logging | Custom async function |

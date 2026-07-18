@@ -1,24 +1,30 @@
 """Throttle and ASGI middleware for throttling HTTP connections."""
 
+import asyncio
 import inspect
 import typing
+from collections.abc import Collection
 
-from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
+from traffik._utils import is_async_callable
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
-from traffik.exceptions import ConfigurationError, _build_exception_handler_getter
+from traffik.exceptions import (
+    _EXEMPT_EXCEPTIONS,
+    BackendConnectionError,
+    ConfigurationError,
+    _build_exception_handler_getter,
+)
 from traffik.registry import ThrottleRule
 from traffik.throttles import Throttle
-from traffik.types import (
+from traffik.typing import (
     ExceptionHandler,
     HTTPConnectionT,
     Matchable,
     ThrottlePredicate,
 )
-from traffik.utils import is_async_callable
 
 
 class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
@@ -34,6 +40,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
     If the connection does not match the criteria, it is returned without consuming throttle quota.
 
     Usage:
+
     ```python
     from starlette.applications import Starlette
 
@@ -75,18 +82,18 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
     """
 
     __slots__ = (
-        "throttle",
-        "rule",
+        "__signature__",
         "_default_context",
         "cost",
-        "__signature__",
+        "rule",
+        "throttle",
     )
 
     def __init__(
         self,
         throttle: Throttle[HTTPConnectionT],
         path: typing.Optional[Matchable] = None,
-        methods: typing.Optional[typing.Iterable[str]] = None,
+        methods: typing.Optional[Collection[str]] = None,
         predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
@@ -210,7 +217,8 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
 
 
 _SortThrottles = typing.Union[
-    typing.Literal["cheap_first", "cheap_last", False, None],
+    None,
+    typing.Literal["cheap_first", "cheap_last", False],
     typing.Callable[
         [typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]],
         typing.Any,
@@ -365,16 +373,18 @@ class ThrottleMiddleware:
     """
 
     __slots__ = (
+        "_backend_ok",
         "app",
-        "middleware_throttles",
         "backend",
-        "get_exception_handler",
         "context",
+        "get_exception_handler",
+        "middleware_throttles",
     )
 
     def __init__(
         self,
         app: ASGIApp,
+        /,
         middleware_throttles: typing.Sequence[
             typing.Union[MiddlewareThrottle[typing.Any], Throttle[typing.Any]]
         ],
@@ -392,7 +402,11 @@ class ThrottleMiddleware:
 
         :param app: The ASGI application to wrap.
         :param middleware_throttles: A sequence of `MiddlewareThrottle` instances to apply.
-        :param backend: An optional throttle backend to use.
+        :param backend: An optional throttle backend to use. It is advised that this backend is
+            initialized and ready before starting the application. If not provided, the middleware will attempt to
+            retrieve a backend from the application context on each request, which allows it to work with backends
+            that are set up in the application's lifespan. However, for better performance, it's recommended to
+            provide the backend directly to the middleware if possible.
         :param exception_handler_getter: An optional callable that takes an exception and returns an ASGI exception handler.
         :param context: An optional mapping of context to pass to the throttles.
             This is merged with any context provided by individual throttles, with the
@@ -408,7 +422,10 @@ class ThrottleMiddleware:
         """
         self.app = app
         self.middleware_throttles = _prep_throttles(middleware_throttles, sort=sort)
-        self.backend = backend or get_throttle_backend(app)
+        self.backend = backend if backend is not None else get_throttle_backend(app)
+        # We set to True once we've successfully checked that the backend is ready once.
+        # Also actively tracks backend health
+        self._backend_ok = False
         self.get_exception_handler = exception_handler_getter
         self.context = context
 
@@ -441,7 +458,13 @@ class ThrottleMiddleware:
         # The backend context must be not closed on context exit.
         # It must also be persistent to ensure throttles can maintain
         # state across multiple connections.
-        async with backend(close_on_exit=False, persistent=True):
+        async with backend(
+            close_on_exit=False,
+            persistent=True,
+            initialized=self._backend_ok,  # Only initialize if the backend isn't OK
+        ):
+            # We can now say the backend is OK after a successful context entry
+            self._backend_ok = True
             context = self.context
             for throttle in self.middleware_throttles[typ]:
                 try:
@@ -449,7 +472,14 @@ class ThrottleMiddleware:
                         connection,  # type: ignore[arg-type]
                         context=context,
                     )
+                except _EXEMPT_EXCEPTIONS:
+                    raise
                 except Exception as exc:
+                    if isinstance(exc, BackendConnectionError):
+                        # We pessimistically set the backend as not OK, so that we attempt to re-initialize it on the next request.
+                        # This helps in recovery in case of transient backend connection issues.
+                        self._backend_ok = False
+
                     # This approach allows custom throttles to raise custom exceptions
                     # that will be handled if they register an exception handler with
                     # the application. If not, the exception will propagate and the
@@ -467,13 +497,15 @@ class ThrottleMiddleware:
                         if is_async_callable(handler):
                             response = await handler(connection, exc)  # type: ignore
                         else:
-                            response = await run_in_threadpool(handler, connection, exc)  # type: ignore[arg-type]
+                            response = await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
+                                None, handler, connection, exc
+                            )
 
                         if response is not None:
                             await response(scope, receive, send)  # type: ignore[call-arg]
                             return
 
-                    raise exc
+                    raise
 
         # Ensure that the next middleware or application call is not nested
         # within this middleware's backend context. Else, it would cause

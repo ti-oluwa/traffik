@@ -1,22 +1,29 @@
 """Sliding Window Rate Limiting Strategies"""
 
+import asyncio
 import typing
 from dataclasses import dataclass, field
 
+from starlette.requests import HTTPConnection
 from typing_extensions import TypedDict
 
+from traffik._utils import time
 from traffik.backends.base import ThrottleBackend
 from traffik.rates import Rate
-from traffik.types import LockConfig, StrategyStat, Stringable, WaitPeriod
-from traffik.utils import MsgPackDecodeError, dump_data, load_data, time
+from traffik.strategies._serde import (
+    SERDE_ERRORS,
+    _encode_two_float_records,
+    _iter_two_float_records,
+)
+from traffik.typing import LockConfig, StrategyStat, Stringable, WaitPeriod
 
 __all__ = [
-    "SlidingWindowLog",
     "SlidingWindowCounter",
-    "SlidingWindowLogStrategy",
-    "SlidingWindowCounterStrategy",
-    "SlidingWindowLogStatMetadata",
     "SlidingWindowCounterStatMetadata",
+    "SlidingWindowCounterStrategy",
+    "SlidingWindowLog",
+    "SlidingWindowLogStatMetadata",
+    "SlidingWindowLogStrategy",
 ]
 
 
@@ -37,7 +44,7 @@ class SlidingWindowLogStatMetadata(TypedDict):
     entry_count: int
     """Number of entries (requests) currently in the log within the window."""
 
-    current_cost_sum: float
+    current_total_cost: float
     """Total cost of all requests in the current sliding window."""
 
     oldest_entry_ms: typing.Optional[float]
@@ -106,7 +113,7 @@ class SlidingWindowLogStrategy:
     **Storage format:**
     - Key: `{namespace}:{key}:slidinglog`
     - Value: JSON array of request timestamps in milliseconds
-    - TTL: Window duration + 1 second buffer
+    - TTL: Window duration (atleast 1 second)
 
     **Example:**
     ```python
@@ -128,7 +135,11 @@ class SlidingWindowLogStrategy:
     """Configuration for backend locking during log updates."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         """
         Apply sliding window log rate limiting strategy.
@@ -150,50 +161,58 @@ class SlidingWindowLogStrategy:
         log_key = f"{full_key}:slidinglog"
         ttl_seconds = max(int(window_duration_ms // 1000), 1)  # At least 1s
 
-        async with await backend.lock(f"lock:{log_key}", **self.lock_config):
-            old_log_json = await backend.get(log_key)
+        async with backend.lock(f"lock:{log_key}", **self.lock_config):
+            old_log = await backend.get(log_key)
             # If log exists, load and parse entries as [timestamp, cost] tuples
-            if old_log_json and old_log_json != "":
+            if old_log and old_log != "":
                 try:
-                    entries: typing.List[typing.List[float]] = load_data(old_log_json)
-                except (MsgPackDecodeError, ValueError, TypeError):
+                    entries = _iter_two_float_records(old_log)
+                except SERDE_ERRORS:
                     entries = []
             else:
                 entries = []
 
             # Filter entries, sum costs, and find oldest timestamp in one pass for efficiency
             valid_entries = []
-            current_cost_sum = 0.0
+            current_total_cost = 0.0
             oldest_timestamp = float("inf")
 
             try:
-                for ts, c in entries:
-                    ts_f, c_f = float(ts), float(c)
-                    if ts_f > window_start:
-                        valid_entries.append([ts_f, c_f])
-                        current_cost_sum += c_f
-                        if ts_f < oldest_timestamp:
-                            oldest_timestamp = ts_f
-            except (ValueError, TypeError):
+                for timestamp, recorded_cost in entries:
+                    timestamp, recorded_cost = float(timestamp), float(recorded_cost)
+                    if timestamp > window_start:
+                        valid_entries.append([timestamp, recorded_cost])
+                        current_total_cost += recorded_cost
+                        oldest_timestamp = min(timestamp, oldest_timestamp)
+            except SERDE_ERRORS:
                 valid_entries = []
-                current_cost_sum = 0.0
+                current_total_cost = 0.0
                 oldest_timestamp = float("inf")
 
             # If adding this request's cost would exceed limit, reject it
-            if current_cost_sum + cost > rate.limit:
+            if current_total_cost + cost > rate.limit:
                 # Use the oldest entry to calculate wait time
                 wait_ms = (oldest_timestamp + window_duration_ms) - now
-                await backend.set(log_key, dump_data(valid_entries), expire=ttl_seconds)
+                await backend.set(
+                    log_key,
+                    _encode_two_float_records(valid_entries),
+                    expire=ttl_seconds,
+                )
                 return wait_ms
 
             # If within limit, add this request as [timestamp, cost] entry
             valid_entries.append([now, float(cost)])
-            await backend.set(log_key, dump_data(valid_entries), expire=ttl_seconds)
-            return 0.0
+            await backend.set(
+                log_key, _encode_two_float_records(valid_entries), expire=ttl_seconds
+            )
+        return 0.0
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
-    ) -> StrategyStat:
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+    ) -> StrategyStat[SlidingWindowLogStatMetadata]:
         """
         Get current statistics for the rate limit.
 
@@ -217,41 +236,41 @@ class SlidingWindowLogStrategy:
         full_key = backend.get_key(str(key))
         log_key = f"{full_key}:slidinglog"
 
-        old_log_json = await backend.get(log_key)
+        old_log = await backend.get(log_key)
         # If log exists, load and parse entries as [timestamp, cost] tuples
-        if old_log_json and old_log_json != "":
+        if old_log and old_log != "":
             try:
-                entries: typing.List[typing.List[float]] = load_data(old_log_json)
-            except (MsgPackDecodeError, ValueError, TypeError):
+                entries = _iter_two_float_records(old_log)
+            except SERDE_ERRORS:
                 entries = []
         else:
             entries = []
 
         # Single pass: filter entries, sum costs, and find oldest timestamp
         valid_entries = []
-        current_cost_sum = 0.0
+        current_total_cost = 0.0
         oldest_timestamp: typing.Optional[float] = None
 
         try:
-            for ts, c in entries:
-                ts_f, c_f = float(ts), float(c)
-                if ts_f > window_start:
-                    valid_entries.append([ts_f, c_f])
-                    current_cost_sum += c_f
-                    if oldest_timestamp is None or ts_f < oldest_timestamp:
-                        oldest_timestamp = ts_f
-        except (ValueError, TypeError):
+            for timestamp, recorded_cost in entries:
+                timestamp, recorded_cost = float(timestamp), float(recorded_cost)
+                if timestamp > window_start:
+                    valid_entries.append([timestamp, recorded_cost])
+                    current_total_cost += recorded_cost
+                    if oldest_timestamp is None or timestamp < oldest_timestamp:
+                        oldest_timestamp = timestamp
+        except SERDE_ERRORS:
             valid_entries = []
-            current_cost_sum = 0.0
+            current_total_cost = 0.0
             oldest_timestamp = None
 
         # Calculate remaining capacity
-        hits_remaining = max(rate.limit - current_cost_sum, 0.0)
+        limit = rate.limit
+        hits_remaining = max(limit - current_total_cost, 0.0)
 
-        # If over limit, calculate wait time
-        if current_cost_sum > rate.limit and oldest_timestamp is not None:
-            wait_ms = (oldest_timestamp + window_duration_ms) - now
-            wait_ms = max(wait_ms, 0.0)
+        # Will next request over limit? calculate wait time
+        if current_total_cost >= limit and oldest_timestamp is not None:
+            wait_ms = max((oldest_timestamp + window_duration_ms) - now, 0.0)
         else:
             wait_ms = 0.0
 
@@ -264,7 +283,7 @@ class SlidingWindowLogStrategy:
                 strategy="sliding_window_log",
                 window_start_ms=window_start,
                 entry_count=len(valid_entries),
-                current_cost_sum=current_cost_sum,
+                current_total_cost=current_total_cost,
                 oldest_entry_ms=oldest_timestamp,
             ),
         )
@@ -273,7 +292,7 @@ class SlidingWindowLogStrategy:
 @dataclass(frozen=True)
 class SlidingWindowCounterStrategy:
     """
-    Sliding Window Counter rate limiting (hybrid approach).
+    Sliding Window Counter rate limiting.
 
     Combines fixed window counters with weighted calculation to approximate
     a sliding window. Offers good accuracy with low memory usage.
@@ -305,7 +324,8 @@ class SlidingWindowCounterStrategy:
     - Key: `{namespace}:{key}:slidingcounter:{window_id}`
     - Value: Request counter (integer)
     - Uses two consecutive windows for weighted calculation
-    - TTL: Window duration + 1 second buffer
+    - TTL: 2x window duration so previous window is available
+        throughout the entire current window. Minimum of 1 second for cleanup.
 
     **Algorithm example:**
         At timestamp 00:30 (halfway through 1-minute window):
@@ -316,11 +336,11 @@ class SlidingWindowCounterStrategy:
         - If limit is 100, 20 more requests allowed
 
     **Example:**
+
     ```python
     from traffik.rates import Rate
     from traffik.strategies import SlidingWindowCounterStrategy
 
-    # Balanced approach: good accuracy with low memory
     rate = Rate.parse("100/1m")
     strategy = SlidingWindowCounterStrategy()
     wait_ms = await strategy("user:123", rate, backend)
@@ -335,7 +355,11 @@ class SlidingWindowCounterStrategy:
     """Configuration for backend locking during counter updates."""
 
     async def __call__(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend, cost: int = 1
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
+        cost: int = 1,
     ) -> WaitPeriod:
         """
         Apply sliding window counter rate limiting strategy.
@@ -366,16 +390,14 @@ class SlidingWindowCounterStrategy:
         # throughout the entire current window. Minimum 1 second for cleanup.
         ttl_seconds = max(int((2 * window_duration_ms) // 1000), 1)
         limit = rate.limit
-        async with await backend.lock(
-            f"lock:{previous_window_key}", **self.lock_config
-        ):
-            # Increment current window counter by cost
-            current_count = await backend.increment_with_ttl(
-                current_window_key, amount=cost, ttl=ttl_seconds
+        async with backend.lock(f"lock:{previous_window_key}", **self.lock_config):
+            # Increment current window counter by cost and get previous window counter
+            current_count, previous_count_str = await asyncio.gather(
+                backend.increment_with_ttl(
+                    current_window_key, amount=cost, ttl=ttl_seconds
+                ),
+                backend.get(previous_window_key),
             )
-
-            # Get previous window counter
-            previous_count_str = await backend.get(previous_window_key)
             if previous_count_str and previous_count_str != "":
                 try:
                     previous_count = int(previous_count_str)
@@ -393,17 +415,20 @@ class SlidingWindowCounterStrategy:
 
             # If weighted count exceeds limit, reject request
             if weighted_count > limit:
-                requests_over = weighted_count - limit
+                requests_excess = weighted_count - limit
                 if previous_count > 0:
-                    wait_ratio = requests_over / previous_count
+                    wait_ratio = requests_excess / previous_count
                     wait_ms = wait_ratio * time_in_current_window
                 else:
                     wait_ms = window_duration_ms - time_in_current_window
                 return wait_ms
-            return 0.0
+        return 0.0
 
     async def get_stat(
-        self, key: Stringable, rate: Rate, backend: ThrottleBackend
+        self,
+        key: Stringable,
+        rate: Rate,
+        backend: ThrottleBackend[typing.Any, HTTPConnection],
     ) -> StrategyStat[SlidingWindowCounterStatMetadata]:
         """
         Get current statistics for the rate limit.
@@ -445,13 +470,14 @@ class SlidingWindowCounterStrategy:
         weighted_count = (previous_count * overlap_percentage) + current_count
 
         # Calculate remaining hits
-        hits_remaining = max(rate.limit - weighted_count, 0.0)
+        limit = rate.limit
+        hits_remaining = max(limit - weighted_count, 0.0)
 
-        # If over limit, calculate wait time
-        if weighted_count > rate.limit:
-            requests_over = weighted_count - rate.limit
+        # Will next request go over limit? calculate wait time
+        if weighted_count + 1 > limit:
+            requests_excess = weighted_count + 1 - limit
             if previous_count > 0:
-                wait_ratio = requests_over / previous_count
+                wait_ratio = requests_excess / previous_count
                 wait_ms = wait_ratio * time_in_current_window
             else:
                 wait_ms = window_duration_ms - time_in_current_window

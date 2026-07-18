@@ -1,6 +1,6 @@
 # Makefile for Traffik development and testing
 
-.PHONY: help install install-dev install-test test test-fast test-slow test-watch test-coverage test-coverage-xml test-coverage-html lint lint-fix format format-check security type-check quality build upload upload-test dev-setup clean redis-start redis-stop ci docs debug-env example dev release-check
+.PHONY: help install install-dev install-test install-docs install-bench test test-fast test-watch test-coverage test-coverage-xml test-coverage-html bench lint lint-fix format format-check security type-check quality build upload upload-test dev-setup clean ci docs debug-env example dev release-check
 
 # Default target
 help: ## Show this help message
@@ -11,29 +11,35 @@ help: ## Show this help message
 
 # Installation targets
 install: ## Install the package and all dependencies
-	uv add traffik[all]
+	uv sync --extra all --inexact
 
-install-dev: ## Install development dependencies
-	uv sync --extra dev
+install-dev: ## Install development dependencies (Includes test and docs dependencies)
+	uv sync --group dev --group test --group docs --group benchmark --inexact
 
 install-test: ## Install testing dependencies
-	uv sync --extra test
+	uv sync --group test --inexact
+
+install-docs: ## Install docs dependencies
+	uv sync --group docs --inexact
+
+install-bench: ## Install benchmarking dependencies
+	uv sync --group benchmark --inexact
 
 # Testing targets
-test: ## Run full test suite. Requires all dependencies. Use `make test m=marker_name` to filter by markers.
-	@if [ -n "$(m)" ]; then \
-		echo "Running tests with marker: $(m)"; \
-		uv run pytest -m "$(m)" -v --tb=short; \
+TEST_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+test: ## Run full test suite. Requires all dependencies.
+	@if [ -n "$(TEST_ARGS)" ]; then \
+		echo "Running: uv run pytest $(TEST_ARGS)"; \
+		uv run pytest $(TEST_ARGS); \
 	else \
 		echo "Running all tests"; \
 		uv run pytest -v --tb=short; \
 	fi
+%:
+	@:
 
 test-fast: ## Run tests not marked as slow]
 	SKIP_REDIS_TESTS=true SKIP_MEMCACHED_TESTS=true uv run pytest -m "not slow" -x -v --tb=short
-
-test-slow: ## Run slow tests
-	SKIP_REDIS_TESTS=false SKIP_MEMCACHED_TESTS=false uv run pytest -m "slow" -v --tb=short
 
 test-watch: ## Run tests in watch mode
 	uv run pytest-watch --onpass "echo 'Tests passed'" --onfail "echo 'Tests failed'" -- -v --tb=short 
@@ -49,6 +55,13 @@ test-coverage-xml: ## Run tests with coverage and generate XML report
 test-coverage-html: ## Run tests with coverage and generate HTML report
 	uv run pytest --cov=src/traffik --cov-branch --cov-report=html:coverage_html_report --cov-fail-under=80
 	@echo "HTML coverage report generated at coverage_html_report/index.html"
+
+# Benchmarking targets
+BENCH_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+bench: ## Run benchmarks. Use `make bench scenario_name` to run a specific scenario.
+	uv run -m benchmarks $(BENCH_ARGS)
+%:
+	@:
 
 # Code quality targets
 lint: ## Run linting
@@ -107,39 +120,13 @@ clean: ## Clean up build artifacts and cache
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete
 
-# Redis setup (for local development)
-redis-start: ## Start Redis using Docker (if available)
-	@if command -v docker >/dev/null 2>&1; then \
-		if docker ps -a --format "table {{.Names}}" | grep -q traffik-redis; then \
-			echo "Redis container already exists. Starting..."; \
-			docker start traffik-redis; \
-		else \
-			echo "Creating and starting Redis container..."; \
-			docker run -d -p 6379:6379 --name traffik-redis redis:7-alpine; \
-		fi; \
-		echo "Redis is running on port 6379"; \
-	else \
-		echo "Docker not available. Please install Redis manually."; \
-	fi
-
-redis-stop: ## Stop Redis container
-	@if command -v docker >/dev/null 2>&1; then \
-		if docker ps --format "table {{.Names}}" | grep -q traffik-redis; then \
-			echo "Stopping Redis container..."; \
-			docker stop traffik-redis; \
-		else \
-			echo "Redis container is not running"; \
-		fi; \
-	else \
-		echo "Docker not available"; \
-	fi
-
 # CI simulation
 ci: quality test-coverage ## Run CI-like checks locally
 
 # Documentation
-docs: ## Generate documentation (placeholder)
-	@echo "Documentation generation not implemented yet"
+docs: install-docs ## Build and serve documentation
+	zensical build
+	zensical serve -o
 
 # Debugging helpers
 debug-env: ## Show environment information
@@ -159,8 +146,8 @@ from traffik.throttles import HTTPThrottle; \
 async def demo(): \
     backend = InMemoryBackend(); \
     async with backend: \
-        throttle = HTTPThrottle(limit=5, seconds=10); \
-        print('✅ Traffik library imported and configured successfully!'); \
+        throttle = HTTPThrottle(uid="test", rate="10/s"); \
+        print(f'✅ Traffik library imported and configured successfully!'); \
         print(f'   Backend: {backend.__class__.__name__}'); \
         print(f'   Throttle: {throttle.limit} requests per {throttle.expires_after}ms'); \
 asyncio.run(demo())"

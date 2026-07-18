@@ -3,15 +3,16 @@ import re
 import threading
 import typing
 import weakref
+from collections.abc import Collection
 
 from traffik.exceptions import ConfigurationError
-from traffik.types import (
+from traffik.typing import (
     HTTPConnectionT,
     Matchable,
     ThrottlePredicate,
 )
 
-__all__ = ["ThrottleRule", "BypassThrottleRule", "ThrottleRegistry"]
+__all__ = ["BypassThrottleRule", "ThrottleRegistry", "ThrottleRule"]
 
 
 def _glob_to_regex(pattern: str) -> str:
@@ -54,17 +55,17 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
     """Higher value means higher check priority. Mainly for optimizing throttle rule checks"""
 
     __slots__ = (
-        "path",
-        "methods",
-        "predicate",
-        "_predicate_takes_context",
         "_hash",
+        "_predicate_takes_context",
+        "methods",
+        "path",
+        "predicate",
     )
 
     def __init__(
         self,
         path: typing.Optional[Matchable] = None,
-        methods: typing.Optional[typing.Iterable[str]] = None,
+        methods: typing.Optional[Collection[str]] = None,
         predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
         _compute_hash: bool = True,
     ):
@@ -203,7 +204,7 @@ class BypassThrottleRule(ThrottleRule[HTTPConnectionT]):
     def __init__(
         self,
         path: typing.Optional[Matchable] = None,
-        methods: typing.Optional[typing.Iterable[str]] = None,
+        methods: typing.Optional[Collection[str]] = None,
         predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
     ):
         super().__init__(
@@ -288,7 +289,7 @@ class ThrottleRegistry:
     throttle by UID.
     """
 
-    __slots__ = ("_registered", "_lock", "_rules", "_throttle_refs")
+    __slots__ = ("_lock", "_registered", "_rules", "_throttle_refs")
 
     def __init__(self) -> None:
         self._registered: typing.Set[str] = set()
@@ -346,7 +347,7 @@ class ThrottleRegistry:
         :raises ConfigurationError: If `target_uid` is not registered.
         """
         if not rules:
-            return None
+            return
 
         if target_uid not in self._registered:
             raise ConfigurationError(f"No throttle registered with UID {target_uid!r}")

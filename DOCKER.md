@@ -30,7 +30,7 @@ This guide explains how to use Docker to test the traffik library across differe
 - `./docker-test.sh test-native` - Tests without external dependencies
 - `./docker-test.sh test-fast` - Fast tests
 - `./docker-test.sh test-matrix` - Test across all Python versions
-- `./docker-test.sh test-py38` - Test on Python 3.8
+- `./docker-test.sh test-py39` - Test on Python 3.9
 - `./docker-test.sh test-py312` - Test on Python 3.12
 - `./docker-test.sh coverage` - Generate coverage report
 
@@ -98,7 +98,7 @@ This guide explains how to use Docker to test the traffik library across differe
 # This runs:
 # 1. Code quality checks
 # 2. Test suite
-# 4. Coverage analysis
+# 3. Coverage analysis
 ```
 
 ## Manual Docker Commands
@@ -188,7 +188,7 @@ docker-compose run --user $(id -u):$(id -g) test
 
 ```bash
 # Use faster volume mounting (macOS)
-docker-compose -f docker-compose.yml up shell
+docker-compose -f compose.yml up shell
 
 # Reduce build context with .dockerignore
 # (already configured in the project)
@@ -209,7 +209,7 @@ docker-compose -f docker-compose.yml up shell
 
 ```bash
 # Test with specific Python version
-docker-compose -f docker-compose.yml up test-py39
+docker-compose -f compose.yml up test-py39
 ```
 
 ### Custom Redis Configuration
@@ -223,7 +223,7 @@ REDIS_HOST=external-redis.example.com docker-compose up test
 
 ```bash
 # Run test suite in different Python versions in parallel
-docker-compose -f docker-compose.yml up \
+docker-compose -f compose.yml up \
   test-py38 test-py39 test-py310 test-py311 test-py312
 ```
 
@@ -244,7 +244,7 @@ Add this to `.vscode/settings.json`:
 ### PyCharm
 
 1. Configure Docker Compose as Python interpreter
-2. Set docker-compose.yml as configuration file
+2. Set compose.yml as configuration file
 3. Select 'dev' service for development
 
 ## Best Practices

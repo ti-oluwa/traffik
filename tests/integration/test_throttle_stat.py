@@ -327,6 +327,7 @@ class TestHTTPThrottleStat:
 
 @pytest.mark.throttle
 @pytest.mark.websocket
+@pytest.mark.anyio
 class TestWebSocketThrottleStat:
     async def test_stat_before_and_after_each_message(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework

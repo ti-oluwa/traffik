@@ -38,6 +38,7 @@ from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 
 @pytest.mark.throttle
 @requires_throttle_type
+@pytest.mark.anyio
 class TestThrottleBasic:
     async def test_throttle_initialization(
         self,

@@ -37,6 +37,7 @@ def test_throttled_no_throttles_raises() -> None:
 
 @pytest.mark.throttle
 @pytest.mark.decorator
+@pytest.mark.anyio
 async def test_throttled_no_connection_raises() -> None:
     """Raises ValueError when no HTTPConnection/WebSocket is in the call args."""
     throttle = HTTPThrottle(
@@ -56,6 +57,7 @@ async def test_throttled_no_connection_raises() -> None:
 
 @pytest.mark.throttle
 @pytest.mark.decorator
+@pytest.mark.anyio
 async def test_throttled_websocket_no_connection_raises() -> None:
     """Raises ValueError when no WebSocket is in the call args."""
     throttle = WebSocketThrottle(
@@ -75,7 +77,8 @@ async def test_throttled_websocket_no_connection_raises() -> None:
 
 @pytest.mark.throttle
 @pytest.mark.decorator
-def test_throttled_preserves_function_metadata() -> None:
+@pytest.mark.anyio
+async def test_throttled_preserves_function_metadata() -> None:
     """`@throttled` preserves the wrapped function's `__name__`/`__doc__`."""
     throttle = HTTPThrottle(
         "test-decorator-meta",

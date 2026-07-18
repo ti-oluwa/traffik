@@ -88,20 +88,16 @@ class TestMiddlewareThrottleFiltering:
             )
             middleware_throttle = MiddlewareThrottle(throttle=throttle, path="/api/")
 
-            api_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/api/users",
-                }
-            )
-            public_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/public/info",
-                }
-            )
+            api_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/api/users",
+            })
+            public_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/public/info",
+            })
 
             assert await middleware_throttle(api_request) is api_request
             assert await middleware_throttle(public_request) is public_request
@@ -142,22 +138,18 @@ class TestMiddlewareThrottleFiltering:
                 throttle=throttle, predicate=is_premium_user
             )
 
-            premium_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/test",
-                    "headers": {"x-user-tier": "premium"},
-                }
-            )
-            free_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/test",
-                    "headers": {"x-user-tier": "free"},
-                }
-            )
+            premium_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/test",
+                "headers": {"x-user-tier": "premium"},
+            })
+            free_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/test",
+                "headers": {"x-user-tier": "free"},
+            })
 
             assert await middleware_throttle(premium_request) is premium_request
             assert await middleware_throttle(free_request) is free_request
@@ -191,14 +183,12 @@ class TestMiddlewareThrottleFiltering:
             ]
             for method, path, has_auth in test_cases:
                 headers = [(b"authorization", b"Bearer token")] if has_auth else []
-                request = Request(
-                    {
-                        "type": "http",
-                        "method": method,
-                        "path": path,
-                        "headers": headers,
-                    }
-                )
+                request = Request({
+                    "type": "http",
+                    "method": method,
+                    "path": path,
+                    "headers": headers,
+                })
                 assert await middleware_throttle(request) is request
 
 
@@ -251,13 +241,11 @@ class TestMiddlewareThrottleRegexMatching:
             assert middleware_throttle.rule.path.pattern == "/api/"
 
             matching = Request({"type": "http", "method": "GET", "path": "/api/users"})
-            non_matching = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/public/data",
-                }
-            )
+            non_matching = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/public/data",
+            })
             assert await middleware_throttle(matching) is matching
             assert await middleware_throttle(non_matching) is non_matching
 
@@ -276,22 +264,18 @@ class TestMiddlewareThrottleRegexMatching:
             )
 
             for _ in range(2):
-                request = Request(
-                    {
-                        "type": "http",
-                        "method": "GET",
-                        "path": "/api/search",
-                    }
-                )
-                assert await middleware_throttle(request) is request
-
-            request = Request(
-                {
+                request = Request({
                     "type": "http",
                     "method": "GET",
-                    "path": "/api/search/results",
-                }
-            )
+                    "path": "/api/search",
+                })
+                assert await middleware_throttle(request) is request
+
+            request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/api/search/results",
+            })
             assert await middleware_throttle(request) is request
 
     async def test_case_sensitive_regex(
@@ -1141,18 +1125,22 @@ class TestPrepThrottles:
     """`_prep_throttles` - pure function, no app, no framework."""
 
     def test_cheap_first(self) -> None:
-        t_cheap = make_http_throttle("cheap", cost=1)
+        cheap_throttle = make_http_throttle("cheap", cost=1)
         t_mid = make_http_throttle("mid", cost=5)
-        t_expensive = make_http_throttle("expensive", cost=10)
-        result = _prep_throttles([t_expensive, t_cheap, t_mid], sort="cheap_first")
-        assert result["http"] == [t_cheap, t_mid, t_expensive]
+        expensive_throttle = make_http_throttle("expensive", cost=10)
+        result = _prep_throttles(
+            [expensive_throttle, cheap_throttle, t_mid], sort="cheap_first"
+        )
+        assert result["http"] == [cheap_throttle, t_mid, expensive_throttle]
 
     def test_cheap_last(self) -> None:
-        t_cheap = make_http_throttle("cheap", cost=1)
+        cheap_throttle = make_http_throttle("cheap", cost=1)
         t_mid = make_http_throttle("mid", cost=5)
-        t_expensive = make_http_throttle("expensive", cost=10)
-        result = _prep_throttles([t_cheap, t_mid, t_expensive], sort="cheap_last")
-        assert result["http"] == [t_expensive, t_mid, t_cheap]
+        expensive_throttle = make_http_throttle("expensive", cost=10)
+        result = _prep_throttles(
+            [cheap_throttle, t_mid, expensive_throttle], sort="cheap_last"
+        )
+        assert result["http"] == [expensive_throttle, t_mid, cheap_throttle]
 
     def test_no_sort(self) -> None:
         t1 = make_http_throttle("first", cost=10)
@@ -1172,22 +1160,26 @@ class TestPrepThrottles:
     def test_none_cost_sorted_last(self) -> None:
         """
         `MiddlewareThrottle(cost=None)` falls back to the wrapped throttle's
-        cost (default 1). `t_no_cost` gets the same sort key as `t_cheap`
+        cost (default 1). `t_no_cost` gets the same sort key as `cheap_throttle`
         (1, False); stable sort keeps `t_no_cost` (input index 0) ahead of
-        `t_cheap` (index 2).
+        `cheap_throttle` (index 2).
         """
-        t_cheap = make_http_throttle("cheap", cost=1)
+        cheap_throttle = make_http_throttle("cheap", cost=1)
         t_no_cost = make_http_throttle("no-cost", cost=None)
-        t_expensive = make_http_throttle("expensive", cost=100)
-        result = _prep_throttles([t_no_cost, t_expensive, t_cheap], sort="cheap_first")
-        assert result["http"] == [t_no_cost, t_cheap, t_expensive]
+        expensive_throttle = make_http_throttle("expensive", cost=100)
+        result = _prep_throttles(
+            [t_no_cost, expensive_throttle, cheap_throttle], sort="cheap_first"
+        )
+        assert result["http"] == [t_no_cost, cheap_throttle, expensive_throttle]
 
     def test_none_cost_sorted_first_with_cheap_last(self) -> None:
-        t_cheap = make_http_throttle("cheap", cost=1)
+        cheap_throttle = make_http_throttle("cheap", cost=1)
         t_no_cost = make_http_throttle("no-cost", cost=None)
-        t_expensive = make_http_throttle("expensive", cost=100)
-        result = _prep_throttles([t_cheap, t_expensive, t_no_cost], sort="cheap_last")
-        assert result["http"] == [t_expensive, t_cheap, t_no_cost]
+        expensive_throttle = make_http_throttle("expensive", cost=100)
+        result = _prep_throttles(
+            [cheap_throttle, expensive_throttle, t_no_cost], sort="cheap_last"
+        )
+        assert result["http"] == [expensive_throttle, cheap_throttle, t_no_cost]
 
     def test_invalid_sort(self) -> None:
         t = make_http_throttle("test", cost=1)
@@ -1211,7 +1203,7 @@ async def test_middleware_sort_parameter_integration(
     inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
 ) -> None:
     """The `sort=` param on `ThrottleMiddleware` actually reorders `middleware_throttles`."""
-    t_expensive = MiddlewareThrottle(
+    expensive_throttle = MiddlewareThrottle(
         throttle=HTTPThrottle(
             uid=f"expensive-{web_framework.name}",
             rate="10/s",
@@ -1220,7 +1212,7 @@ async def test_middleware_sort_parameter_integration(
         ),
         cost=10,
     )
-    t_cheap = MiddlewareThrottle(
+    cheap_throttle = MiddlewareThrottle(
         throttle=HTTPThrottle(
             uid=f"cheap-{web_framework.name}",
             rate="10/s",
@@ -1246,7 +1238,7 @@ async def test_middleware_sort_parameter_integration(
         middleware=[
             Middleware(
                 ThrottleMiddleware,
-                middleware_throttles=[t_expensive, t_cheap],
+                middleware_throttles=[expensive_throttle, cheap_throttle],
                 backend=inmemory_backend,
                 sort="cheap_first",
             )
@@ -1256,7 +1248,10 @@ async def test_middleware_sort_parameter_integration(
         await client.get("/test")
     middleware1 = _find_throttle_middleware(app1)
     assert middleware1 is not None
-    assert middleware1.middleware_throttles["http"] == [t_cheap, t_expensive]
+    assert middleware1.middleware_throttles["http"] == [
+        cheap_throttle,
+        expensive_throttle,
+    ]
 
     app2 = web_framework.build_app(
         http_routes=[HTTPRoute("/test", endpoint)],
@@ -1264,7 +1259,7 @@ async def test_middleware_sort_parameter_integration(
         middleware=[
             Middleware(
                 ThrottleMiddleware,
-                middleware_throttles=[t_cheap, t_expensive],
+                middleware_throttles=[cheap_throttle, expensive_throttle],
                 backend=inmemory_backend,
                 sort="cheap_last",
             )
@@ -1274,4 +1269,7 @@ async def test_middleware_sort_parameter_integration(
         await client.get("/test")
     middleware2 = _find_throttle_middleware(app2)
     assert middleware2 is not None
-    assert middleware2.middleware_throttles["http"] == [t_expensive, t_cheap]
+    assert middleware2.middleware_throttles["http"] == [
+        expensive_throttle,
+        cheap_throttle,
+    ]

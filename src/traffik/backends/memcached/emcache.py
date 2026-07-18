@@ -919,6 +919,9 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         """Reset the backend by clearing all tracked namespace data."""
         await self.clear()
 
+    def closed(self) -> bool:
+        return self.connection is None and self._named_gate_registry is None
+
     async def close(self) -> None:
         """Close the Memcached connection pool."""
         if self.connection is not None:

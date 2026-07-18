@@ -674,12 +674,10 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             nodes = []
             for item in raw:
                 if isinstance(item, dict):
-                    nodes.append(
-                        {
-                            "host": item["host"],
-                            "port": int(item.get("port", 6379)),
-                        }
-                    )
+                    nodes.append({
+                        "host": item["host"],
+                        "port": int(item.get("port", 6379)),
+                    })
                 elif isinstance(item, (list, tuple)) and len(item) == 2:
                     nodes.append({"host": item[0], "port": int(item[1])})
                 else:
@@ -988,6 +986,9 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
     async def reset(self) -> None:
         """Reset all keys in the namespace."""
         await self.clear()
+
+    def closed(self) -> bool:
+        return self.connection is None and self._named_gate_registry is None
 
     async def close(self) -> None:
         if self.connection is not None and self._owns_connection:

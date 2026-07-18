@@ -9,6 +9,7 @@ import sys
 import typing
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
+import warnings
 
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
@@ -702,11 +703,24 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
             self._token = None
 
         backend = self.backend
+        if backend.closed():
+            if not self.persistent:
+                warnings.warn(
+                    "Context non-persistence (`persistent=False`) cannot be enforced on exit. "
+                    "Backend was closed before exit.",
+                    source=RuntimeWarning,
+                )
+            return
+
+        if not self._initialized:
+            # Just return here if backend was not initialized on context entry
+            # for some reason to avoid errors by attempting to reset or close the backend.
+            return
 
         # Store any exception that occurs during reset/close to raise later
         # This is to ensure that we atleast call `close()` even if `reset()` fails.
         exit_exc: typing.Optional[BaseException] = None
-        if not self.persistent and self._initialized:
+        if not self.persistent:
             try:
                 await backend.reset()
                 # Should raise `BackendError` due to wrap,

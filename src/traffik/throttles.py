@@ -1157,6 +1157,53 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         **throttle_kwargs: typing.Any,
     ) -> Middleware:
+        """
+        Create a middleware configuration for this throttle.
+
+        This is a convenience method for wrapping a single `HTTPThrottle` in a
+        `ThrottleMiddleware` instance. The returned `Middleware` object can be
+        added directly to a Starlette or FastAPI application.
+
+        Unless explicitly overridden, the middleware uses the throttle's configured
+        backend. Additional keyword arguments are forwarded to the underlying
+        `MiddlewareThrottle` wrapper, allowing middleware-specific behavior to be
+        customized without modifying the throttle itself.
+
+        :param backend: Backend used by the middleware. If `None`, the throttle's
+            configured backend is used.
+        :param exception_handler_getter: Optional callable that maps exceptions
+            raised during throttling to custom exception handlers.
+        :param context: Optional mapping of values made available to middleware
+            callbacks and exception handlers.
+        :param throttle_kwargs: Additional keyword arguments forwarded to the
+            `MiddlewareThrottle` wrapper.
+        :returns: A configured `Middleware` instance that can be passed to
+            `Starlette` application or route.
+
+        **Example (FastAPI)**:
+
+        ```python
+        from fastapi import FastAPI
+        from traffik.throttles import HTTPThrottle
+
+        throttle = HTTPThrottle(uid="api", rate="100/minute")
+
+        app = FastAPI(middleware=[throttle.as_middleware()])
+        ```
+
+        **Example (Starlette)**:
+
+        ```python
+        from starlette.applications import Starlette
+        from starlette.routing import Route, WebSocketRoute
+
+        # Option 1:
+        app = Starlette(..., middleware=[throttle.as_middleware()])
+
+        # Option 2:
+        route = Route(..., middleware=[throttle.as_middleware()])
+        ```
+        """
         from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
 
         return Middleware(
@@ -1564,14 +1611,12 @@ async def websocket_throttled(
 
     wait_seconds = math.ceil(wait_ms / 1000)
     try:
-        await connection.send_json(
-            {
-                "type": "rate_limit",
-                "error": "Too many messages",
-                "retry_after": wait_seconds,
-                **context.get("extras", {}),
-            }
-        )
+        await connection.send_json({
+            "type": "rate_limit",
+            "error": "Too many messages",
+            "retry_after": wait_seconds,
+            **context.get("extras", {}),
+        })
     except RuntimeError as exc:
         # Connection was closed (by client) between check and send
         # Silently ignore since client is already disconnected

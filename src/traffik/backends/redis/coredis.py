@@ -717,6 +717,9 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         """Reset throttle state by clearing all namespace keys."""
         await self.clear()
 
+    def closed(self) -> bool:
+        return self.connection is None and self._named_gate_registry is None
+
     async def close(self) -> None:
         """
         Release resources and clean up.

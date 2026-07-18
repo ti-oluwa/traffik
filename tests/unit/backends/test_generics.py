@@ -911,8 +911,8 @@ class TestThrottleBackend:
                 # by default, it should not close on exiting the context
                 assert inner_context1.close_on_exit is False
                 # Since persistence is not explicitly set for the inner context,
-                # ensure the inner context (from the same backend) is persistent, although the backend is non-persistent
-                # This behaviour prevent unexpected behaviour and ensure data integrity when nesting context's of a single backend
+                # ensure the inner context (from the same backend) is persistent, although the backend may be non-persistent.
+                # This behaviour prevents unexpected behaviour and ensures data integrity when nesting context's of a single backend
                 assert inner_context1.persistent is True
                 async with inner_context1:
                     # Confirm value from parent context still remains
@@ -923,15 +923,26 @@ class TestThrottleBackend:
                     assert await backend.get(key) == "value2"
 
                     # Explicitly set `close_on_exit` and `persistent` now
-                    inner_context2 = backend(close_on_exit=True, persistent=False)
-                    assert inner_context2.close_on_exit is True
+                    # We cannot close a multiprocess backend safely on exit, especially
+                    # when the multiprocess backend is the one who created the shared memory segment used
+                    # as is in this case where we have just one backend. Closing unlinks the shared memory,
+                    # and we dont want that since the outer/parent context still need it (on exit)
+                    close_on_exit = not isinstance(backend, MultiProcessInMemoryBackend)
+                    inner_context2 = backend(
+                        close_on_exit=close_on_exit, persistent=False
+                    )
+                    assert inner_context2.close_on_exit is close_on_exit
                     assert inner_context2.persistent is False
                     async with inner_context2:
                         # Confirm value from parent context still remains
                         assert await backend.get(key) == "value2"
 
+                    # We can now close specifically for the multiprocess backend
+                    if not close_on_exit:
+                        await backend.close()
+
                 assert backend.connection is None
-                # Backend should raise an error now that is connection was closed by inner_context2
+                # Backend should raise an error now that is connection was closed by `inner_context2`
                 with pytest.raises(BackendConnectionError):
                     await backend.get(key)
 

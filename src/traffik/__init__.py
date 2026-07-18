@@ -1,5 +1,5 @@
 """
-**Traffik** - Asynchronous Distributed Rate Limiting for Starlette and FastAPI Applications.
+**Traffik** - Distributed Rate Limiting for Starlette Applications.
 """
 
 from .backends import *  # noqa

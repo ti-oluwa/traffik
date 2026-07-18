@@ -1188,16 +1188,20 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             self._initialized
             and self._shared_memory is not None
             and self._buffer is not None
+            and not self._executor._shutdown
         )
 
     def _assert_ready(self) -> None:
         """
-        Raise `BackendConnectionError` if the backend has not been
-        initialised.
+        Raise `BackendConnectionError/BackendError` if the backend has not been initialised.
         """
         if not self._initialized or self._buffer is None:
             raise BackendConnectionError(
                 "Connection error! Ensure backend is initialized."
+            )
+        if self._executor._shutdown:
+            raise BackendError(
+                "Backend executor has shutdown! Ensure backend is initialized."
             )
 
     def _shard_idx_for_key(self, key: str) -> int:
@@ -2519,12 +2523,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         shard_to_items: typing.Dict[int, typing.List[typing.Tuple[str, str]]] = {}
         for key, val in items.items():
-            shard_to_items.setdefault(self._shard_idx_for_key(key), []).append(
-                (
-                    key,
-                    val,
-                )
-            )
+            shard_to_items.setdefault(self._shard_idx_for_key(key), []).append((
+                key,
+                val,
+            ))
 
         await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
             self._executor, self._multi_set, shard_to_items, expire
@@ -2608,7 +2610,18 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     def closed(self) -> bool:
         """Return `True` if the backend has been closed."""
-        return not self._initialized
+        return (
+            not self._initialized
+            and self._cleanup_task is None
+            and self._buffer is None
+            and self._shared_memory is None
+            and (self._reentrant_lock_pool is None or self._reentrant_lock_pool.closed)
+            and (
+                self._non_reentrant_lock_pool is None
+                or self._non_reentrant_lock_pool.closed
+            )
+            and self._executor._shutdown
+        )
 
     async def close(self) -> None:
         """
@@ -2621,6 +2634,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         Closes the named lock pool, and shuts down the thread pool executor.
         """
+        if not self._initialized:
+            return
+
         self._initialized = False
 
         if self._cleanup_task is not None and not self._cleanup_task.done():
@@ -2660,4 +2676,4 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             self._non_reentrant_lock_pool = None
 
         # Close threadpool executor
-        self._executor.shutdown(wait=False)
+        self._executor.shutdown(wait=False, cancel_futures=False)

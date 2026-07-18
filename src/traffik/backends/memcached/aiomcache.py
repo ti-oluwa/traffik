@@ -848,6 +848,9 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         """Reset the backend."""
         await self.clear()
 
+    def closed(self) -> bool:
+        return self.connection is None and self._named_gate_registry is None
+
     async def close(self) -> None:
         """Close the Memcached connection."""
         if self.connection is not None:

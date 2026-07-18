@@ -3,6 +3,7 @@
 import datetime
 import logging
 import os
+import sys
 import typing
 
 import pytest
@@ -90,6 +91,9 @@ def get_aiomcache_backend(namespace: str, persistent: bool) -> ThrottleBackend:
         # Enable key tracking for testing purposes
         # So that we can clean up keys after tests
         track_keys=True,
+        # To ensure that lock keys expires as we have way to track lock key and
+        # expire/delete them, especailly when and error occurs acquisition
+        lock_ttl=30,
     )
 
 
@@ -109,6 +113,9 @@ def get_emcache_backend(namespace: str, persistent: bool) -> ThrottleBackend:
         # Enable key tracking for testing purposes
         # So that we can clean up keys after tests
         track_keys=True,
+        # To ensure that lock keys expires as we have way to track lock key and
+        # expire/delete them, especailly when and error occurs acquisition
+        lock_ttl=30,
     )
 
 
@@ -124,16 +131,20 @@ def get_multiprocess_backend(namespace: str, persistent: bool) -> ThrottleBacken
     )
 
 
+MAYBE_UNIX = sys.platform != "windows" and sys.platform != "cygwin"
 BACKEND_FACTORIES: typing.List[
     typing.Callable[[str, bool], ThrottleBackend[typing.Any, typing.Any]]
 ] = [
     get_inmemory_backend,
-    get_multiprocess_backend,
-    get_emcache_backend,
     get_aiomcache_backend,
     get_aioredis_backend,
     get_coredis_backend,
 ]
+if MAYBE_UNIX:
+    BACKEND_FACTORIES.extend([
+        # get_multiprocess_backend,
+        get_emcache_backend,
+    ])
 
 
 class BackendGen(typing.Generic[HTTPConnectionT]):

@@ -7,9 +7,9 @@ import inspect
 import math
 import sys
 import typing
+import warnings
 from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
-import warnings
 
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
@@ -282,8 +282,8 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
         **Note:** This only checks if the `connection` attribute is None.
         Subclasses that manage their own connection state should override
-        this method to provide an accurate status. 
-        
+        this method to provide an accurate status.
+
         Ideally, `close` should set `connection` to None to maintain consistency with this method.
 
         :return: True if connection is closed, False otherwise.

@@ -127,9 +127,9 @@ class TestThrottleBackend:
                 key = backend.get_key("concurrent_counter")
 
                 # Perform multiple concurrent increments
-                results = await asyncio.gather(*[
-                    backend.increment(key) for _ in range(10)
-                ])
+                results = await asyncio.gather(
+                    *[backend.increment(key) for _ in range(10)]
+                )
 
                 # All results should be unique (atomicity guarantee)
                 assert len(set(results)) == 10
@@ -299,11 +299,13 @@ class TestThrottleBackend:
                 key3 = backend.get_key("key3")
 
                 # Set multiple keys
-                await backend.multi_set({
-                    key1: "value1",
-                    key2: "value2",
-                    key3: "value3",
-                })
+                await backend.multi_set(
+                    {
+                        key1: "value1",
+                        key2: "value2",
+                        key3: "value3",
+                    }
+                )
 
                 # Verify all keys were set
                 assert await backend.get(key1) == "value1"
@@ -356,10 +358,12 @@ class TestThrottleBackend:
                 await backend.set(key2, "old2")
 
                 # Overwrite with multi_set
-                await backend.multi_set({
-                    key1: "new1",
-                    key2: "new2",
-                })
+                await backend.multi_set(
+                    {
+                        key1: "new1",
+                        key2: "new2",
+                    }
+                )
 
                 # Verify overwritten
                 assert await backend.get(key1) == "new1"
@@ -376,11 +380,13 @@ class TestThrottleBackend:
                 key3 = backend.get_key("rtkey3")
 
                 # Set using multi_set
-                await backend.multi_set({
-                    key1: "rtvalue1",
-                    key2: "rtvalue2",
-                    key3: "rtvalue3",
-                })
+                await backend.multi_set(
+                    {
+                        key1: "rtvalue1",
+                        key2: "rtvalue2",
+                        key3: "rtvalue3",
+                    }
+                )
 
                 # Get using multi_get
                 values = await backend.multi_get(key1, key2, key3)
@@ -541,26 +547,30 @@ class TestThrottleBackend:
                 # Exclude `InMemoryBackend` as it does not support `blocking_timeout` yet
                 if not isinstance(backend, InMemoryBackend):
                     with pytest.raises(LockAcquisitionError):
-                        await asyncio.gather(*[
-                            increment_with_lock(
-                                backend,
-                                lock_name=lock_name,
-                                key=key,
-                                blocking=True,
-                                blocking_timeout=0.01,
-                                sleep=0.001,
-                            )
-                            for _ in range(200)
-                        ])
+                        await asyncio.gather(
+                            *[
+                                increment_with_lock(
+                                    backend,
+                                    lock_name=lock_name,
+                                    key=key,
+                                    blocking=True,
+                                    blocking_timeout=0.01,
+                                    sleep=0.001,
+                                )
+                                for _ in range(200)
+                            ]
+                        )
 
                 # 3. Try non-blocking now, and a timeout error should be raised
                 with pytest.raises(LockAcquisitionError):
-                    await asyncio.gather(*[
-                        increment_with_lock(
-                            backend, lock_name=lock_name, key=key, blocking=False
-                        )
-                        for _ in range(5)
-                    ])
+                    await asyncio.gather(
+                        *[
+                            increment_with_lock(
+                                backend, lock_name=lock_name, key=key, blocking=False
+                            )
+                            for _ in range(5)
+                        ]
+                    )
 
     @pytest.mark.concurrent
     @pytest.mark.multithreaded

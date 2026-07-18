@@ -135,12 +135,11 @@ def get_multiprocess_backend(namespace: str, persistent: bool) -> ThrottleBacken
 MAYBE_UNIX = sys.platform != "windows" and sys.platform != "cygwin"
 BACKEND_FACTORIES: typing.List[
     typing.Callable[[str, bool], ThrottleBackend[typing.Any, typing.Any]]
-] = [
-    get_inmemory_backend,
-    get_aiomcache_backend,
-    get_aioredis_backend,
-    get_coredis_backend,
-]
+] = [get_inmemory_backend, get_aiomcache_backend, get_aioredis_backend]
+
+if sys.version_info >= (3, 10):
+    BACKEND_FACTORIES.append(get_coredis_backend)
+
 if MAYBE_UNIX:
     supports_fork = "fork" in multiprocessing.get_all_start_methods()
     BACKEND_FACTORIES.append(get_emcache_backend)

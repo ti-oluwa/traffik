@@ -18,8 +18,7 @@ import typing
 from urllib.parse import unquote, urljoin, urlsplit
 
 from httpx2 import ASGITransport, AsyncClient, Response
-from starlette.testclient import ASGI3App
-from starlette.types import Message, Scope
+from starlette.types import ASGIApp, Message, Scope
 from starlette.websockets import WebSocketDisconnect
 from typing_extensions import Self
 
@@ -42,7 +41,7 @@ class AsyncWebSocketTestSession:
 
     def __init__(
         self,
-        app: ASGI3App,
+        app: ASGIApp,
         scope: Scope,
         loop: asyncio.AbstractEventLoop,
         receive_queue: asyncio.Queue[Message],
@@ -273,7 +272,7 @@ class AsyncTestClient:
 
     def __init__(
         self,
-        app: ASGI3App,
+        app: ASGIApp,
         base_url: str = "http://testclient",
         raise_server_exceptions: bool = True,
         root_path: str = "",

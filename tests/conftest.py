@@ -142,12 +142,14 @@ BACKEND_FACTORIES: typing.List[
     get_coredis_backend,
 ]
 if MAYBE_UNIX:
-    BACKEND_FACTORIES.extend([
-        # get_multiprocess_backend,
-        get_emcache_backend,
-    ])
-    if multiprocessing.get_start_method(allow_none=True) != "fork":
-        multiprocessing.set_start_method("fork")
+    supports_fork = "fork" in multiprocessing.get_all_start_methods()
+    BACKEND_FACTORIES.append(get_emcache_backend)
+
+    # if supports_fork:
+    #     BACKEND_FACTORIES.append(get_multiprocess_backend)
+
+    if supports_fork and multiprocessing.get_start_method(allow_none=True) != "fork":
+        multiprocessing.set_start_method("fork", force=True)
 
 
 class BackendGen(typing.Generic[HTTPConnectionT]):

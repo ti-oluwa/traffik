@@ -1,4 +1,17 @@
+import platform
+
 from setuptools import Extension, setup
+
+ext_modules = []
+
+if platform.system() != "Windows":
+    ext_modules.append(
+        Extension(
+            "traffik.backends._ext",
+            ["src/traffik/backends/_cext/_ext.c"],
+            extra_compile_args=["-O2"],
+        )
+    )
 
 setup(
     name="traffik",
@@ -67,11 +80,5 @@ setup(
     },
     package_dir={"": "src"},
     package_data={"traffik": ["py.typed"]},
-    ext_modules=[
-        Extension(
-            name="traffik.backends._ext",
-            sources=["src/traffik/backends/_cext/_ext.c"],
-            extra_compile_args=["-O2"],
-        )
-    ],
+    ext_modules=ext_modules,
 )

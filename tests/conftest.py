@@ -2,6 +2,7 @@
 
 import datetime
 import logging
+import multiprocessing
 import os
 import sys
 import typing
@@ -145,6 +146,8 @@ if MAYBE_UNIX:
         # get_multiprocess_backend,
         get_emcache_backend,
     ])
+    if multiprocessing.get_start_method(allow_none=True) != "fork":
+        multiprocessing.set_start_method("fork")
 
 
 class BackendGen(typing.Generic[HTTPConnectionT]):

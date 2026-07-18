@@ -725,7 +725,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             to run blocking shared-memory operations off the event loop.
             `None` (default) falls back to `max(number_of_shards, 32)`, matching
             prior behavior. Size this based on expected peak *per-worker*
-            concurrency, not on `number_of_shards` — the two control unrelated
+            concurrency, not on `number_of_shards` - the two control unrelated
             things (memory/sharding layout vs. how many blocking ops this
             process can have in flight at once) and don't need to move together.
             Raising this only helps if requests are actually queueing on the

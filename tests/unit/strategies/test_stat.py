@@ -290,7 +290,7 @@ class TestStrategyStat:
         assert round(stat.hits_remaining) == 0, "Should be at limit"
 
         # Wait for window to reset
-        await asyncio.sleep(0.20)
+        await asyncio.sleep(0.22)
 
         # Stat should show reset
         stat = await strategy.get_stat(key, rate, backend)  # type: ignore

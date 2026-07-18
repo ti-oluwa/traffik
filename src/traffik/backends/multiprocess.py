@@ -58,9 +58,9 @@ Only the creator calls `unlink()` on close. Attachers call `close()` only.
 import asyncio
 import math
 import multiprocessing
+import platform
 import re
 import struct
-import sys
 import threading
 import typing
 from concurrent.futures import ThreadPoolExecutor
@@ -72,11 +72,13 @@ from types import TracebackType
 from typing_extensions import Self
 
 from traffik._locks import _NamedLockHandle, _NamedLockPool
-from traffik.backends._ext import (  # type: ignore[import]
-    clear_byte,
-    fnv_32bit_hash,
-    test_and_set_byte,
-)
+
+_ON_WINDOWS = platform.system() == "Windows"
+if not _ON_WINDOWS:
+    from traffik.backends import _ext as cext  # type: ignore[import]
+else:
+    cext: typing.Any  # type: ignore
+
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import (
     BackendConnectionError,
@@ -148,7 +150,7 @@ def _derive_shared_memory_name(namespace: str) -> str:
     :return: A valid POSIX shared memory segment name.
     """
     sanitized = re.sub(r"[^A-Za-z0-9_-]", "_", namespace)
-    hex_suffix = format(fnv_32bit_hash(namespace.encode("utf-8")), "08x")
+    hex_suffix = format(cext.fnv_32bit_hash(namespace.encode("utf-8")), "08x")
     middle_max = (
         _SHARED_MEMORY_NAME_MAX_LENGTH
         - len(_SHARED_MEMORY_NAME_PREFIX)
@@ -277,7 +279,7 @@ class _AsyncSharedMemoryLock:
 
     1. If the current task already owns the lock and reentrancy is enabled,
        increment the counter and return immediately.
-    2. Call `test_and_set_byte` (atomic XCHG).
+    2. Call `cext.test_and_set_byte` (atomic XCHG).
     3. If old value was 0, we acquired the lock; record task ownership and return `True`.
     4. Otherwise yield to the event loop via `asyncio.sleep(0)`
        (first `max_spins_before_backoff` attempts) or with an
@@ -286,8 +288,8 @@ class _AsyncSharedMemoryLock:
 
     The yield in step 4 is a pure cooperative handoff.
     The lock holder (running in the same or a different process)
-    will complete its critical section and call `clear_byte`, making
-    the byte 0 again so a subsequent `test_and_set_byte` by a waiter succeeds.
+    will complete its critical section and call `cext.clear_byte`, making
+    the byte 0 again so a subsequent `cext.test_and_set_byte` by a waiter succeeds.
     """
 
     __slots__ = (
@@ -382,7 +384,7 @@ class _AsyncSharedMemoryLock:
         spin_max_delay = self._spin_max_delay_seconds
         has_blocking_timeout = blocking_timeout is not None
         while True:
-            if test_and_set_byte(self._buffer, self._byte_index) == 0:
+            if cext.test_and_set_byte(self._buffer, self._byte_index) == 0:
                 # Old value was 0. We already atomically set it to 1 and own the lock
                 self._owner = current_task
                 self._reentry_count = 1
@@ -428,10 +430,10 @@ class _AsyncSharedMemoryLock:
 
         # Outermost release. Clear the shared memory byte and ownership together
         try:
-            clear_byte(self._buffer, self._byte_index)
+            cext.clear_byte(self._buffer, self._byte_index)
         finally:
-            # Clear ownership regardless of whether clear_byte succeeded.
-            # `clear_byte` is a C extension writing a single byte, so failure here
+            # Clear ownership regardless of whether cext.clear_byte succeeded.
+            # `cext.clear_byte` is a C extension writing a single byte, so failure here
             # would indicate a severe memory error, but we still clean up state.
             self._owner = None
             self._reentry_count = 0
@@ -448,7 +450,7 @@ class _AsyncSharedMemoryLock:
             # For safety, clear the byte so we don't permanently poison
             # the shared memory flag for future lock instances that
             # receive the same byte index.
-            clear_byte(self._buffer, self._byte_index)
+            cext.clear_byte(self._buffer, self._byte_index)
             self._owner = None
             self._reentry_count = 0
         self._byte_pool.release_index(self._byte_index)
@@ -732,7 +734,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             executor rather than on a shard's semaphore; profile before assuming
             which one you're bottlenecked on.
         """
-        if sys.platform == "win32" or sys.platform == "cygwin":
+        if _ON_WINDOWS:
             raise RuntimeError(
                 f"`{self.__class__.__name__}` is not supported on Windows. "
                 "It requires the 'fork' multiprocessing start method, which "
@@ -1214,7 +1216,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param key: The throttle key string.
         :return: Shard index in `[0, number_of_shards)`.
         """
-        return fnv_32bit_hash(key.encode("utf-8")) % self._number_of_shards
+        return cext.fnv_32bit_hash(key.encode("utf-8")) % self._number_of_shards
 
     def _shard_base(self, shard_idx: int) -> int:
         """
@@ -1249,7 +1251,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         hash_table_base = shard_base + self._shard_hash_table_base_offset
         capacity = self._shard_hash_table_capacity
         mask = self._shard_hash_table_mask
-        start = fnv_32bit_hash(key_bytes) & mask
+        start = cext.fnv_32bit_hash(key_bytes) & mask
         first_tombstone = -1
 
         for i in range(capacity):

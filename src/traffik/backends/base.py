@@ -282,8 +282,9 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
 
         **Note:** This only checks if the `connection` attribute is None.
         Subclasses that manage their own connection state should override
-        this method to provide an accurate status. Ideally, `close` should set `connection`
-        to None to maintain consistency with this method.
+        this method to provide an accurate status. 
+        
+        Ideally, `close` should set `connection` to None to maintain consistency with this method.
 
         :return: True if connection is closed, False otherwise.
         """

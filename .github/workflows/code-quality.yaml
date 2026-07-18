@@ -75,4 +75,4 @@ jobs:
         run: |
           echo "Running mypy type checking..."
           uv run python -m mypy src/ --ignore-missing-imports --no-strict-optional
-        continue-on-error: true  # Optional since you might not have mypy setup yet
+        continue-on-error: true 

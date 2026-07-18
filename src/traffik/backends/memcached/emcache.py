@@ -8,6 +8,7 @@ import asyncio
 import math
 import sys
 import typing
+import zlib
 from time import monotonic
 from types import TracebackType
 
@@ -509,68 +510,33 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         """
         self.set_lock_contention_threshold(2**31)
 
+    def _tracking_key_for(self, key: str, num_shards: int = 16) -> str:
+        shard = zlib.crc32(key.encode()) % num_shards
+        return f"{self._tracking_key}:{shard}"
+
     async def _track_key(self, key: str) -> None:
-        """Best-effort add key to tracking set."""
-        if self.connection is None:
+        """Best-effort add key to tracking set. Atomic."""
+        if self.connection is None or "||" in key:
+            if "||" in key:
+                sys.stderr.write(f"Warning: Key '{key}' contains '||'...\n")
             return
 
-        if "||" in key:
-            sys.stderr.write(
-                f"Warning: Key '{key}' contains '||' which is used as a separator "
-                "in key tracking. Ensure keys do not contain this sequence.\n"
-            )
-            sys.stderr.flush()
-            return
-
-        tracking_key = self._tracking_key.encode()
+        tracking_key = self._tracking_key_for(key)  # sharded, see below
+        entry = f"||{key}".encode()
         try:
-            item = await self.connection.get(tracking_key)
-            if item is None:
-                await self.connection.set(
-                    tracking_key,
-                    key.encode(),
-                    exptime=0,
-                    noreply=False,
-                )
-            else:
-                keys_set = set(item.value.decode().split("||"))
-                if key not in keys_set:
-                    keys_set.add(key)
-                    await self.connection.set(
-                        tracking_key,
-                        "||".join(sorted(keys_set)).encode(),
-                        exptime=0,
-                        noreply=False,
-                    )
-        except _EMCACHE_BASE_EXCEPTIONS as exc:
-            sys.stderr.write(f"Warning: Failed to track key '{key}': {exc}\n")
-            sys.stderr.flush()
-
-    async def _untrack_key(self, key: str) -> None:
-        """Best-effort remove key from tracking set."""
-        if self.connection is None:
-            return
-
-        tracking_key = self._tracking_key.encode()
-        try:
-            item = await self.connection.get(tracking_key)
-            if item is None:
+            if await self.connection.append(tracking_key.encode(), entry):
                 return
 
-            keys_set = set(item.value.decode().split("||"))
-            if key in keys_set:
-                keys_set.remove(key)
-                if keys_set:
-                    await self.connection.set(
-                        tracking_key,
-                        "||".join(sorted(keys_set)).encode(),
-                        exptime=0,
-                        noreply=False,
-                    )
-                else:
-                    await self.connection.delete(tracking_key, noreply=False)
+            # Key doesn't exist yet. Try to create it.
+            if await self.connection.add(
+                tracking_key.encode(), key.encode(), exptime=0
+            ):
+                return
+
+            # Lost the create race. The winner's `add` means append will work now.
+            await self.connection.append(tracking_key.encode(), entry)
         except _EMCACHE_BASE_EXCEPTIONS as exc:
-            sys.stderr.write(f"Warning: Failed to untrack key '{key}': {exc}\n")
+            sys.stderr.write(f"Warning: Failed to track key '{key}': {exc}\n")
             sys.stderr.flush()
 
     def _assert_ready(self) -> None:
@@ -653,8 +619,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
 
         try:
             await self.connection.delete(key.encode(), noreply=False)  # type: ignore[union-attr]
-            if self.track_keys:
-                await self._untrack_key(key)
             return True
         except emcache.NotFoundCommandError:
             return False

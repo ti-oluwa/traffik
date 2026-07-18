@@ -105,10 +105,12 @@ line-length = 88
 target-version = "py39"
 lint.extend-select = ["I", "TID", "F"]
 
-
 [tool.mypy]
 namespace_packages = "True"
 mypy_path = "src"
+
+[tool.bandit]
+skips = ["B101"]
 
 [dependency-groups]
 dev = [

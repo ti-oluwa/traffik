@@ -1,8 +1,8 @@
 """Redis implementation of the throttle backend using `redis.asyncio`."""
 
 import asyncio
+import logging
 import math
-import sys
 import typing
 from time import monotonic
 from types import TracebackType
@@ -28,6 +28,7 @@ from traffik.typing import (
     ThrottleErrorHandler,
 )
 
+logger = logging.getLogger(__name__)
 _AnyRedis = typing.Union[aioredis.Redis, aioredis.RedisCluster]
 
 _INCREMENT_WITH_TTL_SCRIPT = """
@@ -327,9 +328,9 @@ class _AsyncRedisLock:
                 name,  # KEYS[1]
                 token,  # ARGV[1]
             )
-            if not released:
-                sys.stderr.write(f"Warning: Lock '{name}' expired or stolen\n")
-                sys.stderr.flush()
+            if not released and logger.isEnabledFor(logging.WARNING):
+                logger.warning("Lock '%s' expired or stolen.\n", name)
+
         except NoScriptError:
             # Script was flushed from Redis cache, re-register and retry
             # Update shared dict so backend and future locks see the new SHA
@@ -626,7 +627,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         self._owns_connection: bool = False
 
         self._increment_with_ttl_sha: typing.Optional[str] = None
-        """SHA hash of the loaded Lua script for increment_with_ttl."""
+        """SHA hash of the loaded Lua script for `increment_with_ttl`."""
         self._clear_sha: typing.Optional[str] = None
         """SHA hash of the loaded Lua script for clear."""
 
@@ -996,11 +997,8 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         if self.connection is not None and self._owns_connection:
             try:
                 await self.connection.aclose()
-            except RedisError as exc:
-                sys.stderr.write(
-                    f"Warning: error while closing redis connection: {exc}\n"
-                )
-                sys.stderr.flush()
+            except RedisError:
+                logger.exception("An error occurred while closing redis connection.\n")
 
         self.connection = None
         self._increment_with_ttl_sha = None

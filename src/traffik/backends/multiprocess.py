@@ -77,7 +77,7 @@ _ON_WINDOWS = platform.system() == "Windows"
 if not _ON_WINDOWS:
     from traffik.backends import _ext as cext  # type: ignore[import]
 else:
-    cext: typing.Any  # type: ignore
+    cext: typing.Any = object()  # type: ignore
 
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import (

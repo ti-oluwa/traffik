@@ -5,8 +5,8 @@ Supports only UNIX systems (no Windows support. Use other client backends)
 """
 
 import asyncio
+import logging
 import math
-import sys
 import typing
 import zlib
 from time import monotonic
@@ -30,6 +30,8 @@ from traffik.typing import (
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_memcached_nodes(
@@ -253,7 +255,8 @@ class _AsyncMemcachedLock:
             if item is not None and item.value.decode("utf-8") == token:
                 await self._client.delete(name_bytes, noreply=False)
             else:
-                sys.stderr.write(f"Warning: Lock '{self._name}' expired or stolen\n")
+                if logger.isEnabledFor(logging.WARNING):
+                    logger.warning("Lock '%s' expired or stolen.\n", self._name)
         except _EMCACHE_BASE_EXCEPTIONS as exc:  # nosec
             # Lock might have expired or been released already.
             raise LockReleaseError(f"Failed to release lock '{self._name}'") from exc
@@ -263,7 +266,6 @@ class _AsyncMemcachedLock:
             self._owner = None
             self._token = None
             self._reentry_count = 0
-            sys.stderr.flush()
 
     async def __aenter__(self) -> Self:
         if not await self.acquire():
@@ -324,6 +326,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         lock_blocking_timeout: typing.Optional[float] = None,
         lock_contention_threshold: int = 1,
         track_keys: bool = False,
+        number_of_tracking_shards: int = 16,
         autobatching: bool = False,
         ssl: bool = False,
         ssl_verify: bool = True,
@@ -385,6 +388,13 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             Note: This adds overhead to cache operations and is not 100%
             reliable. Only use if you absolutely need the `clear()`
             functionality. `clear()` will be a no-op if this is False.
+        :param number_of_tracking_shards: Number of Memcached tracking shards to use
+            when `track_keys` is enabled. Tracked keys are distributed across this
+            many shard keys to reduce contention and the likelihood of oversized
+            tracking entries caused by Memcached's item size limits. Higher values
+            improve write scalability and increase the maximum number of trackable
+            keys at the cost of requiring more operations during `clear()`. Must
+            be at least 1. Defaults to 16.
         :param autobatching: Whether to enable emcache's autobatching
             feature. When True, multiple concurrent `get` operations are
             transparently batched into a single Memcached `get_many`
@@ -399,6 +409,9 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         :param password: SASL authentication password.
         :param kwargs: Additional keyword arguments.
         """
+        if number_of_tracking_shards < 1:
+            raise ValueError("`number_of_tracking_shards` must be at least 1")
+
         if nodes is not None:
             self._host_addresses = _parse_memcached_nodes(nodes)
         else:
@@ -422,14 +435,12 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         self.min_connections = min_connections
         self.purge_unused_connections_after = purge_unused_connections_after
         self.connection_timeout = connection_timeout
-        self.track_keys = track_keys
         self.autobatching = autobatching
         self.ssl = ssl
         self.ssl_verify = ssl_verify
         self.ssl_extra_ca = ssl_extra_ca
         self.username = username
         self.password = password
-        self._tracking_key = f"{namespace}:__tracked_keys__"
         super().__init__(
             None,
             namespace=namespace,
@@ -442,6 +453,9 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             lock_blocking_timeout=lock_blocking_timeout,
             **kwargs,
         )
+        self.track_keys = track_keys
+        self._tracking_key = self.get_key("__tracked_keys__")
+        self._number_of_tracking_shards = number_of_tracking_shards
         self._lock_contention_threshold = lock_contention_threshold
         self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
 
@@ -510,34 +524,43 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         """
         self.set_lock_contention_threshold(2**31)
 
-    def _tracking_key_for(self, key: str, num_shards: int = 16) -> str:
+    def _get_tracking_key_for(self, key: str, num_shards: int = 16) -> str:
         shard = zlib.crc32(key.encode()) % num_shards
+        return f"{self._tracking_key}:{shard}"
+
+    def _get_tracking_shard_key(self, shard: int) -> str:
         return f"{self._tracking_key}:{shard}"
 
     async def _track_key(self, key: str) -> None:
         """Best-effort add key to tracking set. Atomic."""
         if self.connection is None or "||" in key:
             if "||" in key:
-                sys.stderr.write(f"Warning: Key '{key}' contains '||'...\n")
+                logger.warning("Key '%s' contains '||'...\n", key)
             return
 
-        tracking_key = self._tracking_key_for(key)  # sharded, see below
+        tracking_key = self._get_tracking_key_for(
+            key, num_shards=self._number_of_tracking_shards
+        )
         entry = f"||{key}".encode()
         try:
-            if await self.connection.append(tracking_key.encode(), entry):
+            if await self.connection.append(
+                tracking_key.encode(), entry, noreply=False
+            ):
                 return
 
             # Key doesn't exist yet. Try to create it.
             if await self.connection.add(
-                tracking_key.encode(), key.encode(), exptime=0
+                tracking_key.encode(),
+                key.encode(),
+                exptime=0,
+                noreply=False,
             ):
                 return
 
             # Lost the create race. The winner's `add` means append will work now.
-            await self.connection.append(tracking_key.encode(), entry)
-        except _EMCACHE_BASE_EXCEPTIONS as exc:
-            sys.stderr.write(f"Warning: Failed to track key '{key}': {exc}\n")
-            sys.stderr.flush()
+            await self.connection.append(tracking_key.encode(), entry, noreply=False)
+        except _EMCACHE_BASE_EXCEPTIONS:
+            logger.warning("Failed to track key '%s'.\n", key, exc_info=True)
 
     def _assert_ready(self) -> None:
         """
@@ -663,7 +686,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
                     await self._track_key(key)
                 return amount
             except emcache.NotStoredStorageCommandError:
-                # Race occured. Another client created the key first; retry INCR.
+                # Race occurred. Another client created the key first; retry INCR.
                 new_value = await self.connection.increment(encoded_key, amount)  # type: ignore[union-attr]
                 return new_value  # type: ignore[return-value]
         else:
@@ -858,26 +881,27 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
 
         self._assert_ready()
 
-        tracking_key = self._tracking_key.encode()
-        item = await self.connection.get(tracking_key)  # type: ignore[union-attr]
-        if item is None:
-            return
+        for shard in range(self._number_of_tracking_shards):
+            tracking_key = self._get_tracking_shard_key(shard)
+            tracked = await self.connection.get(tracking_key.encode())  # type: ignore[union-attr]
+            if tracked is None:
+                continue
 
-        keys = item.value.decode().split("||")
-        # Remove the tracking key itself (as last thing)
-        keys.append(self._tracking_key)
-        tasks = [
-            asyncio.create_task(self.connection.delete(key.encode(), noreply=False))  # type: ignore[union-attr]
-            for key in keys
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for key, result in zip(keys, results):
-            if isinstance(result, Exception) and not isinstance(
-                result, emcache.NotFoundCommandError
-            ):
-                raise BackendError(
-                    f"Failed to clear key '{key}': {result!s}"
-                ) from result
+            keys = tracked.value.decode().split("||")
+            # Remove the tracking key itself (as last thing)
+            keys.append(self._tracking_key)
+            tasks = [
+                asyncio.create_task(self.connection.delete(key.encode(), noreply=False))  # type: ignore[union-attr]
+                for key in keys
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for key, result in zip(keys, results):
+                if isinstance(result, BaseException) and not isinstance(
+                    result, emcache.NotFoundCommandError
+                ):
+                    raise BackendError(
+                        f"Failed to clear key '{key}': {result!s}"
+                    ) from result
 
     async def reset(self) -> None:
         """Reset the backend by clearing all tracked namespace data."""

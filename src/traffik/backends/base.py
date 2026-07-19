@@ -4,8 +4,8 @@ import asyncio
 import functools
 import hashlib
 import inspect
+import logging
 import math
-import sys
 import typing
 import warnings
 from contextlib import asynccontextmanager
@@ -37,6 +37,8 @@ from traffik.typing import (
     ThrottleErrorHandler,
     WaitPeriod,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def default_identifier(connection: HTTPConnection) -> typing.Any:
@@ -726,21 +728,19 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
                 await backend.reset()
                 # Should raise `BackendError` due to wrap,
                 # but catch all to prevent context exit failure
-            except BaseException as exc:  # noqa
-                sys.stderr.write(
-                    f"Error resetting throttle backend during context exit: {exc}\n"
+            except BaseException as exc:
+                logger.exception(
+                    "Error resetting throttle backend during context exit.\n"
                 )
-                sys.stderr.flush()
                 exit_exc = exc
 
         if self.close_on_exit:
             try:
                 await backend.close()
-            except BaseException as exc:  # noqa  # Same here
-                sys.stderr.write(
-                    f"Error closing throttle backend during context exit: {exc}\n"
+            except BaseException as exc:  # Same here
+                logger.exception(
+                    "Error closing throttle backend during context exit.\n"
                 )
-                sys.stderr.flush()
                 if exit_exc is None:
                     exit_exc = exc
 

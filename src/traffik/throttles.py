@@ -3,8 +3,8 @@
 import asyncio
 import functools
 import inspect
+import logging
 import math
-import sys
 import typing
 import weakref
 
@@ -62,6 +62,8 @@ __all__ = [
     "throttled",
     "websocket_throttled",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 @typing.runtime_checkable
@@ -891,11 +893,14 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             wait_ms = await self.strategy(key, rate, backend, actual_cost)  # type: ignore[arg-type]
         except _EXEMPT_EXCEPTIONS:
             raise
-        except BaseException as exc:  # noqa
-            sys.stderr.write(
-                f"Warning: An error occurred while utilizing strategy '{self.strategy!r}'.\n {type(exc).__name__}: {exc}\n"
-            )
-            sys.stderr.flush()
+        except BaseException as exc:
+            if logger.isEnabledFor(logging.WARNING):
+                logger.warning(
+                    "An error occurred while utilizing strategy '%s'.\n %s\n",
+                    self.strategy,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
             wait_ms = await self._handle_error(
                 connection,
                 exc=exc,
@@ -1619,11 +1624,10 @@ async def websocket_throttled(
                 **context.get("extras", {}),
             }
         )
-    except RuntimeError as exc:
+    except RuntimeError:
         # Connection was closed (by client) between check and send
         # Silently ignore since client is already disconnected
-        sys.stderr.write(f"An error occurred while sending throttled message: {exc}\n")
-        sys.stderr.flush()
+        logger.exception("An error occurred while sending throttled message\n")
 
 
 class WebSocketThrottle(Throttle[WebSocket]):

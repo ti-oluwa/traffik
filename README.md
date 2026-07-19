@@ -1,24 +1,24 @@
 # Traffik
 
+[![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
+[![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Traffik is a rate limiting library for Starlette applications. With Traffik, you can write the throttle/limit once,
 point it at whatever you want to use as storage and it just works. Traffik also support dependency injection in FastAPI.
 
-By default, throttles used the in-memory storage - which you can keep while you're developing. Switch to Redis or Memcached once you need to share state across processes, especially for production or live setups.
+By default, throttles use the in-memory storage - which you can keep while you're developing. Switch to Redis or Memcached once you need to share state across processes, especially for production or live setups.
 
 This started as a "I need to rate limit an API" project, and grew into a fairly complete (may be over-engineered) toolkit for it.
 
 The core API (fixed window, sliding window, token bucket, a couple of backends) covers what
 you'll mostly need. However, there's more options to choose from if you want it.
 
-[![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
-[![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 ```bash
 pip install traffik
 ```
 
-That is all that is needrd for use with an in-memory backend. No extra dependencies needed. For Redis or Memcached, see
+That is all that's needed for use with an in-memory backend. No extra dependencies needed. For Redis or Memcached, see
 [Backends](#backends) below.
 
 ## Quickstart
@@ -346,7 +346,7 @@ async def ws_endpoint(websocket: WebSocket):
         data = await websocket.receive_text()
         await ws_throttle.hit(websocket, context={"scope": "message"}) # Per message level
         if is_throttled(websocket):
-            # The default throttled handler already send a throttle frame to the client
+            # The default throttled handler already sent a *throttled* frame to the client
             # You can override that behaviour if you need something custom.
             continue
         await websocket.send_text(process(data))

@@ -2,8 +2,8 @@
 
 import asyncio
 import functools
+import logging
 import math
-import sys
 import typing
 import zlib
 from time import monotonic
@@ -30,6 +30,8 @@ from traffik.typing import (
     T,
     ThrottleErrorHandler,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _on_error_return(
@@ -266,7 +268,8 @@ class _AsyncMemcachedLock:
             if item is not None and item.decode("utf-8") == token:
                 await self._client.delete(name_bytes)
             else:
-                sys.stderr.write(f"Warning: Lock '{self._name}' expired or stolen\n")
+                if logger.isEnabledFor(logging.WARNING):
+                    logger.warning("Lock '%s' expired or stolen.\n", self._name)
         except ClientException as exc:  # nosec
             # Lock might have expired or been released already
             raise LockReleaseError(f"Failed to release lock '{self._name}'") from exc
@@ -276,7 +279,6 @@ class _AsyncMemcachedLock:
             self._owner = None
             self._token = None
             self._reentry_count = 0
-            sys.stderr.flush()
 
     async def __aenter__(self):
         if not await self.acquire():
@@ -329,6 +331,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         lock_blocking_timeout: typing.Optional[float] = None,
         lock_contention_threshold: int = 1,
         track_keys: bool = False,
+        number_of_tracking_shards: int = 16,
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -366,8 +369,18 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             Note: This adds overhead to cache operations and is not 100% reliable.
             Only use if you absolutely need the `clear()` functionality.
             `clear()` will be no-op if this is False.
+        :param number_of_tracking_shards: Number of Memcached tracking shards to use
+            when `track_keys` is enabled. Tracked keys are distributed across this
+            many shard keys to reduce contention and the likelihood of oversized
+            tracking entries caused by Memcached's item size limits. Higher values
+            improve write scalability and increase the maximum number of trackable
+            keys at the cost of requiring more operations during `clear()`. Must
+            be at least 1. Defaults to 16.
         :param kwargs: Additional keyword arguments.
         """
+        if number_of_tracking_shards < 1:
+            raise ValueError("`number_of_tracking_shards` must be at least 1")
+
         if url and (host != "localhost" or port != 11211):
             raise ValueError("Specify either 'url' or 'host'/'port', not both.")
 
@@ -381,8 +394,6 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         self.pool_size = pool_size
         self.pool_minsize = pool_minsize
         self.connection_args = connection_args
-        self.track_keys = track_keys
-        self._tracking_key = f"{namespace}:__tracked_keys__"
         super().__init__(
             None,
             namespace=namespace,
@@ -395,21 +406,29 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             lock_blocking_timeout=lock_blocking_timeout,
             **kwargs,
         )
+        self.track_keys = track_keys
+        self._tracking_key = self.get_key("__tracked_keys__")
+        self._number_of_tracking_shards = number_of_tracking_shards
         self._lock_contention_threshold = lock_contention_threshold
         self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
 
-    def _tracking_key_for(self, key: str, num_shards: int = 16) -> str:
+    def _get_tracking_key_for(self, key: str, num_shards: int = 16) -> str:
         shard = zlib.crc32(key.encode()) % num_shards
+        return f"{self._tracking_key}:{shard}"
+
+    def _get_tracking_shard_key(self, shard: int) -> str:
         return f"{self._tracking_key}:{shard}"
 
     async def _track_key(self, key: str) -> None:
         """Best-effort add key to tracking set. Atomic."""
         if self.connection is None or "||" in key:
             if "||" in key:
-                sys.stderr.write(f"Warning: Key '{key}' contains '||'...\n")
+                logger.warning("Key '%s' contains '||'...\n", key)
             return
 
-        tracking_key = self._tracking_key_for(key)  # sharded, see below
+        tracking_key = self._get_tracking_key_for(
+            key, num_shards=self._number_of_tracking_shards
+        )
         entry = f"||{key}".encode()
         try:
             if await self.connection.append(tracking_key.encode(), entry, exptime=0):
@@ -423,9 +442,8 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
 
             # Lost the create race. The winner's `add` means append will work now.
             await self.connection.append(tracking_key.encode(), entry, exptime=0)
-        except ClientException as exc:
-            sys.stderr.write(f"Warning: Failed to track key '{key}': {exc}\n")
-            sys.stderr.flush()
+        except ClientException:
+            logger.warning("Failed to track key '%s'.\n", key, exc_info=True)
 
     async def initialize(self) -> None:
         """Initialize the Memcached connection."""
@@ -785,24 +803,25 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
 
         self._assert_ready()
 
-        tracking_key = self._tracking_key
-        tracked = await self.connection.get(tracking_key.encode())  # type: ignore[union-attr]
-        if tracked is None:
-            return
+        for shard in range(self._number_of_tracking_shards):
+            tracking_key = self._get_tracking_shard_key(shard)
+            tracked = await self.connection.get(tracking_key.encode())  # type: ignore[union-attr]
+            if tracked is None:
+                continue
 
-        keys = tracked.decode().split("||")
-        # Delete the tracking key itself finally (added as last key)
-        keys.append(tracking_key)
-        tasks = [
-            asyncio.create_task(self.connection.delete(key.encode()))  # type: ignore[union-attr]
-            for key in keys
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for key, result in zip(keys, results):
-            if isinstance(result, Exception):
-                raise BackendError(
-                    f"Failed to clear key '{key}': {result!s}"
-                ) from result
+            keys = tracked.decode().split("||")
+            # Delete the tracking key itself finally (added as last key)
+            keys.append(tracking_key)
+            tasks = [
+                asyncio.create_task(self.connection.delete(key.encode()))  # type: ignore[union-attr]
+                for key in keys
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for key, result in zip(keys, results):
+                if isinstance(result, BaseException):
+                    raise BackendError(
+                        f"Failed to clear key '{key}': {result!s}"
+                    ) from result
 
     async def reset(self) -> None:
         """Reset the backend."""

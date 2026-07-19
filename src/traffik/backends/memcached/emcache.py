@@ -495,7 +495,21 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
 
     async def ready(self) -> bool:
         """Return True if the client has been created and can serve traffic."""
-        return self.connection is not None
+        if self.connection is None:
+            return False
+
+        try:
+            for address in self._host_addresses:
+                version = await self.connection.version(address)
+                if version is None:
+                    return False
+            return True
+        except _EMCACHE_BASE_EXCEPTIONS:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "An exception occured when checking readiness", exc_info=True
+                )
+            return False
 
     def set_lock_contention_threshold(self, threshold: int) -> None:
         """
@@ -533,8 +547,9 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
 
     async def _track_key(self, key: str) -> None:
         """Best-effort add key to tracking set. Atomic."""
-        if self.connection is None or "||" in key:
-            if "||" in key:
+        warn = False
+        if self.connection is None or (warn := "||" in key) is True:
+            if warn:
                 logger.warning("Key '%s' contains '||'...\n", key)
             return
 
@@ -543,21 +558,27 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         )
         entry = f"||{key}".encode()
         try:
-            if await self.connection.append(
-                tracking_key.encode(), entry, noreply=False
-            ):
+            try:
+                await self.connection.append(
+                    tracking_key.encode(), entry, noreply=False
+                )
                 return
+            except emcache.NotStoredStorageCommandError:
+                # Tracking key doesn't exist yet, fall through to create it.
+                pass
 
-            # Key doesn't exist yet. Try to create it.
-            if await self.connection.add(
-                tracking_key.encode(),
-                key.encode(),
-                exptime=0,
-                noreply=False,
-            ):
+            try:
+                await self.connection.add(
+                    tracking_key.encode(),
+                    key.encode(),
+                    exptime=0,
+                    noreply=False,
+                )
                 return
+            except emcache.NotStoredStorageCommandError:
+                # Lost the create race, the winner's `add` means append will work now.
+                pass
 
-            # Lost the create race. The winner's `add` means append will work now.
             await self.connection.append(tracking_key.encode(), entry, noreply=False)
         except _EMCACHE_BASE_EXCEPTIONS:
             logger.warning("Failed to track key '%s'.\n", key, exc_info=True)
@@ -776,7 +797,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         self._assert_ready()
 
         encoded_key = key.encode()
-
         # Key exists, just increment (preserves existing TTL).
         try:
             new_value = await self.connection.increment(encoded_key, amount)  # type: ignore[union-attr]
@@ -812,11 +832,13 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         if not keys:
             return []
 
-        encoded_keys = [k.encode() for k in keys]
+        encoded_keys = [key.encode() for key in keys]
         items: typing.Dict[bytes, emcache.Item] = await self.connection.get_many(  # type: ignore[union-attr]
             encoded_keys
         )
-        return [items[k].value.decode() if k in items else None for k in encoded_keys]
+        return [
+            items[key].value.decode() if key in items else None for key in encoded_keys
+        ]
 
     async def multi_set(
         self,

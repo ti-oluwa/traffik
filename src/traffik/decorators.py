@@ -86,7 +86,7 @@ def _apply_throttle(
     # So that the rate limit check is done before any other operations or dependencies
     # are resolved/executed, improving the efficiency of implementation.
     if inspect.iscoroutinefunction(route):
-        wrapper_code = f"""
+        code = f"""
 async def route_wrapper(
     {throttle_dep_param_name}: Annotated[typing.Any, Depends(throttle)],
     *args: P.args,
@@ -95,7 +95,7 @@ async def route_wrapper(
     return await route(*args, **kwargs)
 """
     else:
-        wrapper_code = f"""
+        code = f"""
 def route_wrapper(
     {throttle_dep_param_name}: Annotated[typing.Any, Depends(throttle)],
     *args: P.args,
@@ -104,24 +104,15 @@ def route_wrapper(
     return route(*args, **kwargs)
 """
 
-    local_namespace = {
-        "throttle": throttle,
-        "Annotated": Annotated,
-        "Depends": Depends,
-    }
-    global_namespace = {
-        **globals(),
-        "route": route,
-    }
-    exec(  # nosec
-        wrapper_code,
-        global_namespace,
-        local_namespace,
+    local_namespace = {"throttle": throttle, "Annotated": Annotated, "Depends": Depends}
+    global_namespace = {**globals(), "route": route}
+    exec(  # noqa nosec
+        code, globals=global_namespace, locals=local_namespace
     )
-    route_wrapper = local_namespace["route_wrapper"]
-    route_wrapper = functools.wraps(route)(route_wrapper)  # type: ignore[arg-type]
-    # The resulting function from applying `functools.wraps(route)` on `route_wrapper`
-    # would not have the throttle dependency in its signature, although it is present in `route_wrapper`'s definition,
+    wrapper = local_namespace["route_wrapper"]
+    wrapper = functools.wraps(route)(wrapper)  # type: ignore[arg-type]
+    # The resulting function from applying `functools.wraps(route)` on `wrapper`
+    # would not have the throttle dependency in its signature, although it is present in `wrapper`'s definition,
     # because the result of `functools.wraps` assumes the signature of the original function (route in this case).
 
     # Since the original/wrapped function does not have the throttle dependency in its signature,
@@ -129,8 +120,8 @@ def route_wrapper(
     # uses the signature of the function to determine the params, hence the dependencies of the function.
 
     # So, we update the signature of the wrapper to include the throttle dependency
-    route_wrapper = _add_parameter_to_signature(
-        func=route_wrapper,
+    wrapper = _add_parameter_to_signature(
+        func=wrapper,
         parameter=inspect.Parameter(
             name=throttle_dep_param_name,
             kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -138,7 +129,7 @@ def route_wrapper(
         ),
         index=0,  # Since the throttle dependency was added as the first parameter
     )
-    return route_wrapper
+    return wrapper
 
 
 @typing.overload
@@ -197,7 +188,9 @@ def throttled(
 
     if len(throttles) > 1:
         connection_type = throttles[0].connection_type
-        if not all(t.connection_type is connection_type for t in throttles):
+        if not all(
+            throttle.connection_type is connection_type for throttle in throttles
+        ):
             raise ValueError("All throttles must have the same connection type.")
 
         async def throttle(connection: HTTPConnectionT) -> HTTPConnectionT:

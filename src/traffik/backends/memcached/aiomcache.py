@@ -421,8 +421,9 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
 
     async def _track_key(self, key: str) -> None:
         """Best-effort add key to tracking set. Atomic."""
-        if self.connection is None or "||" in key:
-            if "||" in key:
+        warn = False
+        if self.connection is None or (warn := "||" in key) is True:
+            if warn:
                 logger.warning("Key '%s' contains '||'...\n", key)
             return
 
@@ -477,6 +478,10 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             await self.connection.version()
             return True
         except ClientException:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "An exception occured when checking readiness", exc_info=True
+                )
             return False
 
     def set_lock_contention_threshold(self, threshold: int) -> None:

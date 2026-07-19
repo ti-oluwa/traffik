@@ -62,8 +62,8 @@ def _parse_memcached_nodes(
                     emcache.MemcachedHostAddress(parsed["host"], parsed["port"])
                 )
             elif ":" in node:
-                host, port = node.rsplit(":", 1)
-                result.append(emcache.MemcachedHostAddress(host, int(port)))
+                host, port_str = node.rsplit(":", 1)
+                result.append(emcache.MemcachedHostAddress(host, int(port_str)))
             else:
                 result.append(emcache.MemcachedHostAddress(node, 11211))
         else:

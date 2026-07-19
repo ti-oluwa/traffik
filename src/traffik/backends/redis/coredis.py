@@ -594,7 +594,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         """Set *key* to *value* with an optional expiry in seconds."""
         self._assert_ready()
         if expire is not None:
-            await self.connection.set(key, value, px=expire * 1000)  # type: ignore[union-attr]
+            await self.connection.set(key, value, px=expire * 1000)  # type: ignore[union-attr,call-overload]
         else:
             await self.connection.set(key, value)  # type: ignore[union-attr]
 
@@ -641,7 +641,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         """
         self._assert_ready()
         assert self._increment_with_ttl_script is not None
-        result = await self._increment_with_ttl_script(
+        result: typing.Union[str, int] = await self._increment_with_ttl_script(
             keys=[key],
             args=[str(amount), str(ttl)],
         )

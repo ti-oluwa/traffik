@@ -818,7 +818,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             # Delete the tracking key itself finally (added as last key)
             keys.append(tracking_key)
             tasks = [
-                asyncio.create_task(self.connection.delete(key.encode()))  # type: ignore[union-attr]
+                asyncio.create_task(self.connection.delete(key.encode()))  # type: ignore[arg-type,union-attr]
                 for key in keys
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)

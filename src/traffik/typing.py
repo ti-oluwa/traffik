@@ -52,6 +52,7 @@ HTTPConnectionTcon = TypeVar(
 WaitPeriod: TypeAlias = float
 
 
+@typing.runtime_checkable
 class Stringable(typing.Protocol):
     """Protocol for objects that can be converted to a string."""
 

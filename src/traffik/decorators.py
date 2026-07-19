@@ -58,7 +58,7 @@ class _DecoratorDepends(Depends, typing.Generic[P, R, Q, S]):
     ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
         if self.dependency is None:
             return decorated
-        return self.dependency_decorator(decorated, self.dependency)  # type: ignore[union-attr]
+        return self.dependency_decorator(decorated, self.dependency)  # type: ignore[misc,union-attr]
 
 
 # Is this worth it? I mean! Just because of the `@throttled(...)` decorator?

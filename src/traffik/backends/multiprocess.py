@@ -77,16 +77,16 @@ _ON_WINDOWS = platform.system() == "Windows"
 if not _ON_WINDOWS:
     from traffik.backends import _ext as cext  # type: ignore[import]
 else:
-    cext: typing.Any = object()  # type: ignore
+    cext: typing.Any = object()  # type: ignore[import,no-redef]
 
-from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import (
+from traffik.backends.base import ThrottleBackend  # noqa: E402
+from traffik.exceptions import (  # noqa: E402
     BackendConnectionError,
     BackendError,
     LockAcquisitionError,
     LockReleaseError,
 )
-from traffik.typing import (
+from traffik.typing import (  # noqa: E402
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,

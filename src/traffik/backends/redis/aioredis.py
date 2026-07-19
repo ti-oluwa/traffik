@@ -22,6 +22,7 @@ from traffik.exceptions import (
     LockReleaseError,
 )
 from traffik.typing import (
+    AsyncLock,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
@@ -820,6 +821,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
     ) -> _GatedNamedLock[typing.Union[_AsyncRedisLock, _AsyncRedLock]]:
         """Returns a distributed Redis lock for the given name."""
         self._assert_ready()
+        lock: AsyncLock
         if not self._use_redlock:
             lock = _AsyncRedisLock(
                 name,
@@ -846,7 +848,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
     ) -> typing.Optional[str]:
         """Get value by key."""
         self._assert_ready()
-        return await self.connection.get(key)  # type: ignore[union-attr]
+        return await self.connection.get(key)  # type: ignore[union-attr,return-value]
 
     async def set(
         self, key: str, value: typing.Any, expire: typing.Optional[float] = None
@@ -854,7 +856,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         """Set value by key with optional expiration."""
         self._assert_ready()
         if expire is not None:
-            await self.connection.set(key, value, px=expire * 1000)  # type: ignore[union-attr]
+            await self.connection.set(key, value, px=expire * 1000)  # type: ignore[arg-type,union-attr,return-value]
         else:
             await self.connection.set(key, value)  # type: ignore[union-attr]
 
@@ -938,7 +940,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         self._assert_ready()
         if not keys:
             return []
-        return await self.connection.mget(keys)  # type: ignore[union-attr]
+        return await self.connection.mget(keys)  # type: ignore[union-attr,return-value]
 
     async def multi_set(
         self,

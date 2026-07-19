@@ -738,6 +738,7 @@ class PriorityQueueStrategy:
         async with backend.lock(f"lock:{queue_key}", **self.lock_config):
             # Get current queue
             raw_queue = await backend.get(queue_key)
+            queue: typing.Iterable[typing.Tuple[float, float, float]]
             if raw_queue:
                 try:
                     queue = _iter_three_float_records(raw_queue)
@@ -748,13 +749,13 @@ class PriorityQueueStrategy:
 
             # Filter expired, sum higher priority cost, find oldest high-priority timestamp in one pass
             cutoff = now - rate.expire
-            filtered_queue = []
-            higher_priority_cost = 0
+            filtered_queue: typing.List[typing.Tuple[float, float, float]] = []
+            higher_priority_cost = 0.0
             oldest_high_priority_timestamp = float("inf")
 
             for timestamp, recorded_priority, recorded_cost in queue:
                 if timestamp > cutoff:
-                    filtered_queue.append([timestamp, recorded_priority, recorded_cost])
+                    filtered_queue.append((timestamp, recorded_priority, recorded_cost))
                     if recorded_priority >= priority:
                         higher_priority_cost += recorded_cost
                         oldest_high_priority_timestamp = min(
@@ -772,7 +773,7 @@ class PriorityQueueStrategy:
                 return rate.expire  # Shouldn't reach here
 
             # Add current request to queue
-            queue.append([now, priority, cost])
+            queue.append((now, priority, cost))
 
             # Enforce max queue size (remove oldest low priority if needed)
             if len(queue) > self.max_queue_size:
@@ -820,6 +821,7 @@ class PriorityQueueStrategy:
         queue_key = f"{full_key}:priority:queue"
 
         raw_queue = await backend.get(queue_key)
+        queue: typing.Iterable[typing.Tuple[float, float, float]]
         if raw_queue:
             try:
                 queue = _iter_three_float_records(raw_queue)
@@ -830,14 +832,14 @@ class PriorityQueueStrategy:
 
         # Filter expired, sum costs, find oldest high-priority timestamp in one pass
         cutoff = now - rate.expire
-        filtered_queue = []
-        higher_priority_cost = 0
-        total_cost = 0
+        filtered_queue: typing.List[typing.Tuple[float, float, float]] = []
+        higher_priority_cost = 0.0
+        total_cost = 0.0
         oldest_high_priority_timestamp = float("inf")
 
         for timestamp, recorded_priority, recorded_cost in queue:
             if timestamp > cutoff:
-                filtered_queue.append([timestamp, recorded_priority, recorded_cost])
+                filtered_queue.append((timestamp, recorded_priority, recorded_cost))
                 total_cost += recorded_cost
                 if recorded_priority >= priority:
                     higher_priority_cost += recorded_cost

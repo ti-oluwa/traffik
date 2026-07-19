@@ -6,11 +6,7 @@ import weakref
 from collections.abc import Collection
 
 from traffik.exceptions import ConfigurationError
-from traffik.typing import (
-    HTTPConnectionT,
-    Matchable,
-    ThrottlePredicate,
-)
+from traffik.typing import HTTPConnectionT, Matchable, ThrottlePredicate
 
 __all__ = ["BypassThrottleRule", "ThrottleRegistry", "ThrottleRule"]
 
@@ -94,10 +90,10 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
             It is run after checking the path and methods, so it should be used for more expensive checks.
         """
         self.path: typing.Optional[re.Pattern[str]]
-        if isinstance(path, str):
-            self.path = re.compile(_glob_to_regex(path))
-        else:
+        if path is None or isinstance(path, re.Pattern):
             self.path = path
+        else:
+            self.path = re.compile(_glob_to_regex(str(path)))
 
         if methods is None:
             self.methods = None
@@ -275,7 +271,7 @@ def _prep_rules(
     return tuple(
         sorted(
             rules,
-            key=lambda r: (r.predicate is not None, -type(r).__rank__),
+            key=lambda rule: (rule.predicate is not None, -type(rule).__rank__),
         )
     )
 

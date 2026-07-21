@@ -80,12 +80,12 @@ and your real limit pere request becomes `configured_limit × worker_count`.
 
 ### Multi-process shared memory backend - multiple workers, one machine
 
-> EXPERIMENTAL! This is a non-conventional one and still requires a lot of testing to prove its viability. It may be removed in future releases. This only works on UNIX platforms with `"fork"` process start method.
+> EXPERIMENTAL! This is a non-conventional one and still requires a lot of testing to prove its stability. It may be removed in future releases. This only works on UNIX platforms with `"fork"` process start method.
 
 If you're running gunicorn/uvicorn with several workers on a single box and don't want
 to stand up Redis just to get accurate counts across them then you can try out this backend.
 
-I must say, setup may be trickier than other backends as it relies on process forking. Also context usage is constrained. You cannot use a closing context (`close_on_exit=True`) within the application with this one. Although, it is permitted at lifespan level
+I must say, setup may be trickier than other backends as it relies on process forking. Also context usage is constrained. You cannot use a closing context (`close_on_exit=True`) within the application with this one. Although, it is permitted at lifespan (outermost) level
 
 ```python
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
@@ -97,6 +97,8 @@ backend = MultiProcessInMemoryBackend(
     number_of_shards=64,     # rule of thumb: 2 × worker count
     cleanup_frequency=30.0,  # reclaim expired slots periodically
 )
+backend.start() # Call once in parent process
+
 app = FastAPI(lifespan=backend.lifespan)
 ```
 

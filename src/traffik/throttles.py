@@ -29,8 +29,8 @@ from traffik.headers import Header, Headers
 from traffik.rates import Rate
 from traffik.registry import (
     GLOBAL_REGISTRY,
+    Rule,
     ThrottleRegistry,
-    ThrottleRule,
     _prep_rules,
 )
 from traffik.strategies import DEFAULT_STRATEGY
@@ -193,7 +193,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         registry: typing.Optional[ThrottleRegistry] = None,
-        rules: typing.Optional[typing.Iterable[ThrottleRule[HTTPConnectionT]]] = None,
+        rules: typing.Optional[typing.Iterable[Rule[HTTPConnectionT]]] = None,
         cache_ids: bool = True,
         dynamic_rules: bool = False,
     ) -> None:
@@ -329,7 +329,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         registry.register(uid, self)
         self.registry = registry
-        self._rules: typing.Tuple[ThrottleRule[HTTPConnectionT], ...] = (
+        self._rules: typing.Tuple[Rule[HTTPConnectionT], ...] = (
             _prep_rules(set(rules)) if rules else ()
         )
         self._rules_resolved = False
@@ -1220,9 +1220,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             sort=None,
         )
 
-    def add_rules(
-        self, target_uid: str, /, *rules: ThrottleRule[HTTPConnectionT]
-    ) -> None:
+    def add_rules(self, target_uid: str, /, *rules: Rule[HTTPConnectionT]) -> None:
         """
         Add rules that gate another throttle's application.
 
@@ -1232,14 +1230,14 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         certain methods, paths, or custom predicates.
 
         :param target_uid: The UID of the throttle to attach rules to.
-        :param rules: One or more `ThrottleRule` instances to add.
+        :param rules: One or more `Rule` instances to add.
         :raises `ConfigurationError`: If `target_uid` is not registered.
 
         Example Usage - Bypassing the global throttle for GET requests:
 
         ```python
         from traffik.throttles import HTTPThrottle
-        from traffik.registry import ThrottleRule
+        from traffik.registry import Rule
 
         # Global throttle: 100 req/min across all methods
         global_throttle = HTTPThrottle(uid="api:global", rate="100/min")
@@ -1251,7 +1249,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         # effectively bypassing it for reads.
         write_throttle.add_rules(
             "api:global",
-            ThrottleRule(methods={"POST", "PUT", "PATCH", "DELETE"}),
+            Rule(methods={"POST", "PUT", "PATCH", "DELETE"}),
         )
 
         # Now on a GET request:
@@ -1446,7 +1444,7 @@ class HTTPThrottle(Throttle[Request]):
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         registry: typing.Optional[ThrottleRegistry] = None,
-        rules: typing.Optional[typing.Iterable[ThrottleRule[Request]]] = None,
+        rules: typing.Optional[typing.Iterable[Rule[Request]]] = None,
         cache_ids: bool = True,
         dynamic_rules: bool = False,
         use_method: bool = True,
@@ -1661,7 +1659,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         registry: typing.Optional[ThrottleRegistry] = None,
-        rules: typing.Optional[typing.Iterable[ThrottleRule[WebSocket]]] = None,
+        rules: typing.Optional[typing.Iterable[Rule[WebSocket]]] = None,
         cache_ids: bool = True,
         dynamic_rules: bool = False,
     ) -> None:

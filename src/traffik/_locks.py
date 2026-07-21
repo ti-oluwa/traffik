@@ -1081,7 +1081,7 @@ class _NamedGateHandle:
     Single-use managed handle returned by `_NamedGateRegistry.get`.
 
     Wraps a shared `asyncio.Lock` for one acquire/release lifecycle,
-    managing both the asyncio.Lock state and the registry waiter count.
+    managing both the `asyncio.Lock` state and the registry waiter count.
 
     **Single-use contract:**
 

@@ -138,7 +138,7 @@ A callable that implements a backoff strategy.
 Takes the current attempt number and base delay, and returns the delay in seconds before the next retry.
 """
 
-ThrottlePredicate: TypeAlias = typing.Union[
+Predicate: TypeAlias = typing.Union[
     typing.Callable[[HTTPConnectionT], typing.Awaitable[bool]],
     typing.Callable[
         [HTTPConnectionT, typing.Optional[typing.Mapping[str, typing.Any]]],

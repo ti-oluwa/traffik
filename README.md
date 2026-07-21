@@ -428,12 +428,12 @@ async def my_handler(request, wait_ms, throttle, context):
 Traffik allows you to gate when a throttle applies, or skip it for certain traffic using rules. See examples on how to use them below.
 
 ```python
-from traffik.registry import ThrottleRule, BypassThrottleRule
+from traffik.registry import throttle_if, bypass_if
 
 # Only apply the global throttle to write methods
 write_throttle.add_rules(
     "api:global",
-    ThrottleRule(methods={"POST", "PUT", "PATCH", "DELETE"}),
+    throttle_if(methods={"POST", "PUT", "PATCH", "DELETE"}),
 )
 
 # Skip throttling for internal traffic
@@ -443,7 +443,7 @@ async def is_internal(request: Request) -> bool:
 throttle = HTTPThrottle(
     "api:global",
     rate="100/min",
-    rules=[BypassThrottleRule(predicate=is_internal)],
+    rules=[bypass_if(predicate=is_internal)],
 )
 ```
 

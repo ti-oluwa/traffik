@@ -6,9 +6,9 @@ import weakref
 from collections.abc import Collection
 
 from traffik.exceptions import ConfigurationError
-from traffik.typing import HTTPConnectionT, Matchable, ThrottlePredicate
+from traffik.typing import HTTPConnectionT, Matchable, Predicate
 
-__all__ = ["BypassThrottleRule", "ThrottleRegistry", "ThrottleRule"]
+__all__ = ["Bypass", "Rule", "ThrottleRegistry", "bypass_if", "throttle_if"]
 
 
 def _glob_to_regex(pattern: str) -> str:
@@ -32,7 +32,7 @@ def _glob_to_regex(pattern: str) -> str:
     return pattern
 
 
-class ThrottleRule(typing.Generic[HTTPConnectionT]):
+class Rule(typing.Generic[HTTPConnectionT]):
     """
     A Throttle "Gate" Rule.
 
@@ -40,11 +40,11 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
 
     When used with a throttle, all rules are checked conjunctively on each `hit(...)` call.
     If **any** rule returns False, the throttle is skipped for that connection.
-    A `ThrottleRule` returns True when the connection matches its criteria (path,
+    A `Rule` returns True when the connection matches its criteria (path,
     methods, predicate), meaning "yes, apply the throttle". Non-matching connections
     pass through without consuming quota.
 
-    See also: `BypassThrottleRule` for the inverse behavior.
+    See also: `Bypass` for the inverse behavior.
     """
 
     __rank__ = 0
@@ -60,9 +60,10 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
 
     def __init__(
         self,
+        *,
         path: typing.Optional[Matchable] = None,
         methods: typing.Optional[Collection[str]] = None,
-        predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
+        predicate: typing.Optional[Predicate[HTTPConnectionT]] = None,
         _compute_hash: bool = True,
     ):
         """
@@ -176,13 +177,13 @@ class ThrottleRule(typing.Generic[HTTPConnectionT]):
         super().__setattr__(name, value)
 
 
-class BypassThrottleRule(ThrottleRule[HTTPConnectionT]):
+class Bypass(Rule[HTTPConnectionT]):
     """
     A Throttle "Bypass" Rule.
 
     Skip/bypass the throttle when this rule matches an HTTP connection.
 
-    The inverse of `ThrottleRule`. When a connection matches the bypass criteria
+    The inverse of `Rule`. When a connection matches the bypass criteria
     (path, methods, predicate), the throttle is **not** applied and the connection
     passes through without consuming quota.
 
@@ -199,9 +200,10 @@ class BypassThrottleRule(ThrottleRule[HTTPConnectionT]):
 
     def __init__(
         self,
+        *,
         path: typing.Optional[Matchable] = None,
         methods: typing.Optional[Collection[str]] = None,
-        predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
+        predicate: typing.Optional[Predicate[HTTPConnectionT]] = None,
     ):
         super().__init__(
             path=path,
@@ -245,26 +247,76 @@ class BypassThrottleRule(ThrottleRule[HTTPConnectionT]):
         return False
 
 
+def throttle_if(
+    *,
+    path: typing.Optional[Matchable] = None,
+    methods: typing.Optional[Collection[str]] = None,
+    predicate: typing.Optional[Predicate[HTTPConnectionT]] = None,
+) -> Rule:
+    """
+    Create a `Rule` describing when a throttle should be applied.
+
+    This is a convenience helper equivalent to calling
+    `Rule(path=..., methods=..., predicate=...)`.
+
+    :param path: A path matcher (string, glob, or compiled regex). If
+        omitted, the rule matches all paths.
+    :param methods: HTTP methods the rule applies to. If omitted, all
+        methods match. Ignored for WebSocket connections.
+    :param predicate: Optional asynchronous predicate evaluated after the
+        path and method checks. It may accept either the connection alone
+        or the connection and a context mapping.
+    :returns: A `Rule` that matches connections which should consume
+        throttle quota.
+    """
+    return Rule(path=path, methods=methods, predicate=predicate)
+
+
+def bypass_if(
+    *,
+    path: typing.Optional[Matchable] = None,
+    methods: typing.Optional[Collection[str]] = None,
+    predicate: typing.Optional[Predicate[HTTPConnectionT]] = None,
+) -> Bypass:
+    """
+    Create a `Bypass` rule describing when a throttle should be skipped.
+
+    This is a convenience helper equivalent to calling
+    `Bypass(path=..., methods=..., predicate=...)`.
+
+    :param path: A path matcher (string, glob, or compiled regex). If
+        omitted, the bypass rule matches all paths.
+    :param methods: HTTP methods the bypass applies to. If omitted, all
+        methods match. Ignored for WebSocket connections.
+    :param predicate: Optional asynchronous predicate evaluated after the
+        path and method checks. It may accept either the connection alone
+        or the connection and a context mapping.
+    :returns: A `Bypass` rule that exempts matching connections from
+        throttling.
+    """
+    return Bypass(path=path, methods=methods, predicate=predicate)
+
+
 def _prep_rules(
-    rules: typing.Iterable[ThrottleRule[typing.Any]],
-) -> typing.Tuple[ThrottleRule[typing.Any], ...]:
+    rules: typing.Iterable[Rule[typing.Any]],
+) -> typing.Tuple[Rule[typing.Any], ...]:
     """
     Sort rules for optimal short-circuit evaluation order.
 
-    Bypass rules (`BypassThrottleRule`) are placed before regular rules
+    Bypass rules (`Bypass`) are placed before regular rules
     because they return False on match, which is the fastest path to skip a throttle.
     Within each tier, rules without predicates come first since path/method
     checks (frozenset lookup + regex) are cheaper than arbitrary async predicates.
 
     The resulting order becomes:
 
-    1. `BypassThrottleRule` without predicate
-    2. `ThrottleRule` without predicate
-    3. `BypassThrottleRule` with predicate
-    4. `ThrottleRule` with predicate
+    1. `Bypass` without predicate
+    2. `Rule` without predicate
+    3. `Bypass` with predicate
+    4. `Rule` with predicate
 
-    :param rules: A sequence of `ThrottleRule` instances to sort.
-    :return: A sorted tuple of `ThrottleRule` instances.
+    :param rules: A sequence of `Rule` instances to sort.
+    :return: A sorted tuple of `Rule` instances.
     """
     if not rules:
         return ()
@@ -292,7 +344,7 @@ class ThrottleRegistry:
         """Set of registered throttle UIDs"""
         self._lock = threading.RLock()
         """Re-entrant lock for thread-safe registry operations"""
-        self._rules: typing.Dict[str, typing.Set[ThrottleRule[typing.Any]]] = {}
+        self._rules: typing.Dict[str, typing.Set[Rule[typing.Any]]] = {}
         """Mapping of throttle UIDs to rules that must pass for the throttle to be applied"""
         self._throttle_refs: typing.Dict[str, weakref.ref] = {}  # type: ignore[type-arg]
         """Weak references to registered throttle instances, keyed by UID"""
@@ -331,7 +383,7 @@ class ThrottleRegistry:
             self._rules.pop(uid, None)
             self._throttle_refs.pop(uid, None)
 
-    def add_rules(self, target_uid: str, /, *rules: ThrottleRule[typing.Any]) -> None:
+    def add_rules(self, target_uid: str, /, *rules: Rule[typing.Any]) -> None:
         """
         Add rules that gate a throttle's application.
 
@@ -339,7 +391,7 @@ class ThrottleRegistry:
         If any rule returns False, the throttle is skipped for that connection.
 
         :param target_uid: The UID of the throttle to attach rules to.
-        :param rules: One or more `ThrottleRule` instances to add.
+        :param rules: One or more `Rule` instances to add.
         :raises ConfigurationError: If `target_uid` is not registered.
         """
         if not rules:
@@ -354,12 +406,12 @@ class ThrottleRegistry:
             else:
                 self._rules[target_uid].update(rules)
 
-    def get_rules(self, uid: str) -> typing.List[ThrottleRule[typing.Any]]:
+    def get_rules(self, uid: str) -> typing.List[Rule[typing.Any]]:
         """
         Get all rules associated with a throttle.
 
         :param uid: The UID of the throttle.
-        :return: A list of `ThrottleRule` instances, or an empty list if none exist.
+        :return: A list of `Rule` instances, or an empty list if none exist.
         """
         with self._lock:
             return list(self._rules.get(uid, []))

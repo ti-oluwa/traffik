@@ -107,7 +107,7 @@ def _reraise_as_backend_error(
     ]
     if inspect.iscoroutinefunction(func):
 
-        async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:  # type: ignore[no-redefined]
+        async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:  # type: ignore[no-redef]
             try:
                 return await func(*args, **kwargs)  # type: ignore
             except asyncio.CancelledError:
@@ -167,14 +167,14 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     Hence, locks should not be implemented implicitly in these methods.
 
     **Note:** All backend operation must be done as fast and efficient as possible and should not block the event loop.
-        Operations like logging should not be done on critical paths to prevent deadlocks or performance issues.
+        Operations like logging should be avoided on critical paths to prevent deadlocks or performance issues.
         Logging degrades performance significantly and should be avoided in backend operations.
 
-    **Warning:** Backend operations are not guaranteed to be thread-safe or process-safe.
+    **Warning:** Backend operations are not always guaranteed to be thread-safe or process-safe.
         Ensure to use locks for operations that require safety across concurrent contexts,
         especially in multi-threaded or multi-process environments.
         Backend initialization and connection management should also be done with care to avoid race conditions.
-        Initilization  and connection management (closing connections) should ideally be done at startup (in the ASGI lifespan event)
+        Initilization and connection management (closing connections) should ideally be done at startup (in the ASGI lifespan event)
         or before entering and/or after leaving a concurrent context to ensure safety and proper resource handling.
     """
 
@@ -382,7 +382,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         local_ttl_factor: float = 0.8,
     ) -> _AsyncLockContext[AsyncLock]:
         """
-        Context manager to acquire a distributed lock for the given key.
+        Get a distributed lock context for the given key.
 
         Note that the `ttl`, `blocking`, and `blocking_timeout` parameters
         default to the backend's settings if not provided. If these parameters
@@ -621,7 +621,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             # Ensure app context attribute exists and set the backend in
             # the app context for retrieval in `get_throttle_backend(...)`.
             # Use `dict()` as default context
-            setattr(app, APP_CONTEXT_ATTR, getattr(app, APP_CONTEXT_ATTR, dict()))  # type: ignore
+            setattr(app, APP_CONTEXT_ATTR, getattr(app, APP_CONTEXT_ATTR, {}))  # type: ignore
             setattr(getattr(app, APP_CONTEXT_ATTR), BACKEND_APP_CONTEXT_KEY, self)  # type: ignore
 
         parent_backend = get_throttle_backend(app)
@@ -634,7 +634,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         # For nested contexts, context is persistent if outer context's backend
         # is the same as this context's backend.
         # This is so the inner context does not clear the outer context's data unintentionally.
-        elif is_inner_ctx is False or parent_backend is not self:
+        elif not is_inner_ctx or parent_backend is not self:
             persistent_ctx = self.persistent
         else:
             persistent_ctx = True
@@ -643,7 +643,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             close_ctx_on_exit = close_on_exit
         else:
             # Context should not close on exit if it is nested inside another context
-            close_ctx_on_exit = is_inner_ctx is False
+            close_ctx_on_exit = not is_inner_ctx
         return _BackendContext(
             backend=self,
             persistent=persistent_ctx,

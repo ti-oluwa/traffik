@@ -37,27 +37,33 @@ automatically from the namespace. Names must:
 - Be at most 30 characters (the OS prepends `/`, and macOS caps at 31)
 - Be non-empty
 
-**Create / attach pattern**
-
-Use the `create` and `attach` class methods (or the `create` bool constructor
-argument) to be explicit about ownership:
 
 ```
-# In the parent process, before forking:
-backend = MultiProcessInMemoryBackend.create(namespace="myapp")
-await backend.initialize()
+# In the parent process, before forking (e.g. gunicorn's `preload_app`):
+backend = MultiProcessInMemoryBackend(namespace="myapp")
+backend.start()  # sync - no event loop needed
 
-# In a worker that attaches to an already-initialised segment:
-backend = MultiProcessInMemoryBackend.attach(namespace="myapp")
-await backend.initialize()
+app = FastAPI(lifespan=backend.lifespan)
 ```
 
-Only the creator calls `unlink()` on close. Attachers call `close()` only.
+Each forked worker inherits a fully-initialized instance automatically -
+shared memory, semaphores, and all. Workers don't call anything to "join" it;
+`lifespan=backend.lifespan` calling `await backend.initialize()` in each
+worker's own event loop is enough (see `start()`/`initialize()` below for why
+that split exists, and why it's still needed even though `start()` already
+ran in the parent).
+
+If a segment with the target name already exists when `start()` runs, it can
+only be a stale leftover from a previous run not an actively-used peer,
+since nothing else can safely attach to it anyway. So it's unlinked and
+recreated rather than reused.
 """
 
 import asyncio
+import logging
 import math
 import multiprocessing
+import os
 import platform
 import re
 import struct
@@ -69,24 +75,24 @@ from multiprocessing.synchronize import Semaphore
 from time import monotonic
 from types import TracebackType
 
-from typing_extensions import Self
-
 from traffik._locks import _NamedLockHandle, _NamedLockPool
 
 _ON_WINDOWS = platform.system() == "Windows"
+
+logger = logging.getLogger(__name__)
 if not _ON_WINDOWS:
     from traffik.backends import _ext as cext  # type: ignore[import]
 else:
-    cext: typing.Any = object()  # type: ignore[import,no-redef]
+    cext: typing.Any = object()  # type: ignore
 
-from traffik.backends.base import ThrottleBackend  # noqa: E402
-from traffik.exceptions import (  # noqa: E402
+from traffik.backends.base import ThrottleBackend  # noqa
+from traffik.exceptions import (  # noqa
     BackendConnectionError,
     BackendError,
     LockAcquisitionError,
     LockReleaseError,
 )
-from traffik.typing import (  # noqa: E402
+from traffik.typing import (  # noqa
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
@@ -573,11 +579,11 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     * 50 req / min: `max_value_size >= 1000` - **default is insufficient**.
     * 100 req / min: `max_value_size >= 2000` - **default is insufficient**.
 
-    Exceeding `max_value_size` raises `traffik.exceptions.BackendError`
+    Exceeding `max_value_size` raises a `BackendError`
     at request time, not at initialisation, so an undersized value will surface
     as a runtime error under load rather than a startup failure.
-    Always calculate the required size before deploying
-    `traffik.strategies.SlidingWindowLogStrategy` with this backend.
+    Always calculate the required size before deploying `SlidingWindowLogStrategy`
+    with this backend.
 
     Other variable-length strategies (leaky-bucket-with-queue, priority-queue,
     cost-based token-bucket, …) store state blobs whose size grows with queue
@@ -589,8 +595,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     Each distinct rate-limit key occupies one slot for the lifetime of its
     current window plus any time before the background cleaner reclaims it.
     Without a cleaner, expired slots accumulate until `max_keys` is reached,
-    at which point `traffik.exceptions.BackendError` is raised on the
-    next write to an affected shard.
+    at which point a `BackendError` is raised on the next write to an affected shard.
 
     Set `cleanup_frequency` in every production deployment:
 
@@ -601,7 +606,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     )
     ```
 
-    The cleaner runs as an :mod:`asyncio` background task in the creating
+    The cleaner runs as an `asyncio` background task in the creating
     process only. It acquires each shard's `slot_map_semaphore` briefly
     while purging confirmed-expired entries; this introduces a small,
     bounded pause on whichever requests happen to touch the same shard at
@@ -646,8 +651,6 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     _EXPIRY_SIZE: typing.ClassVar[int] = 8
     _OCCUPIED_FLAG_SIZE: typing.ClassVar[int] = 1
 
-    _create_semaphore = multiprocessing.Semaphore()
-
     wrap_methods: typing.Tuple[str, ...] = ("clear",)
 
     def __init__(
@@ -673,7 +676,6 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         max_value_size: int = 512,
         cleanup_frequency: typing.Optional[float] = None,
         shared_memory_name: typing.Optional[str] = None,
-        create: typing.Optional[bool] = None,
         max_aba_retries: int = 3,
         executor_max_workers: typing.Optional[int] = None,
         **kwargs: typing.Any,
@@ -717,22 +719,34 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param shared_memory_name: Explicit POSIX shared memory segment name.
             Must match `[A-Za-z0-9_-]`, max 30 characters. Derived from
             *namespace* automatically when `None`.
-        :param create: When `True`, `initialize()` creates and
-            owns the shared-memory segment. When `False` it attaches to an existing segment
-            created by another instance. Prefer the `create` / `attach` class methods for clarity.
-            If `None` (default), it attaches if the shared-memory segment exists, else, it creates its.
         :param max_aba_retries: Maximum number of ABA-race retries before raising
             `BackendError`.
         :param executor_max_workers: Maximum number of OS threads in the pool used
             to run blocking shared-memory operations off the event loop.
-            `None` (default) falls back to `max(number_of_shards, 32)`, matching
-            prior behavior. Size this based on expected peak *per-worker*
+            `None` (default) falls back to `max(number_of_shards, 32)`.
+            Size this based on expected peak *per-worker*
             concurrency, not on `number_of_shards` - the two control unrelated
             things (memory/sharding layout vs. how many blocking ops this
             process can have in flight at once) and don't need to move together.
             Raising this only helps if requests are actually queueing on the
             executor rather than on a shard's semaphore; profile before assuming
             which one you're bottlenecked on.
+
+        **Fork safety:** this backend registers an `os.register_at_fork` hook
+        that rebuilds its `ThreadPoolExecutor` and clears the background
+        cleanup task in each forked child. POSIX `fork()` only duplicates the
+        calling thread. Any other threads that existed in the parent
+        (including this executor's workers) simply don't exist in a forked
+        child, so work submitted to an inherited executor would queue forever
+        with nothing to service it, and an inherited `asyncio.Task` reference
+        belongs to the parent's event loop, not this process's. The hook
+        discards both (nothing to gracefully shut down as their internal state
+        may be inconsistent, copied mid-operation from threads/loops that no
+        longer exist here) and `initialize()` rebuilds them fresh, per-process.
+
+        Semaphores and the shared-memory mapping are unaffected by this and
+        are inherited normally as POSIX `fork()` duplicates those correctly;
+        only threads and event-loop-bound objects are the exception.
         """
         if _ON_WINDOWS:
             raise RuntimeError(
@@ -758,14 +772,14 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         _validate_shared_memory_name(shared_memory_name)
         self._shared_memory_name: str = shared_memory_name
 
-        # If the create arg is unset, only create if the shared memory does not exist
-        if create is not None:
-            self._create = create
-        else:
-            # Ensure that only one tasks/threads/process can auto determine `self._create`
-            # at a time.
-            with self._create_semaphore:
-                self._create = not shared_memory_exists(self._shared_memory_name)
+        # Captured once here so we can tell "the process that actually
+        # called `start()`" apart from "a forked worker that inherited this
+        # object via `fork()`". `fork()` duplicates plain attributes verbatim.
+        # `os.getpid()`, on the other hand, is necessarily different in a
+        # forked child. This is also used in `close()` to make sure only
+        # the real creator ever unlinks the shared memory segment, not
+        # every worker that happens to recycle/shut down.
+        self._creator_pid = os.getpid()
 
         kwargs.pop("persistent", None)
         super().__init__(
@@ -863,14 +877,20 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._slot_map_semaphores: typing.Optional[typing.List[Semaphore]] = None
         self._shard_semaphores: typing.Optional[typing.List[Semaphore]] = None
 
-        self._executor = ThreadPoolExecutor(
-            max_workers=(
-                executor_max_workers
-                if executor_max_workers is not None
-                else max(number_of_shards, 32)
-            ),
-            thread_name_prefix=namespace,
+        self._executor_max_workers = (
+            executor_max_workers
+            if executor_max_workers is not None
+            else max(number_of_shards, 32)
         )
+        self._executor_thread_name_prefix = namespace
+        self._executor = ThreadPoolExecutor(
+            max_workers=self._executor_max_workers,
+            thread_name_prefix=self._executor_thread_name_prefix,
+        )
+        # The executor's worker threads don't exist in a forked child, so it must
+        # be rebuilt there, not inherited as-is. (See the "Fork safety" note in this method's docstring)
+        os.register_at_fork(after_in_child=self._reinit_after_fork)
+
         self._lock_pool_size = lock_pool_size
         self._lock_pool_headroom = lock_pool_headroom
         # Size the byte pool with headroom
@@ -895,199 +915,106 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._cleanup_task: typing.Optional[asyncio.Task[None]] = None
         self._initialized: bool = False
 
-    @classmethod
-    def create(
-        cls,
-        *,
-        namespace: str = "mp-inmemory",
-        identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
-        handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[HTTPConnectionT, typing.Any]
-        ] = None,
-        on_error: typing.Union[
-            typing.Literal["allow", "throttle", "raise"],
-            ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
-        ] = "throttle",
-        lock_blocking: typing.Optional[bool] = None,
-        lock_ttl: typing.Optional[float] = None,
-        lock_blocking_timeout: typing.Optional[float] = None,
-        lock_pool_size: int = 128,
-        lock_pool_headroom: int = 4,
-        max_keys: int = 65536,
-        number_of_shards: int = 64,
-        max_value_size: int = 512,
-        cleanup_frequency: typing.Optional[float] = None,
-        shared_memory_name: typing.Optional[str] = None,
-        executor_max_workers: typing.Optional[int] = None,
-        **kwargs: typing.Any,
-    ) -> Self:
+    def _reinit_after_fork(self) -> None:
         """
-        Create a new backend instance that **owns** the shared memory segment.
+        Hook to rebuild fork-unsafe resources in a freshly-forked child process.
 
-        Call `await instance.initialize()` after construction. Only one
-        process should call `create()` for a given *shared_memory_name* /
-        *namespace* combination. The segment is unlinked when `close()` is
-        called on the creator.
+        Register via `os.register_at_fork(after_in_child=...)` on initialization.
+        Runs in the child immediately after `fork()`, before any other
+        code in that process executes.
 
-        :param namespace: Key prefix for all throttle keys.
-        :param identifier: The connected client identifier generator.
-        :param handle_throttled: The handler to call when the client connection
-            is throttled.
-        :param on_error: Strategy to handle errors during throttling. One of
-            `"allow"`, `"throttle"`, `"raise"`, or a custom callable.
-        :param lock_blocking: Whether named locks block on acquisition.
-        :param lock_ttl: Default TTL for named locks in seconds.
-        :param lock_blocking_timeout: Default maximum wait time for named locks.
-        :param lock_pool_size: Maximum idle named-lock semaphores in the pool.
-        :param max_keys: Maximum distinct live keys across all shards.
-        :param number_of_shards: Number of independent shards.
-        :param max_value_size: Maximum UTF-8 byte length of a stored string.
-        :param cleanup_frequency: Seconds between background cleanup passes.
-        :param shared_memory_name: Explicit POSIX shared memory segment name.
-        :param executor_max_workers: Maximum blocking-operation thread pool size
-            for this process. `None` defaults to `max(number_of_shards, 32)`.
-        :param kwargs: Other keyword arguments passed to the constructor.
-            See `__init__` for details.
-        :return: A new `MultiProcessInMemoryBackend` configured as creator.
+        Two things get discarded here, for the same underlying reason:
+
+        - The inherited `ThreadPoolExecutor` is a shell at this point. Its
+          worker threads existed only in the parent and do not carry over
+          through `fork()` (POSIX `fork()` duplicates only the calling
+          thread). Submitting to it as-is would queue work with no live
+          thread to ever service it.
+        - The inherited `self._cleanup_task` reference belongs to the
+          parent's event loop, not whatever loop this (forked) process ends
+          up running. It isn't running here and can't meaningfully be
+          awaited/cancelled from a different loop.
+
+        Neither is explicitly shut down/cancelled here. Their internal
+        state may be inconsistent, copied mid-operation from a thread/loop
+        that no longer exists in this process, so they're simply discarded.
+        `initialize()` rebuilds both fresh the next time it's called in this
+        process (which `lifespan=backend.lifespan` does automatically on
+        ASGI startup, in each worker's own event loop).
+
+        Semaphores and the shared-memory mapping are untouched by this hook.
+        `fork()` duplicates those correctly, so they're deliberately left
+        alone; only thread- and event-loop-bound state needs rebuilding.
         """
-        return cls(
-            namespace=namespace,
-            identifier=identifier,
-            handle_throttled=handle_throttled,
-            on_error=on_error,
-            lock_blocking=lock_blocking,
-            lock_ttl=lock_ttl,
-            lock_blocking_timeout=lock_blocking_timeout,
-            lock_pool_size=lock_pool_size,
-            lock_pool_headroom=lock_pool_headroom,
-            max_keys=max_keys,
-            number_of_shards=number_of_shards,
-            max_value_size=max_value_size,
-            cleanup_frequency=cleanup_frequency,
-            shared_memory_name=shared_memory_name,
-            executor_max_workers=executor_max_workers,
-            create=True,
-            **kwargs,
+        self._executor = ThreadPoolExecutor(
+            max_workers=self._executor_max_workers,
+            thread_name_prefix=self._executor_thread_name_prefix,
         )
+        self._cleanup_task = None
 
-    @classmethod
-    def attach(
-        cls,
-        *,
-        namespace: str = "mp-inmemory",
-        identifier: typing.Optional[ConnectionIdentifier[HTTPConnectionT]] = None,
-        handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[HTTPConnectionT, typing.Any]
-        ] = None,
-        on_error: typing.Union[
-            typing.Literal["allow", "throttle", "raise"],
-            ThrottleErrorHandler[HTTPConnectionT, typing.Mapping[str, typing.Any]],
-        ] = "throttle",
-        lock_blocking: typing.Optional[bool] = None,
-        lock_ttl: typing.Optional[float] = None,
-        lock_blocking_timeout: typing.Optional[float] = None,
-        lock_pool_size: int = 128,
-        lock_pool_headroom: int = 4,
-        max_keys: int = 65536,
-        number_of_shards: int = 64,
-        max_value_size: int = 512,
-        cleanup_frequency: typing.Optional[float] = None,
-        shared_memory_name: typing.Optional[str] = None,
-        executor_max_workers: typing.Optional[int] = None,
-        **kwargs: typing.Any,
-    ) -> Self:
+    def start(self) -> None:
         """
-        Attach to an **existing** shared memory segment created by another instance.
+        Allocate the shared memory segment, create semaphores, and set up
+        lock pools.
 
-        The *namespace*, *shared_memory_name*, *max_keys*, *number_of_shards*,
-        and *max_value_size* must exactly match those used by the creator, as
-        they determine the segment layout. The segment is **not** unlinked when
-        `close()` is called on an attaching instance.
+        Safe to call multiple times; subsequent calls are no-ops (including
+        from a forked worker that inherited an already-`start()`'d instance
+        from its parent as there's nothing left for it to do here).
 
-        :param namespace: Key prefix - must match the creator'shard_idx value.
-        :param identifier: The connected client identifier generator.
-        :param handle_throttled: The handler to call when the client connection
-            is throttled.
-        :param on_error: Strategy to handle errors during throttling. One of
-            `"allow"`, `"throttle"`, `"raise"`, or a custom callable.
-        :param lock_blocking: Whether named locks block on acquisition.
-        :param lock_ttl: Default release TTL for named locks in seconds.
-        :param lock_blocking_timeout: Default maximum wait time for acquiring named locks.
-        :param lock_pool_size: Maximum number of idle named locks to keep in the pool for reuse.
-            When the pool is exhausted, new locks will be created on demand.
-        :param lock_pool_headroom: The headroom multiplier for the named lock pool.
-            When the number of idle locks in the pool exceeds `lock_pool_size * lock_pool_headroom`,
-            the excess locks will be closed to free up resources.
-            This allows the pool to temporarily grow under high contention while still enforcing an upper
-            bound on resource usage.
-        :param max_keys: Must match the creator'shard_idx value.
-        :param number_of_shards: Must match the creator'shard_idx value.
-        :param max_value_size: Must match the creator'shard_idx value.
-        :param cleanup_frequency: Seconds between background cleanup passes.
-        :param shared_memory_name: Must match the creator'shard_idx value.
-        :param executor_max_workers: Maximum blocking-operation thread pool size
-            for this process. `None` defaults to `max(number_of_shards, 32)`.
-        :param kwargs: Other keyword arguments passed to the constructor.
-            See `__init__` for details.
-        :return: A new `MultiProcessInMemoryBackend` configured as attacher.
-        """
-        return cls(
-            namespace=namespace,
-            identifier=identifier,
-            handle_throttled=handle_throttled,
-            on_error=on_error,
-            lock_blocking=lock_blocking,
-            lock_ttl=lock_ttl,
-            lock_blocking_timeout=lock_blocking_timeout,
-            lock_pool_size=lock_pool_size,
-            lock_pool_headroom=lock_pool_headroom,
-            max_keys=max_keys,
-            number_of_shards=number_of_shards,
-            max_value_size=max_value_size,
-            cleanup_frequency=cleanup_frequency,
-            shared_memory_name=shared_memory_name,
-            executor_max_workers=executor_max_workers,
-            create=False,
-            **kwargs,
-        )
+        This piece of the backend setup is safe to run from a synchronous
+        startup path with no event loop available, e.g. gunicorn's
+        `preload_app=True` phase:
 
-    async def initialize(self) -> None:
-        """
-        Allocate (or attach to) the shared memory segment and create semaphores.
+        ```
+        # Module level, imported once by gunicorn's master before it forks:
+        backend = MultiProcessInMemoryBackend(namespace="myapp")
+        backend.start()
 
-        Safe to call multiple times; subsequent calls are no-ops.
+        app = FastAPI(lifespan=backend.lifespan)
+        ```
 
-        When `create=True` (the default), allocates a new named segment,
-        zeroes it, and writes each shard's initial free-stack header.
+        Every forked worker inherits the result automatically. shared
+        memory, semaphores, lock pools, all of it. Workers don't need to
+        (and shouldn't) call `start()` themselves.
 
-        When `create=False`, opens an existing segment by name. The segment
-        must already have been initialised by a creator instance; no zeroing
-        or header writing is performed.
+        **Note**:
+            This does not start the background cleanup task as `asyncio.create_task`
+            requires a running loop.
+            `initialize()` handles that part, and does need to be called
+            in every process/event loop that uses this backend, workers included
+            - see its docstring for why that's still necessary even though
+            `start()` already ran in the parent.
 
-        Must be called before any read/write operations.
+        If a shared memory segment with this name already exists, it's
+        unlinked and recreated rather than reused. Since nothing can safely
+        attach to a running instance's segment from outside its own fork tree,
+        a pre-existing segment can only be a stale leftover from a previous run,
+        not an actively-used peer, so there's no correctness reason to preserve it,
+        and every reason not to (its layout isn't guaranteed to match this instance's
+        configuration, and none of its semaphores are shared with this process regardless).
         """
         if self._initialized:
             return
 
-        if self._create:
-            if shared_memory_exists(self._shared_memory_name):
-                raise BackendError(
-                    f"Cannot create shared memory. {self._shared_memory_name!r} already exists. "
-                    "Pass `create=False` or `create=None` on instantiation to fix this"
-                )
-            shared_memory = SharedMemory(
-                create=True,
-                name=self._shared_memory_name,
-                size=self._shared_memory_size,
+        if shared_memory_exists(self._shared_memory_name):
+            logger.warning(
+                "Shared memory segment %r already exists. Treating as a "
+                "stale leftover from a previous run (nothing can safely "
+                "attach to a live instance's segment from outside its own "
+                "fork tree) and recreating it.",
+                self._shared_memory_name,
             )
-            buffer = memoryview(shared_memory.buf)  # type: ignore[arg-type]
-            buffer[:] = bytes(self._shared_memory_size)
-        else:
-            shared_memory = SharedMemory(
-                create=False,
-                name=self._shared_memory_name,
-            )
-            buffer = memoryview(shared_memory.buf)  # type: ignore[arg-type]
+            stale = SharedMemory(create=False, name=self._shared_memory_name)
+            stale.close()
+            stale.unlink()
+
+        shared_memory = SharedMemory(
+            create=True,
+            name=self._shared_memory_name,
+            size=self._shared_memory_size,
+        )
+        buffer = memoryview(shared_memory.buf)  # type: ignore[arg-type]
+        buffer[:] = bytes(self._shared_memory_size)
 
         try:
             self._slot_map_semaphores = [
@@ -1099,27 +1026,25 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         except BaseException:
             buffer.release()
             shared_memory.close()
-            if self._create:
-                shared_memory.unlink()
+            shared_memory.unlink()
             raise
 
         self._shared_memory = shared_memory
         self._buffer = buffer
 
-        if self._create:
-            for shard_idx in range(self._number_of_shards):
-                shard_base = shard_idx * self._shard_size
+        for shard_idx in range(self._number_of_shards):
+            shard_base = shard_idx * self._shard_size
+            _UINT32_STRUCT.pack_into(
+                buffer,
+                shard_base + _HEADER_FREE_COUNT_OFFSET,
+                self._max_keys_per_shard,
+            )
+            for i in range(self._max_keys_per_shard):
                 _UINT32_STRUCT.pack_into(
                     buffer,
-                    shard_base + _HEADER_FREE_COUNT_OFFSET,
-                    self._max_keys_per_shard,
+                    shard_base + self._shard_free_stack_offset + i * 4,
+                    self._max_keys_per_shard - 1 - i,
                 )
-                for i in range(self._max_keys_per_shard):
-                    _UINT32_STRUCT.pack_into(
-                        buffer,
-                        shard_base + self._shard_free_stack_offset + i * 4,
-                        self._max_keys_per_shard - 1 - i,
-                    )
 
         buffer[
             self._lock_bytes_offset : self._lock_bytes_offset
@@ -1176,15 +1101,35 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             self._reentrant_lock_pool.populate()
             self._non_reentrant_lock_pool.populate()
 
-        if self._cleanup_frequency is not None:
-            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+        # Just incase the executor was shutdown and the backend is
+        # being restarted/reinitialized again.
+        if self._executor._shutdown:
+            self._executor = ThreadPoolExecutor(
+                max_workers=self._executor_max_workers,
+                thread_name_prefix=self._executor_thread_name_prefix,
+            )
 
         self._initialized = True
 
+    async def initialize(self) -> None:
+        """
+        Ensure the backend is ready for use in the current process and event loop.
+
+        Calls `start()` (a no-op if already done, say by the parent
+        process before fork) and makes sure this process's background
+        cleanup task is running in this process's own event loop.
+        """
+        self.start()
+
+        if self._cleanup_frequency is not None and (
+            self._cleanup_task is None or self._cleanup_task.done()
+        ):
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+
     async def ready(self) -> bool:
         """
-        Return `True` if the backend has been initialised and the shared
-        memory segment is open.
+        Return `True` if the backend has been initialised and the
+        shared memory segment is open.
         """
         return (
             self._initialized
@@ -1702,7 +1647,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         Overwrite only the int64 counter field, preserving generation, expiry,
         and occupied flag. Sets `slot_kind` to `_INT_SLOT_KIND`.
 
-        Use this on the fast path when the slot already exists and only the
+        Used on the fast path when the slot already exists and only the
         counter value changes.
 
         Must be called with the shard's `shard_semaphore` held.
@@ -1853,13 +1798,15 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         Synchronous delete.
 
         Lock order: `shard_semaphores[shard_idx]` first, then
-        `slot_map_semaphores[shard_idx]`. This is the exception to the
-        normal ordering rule and is safe here because `_delete` never calls
-        `_free_stack_pop`. Holding the shard semaphore while clearing the
+        `slot_map_semaphores[shard_idx]`.
+
+        This is the exception to the normal ordering rule and is safe here
+        because `_delete` never calls `_free_stack_pop`.
+        Holding the shard semaphore while clearing the
         slot prevents a concurrent reader from seeing the slot as occupied
         after it has been returned to the free pool.
 
-        No ABA retry needed: both locks are held simultaneously for the entire
+        No ABA retry needed as both locks are held simultaneously for the entire
         mutation.
 
         :param key: The throttle key to delete.
@@ -2209,10 +2156,12 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     if hash_table_result is None:
                         slot_idx = self._free_stack_pop(buffer, shard_base)
                         self._hash_table_upsert(buffer, shard_base, key_bytes, slot_idx)
-                        gen = self._read_slot_generation(buffer, shard_base, slot_idx)
+                        generation = self._read_slot_generation(
+                            buffer, shard_base, slot_idx
+                        )
                     else:
-                        slot_idx, gen = hash_table_result
-                    slot_assignments[key] = (slot_idx, gen)
+                        slot_idx, generation = hash_table_result
+                    slot_assignments[key] = (slot_idx, generation)
             finally:
                 self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
 
@@ -2225,10 +2174,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
                 try:
                     for key, val in shard_to_items[shard_idx]:
-                        slot_idx, gen = slot_assignments[key]
+                        slot_idx, generation = slot_assignments[key]
                         if (
                             self._read_slot_generation(buffer, shard_base, slot_idx)
-                            != gen
+                            != generation
                         ):
                             aba_keys.append(key)
                             continue
@@ -2263,12 +2212,12 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                             self._hash_table_upsert(
                                 buffer, shard_base, key_bytes, slot_idx
                             )
-                            gen = self._read_slot_generation(
+                            generation = self._read_slot_generation(
                                 buffer, shard_base, slot_idx
                             )
                         else:
-                            slot_idx, gen = hash_table_result
-                        slot_assignments[key] = (slot_idx, gen)
+                            slot_idx, generation = hash_table_result
+                        slot_assignments[key] = (slot_idx, generation)
                 finally:
                     self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
 
@@ -2525,12 +2474,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         shard_to_items: typing.Dict[int, typing.List[typing.Tuple[str, str]]] = {}
         for key, val in items.items():
-            shard_to_items.setdefault(self._shard_idx_for_key(key), []).append(
-                (
-                    key,
-                    val,
-                )
-            )
+            shard_to_items.setdefault(self._shard_idx_for_key(key), []).append((
+                key,
+                val,
+            ))
 
         await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
             self._executor, self._multi_set, shard_to_items, expire
@@ -2632,9 +2579,11 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         Shut down this backend instance.
 
         Cancels the cleanup task, releases the buffer view, and closes the
-        shared memory handle. If this instance is the creator (`create=True`),
-        the segment is also unlinked (destroyed). Attaching instances only
-        close their handle; they do not unlink.
+        shared memory handle. If this is the same process that actually
+        called `start()` (not a forked worker that merely inherited an
+        already-`start()`'d instance), the segment is also unlinked
+        (destroyed). Forked workers only close their local handle, they
+        never unlink.
 
         Closes the named lock pool, and shuts down the thread pool executor.
         """
@@ -2666,8 +2615,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         if self._shared_memory is not None:
             self._shared_memory.close()
-            if self._create:
-                # Clear data and discard shared memory only if we created it
+            if os.getpid() == self._creator_pid:
+                # Clear data and discard shared memory only from the actual
+                # process that called `start()`.
                 self._shared_memory.unlink()
             self._shared_memory = None
 

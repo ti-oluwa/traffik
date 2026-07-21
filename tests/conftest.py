@@ -4,6 +4,7 @@ import datetime
 import logging
 import multiprocessing
 import os
+import platform
 import sys
 import typing
 
@@ -132,7 +133,7 @@ def get_multiprocess_backend(namespace: str, persistent: bool) -> ThrottleBacken
     )
 
 
-MAYBE_UNIX = sys.platform != "windows" and sys.platform != "cygwin"
+MAYBE_POSIX = platform.system() != "Windows"
 BACKEND_FACTORIES: typing.List[
     typing.Callable[[str, bool], ThrottleBackend[typing.Any, typing.Any]]
 ] = [get_inmemory_backend, get_aiomcache_backend, get_aioredis_backend]
@@ -140,12 +141,12 @@ BACKEND_FACTORIES: typing.List[
 if sys.version_info >= (3, 10):
     BACKEND_FACTORIES.append(get_coredis_backend)
 
-if MAYBE_UNIX:
+if MAYBE_POSIX:
     supports_fork = "fork" in multiprocessing.get_all_start_methods()
     BACKEND_FACTORIES.append(get_emcache_backend)
 
-    # if supports_fork:
-    #     BACKEND_FACTORIES.append(get_multiprocess_backend)
+    if supports_fork:
+        BACKEND_FACTORIES.append(get_multiprocess_backend)
 
     if supports_fork and multiprocessing.get_start_method(allow_none=True) != "fork":
         multiprocessing.set_start_method("fork", force=True)

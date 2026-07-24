@@ -1,4 +1,12 @@
-# Traffik
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="Traffik Logo" width="200">
+</p>
+
+<h1 align="center">Traffik</h1>
+
+<h3 align="center">
+  <strong>Rate limiting for Starlette and FastAPI applications</strong>
+</h3>
 
 [![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
 [![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/)

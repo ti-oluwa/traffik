@@ -39,7 +39,7 @@ registry = ThrottleRegistry()
 # Automatically registered on construction, unregistered on GC
 throttle = HTTPThrottle("api:v1", rate="100/min", registry=registry)
 
-registry.exist("api:v1")   # True
+registry.exists("api:v1")   # True
 ```
 
 ---
@@ -90,7 +90,7 @@ See [Throttle Rules & Wildcards](rules.md) for the full path-matching and predic
 Call `disable()` / `enable()` directly on the throttle instance. Both are async and acquire the throttle's internal update lock, so they are safe to call concurrently with `hit()`.
 
 ```python
-# Disable a throttle — subsequent hit() calls return immediately without consuming quota
+# Disable a throttle - subsequent hit() calls return immediately without consuming quota
 await throttle.disable()
 
 # Check status
@@ -134,7 +134,7 @@ Both methods return `True` if the throttle was found and acted upon, or `False` 
 `disable_all()` and `enable_all()` iterate every live throttle in the registry:
 
 ```python
-# Emergency kill switch — let all traffic through
+# Emergency kill switch - let all traffic through
 await registry.disable_all()
 
 # Resume normal throttling
@@ -191,7 +191,7 @@ from traffik.registry import ThrottleRegistry
 registry = ThrottleRegistry()
 
 # Check if a UID is registered
-registry.exist("api:v1")          # True / False
+registry.exists("api:v1")          # True / False
 
 # Retrieve attached rules
 rules = registry.get_rules("api:v1")   # List[ThrottleRule]
@@ -209,7 +209,7 @@ registry.clear()
 
 | Method / attribute | What it does |
 |---|---|
-| `registry.exist(uid)` | Check if a UID is registered |
+| `registry.exists(uid)` | Check if a UID is registered |
 | `registry.add_rules(uid, *rules)` | Attach rules to a throttle |
 | `registry.get_rules(uid)` | Retrieve all rules for a throttle |
 | `registry.get_throttle(uid)` | Return the live throttle instance, or `None` |
@@ -229,5 +229,3 @@ registry.clear()
 | `throttle.update_handle_throttled(h)` | Swap throttled-response handler atomically |
 | `throttle.update_headers(h)` | Replace header collection atomically |
 | `throttle.update_identifier(fn)` | Replace identifier function atomically |
-
-

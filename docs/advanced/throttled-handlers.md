@@ -31,7 +31,7 @@ The WebSocket default message looks like this:
 
 ## Handler Signature
 
-All throttled handlers — HTTP and WebSocket — share the same signature:
+All throttled handlers - HTTP and WebSocket - share the same signature:
 
 ```python
 async def handler(
@@ -145,7 +145,7 @@ async def ws_rate_limit_handler(websocket, wait_ms, throttle, context):
             "retry_after": retry_after,
             "throttle": throttle.uid,
         })
-    # Don't raise — just return. The connection stays alive.
+    # Don't raise - just return. The connection stays alive.
 ```
 
 !!! tip "Performance note"
@@ -184,7 +184,7 @@ async def ws_close_handler(websocket, wait_ms, throttle, context):
         await websocket.close(code=1008, reason=f"Rate limit exceeded. Retry after {retry_after}s.")
 ```
 
-WebSocket close code `1008` is the standard "Policy Violation" code — the right semantic choice for rate limiting.
+WebSocket close code `1008` is the standard "Policy Violation" code - the right semantic choice for rate limiting.
 
 ---
 

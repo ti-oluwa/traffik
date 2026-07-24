@@ -1,6 +1,6 @@
 # Testing
 
-Testing rate-limited endpoints should be fast, isolated, and deterministic. Traffik makes this easy with `InMemoryBackend` — no Redis, no Memcached, no Docker required for unit tests.
+Testing rate-limited endpoints should be fast, isolated, and deterministic. Traffik makes this easy with `InMemoryBackend` - no Redis, no Memcached, no Docker required for unit tests.
 
 ---
 

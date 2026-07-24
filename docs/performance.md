@@ -13,7 +13,7 @@ Before diving into specifics, here are the changes that have the most impact for
 - [ ] Use connection pooling: `MemcachedBackend(pool_size=20)`
 - [ ] Don't call DB/external APIs inside identifier functions
 - [ ] Exempt trusted internal clients with `EXEMPTED` (zero backend overhead)
-- [ ] Keep `cache_ids=True` (default) — especially for WebSockets
+- [ ] Keep `cache_ids=True` (default) - especially for WebSockets
 
 ---
 
@@ -50,13 +50,13 @@ Strategies differ significantly in performance. Here's the order from fastest to
 
 | Strategy | Overhead | Accuracy | Best For |
 |---|---|---|---|
-| `FixedWindow` (>= 1s window) | Minimal — single atomic op, no lock | Good | General APIs, high throughput |
-| `SlidingWindowCounter` | Low — two atomic ops | Better | When burst boundaries matter |
-| `TokenBucket` | Medium — lock + read/write | Excellent (burst-aware) | APIs with natural burst patterns |
-| `LeakyBucket` | Medium — lock + read/write | Excellent (smooth) | Enforcing constant rate |
-| `SlidingWindowLog` | High — serialization + cleanup | Perfect | Strict correctness, lower traffic |
+| `FixedWindow` (>= 1s window) | Minimal - single atomic op, no lock | Good | General APIs, high throughput |
+| `SlidingWindowCounter` | Low - two atomic ops | Better | When burst boundaries matter |
+| `TokenBucket` | Medium - lock + read/write | Excellent (burst-aware) | APIs with natural burst patterns |
+| `LeakyBucket` | Medium - lock + read/write | Excellent (smooth) | Enforcing constant rate |
+| `SlidingWindowLog` | High - serialization + cleanup | Perfect | Strict correctness, lower traffic |
 
-The default strategy is `FixedWindow`. For most applications, it's the right choice — it's accurate enough, and the performance is hard to beat.
+The default strategy is `FixedWindow`. For most applications, it's the right choice - it's accurate enough, and the performance is hard to beat.
 
 ```python
 from traffik import HTTPThrottle
@@ -91,7 +91,7 @@ A good rule of thumb: set `number_of_shards` to roughly your expected peak concu
 
 ## 4. Use Connection Pooling (Memcached)
 
-Every throttle check requires a backend operation. Without connection pooling, each operation opens and closes a network connection — this is expensive. Use pooling:
+Every throttle check requires a backend operation. Without connection pooling, each operation opens and closes a network connection - this is expensive. Use pooling:
 
 ```python
 from traffik.backends.memcached import MemcachedBackend
@@ -137,7 +137,7 @@ If you need to look up user information, cache it in the request state after the
 This sounds minor but it isn't. Logging is synchronous I/O and can block the async event loop under load.
 
 ```python
-# This is inside the hot path — every request goes through here
+# This is inside the hot path - every request goes through here
 async def my_backend_increment(self, key: str, amount: int = 1) -> int:
     # BAD: logging on every request
     logger.debug(f"Incrementing {key} by {amount}")
@@ -156,7 +156,7 @@ According to our benchmarks, adding `logger.debug()` calls inside backend operat
 
 ## 7. Exempt Trusted Clients with EXEMPTED
 
-For trusted internal services, health check endpoints, or admin users, returning `EXEMPTED` from the identifier completely bypasses throttling — no counter read, no counter write, no lock. Zero overhead:
+For trusted internal services, health check endpoints, or admin users, returning `EXEMPTED` from the identifier completely bypasses throttling - no counter read, no counter write, no lock. Zero overhead:
 
 ```python
 from traffik import EXEMPTED
@@ -175,7 +175,7 @@ async def smart_identifier(request: Request):
 throttle = HTTPThrottle("api", rate="1000/min", identifier=smart_identifier)
 ```
 
-This is especially useful for health check endpoints that get hammered by load balancers. There's no point counting those requests — exempt them and save the backend round-trip.
+This is especially useful for health check endpoints that get hammered by load balancers. There's no point counting those requests - exempt them and save the backend round-trip.
 
 ---
 
@@ -184,10 +184,10 @@ This is especially useful for health check endpoints that get hammered by load b
 `cache_ids=True` is the default and caches the computed identifier on the connection's `state` object. For WebSocket connections especially, this prevents recomputing the identifier on every message:
 
 ```python
-# cache_ids=True (default) — computes identifier once, caches on connection.state
+# cache_ids=True (default) - computes identifier once, caches on connection.state
 throttle = HTTPThrottle("api", rate="100/min", cache_ids=True)
 
-# cache_ids=False — recomputes identifier on every hit
+# cache_ids=False - recomputes identifier on every hit
 throttle = HTTPThrottle("api", rate="100/min", cache_ids=False)
 ```
 
@@ -207,7 +207,7 @@ from traffik.middleware import ThrottleMiddleware
 app.add_middleware(
     ThrottleMiddleware,
     throttles=[burst_throttle, sustained_throttle],
-    # cheap_first=True is the default — throttles are automatically sorted
+    # cheap_first=True is the default - throttles are automatically sorted
 )
 ```
 
@@ -217,7 +217,7 @@ Traffik's middleware already applies `cheap_first` ordering by default, so this 
 
 ## 10. Avoid Sub-Second Rate Windows in Production
 
-Sub-second windows (e.g., `"100/500ms"`, `"10/100ms"`) trigger locking in `FixedWindow` and `SlidingWindowCounter` — even when they would otherwise be lock-free. This is necessary for accuracy at millisecond precision, but it adds distributed lock overhead on every request.
+Sub-second windows (e.g., `"100/500ms"`, `"10/100ms"`) trigger locking in `FixedWindow` and `SlidingWindowCounter` - even when they would otherwise be lock-free. This is necessary for accuracy at millisecond precision, but it adds distributed lock overhead on every request.
 
 ```python
 # Lock-free: uses atomic increment_with_ttl only

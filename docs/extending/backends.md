@@ -1,6 +1,6 @@
 # Building Custom Backends
 
-Traffik ships with InMemory, Redis, and Memcached backends. Those cover the vast majority of use cases. But if you have a custom storage layer — DynamoDB, Cassandra, a SQL database, an in-house cache — you can plug it in by subclassing `ThrottleBackend`.
+Traffik ships with InMemory, Redis, and Memcached backends. Those cover the vast majority of use cases. But if you have a custom storage layer - DynamoDB, Cassandra, a SQL database, an in-house cache - you can plug it in by subclassing `ThrottleBackend`.
 
 The contract is well-defined, the base class handles a lot of the plumbing for you, and you only need to implement the storage operations themselves.
 
@@ -17,8 +17,8 @@ class CustomBackend(ThrottleBackend[YourConnectionType, HTTPConnection]):
 
 The two type parameters are:
 
-- `YourConnectionType` — the type of your underlying storage connection (e.g., `aiohttp.ClientSession`, `asyncpg.Pool`, your own client class)
-- `HTTPConnection` — the Starlette HTTP connection type (`Request`, `WebSocket`, or `HTTPConnection` for both)
+- `YourConnectionType` - the type of your underlying storage connection (e.g., `aiohttp.ClientSession`, `asyncpg.Pool`, your own client class)
+- `HTTPConnection` - the Starlette HTTP connection type (`Request`, `WebSocket`, or `HTTPConnection` for both)
 
 ---
 
@@ -107,7 +107,7 @@ async def increment_with_ttl(
 
 ### `multi_get()`
 
-Batch read — called by `SlidingWindowCounter` and the stats system:
+Batch read. Called by `SlidingWindowCounter` and the stats system:
 
 ```python
 async def multi_get(self, *keys: str) -> List[Optional[str]]:
@@ -117,7 +117,7 @@ async def multi_get(self, *keys: str) -> List[Optional[str]]:
 
 ### `multi_set()`
 
-Batch write — called during window resets in sub-second strategies:
+Batch write. Called during window resets in sub-second strategies:
 
 ```python
 async def multi_set(
@@ -137,7 +137,7 @@ async def multi_set(
 
 ## Full Example: Simple In-Process Dictionary Backend
 
-Here's a complete, minimal custom backend using a plain Python dict (for illustration purposes — don't use this in production):
+Here's a complete, minimal custom backend using a plain Python dict (for illustration purposes. Don't use this in production):
 
 ```python
 import asyncio
@@ -291,7 +291,7 @@ class PooledBackend(ThrottleBackend):
         self.connection = await create_pool(self._dsn, max_size=self._pool_size)
 
     async def close(self) -> None:
-        if self.connection:
+        if self.connection is not None:
             await self.connection.close()
 ```
 
@@ -305,9 +305,9 @@ class PooledBackend(ThrottleBackend):
 Distributed locks are the hardest part of a custom backend. A few things to keep in mind:
 
 - **TTL is critical**: Locks must expire automatically. If a worker dies while holding a lock, a TTL prevents permanent deadlock.
-- **Non-blocking mode**: Implement `acquire(blocking=False)` properly — callers use this to avoid waiting for a lock.
+- **Non-blocking mode**: Implement `acquire(blocking=False)` properly - callers use this to avoid waiting for a lock.
 - **Blocking timeout**: `acquire(blocking_timeout=5.0)` should give up after 5 seconds rather than waiting forever.
-- **Context manager support**: The base class wraps `get_lock()` in an `asynccontextmanager` — your lock just needs the `acquire/release` protocol.
+- **Context manager support**: The base class wraps `get_lock()` in an `asynccontextmanager` - your lock just needs the `acquire/release` protocol.
 
 ---
 

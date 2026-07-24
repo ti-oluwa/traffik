@@ -6,10 +6,10 @@ Sometimes you need the throttle to behave differently based on runtime informati
 
 ## When to use direct usage
 
-- **Dynamic cost** — the cost of a request depends on something you compute at runtime (e.g., payload size, number of items).
-- **Multi-step workflows** — you want to consume quota only after a successful operation, or conditionally skip throttling based on an intermediate result.
-- **Conditional throttling** — different branches of your handler have different rate limit semantics.
-- **Per-message WebSocket throttling** — you want to throttle each message inside an established WebSocket connection, not just the connection attempt.
+- **Dynamic cost** - the cost of a request depends on something you compute at runtime (e.g., payload size, number of items).
+- **Multi-step workflows** - you want to consume quota only after a successful operation, or conditionally skip throttling based on an intermediate result.
+- **Conditional throttling** - different branches of your handler have different rate limit semantics.
+- **Per-message WebSocket throttling** - you want to throttle each message inside an established WebSocket connection, not just the connection attempt.
 
 For simpler cases, [dependency injection](dependencies.md) or [decorators](decorators.md) are usually less code.
 
@@ -131,7 +131,7 @@ async def export_data(request: Request):
             detail=f"Rate limit would be exceeded. This request costs {cost} units.",
         )
 
-    # Quota looks sufficient — proceed with the expensive operation
+    # Quota looks sufficient - proceed with the expensive operation
     result = await run_export(body)
 
     # Consume quota now that the operation completed
@@ -197,7 +197,7 @@ async def get_data(request: Request):
 
 ---
 
-## WebSocket: `is_throttled(websocket)` — check state after hit
+## WebSocket: `is_throttled(websocket)` - check state after hit
 
 For WebSocket connections, `hit()` doesn't raise an exception on throttle by default. Instead it sends a `rate_limit` JSON message to the client and marks the connection state. Use `is_throttled()` to check whether the last hit was throttled.
 
@@ -276,11 +276,9 @@ async def process_batch(request: Request):
     # Run the actual processing
     results = await process_items(items)
 
-    # Consume quota — actual cost may differ if some items failed
+    # Consume quota - actual cost may differ if some items failed
     actual_cost = len(results)
     await batch_throttle.hit(request, cost=actual_cost)
 
     return {"processed": actual_cost, "results": results}
 ```
-
-

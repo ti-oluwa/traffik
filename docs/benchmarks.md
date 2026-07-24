@@ -1,11 +1,11 @@
 # Benchmarks
 
-Numbers, glorious numbers. This page documents benchmark results for Traffik across a wide range of scenarios — HTTP dependencies, middleware, WebSocket, and the overhead of specific features like response headers and throttle rules.
+Numbers, glorious numbers. This page documents benchmark results for Traffik across a wide range of scenarios - HTTP dependencies, middleware, WebSocket, and the overhead of specific features like response headers and throttle rules.
 
-The headline: Traffik wins on throughput in most scenarios — faster across the majority of backends and integration patterns, with both libraries achieving correct throttling when state is properly managed.
+The headline: Traffik wins on throughput in most scenarios - faster across the majority of backends and integration patterns, with both libraries achieving correct throttling when state is properly managed.
 
 !!! note "Run them yourself"
-    All benchmark code lives in the `benchmarks/` directory. Every table and chart here was produced by running those scripts. Numbers will differ on your hardware — run your own suite to get figures that reflect your setup.
+    All benchmark code lives in the `benchmarks/` directory. Every table and chart here was produced by running those scripts. Numbers will differ on your hardware - run your own suite to get figures that reflect your setup.
 
 ---
 
@@ -16,7 +16,7 @@ Benchmarks were run on:
 - **Machine**: 8-core CPU (WSL2), 16 GB RAM
 - **Python**: 3.9.22
 - **Backend versions**: Redis v6.2, aiomcache v0.8.2
-- **Comparison**: [SlowAPI](https://github.com/laurentS/slowapi) — a popular FastAPI rate limiter
+- **Comparison**: [SlowAPI](https://github.com/laurentS/slowapi) - a popular FastAPI rate limiter
 - **Test client**: `httpx2.AsyncClient` with `ASGITransport` (in-process, no real network)
 - **Iterations**: 5 per scenario (results averaged)
 - **Concurrency**: batches of 50 concurrent requests unless noted otherwise
@@ -25,9 +25,9 @@ Benchmarks were run on:
 
 ## HTTP Dependency Mode
 
-Throttle applied via `Depends(throttle)` on individual endpoints — the most common integration pattern.
+Throttle applied via `Depends(throttle)` on individual endpoints - the most common integration pattern.
 
-### Throughput (req/s) — Higher is better
+### Throughput (req/s) - Higher is better
 
 #### InMemory Backend
 
@@ -38,7 +38,7 @@ Throttle applied via `Depends(throttle)` on individual endpoints — the most co
 | Sustained load (500 req, 50 concurrent) | 412 | 1,904 | −78% |
 | Burst (100 req, 2× limit) | 1,509 | 1,091 | **+38%** |
 
-Traffik wins decisively on scenarios that involve throttling (high load, burst). The sustained load gap is an artefact of the benchmark, not a real-world concern: all 50 concurrent requests share the same identifier key, so they all queue on the same InMemory shard lock. In production, different users produce different keys that distribute across separate shards with no contention. This effect is specific to the InMemory backend — notice that Redis and Memcached (below) show no such gap under sustained load.
+Traffik wins decisively on scenarios that involve throttling (high load, burst). The sustained load gap is an artefact of the benchmark, not a real-world concern: all 50 concurrent requests share the same identifier key, so they all queue on the same InMemory shard lock. In production, different users produce different keys that distribute across separate shards with no contention. This effect is specific to the InMemory backend - notice that Redis and Memcached (below) show no such gap under sustained load.
 
 #### Redis Backend
 
@@ -60,9 +60,9 @@ Traffik wins decisively on scenarios that involve throttling (high load, burst).
 
 Traffik and SlowAPI show competitive performance on Memcached, with each winning 2 out of 4 scenarios. Traffik maintains an edge on sustained load and burst scenarios, while SlowAPI performs slightly better on low and high load tests.
 
-### Latency Percentiles — Lower is better
+### Latency Percentiles - Lower is better
 
-#### InMemory — High Load (200 req, 50% throttled)
+#### InMemory - High Load (200 req, 50% throttled)
 
 | Percentile | Traffik | SlowAPI |
 | --- | --- | --- |
@@ -70,7 +70,7 @@ Traffik and SlowAPI show competitive performance on Memcached, with each winning
 | P95 | 0.93ms | 1.86ms |
 | P99 | 1.85ms | 2.97ms |
 
-#### Redis — High Load (200 req, 50% throttled)
+#### Redis - High Load (200 req, 50% throttled)
 
 | Percentile | Traffik | SlowAPI |
 | --- | --- | --- |
@@ -78,7 +78,7 @@ Traffik and SlowAPI show competitive performance on Memcached, with each winning
 | P95 | 1.45ms | 1.82ms |
 | P99 | 2.99ms | 3.19ms |
 
-#### Memcached — High Load (200 req, 50% throttled)
+#### Memcached - High Load (200 req, 50% throttled)
 
 | Percentile | Traffik | SlowAPI |
 | --- | --- | --- |
@@ -86,13 +86,13 @@ Traffik and SlowAPI show competitive performance on Memcached, with each winning
 | P95 | 1.70ms | 1.86ms |
 | P99 | 3.89ms | 2.88ms |
 
-Traffik's tail latency (P95, P99) is mostly lower. Under load, Traffik's operations reduce variance because there's no retry-on-conflict — the lock serialises, computes, and returns.
+Traffik's tail latency (P95, P99) is mostly lower. Under load, Traffik's operations reduce variance because there's no retry-on-conflict - the lock serialises, computes, and returns.
 
 ---
 
 ## Middleware Mode
 
-Throttle applied via `ThrottleMiddleware` with `MiddlewareThrottle` entries — the pattern used when you want to rate-limit without modifying route handlers.
+Throttle applied via `ThrottleMiddleware` with `MiddlewareThrottle` entries - the pattern used when you want to rate-limit without modifying route handlers.
 
 ### Throughput (req/s)
 
@@ -104,7 +104,7 @@ Throttle applied via `ThrottleMiddleware` with `MiddlewareThrottle` entries — 
 | Burst (100 req, 2× limit) | 1,099 | 1,052 | +4% |
 | Selective throttling (mixed paths) | 2,264 | 1,601 | **+41%** |
 
-Traffik wins 4 out of 5 middleware scenarios. The sustained load gap follows the same pattern as dependency mode — all benchmark requests share one identifier key, causing single-shard lock contention on the InMemory backend. In production with diverse user keys, this contention does not occur.
+Traffik wins 4 out of 5 middleware scenarios. The sustained load gap follows the same pattern as dependency mode - all benchmark requests share one identifier key, causing single-shard lock contention on the InMemory backend. In production with diverse user keys, this contention does not occur.
 
 ### Selective throttling
 
@@ -133,7 +133,7 @@ Each test sends 150 fully concurrent requests (across 5 iterations = 750 total) 
 | --- | --- | --- | --- |
 | Allowed | 500 | 500 | 500 |
 | Throttled | 250 | 250 | 250 |
-| Within expected range | Yes | Yes | — |
+| Within expected range | Yes | Yes | - |
 
 Both libraries achieve perfect correctness when backend state is flushed between iterations.
 
@@ -145,7 +145,7 @@ Both libraries achieve perfect correctness when backend state is flushed between
 | --- | --- | --- | --- |
 | Allowed | 5,000 | 5,000 | ~5,000 |
 | Throttled | 1,000 | 1,000 | ~1,000 |
-| Within expected range | Yes | Yes | — |
+| Within expected range | Yes | Yes | - |
 
 ### Success rate across scenarios (Redis)
 
@@ -205,9 +205,9 @@ xychart-beta
 | GCRA | 1,750 | 0.42ms | 1.35ms | 2.02ms | * |
 
 !!! note "GCRA strict rate smoothing"
-    GCRA (Generic Cell Rate Algorithm) enforces a strict arrival interval between requests. With a rate of `100/60s`, GCRA expects at least 0.6s between requests. Requests that arrive faster are rejected — this is by design, not a bug. GCRA is ideal when you need smooth, evenly-spaced traffic (e.g. upstream API calls) rather than bursty allowances. Its throughput is high, but success rate in burst benchmarks is low (~1–2%) because most requests arrive faster than the computed emission interval.
+    GCRA (Generic Cell Rate Algorithm) enforces a strict arrival interval between requests. With a rate of `100/60s`, GCRA expects at least 0.6s between requests. Requests that arrive faster are rejected - this is by design, not a bug. GCRA is ideal when you need smooth, evenly-spaced traffic (e.g. upstream API calls) rather than bursty allowances. Its throughput is high, but success rate in burst benchmarks is low (~1–2%) because most requests arrive faster than the computed emission interval.
 
-`SlidingWindowLog` is the most accurate (100% — it stores every request timestamp), but it's also the most memory-hungry and the slowest due to the log scan. `SlidingWindowCounter` hits 100% correctness in practice with much lower overhead by using a weighted counter approximation instead of a full log.
+`SlidingWindowLog` is the most accurate (100% - it stores every request timestamp), but it's also the most memory-hungry and the slowest due to the log scan. `SlidingWindowCounter` hits 100% correctness in practice with much lower overhead by using a weighted counter approximation instead of a full log.
 
 ---
 
@@ -221,13 +221,13 @@ Adding response headers has negligible cost. The overhead is within noise margin
 
 | Configuration | req/s | vs. baseline | P50 | P99 |
 | --- | --- | --- | --- | --- |
-| No headers (baseline) | 401 | — | 0.37ms | 2.06ms |
+| No headers (baseline) | 401 | - | 0.37ms | 2.06ms |
 | `DEFAULT_HEADERS_ALWAYS` (3 static+dynamic) | 408 | +1.8% | 0.36ms | 1.60ms |
 | `DEFAULT_HEADERS_THROTTLED` (only on 429) | 409 | +1.9% | 0.36ms | 1.68ms |
 | 3 custom headers (dynamic resolvers) | 408 | +1.7% | 0.36ms | 1.67ms |
 | 8 headers (4 dynamic resolvers) | 411 | +2.6% | 0.35ms | 1.64ms |
 
-Takeaway: Headers add effectively zero overhead — the differences are within measurement noise. Even 8 headers with 4 dynamic resolvers don't produce a measurable performance impact.
+Takeaway: Headers add effectively zero overhead - the differences are within measurement noise. Even 8 headers with 4 dynamic resolvers don't produce a measurable performance impact.
 
 !!! tip "Minimize resolver overhead"
     Static header values (plain strings) are cheaper than dynamic resolver functions. Use static values where you can, and dynamic resolvers only when you need per-request data like `hits_remaining` or `reset_after`.
@@ -244,7 +244,7 @@ Registry evaluation runs on every request when rules are configured. The overhea
 
 | Configuration | req/s | vs. baseline | P50 | P99 |
 | --- | --- | --- | --- | --- |
-| No rules (baseline) | 412 | — | 0.36ms | 1.39ms |
+| No rules (baseline) | 412 | - | 0.36ms | 1.39ms |
 | Single `ThrottleRule` (exact path) | 408 | −1.0% | 0.36ms | 1.77ms |
 | `ThrottleRule` (`*` single-segment wildcard) | 410 | −0.5% | 0.36ms | 1.67ms |
 | `ThrottleRule` (`**` deep wildcard) | 409 | −0.6% | 0.36ms | 1.55ms |
@@ -252,7 +252,7 @@ Registry evaluation runs on every request when rules are configured. The overhea
 | 10 mixed rules (realistic registry) | 417 | +1.3% | 0.32ms | 1.47ms |
 | Compiled `re.Pattern` rule | 407 | −1.0% | 0.37ms | 1.62ms |
 
-Takeaway: Even a registry of 10 mixed rules does not add overhead due to early short-circuiting. Rules are evaluated with short-circuit logic — `BypassThrottleRule` entries are checked first, so frequently-hit exempted paths (like `/health`) are fast-pathed out before any `ThrottleRule` patterns are evaluated.
+Takeaway: Even a registry of 10 mixed rules does not add overhead due to early short-circuiting. Rules are evaluated with short-circuit logic - `BypassThrottleRule` entries are checked first, so frequently-hit exempted paths (like `/health`) are fast-pathed out before any `ThrottleRule` patterns are evaluated.
 
 Run it yourself:
 

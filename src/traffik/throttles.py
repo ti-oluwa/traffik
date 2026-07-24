@@ -307,7 +307,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             raise ValueError("uid is required and must be a non-empty string")
 
         registry = registry or GLOBAL_REGISTRY
-        if registry.exist(uid):
+        if registry.exists(uid):
             raise ConfigurationError(
                 f"Throttle UID must be unique. Throttle with UID {uid!r} already exists."
             )
@@ -1614,14 +1614,12 @@ async def websocket_throttled(
 
     wait_seconds = math.ceil(wait_ms / 1000)
     try:
-        await connection.send_json(
-            {
-                "type": "rate_limit",
-                "error": "Too many messages",
-                "retry_after": wait_seconds,
-                **context.get("extras", {}),
-            }
-        )
+        await connection.send_json({
+            "type": "rate_limit",
+            "error": "Too many messages",
+            "retry_after": wait_seconds,
+            **context.get("extras", {}),
+        })
     except RuntimeError:
         # Connection was closed (by client) between check and send
         # Silently ignore since client is already disconnected

@@ -3,7 +3,7 @@
 A single rate limit is rarely enough for a production API.
 
 A user who sends 20 requests in the first second and then waits 59 seconds hasn't
-violated a "100/minute" rule — but they've hammered your service with a burst that
+violated a "100/minute" rule - but they've hammered your service with a burst that
 your infrastructure may not appreciate. Conversely, a steady drumbeat of 1 request
 every second looks fine per-minute but might add up to a problematic volume per hour.
 
@@ -20,7 +20,7 @@ Think of it like a two-tier system:
 - **Sustained limit**: Ensures fair long-term use. Long window, generous cap.
 
 A request only succeeds if it passes *every* throttle in the chain. The first
-throttle to reject it wins — subsequent throttles in the chain are not evaluated.
+throttle to reject it wins - subsequent throttles in the chain are not evaluated.
 
 ---
 
@@ -89,9 +89,9 @@ async def get_data():
 !!! note "Import the right `throttled`"
     There are two `throttled` functions in Traffik:
 
-    - `traffik.decorators.throttled` — designed for **FastAPI**, works with its
+    - `traffik.decorators.throttled` - designed for **FastAPI**, works with its
       dependency injection system. Routes do not need an explicit connection parameter.
-    - `traffik.throttles.throttled` — the **Starlette** version. The decorated route
+    - `traffik.throttles.throttled` - the **Starlette** version. The decorated route
       must have a `Request` or `WebSocket` parameter.
 
     For FastAPI, always use `from traffik.decorators import throttled`.
@@ -134,12 +134,12 @@ stops the chain.** No subsequent throttles run.
 This has practical implications for efficiency and user experience:
 
 ```python
-# Good: burst check first — cheaper (shorter window, fewer stored keys)
+# Good: burst check first - cheaper (shorter window, fewer stored keys)
 #       and more informative (the user knows they burst, not that they
 #       exhausted their hourly budget)
 dependencies=[Depends(burst_throttle), Depends(sustained_throttle)]
 
-# Also valid: sustained check first — useful if you want to enforce
+# Also valid: sustained check first - useful if you want to enforce
 #             the hourly cap as the primary signal
 dependencies=[Depends(sustained_throttle), Depends(burst_throttle)]
 ```
@@ -147,7 +147,7 @@ dependencies=[Depends(sustained_throttle), Depends(burst_throttle)]
 !!! tip "Recommended: strictest limit first"
     Put your tightest limit first. It fails fast and saves you a backend roundtrip
     for the looser limit. It also gives the client a more actionable `Retry-After`
-    header — "wait 30 seconds" is more useful than "wait 54 minutes".
+    header - "wait 30 seconds" is more useful than "wait 54 minutes".
 
 ---
 
@@ -207,7 +207,7 @@ quota.
 ## Starlette Example
 
 If you're using Starlette directly (not FastAPI), use `@throttled` from `traffik.throttles`.
-Your route must accept a `Request` parameter — the decorator finds it automatically.
+Your route must accept a `Request` parameter - the decorator finds it automatically.
 
 ```python
 from starlette.applications import Starlette
@@ -236,9 +236,9 @@ app = Starlette(routes=[Route("/api/data", get_data)])
 | `Depends(a), Depends(b)` | Route-level, explicit, most readable |
 | `@throttled(a, b)` | FastAPI decorator style, same result |
 | Router `dependencies=[...]` | Apply to every route in a router |
-| Multiple `@throttled` decorators | Not supported — pass all throttles in one call |
+| Multiple `@throttled` decorators | Not supported - pass all throttles in one call |
 
 !!! warning "Each throttle has its own counter"
     Every `HTTPThrottle` instance tracks usage independently by its `uid`. Make sure
-    each throttle you create has a unique `uid` — Traffik raises a `ConfigurationError`
+    each throttle you create has a unique `uid` - Traffik raises a `ConfigurationError`
     if you try to register two throttles with the same UID.

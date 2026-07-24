@@ -391,14 +391,12 @@ class TestPrepRules:
         bypass_with_predicate = BypassThrottleRule(path="/bp/", predicate=predicate)
 
         # Deliberately shuffled
-        result = _prep_rules(
-            [
-                regular_with_predicate,
-                bypass_with_predicate,
-                regular_no_predicate,
-                bypass_no_predicate,
-            ]
-        )
+        result = _prep_rules([
+            regular_with_predicate,
+            bypass_with_predicate,
+            regular_no_predicate,
+            bypass_no_predicate,
+        ])
         assert result == (
             bypass_no_predicate,
             regular_no_predicate,
@@ -422,23 +420,23 @@ class TestPrepRules:
 
 
 class TestThrottleRegistryBasic:
-    def test_register_and_exist(self) -> None:
+    def test_register_and_exists(self) -> None:
         registry = ThrottleRegistry()
-        assert registry.exist("foo") is False
+        assert registry.exists("foo") is False
         registry.register("foo")
-        assert registry.exist("foo") is True
+        assert registry.exists("foo") is True
 
     def test_register_idempotent(self) -> None:
         registry = ThrottleRegistry()
         registry.register("foo")
         registry.register("foo")
-        assert registry.exist("foo") is True
+        assert registry.exists("foo") is True
 
     def test_unregister(self) -> None:
         registry = ThrottleRegistry()
         registry.register("foo")
         registry.unregister("foo")
-        assert registry.exist("foo") is False
+        assert registry.exists("foo") is False
 
     def test_unregister_nonexistent_is_safe(self) -> None:
         registry = ThrottleRegistry()

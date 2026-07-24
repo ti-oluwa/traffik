@@ -36,7 +36,7 @@ clear failure model.
 burst  = HTTPThrottle("api:burst",     rate="20/min")
 hourly = HTTPThrottle("api:sustained", rate="500/hour")
 
-# Both must pass — first failure wins
+# Both must pass - first failure wins
 @app.get("/api/data", dependencies=[Depends(burst), Depends(hourly)])
 async def get_data():
     ...
@@ -97,5 +97,3 @@ throttle = HTTPThrottle(
     These features compose cleanly. A dynamic-backend throttle can have per-request
     costs and an identifier that returns `EXEMPTED` for admin tokens. Stack them as
     your use case demands.
-
-

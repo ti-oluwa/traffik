@@ -11,6 +11,7 @@ Supports all Redis deployment topologies:
 """
 
 import asyncio
+import logging
 import math
 import sys
 import typing
@@ -19,7 +20,8 @@ from types import TracebackType
 
 if sys.version_info < (3, 10):
     raise ImportError(
-        "`traffik.redis.coredis` is not supported for python<3.10. Upgrade or use a different backend"
+        "`traffik.redis.coredis` is not supported for python<3.10. "
+        "Upgrade your Python version, or use a different backend."
     )
 
 import coredis.exceptions
@@ -47,7 +49,7 @@ from traffik.typing import (
 
 __all__ = ["RedisBackend"]
 
-
+logger = logging.getLogger(__name__)
 _AnyRedis = typing.Union[Redis[str], RedisCluster[str]]
 """Union of the two coredis client types that share a compatible command API."""
 
@@ -592,7 +594,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         """Set *key* to *value* with an optional expiry in seconds."""
         self._assert_ready()
         if expire is not None:
-            await self.connection.set(key, value, px=expire * 1000)  # type: ignore[union-attr]
+            await self.connection.set(key, value, px=expire * 1000)  # type: ignore[union-attr,call-overload]
         else:
             await self.connection.set(key, value)  # type: ignore[union-attr]
 
@@ -639,7 +641,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         """
         self._assert_ready()
         assert self._increment_with_ttl_script is not None
-        result = await self._increment_with_ttl_script(
+        result: typing.Union[str, int] = await self._increment_with_ttl_script(
             keys=[key],
             args=[str(amount), str(ttl)],
         )
@@ -744,11 +746,10 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             try:
                 # Close the connection pool and all underlying sockets. Safe to call multiple times.
                 await self._exit_stack.aclose()
-            except coredis.exceptions.RedisError as exc:
-                sys.stderr.write(
-                    f"Warning: error while closing coredis connection: {exc}\n"
+            except coredis.exceptions.RedisError:
+                logger.exception(
+                    "An error occurred while closing coredis connection.\n"
                 )
-                sys.stderr.flush()
             finally:
                 self._exit_stack = None
 

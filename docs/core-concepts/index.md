@@ -1,7 +1,6 @@
 # Core Concepts
 
-Welcome to the heart of Traffik. Rate limiting can sound intimidating, but Traffik
-is built around four simple, composable ideas. Master these and you master everything.
+Rate limiting in Traffik is built around four simple, composable ideas. Get these and you get everything else in these docs.
 
 ---
 
@@ -9,10 +8,7 @@ is built around four simple, composable ideas. Master these and you master every
 
 ### Rate
 
-A **Rate** is the answer to "how much traffic is too much?" It bundles a request
-limit together with a time window, "100 requests per minute", "5 per second", "1000
-per hour". You can express it as a human-friendly string like `"100/min"` or
-construct it as a `Rate` object when you need a more complex period.
+A **Rate** answers "how much traffic is too much?". It's a request limit paired with a time window: "100 requests per minute," "5 per second," "1000 per hour". Write it as a string (`"100/min"`) or build a `Rate` object directly for more specific periods (`Rate(limit=100, minutes=5, seconds=30)`).
 
 [Rates in depth &rarr;](rates.md)
 
@@ -20,12 +16,7 @@ construct it as a `Rate` object when you need a more complex period.
 
 ### Backend
 
-A **Backend** is where Traffik keeps score. Every time a request comes in, the backend
-increments a counter, checks whether the limit has been crossed, and hands back a
-verdict. Traffik ships with three backends: an `InMemoryBackend`
-for development and single-process apps, a `RedisBackend` for production and
-distributed systems, and a `MemcachedBackend` for when you already have Memcached
-in your stack.
+A **Backend** is where Traffik keeps score. Every hit increments a counter (or equivalent), checks it against the limit, and hands back a verdict. Four backends come built in: `InMemoryBackend` for development and single-process apps, `MultiProcessInMemoryBackend` for sharing state across workers on one machine without Redis (experimental! Read the caveats before using it), `RedisBackend` for production and distributed systems, and `MemcachedBackend` for when Memcached is already in your stack.
 
 [Backends in depth &rarr;](backends.md)
 
@@ -33,11 +24,7 @@ in your stack.
 
 ### Strategy
 
-A **Strategy** is the algorithm that decides *how* to count. Should Traffik use a
-simple fixed window that resets every minute? A sliding window that's immune to
-boundary bursts? A token bucket that allows occasional burst traffic? There are seven
-strategies built in, from the dead-simple `FixedWindow` to the telecom-grade `GCRA`,
-plus a whole collection of advanced strategies in `traffik.strategies.custom`.
+A **Strategy** is the algorithm deciding *how* to count. A simple fixed window that resets every minute? A sliding window that's immune to boundary bursts? A token bucket that allows occasional bursts on top of a sustained rate? Eight strategies come built in, from `FixedWindow` to `GCRA`, plus six more bespoke ones in `traffik.strategies.custom` for when a specific problem (per-tier limits, load-adaptive throttling, ...) genuinely needs for them.
 
 [Strategies in depth &rarr;](strategies.md)
 
@@ -45,11 +32,7 @@ plus a whole collection of advanced strategies in `traffik.strategies.custom`.
 
 ### Identifier
 
-An **Identifier** is how Traffik knows who is who. By default it reads the client's
-IP address, but you can swap in anything: a user ID extracted from a JWT, an API key
-from a header, a tenant slug from the URL. You can even return the special `EXEMPTED`
-sentinel to let a specific client sail straight through without touching the backend
-at all.
+An **Identifier** is how Traffik knows who's who. By default Traffik identifies by the client's IP, but you can replace it with: a user ID pulled from a JWT, an API key from a header, a tenant slug from the URL. Return the `EXEMPTED` sentinel to let a specific client through untouched, no separate bypass logic needed.
 
 [Identifiers in depth &rarr;](identifiers.md)
 
@@ -59,7 +42,7 @@ at all.
 
 ```python
 from traffik import HTTPThrottle
-from traffik.backends.redis import RedisBackend
+from traffik.backends.redis.aioredis import RedisBackend
 
 backend = RedisBackend("redis://localhost:6379", namespace="myapp")
 
@@ -72,7 +55,4 @@ throttle = HTTPThrottle(
 )
 ```
 
-Once you understand these four things, **Rate**, **Backend**, **Strategy**,
-**Identifier**, you understand Traffik.
-
-
+> A `Throttle` is really just these four things bundled behind one callable.

@@ -216,11 +216,11 @@ from traffik.registry import ThrottleRegistry
 
 **Guide:** [Throttle Registry](advanced/registry.md)
 
-Throttles register themselves automatically on construction. You rarely need to create a registry manually — the `GLOBAL_REGISTRY` is used by default.
+Throttles register themselves automatically on construction. You rarely need to create a registry manually - the `GLOBAL_REGISTRY` is used by default.
 
 | Method | Description |
 |---|---|
-| `exist(uid)` | Check if a UID is registered. |
+| `exists(uid)` | Check if a UID is registered. |
 | `add_rules(uid, *rules)` | Attach gating rules to a throttle. Raises `ConfigurationError` if UID not registered. |
 | `get_rules(uid)` | Return all rules attached to a throttle. |
 | `get_throttle(uid)` | Return the live throttle instance, or `None` if garbage-collected. |
@@ -306,7 +306,7 @@ from traffik.headers import Header
 
 **Sentinels:**
 
-- `Header.DISABLE` — Pass as a value in `get_headers()` overrides to suppress a specific header for that call.
+- `Header.DISABLE` - Pass as a value in `get_headers()` overrides to suppress a specific header for that call.
 
 ---
 
@@ -422,5 +422,3 @@ from traffik.config import (
 | `get_lock_ttl()` / `set_lock_ttl(v)` | `TRAFFIK_DEFAULT_LOCK_TTL` | `None` | Lock TTL in seconds. `None` means no timeout. |
 | `get_lock_blocking()` / `set_lock_blocking(v)` | `TRAFFIK_DEFAULT_BLOCKING` | `True` | Whether to block when acquiring a lock. |
 | `get_lock_blocking_timeout()` / `set_lock_blocking_timeout(v)` | `TRAFFIK_DEFAULT_BLOCKING_TIMEOUT` | `None` | Max seconds to wait for a lock. `None` means wait indefinitely. |
-
-

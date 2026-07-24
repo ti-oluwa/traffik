@@ -49,7 +49,7 @@
 }
 
 .tx-card:hover {
-  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
 }
 
 .tx-card h3 {
@@ -86,31 +86,32 @@
   border-color: #ff9800;
 }
 
-.md-typeset .tip > .admonition-title,
-.md-typeset .tip > summary {
+.md-typeset .tip>.admonition-title,
+.md-typeset .tip>summary {
   background-color: rgba(255, 152, 0, 0.1);
 }
 
-.md-typeset .tip > .admonition-title::before,
-.md-typeset .tip > summary::before {
+.md-typeset .tip>.admonition-title::before,
+.md-typeset .tip>summary::before {
   background-color: #ff9800;
 }
 
 /* Code block tweaks */
-.md-typeset pre > code {
-  font-size: 0.85rem;
+.md-typeset pre>code {
+  font-size: 0.74rem;
+  line-height: 1.5;
 }
 
 /* Scale code blocks down on smaller screens */
 @media screen and (max-width: 76.1875em) {
-  .md-typeset pre > code {
-    font-size: 0.8rem;
+  .md-typeset pre>code {
+    font-size: 0.7rem;
   }
 }
 
 @media screen and (max-width: 44.9375em) {
-  .md-typeset pre > code {
-    font-size: 0.72rem;
+  .md-typeset pre>code {
+    font-size: 0.64rem;
   }
 }
 
@@ -126,7 +127,7 @@
   color: var(--md-primary-bg-color);
 }
 
-/* Mermaid chart text — force black for titles and axis labels */
+/* Mermaid chart text - force black for titles and axis labels */
 .mermaid text {
   fill: #000000 !important;
 }

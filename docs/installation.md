@@ -8,73 +8,67 @@ Getting Traffik installed takes about thirty seconds. Let's make sure you get th
 
 Before you install, make sure you have:
 
-- **Python 3.9+** - Traffik uses modern async features and type hints throughout.
+- **Python 3.9+** (up to 3.14) - Traffik uses modern async features and type hints throughout.
 - **FastAPI** or **Starlette** - Traffik integrates with Starlette's `HTTPConnection` model, which FastAPI is built on.
 
 That's it. No mandatory external services, no heavyweight dependencies. The in-memory backend works with no additional setup.
+
+```bash
+pip install traffik
+```
 
 ---
 
 ## Install Options
 
-Traffik ships with optional extras for each storage backend. Install only what you need.
+Traffik ships with one extra per Redis/Memcached client library. Install only what you need.
 
 === "pip"
 
     ```bash
-    # In-memory backend only (great for development)
+    # In-memory backend only - no extra dependencies
     pip install traffik
 
-    # With Redis support
-    pip install "traffik[redis]"
+    # Redis, via redis.asyncio (the default, recommended Redis client)
+    pip install "traffik[aioredis]"
 
-    # With Memcached support
-    pip install "traffik[memcached]"
+    # Redis, via coredis
+    pip install "traffik[coredis]"
 
-    # All backends
+    # Memcached, via aiomcache
+    pip install "traffik[aiomcache]"
+
+    # Memcached, via emcache (Rendezvous hashing, Linux/macOS only)
+    pip install "traffik[emcache]"
+
+    # Everything
     pip install "traffik[all]"
-
-    # Development extras (testing tools, linters, etc.)
-    pip install "traffik[dev]"
     ```
 
 === "uv"
 
     ```bash
-    # In-memory backend only
     uv add traffik
-
-    # With Redis support
-    uv add "traffik[redis]"
-
-    # With Memcached support
-    uv add "traffik[memcached]"
-
-    # All backends
+    uv add "traffik[aioredis]"
+    uv add "traffik[coredis]"
+    uv add "traffik[aiomcache]"
+    uv add "traffik[emcache]"
     uv add "traffik[all]"
-
-    # Development extras
-    uv add "traffik[dev]"
     ```
 
 === "poetry"
 
     ```bash
-    # In-memory backend only
     poetry add traffik
-
-    # With Redis support
-    poetry add "traffik[redis]"
-
-    # With Memcached support
-    poetry add "traffik[memcached]"
-
-    # All backends
+    poetry add "traffik[aioredis]"
+    poetry add "traffik[coredis]"
+    poetry add "traffik[aiomcache]"
+    poetry add "traffik[emcache]"
     poetry add "traffik[all]"
-
-    # Development extras
-    poetry add "traffik[dev]"
     ```
+
+!!! note "The `[redis]` and `[memcached]` extras still work"
+    Older versions only had one extra per storage system. `traffik[redis]` (→ `aioredis`) and `traffik[memcached]` (→ `aiomcache`) are kept as aliases so nothing breaks if you're upgrading, but prefer the client-specific names above for anything new.
 
 ---
 
@@ -82,34 +76,37 @@ Traffik ships with optional extras for each storage backend. Install only what y
 
 | Extra | What it adds | When to use it |
 |---|---|---|
-| *(none)* | Core package + `InMemoryBackend` | Local development, tests, single-process apps |
-| `[redis]` | `redis-py`, `pottery` | Multi-instance production deployments |
-| `[memcached]` | `aiomcache` | High-throughput environments where you already run Memcached |
-| `[all]` | Everything above | When you want to try all backends |
-| `[dev]` | Testing tools, linters, type checkers | Contributing to Traffik |
+| *(none)* | Core package + `InMemoryBackend` + `MultiProcessInMemoryBackend` | Local development, tests, single-machine deployments |
+| `[aioredis]` | `redis` (`redis.asyncio`), `pottery` | Production, single Redis node or cluster. The default choice - see below. |
+| `[coredis]` | `coredis` (Python 3.10+) | You need Sentinel support, or you're already using `coredis` elsewhere |
+| `[aiomcache]` | `aiomcache` | Memcached, portable (pure Python client) |
+| `[emcache]` | `emcache` (Linux/macOS only) | Memcached, multi-node, need the extra throughput |
+| `[all]` | Every extra above | Trying things out, or you genuinely need more than one |
+
+`MultiProcessInMemoryBackend` needs no extra install, it's stdlib `multiprocessing` under the hood but it does need the `fork` process start method, so it's Linux/macOS only in practice. See [Backends](core-concepts/backends.md) for the constraints before reaching for it.
 
 ---
 
 ## Choosing a Backend
 
 !!! tip "Start with InMemory, graduate to Redis"
-    During local development and in CI, the `InMemoryBackend` is perfect. It requires zero configuration and zero external services. When you're ready to deploy, swap it for `RedisBackend`, the rest of your code stays the same.
+    During local development and in CI, `InMemoryBackend` is perfect: zero configuration, zero external services. When you deploy, swap it for `RedisBackend` and the rest of your code stays the same.
 
     ```python
-    # Development
+    # While developing
     from traffik.backends.inmemory import InMemoryBackend
     backend = InMemoryBackend(namespace="myapp")
 
-    # Production (just change these two lines)
-    from traffik.backends.redis import RedisBackend
-    backend = RedisBackend(connection="redis://localhost:6379/0", namespace="myapp")
+    # For production, just change these two lines
+    from traffik.backends.redis.aioredis import RedisBackend
+    backend = RedisBackend("redis://localhost:6379/0", namespace="myapp")
     ```
 
-!!! warning "InMemory is not shared across processes"
-    The `InMemoryBackend` lives in a single Python process. If you run your app with multiple workers (e.g., `uvicorn --workers 4`), each worker has its own independent counter. Use `RedisBackend` or `MemcachedBackend` for any multi-process or multi-host setup.
+!!! warning "InMemory doesn't share state across processes"
+    `InMemoryBackend` lives in a single Python process. If you run your app with multiple workers (`uvicorn --workers 4`, gunicorn, ...), each worker counts independently. Your real limit becomes `configured_limit × worker_count`, silently. For a multi-worker, single-machine setup without Redis, look at `MultiProcessInMemoryBackend` instead. For anything multi-host, use `RedisBackend` or `MemcachedBackend`.
 
 !!! info "Memcached caveats"
-    Memcached doesn't support atomic increment-and-expire in a single operation the way Redis does, so the `MemcachedBackend` uses best-effort distributed locks. This is fine for most workloads, but if you need strong consistency guarantees, Redis is the safer choice.
+    Memcached doesn't give you atomic read-check-write in one round trip the way Redis's Lua scripting does, so `MemcachedBackend` leans on `add`/`cas`-based locking to stay correct. Fine for most workloads. If you need the strongest consistency guarantees under heavy contention, Redis is the safer default.
 
 ---
 
@@ -118,7 +115,7 @@ Traffik ships with optional extras for each storage backend. Install only what y
 ```python
 import traffik
 
-print(traffik.__version__)  # Should print "1.*.*"
+print(traffik.__version__)
 ```
 
 Or from the command line:
@@ -131,15 +128,13 @@ python -c "import traffik; print(traffik.__version__)"
 
 ## Fully Typed
 
-Traffik is a [PEP 561](https://peps.python.org/pep-0561/) compliant package. It ships with a `py.typed` marker, which means type checkers like `mypy` and `pyright` pick up its type annotations automatically, no stub packages required.
+Traffik is a [PEP 561](https://peps.python.org/pep-0561/) compliant package. It ships with a `py.typed` marker, so type checkers like `mypy` and `pyright` pick up its annotations automatically.
 
 !!! tip "Pyright / Pylance users"
-    Traffik's generics (`Throttle[Request]`, `ThrottleBackend[..., Request]`) resolve correctly with strict mode. If you see false positives, make sure you're on the latest version of your type checker.
+    Traffik's generics (`Throttle[Request]`, `ThrottleBackend[..., Request]`) resolve correctly under strict mode. If you see false positives, make sure you're on a recent type checker version first.
 
 ---
 
 ## Next Steps
 
 You're all set. Head over to the [Quick Start](quickstart.md) to write your first throttled endpoint.
-
-

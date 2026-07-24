@@ -48,7 +48,7 @@ class RollingWindowStrategy:
     """
     A rolling window strategy that starts the window on the client's first request.
 
-    Unlike FixedWindow (which aligns to clock boundaries), this gives each client
+    Unlike `FixedWindow` (which aligns to clock boundaries), this gives each client
     a full 'rate.expire' milliseconds from their first request.
     """
 
@@ -61,7 +61,7 @@ class RollingWindowStrategy:
         backend: ThrottleBackend,
         cost: int = 1,
     ) -> WaitPeriod:
-        # Always check for unlimited rate first — zero overhead fast path
+        # Always check for unlimited rate first - zero overhead fast path
         if rate.unlimited:
             return 0.0
 
@@ -76,7 +76,7 @@ class RollingWindowStrategy:
             window_start = await backend.get(start_key)
 
             if window_start is None:
-                # First request from this client — start their window now
+                # First request from this client - start their window now
                 await backend.multi_set(
                     {
                         start_key: str(now_ms),
@@ -90,7 +90,7 @@ class RollingWindowStrategy:
             window_end_ms = window_start_ms + rate.expire
 
             if now_ms >= window_end_ms:
-                # Window expired — start a fresh one
+                # Window expired - start a fresh one
                 await backend.multi_set(
                     {
                         start_key: str(now_ms),
@@ -100,11 +100,11 @@ class RollingWindowStrategy:
                 )
                 return 0.0
 
-            # Inside the window — increment and check
+            # Inside the window - increment and check
             counter = await backend.increment_with_ttl(count_key, amount=cost, ttl=ttl_seconds)
 
         if counter > rate.limit:
-            # Over the limit — tell client when their window resets
+            # Over the limit - tell client when their window resets
             wait_ms = window_end_ms - now_ms
             return max(wait_ms, 0.0)
 
@@ -136,7 +136,7 @@ class RollingWindowStrategy:
         counter = int(count_raw) if count_raw else 0
 
         if now_ms >= window_end_ms:
-            # Window expired — fresh slate
+            # Window expired - fresh slate
             return StrategyStat(
                 key=key,
                 rate=rate,
@@ -209,13 +209,13 @@ async with backend.lock(f"lock:{full_key}:mystrategy", **self.lock_config):
 
 ### 4. Use `increment_with_ttl()` When Possible
 
-This is an atomic increment-and-set-TTL operation — much more efficient than `get()` + `increment()` + `expire()` with a lock:
+This is an atomic increment-and-set-TTL operation - much more efficient than `get()` + `increment()` + `expire()` with a lock for most backends:
 
 ```python
 # Good: single atomic operation
 counter = await backend.increment_with_ttl(counter_key, amount=cost, ttl=ttl_seconds)
 
-# Less efficient: three operations under a lock
+# Less efficient: three operations under a lock (third is lock release)
 async with backend.lock(...):
     counter = await backend.increment(counter_key, cost)
     await backend.expire(counter_key, ttl_seconds)
@@ -245,7 +245,7 @@ return wait_ms / 1000  # This would be almost always 0
 
 ### 7. Return 0.0 (not None) to Allow
 
-Returning `0` or `0.0` means "allow". Returning `None` is not valid — always return a float.
+Returning `0` or `0.0` means "allow". Returning `None` is not valid - always return a float.
 
 ---
 

@@ -17,13 +17,13 @@ from traffik.exceptions import (
     ConfigurationError,
     _build_exception_handler_getter,
 )
-from traffik.registry import ThrottleRule
+from traffik.registry import Rule
 from traffik.throttles import Throttle
 from traffik.typing import (
     ExceptionHandler,
     HTTPConnectionT,
     Matchable,
-    ThrottlePredicate,
+    Predicate,
 )
 
 
@@ -94,7 +94,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         throttle: Throttle[HTTPConnectionT],
         path: typing.Optional[Matchable] = None,
         methods: typing.Optional[Collection[str]] = None,
-        predicate: typing.Optional[ThrottlePredicate[HTTPConnectionT]] = None,
+        predicate: typing.Optional[Predicate[HTTPConnectionT]] = None,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> None:
@@ -122,7 +122,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         """
         self.throttle = throttle
         self.cost = cost
-        self.rule = ThrottleRule[HTTPConnectionT](
+        self.rule = Rule[HTTPConnectionT](
             path=path, methods=methods, predicate=predicate
         )
         self._default_context = dict(context or {})

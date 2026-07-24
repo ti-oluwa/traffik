@@ -3,8 +3,8 @@
 import asyncio
 import functools
 import inspect
+import logging
 import math
-import sys
 import typing
 import weakref
 
@@ -29,8 +29,8 @@ from traffik.headers import Header, Headers
 from traffik.rates import Rate
 from traffik.registry import (
     GLOBAL_REGISTRY,
+    Rule,
     ThrottleRegistry,
-    ThrottleRule,
     _prep_rules,
 )
 from traffik.strategies import DEFAULT_STRATEGY
@@ -62,6 +62,8 @@ __all__ = [
     "throttled",
     "websocket_throttled",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 @typing.runtime_checkable
@@ -191,7 +193,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         registry: typing.Optional[ThrottleRegistry] = None,
-        rules: typing.Optional[typing.Iterable[ThrottleRule[HTTPConnectionT]]] = None,
+        rules: typing.Optional[typing.Iterable[Rule[HTTPConnectionT]]] = None,
         cache_ids: bool = True,
         dynamic_rules: bool = False,
     ) -> None:
@@ -305,7 +307,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             raise ValueError("uid is required and must be a non-empty string")
 
         registry = registry or GLOBAL_REGISTRY
-        if registry.exist(uid):
+        if registry.exists(uid):
             raise ConfigurationError(
                 f"Throttle UID must be unique. Throttle with UID {uid!r} already exists."
             )
@@ -327,7 +329,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         registry.register(uid, self)
         self.registry = registry
-        self._rules: typing.Tuple[ThrottleRule[HTTPConnectionT], ...] = (
+        self._rules: typing.Tuple[Rule[HTTPConnectionT], ...] = (
             _prep_rules(set(rules)) if rules else ()
         )
         self._rules_resolved = False
@@ -891,11 +893,14 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             wait_ms = await self.strategy(key, rate, backend, actual_cost)  # type: ignore[arg-type]
         except _EXEMPT_EXCEPTIONS:
             raise
-        except BaseException as exc:  # noqa
-            sys.stderr.write(
-                f"Warning: An error occurred while utilizing strategy '{self.strategy!r}'.\n {type(exc).__name__}: {exc}\n"
-            )
-            sys.stderr.flush()
+        except BaseException as exc:
+            if logger.isEnabledFor(logging.WARNING):
+                logger.warning(
+                    "An error occurred while utilizing strategy '%s'.\n %s\n",
+                    self.strategy,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
             wait_ms = await self._handle_error(
                 connection,
                 exc=exc,
@@ -1215,9 +1220,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             sort=None,
         )
 
-    def add_rules(
-        self, target_uid: str, /, *rules: ThrottleRule[HTTPConnectionT]
-    ) -> None:
+    def add_rules(self, target_uid: str, /, *rules: Rule[HTTPConnectionT]) -> None:
         """
         Add rules that gate another throttle's application.
 
@@ -1227,14 +1230,14 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         certain methods, paths, or custom predicates.
 
         :param target_uid: The UID of the throttle to attach rules to.
-        :param rules: One or more `ThrottleRule` instances to add.
+        :param rules: One or more `Rule` instances to add.
         :raises `ConfigurationError`: If `target_uid` is not registered.
 
         Example Usage - Bypassing the global throttle for GET requests:
 
         ```python
         from traffik.throttles import HTTPThrottle
-        from traffik.registry import ThrottleRule
+        from traffik.registry import Rule
 
         # Global throttle: 100 req/min across all methods
         global_throttle = HTTPThrottle(uid="api:global", rate="100/min")
@@ -1246,7 +1249,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         # effectively bypassing it for reads.
         write_throttle.add_rules(
             "api:global",
-            ThrottleRule(methods={"POST", "PUT", "PATCH", "DELETE"}),
+            Rule(methods={"POST", "PUT", "PATCH", "DELETE"}),
         )
 
         # Now on a GET request:
@@ -1441,7 +1444,7 @@ class HTTPThrottle(Throttle[Request]):
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         registry: typing.Optional[ThrottleRegistry] = None,
-        rules: typing.Optional[typing.Iterable[ThrottleRule[Request]]] = None,
+        rules: typing.Optional[typing.Iterable[Rule[Request]]] = None,
         cache_ids: bool = True,
         dynamic_rules: bool = False,
         use_method: bool = True,
@@ -1611,19 +1614,16 @@ async def websocket_throttled(
 
     wait_seconds = math.ceil(wait_ms / 1000)
     try:
-        await connection.send_json(
-            {
-                "type": "rate_limit",
-                "error": "Too many messages",
-                "retry_after": wait_seconds,
-                **context.get("extras", {}),
-            }
-        )
-    except RuntimeError as exc:
+        await connection.send_json({
+            "type": "rate_limit",
+            "error": "Too many messages",
+            "retry_after": wait_seconds,
+            **context.get("extras", {}),
+        })
+    except RuntimeError:
         # Connection was closed (by client) between check and send
         # Silently ignore since client is already disconnected
-        sys.stderr.write(f"An error occurred while sending throttled message: {exc}\n")
-        sys.stderr.flush()
+        logger.exception("An error occurred while sending throttled message\n")
 
 
 class WebSocketThrottle(Throttle[WebSocket]):
@@ -1657,7 +1657,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         registry: typing.Optional[ThrottleRegistry] = None,
-        rules: typing.Optional[typing.Iterable[ThrottleRule[WebSocket]]] = None,
+        rules: typing.Optional[typing.Iterable[Rule[WebSocket]]] = None,
         cache_ids: bool = True,
         dynamic_rules: bool = False,
     ) -> None:

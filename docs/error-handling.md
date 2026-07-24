@@ -1,6 +1,6 @@
 # Error Handling
 
-Rate limiting backends can fail. Redis goes down. Network blips happen. Memcached runs out of memory. The question isn't *if* your backend will fail — it's *what should Traffik do when it does*?
+Rate limiting backends can fail. Redis goes down. Network blips happen. Memcached runs out of memory. The question isn't *if* your backend will fail - it's *what should Traffik do when it does*?
 
 Traffik gives you fine-grained control over that answer: from a simple one-liner to a full circuit-breaker pattern with automatic failover.
 
@@ -55,11 +55,11 @@ throttle = HTTPThrottle("api", rate="100/min", on_error="throttle")
 throttle = HTTPThrottle("api", rate="100/min", on_error="raise")
 ```
 
-`"throttle"` is the default behavior — if you don't set `on_error`, Traffik fails closed. Better to slow things down than to let unlimited traffic through when your backend is struggling.
+`"throttle"` is the default behavior - if you don't set `on_error`, Traffik fails closed. Better to slow things down than to let unlimited traffic through when your backend is struggling.
 
 ---
 
-## `fallback` — Automatic Failover
+## `fallback` - Automatic Failover
 
 Switch to a backup backend when the primary fails:
 
@@ -97,7 +97,7 @@ throttle = HTTPThrottle(
 
 ---
 
-## `retry` — Retry Transient Failures
+## `retry` - Retry Transient Failures
 
 Retry the throttle operation with backoff before giving up:
 
@@ -127,7 +127,7 @@ throttle = HTTPThrottle(
 
 ---
 
-## `failover` — Full Circuit Breaker + Retry + Fallback
+## `failover` - Full Circuit Breaker + Retry + Fallback
 
 The recommended pattern for production. Combines all resilience techniques:
 
@@ -240,7 +240,7 @@ throttle = HTTPThrottle(
 ```
 
 !!! warning "Don't log inside backends"
-    Logging inside backend operations (not error handlers) causes serious performance degradation. Logging is synchronous and can block the event loop. See [Performance Tips](performance.md) for details. Logging inside error *handlers* is fine — handlers only run when something goes wrong.
+    Logging inside backend operations (not error handlers) causes serious performance degradation. Logging is synchronous and can block the event loop. See [Performance Tips](performance.md) for details. Logging inside error *handlers* is fine - handlers only run when something goes wrong.
 
 ---
 
@@ -248,9 +248,9 @@ throttle = HTTPThrottle(
 
 | Scenario | Handler to Use |
 |---|---|
-| Development / low stakes | `on_error="allow"` — fail open, keep dev experience smooth |
-| Security-sensitive API | `on_error="throttle"` — fail closed, protect the resource |
-| Debugging backend issues | `on_error="raise"` — propagate exceptions for visibility |
+| Development / low stakes | `on_error="allow"` - fail open, keep dev experience smooth |
+| Security-sensitive API | `on_error="throttle"` - fail closed, protect the resource |
+| Debugging backend issues | `on_error="raise"` - propagate exceptions for visibility |
 | Redis down, InMemory fallback | `fallback(fallback_backend)` |
 | Transient network blips | `retry(max_retries=3, retry_on=(TimeoutError,))` |
 | Production with HA requirements | `failover(fallback, breaker=CircuitBreaker(...))` |
@@ -260,7 +260,7 @@ throttle = HTTPThrottle(
 
 ## Backend-Level vs. Throttle-Level Handlers
 
-You can set `on_error` at the backend level — it applies to all throttles using that backend:
+You can set `on_error` at the backend level - it applies to all throttles using that backend:
 
 ```python
 backend = RedisBackend(
@@ -287,7 +287,7 @@ Throttle-level `on_error` always takes precedence over backend-level `on_error`.
 
 ## `ConnectionThrottled`
 
-When a client exceeds the rate limit, Traffik raises `ConnectionThrottled`. This is a subclass of Starlette's `HTTPException`, which means FastAPI and Starlette handle it automatically — no custom handler registration is needed for basic behavior. The client receives a `429 Too Many Requests` response without any extra setup on your part.
+When a client exceeds the rate limit, Traffik raises `ConnectionThrottled`. This is a subclass of Starlette's `HTTPException`, which means FastAPI and Starlette handle it automatically - no custom handler registration is needed for basic behavior. The client receives a `429 Too Many Requests` response without any extra setup on your part.
 
 ```python
 from traffik.exceptions import ConnectionThrottled
@@ -295,7 +295,7 @@ from traffik.exceptions import ConnectionThrottled
 
 ### Custom handler for richer responses
 
-If you want to return a richer response — for example, including extra information in the response body or a custom JSON structure — register a custom exception handler:
+If you want to return a richer response - for example, including extra information in the response body or a custom JSON structure - register a custom exception handler:
 
 ```python
 from fastapi import FastAPI, Request
@@ -321,7 +321,7 @@ app.add_exception_handler(ConnectionThrottled, throttle_handler)
 
 ### Why prefer `ConnectionThrottled` over plain `HTTPException`?
 
-When writing throttle-related code — custom handlers, middleware, or decorators — use `ConnectionThrottled` rather than a plain `HTTPException(status_code=429)`. It carries the same automatic handling, but conveys clearer semantics: this is a rate-limit error specifically, not just any 429. It also makes your exception handlers easier to scope precisely.
+When writing throttle-related code - custom handlers, middleware, or decorators - use `ConnectionThrottled` rather than a plain `HTTPException(status_code=429)`. It carries the same automatic handling, but conveys clearer semantics: this is a rate-limit error specifically, not just any 429. It also makes your exception handlers easier to scope precisely.
 
 ```python
 # Prefer this in throttle-related code:

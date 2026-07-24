@@ -4,8 +4,8 @@ An identifier is **how Traffik knows who is who**. Before any strategy runs, Tra
 calls the identifier function to get a string key that represents the caller. All
 counter increments, lock names, and backend keys are namespaced under that key.
 
-Get the identifier right and you get per-user, per-tenant, or per-API-key rate
-limiting. Return the wrong thing and everyone shares a single counter.
+Get the identifier right and you get correct per-user, per-tenant, or per-API-key rate
+limiting. Returning the wrong thing could mean everyone shares a single counter.
 
 ---
 
@@ -32,7 +32,7 @@ throttle = HTTPThrottle(uid="my-api", rate="100/min")
 ## Custom identifiers
 
 An identifier is any `async` function that takes an `HTTPConnection` and returns
-something that can be converted to a string:
+something that can be converted to a string, to distinguish connections/clients:
 
 ```python
 async def my_identifier(connection: HTTPConnection) -> str:
@@ -72,7 +72,7 @@ backend = RedisBackend(
 
     ```python
     from starlette.requests import HTTPConnection
-    from traffik.utils import get_remote_address
+    from traffik import get_remote_address
     from traffik.config import ANONYMOUS_IDENTIFIER
 
     async def ip_identifier(connection: HTTPConnection) -> str:
@@ -124,7 +124,7 @@ increment any counter. The overhead is essentially zero.
 
 ```python
 from starlette.requests import HTTPConnection
-from traffik.types import EXEMPTED
+from traffik import EXEMPTED
 
 async def identifier_with_allowlist(connection: HTTPConnection):
     ip = connection.headers.get("x-forwarded-for", "").split(",")[0].strip()
@@ -138,7 +138,7 @@ async def identifier_with_allowlist(connection: HTTPConnection):
 
 !!! tip "EXEMPTED is the right tool for internal traffic"
     Allowlisting via `EXEMPTED` costs nothing. Returning an identifier that you
-    then map to an unlimited `Rate` still touches the backend and runs the strategy.
+    then map to an unlimited `Rate` does same but has some overhead.
     When you want zero overhead, return `EXEMPTED`.
 
 ---
@@ -165,10 +165,7 @@ from traffik.config import ANONYMOUS_IDENTIFIER
 
 ## Identifier caching with `cache_ids`
 
-By default (`cache_ids=True`), Traffik calls your identifier function **once per
-request** and caches the result in the request's context for the lifetime of that
-request. If multiple throttles apply to the same endpoint, they all reuse the cached
-value and your identifier function is never called more than once.
+By default (`cache_ids=True`), Traffik calls your identifier function **once per request** and caches the result in the request's context for the lifetime of that request. If the throttle is applied or hit multiple time on the same route or endpoint, they all reuse the cached value and your identifier function is never called more than once.
 
 ```python
 from traffik import HTTPThrottle
@@ -177,7 +174,7 @@ throttle = HTTPThrottle(
     uid="my-api",
     rate="100/min",
     identifier=my_identifier,
-    cache_ids=True,   # default — identifier called once, result reused
+    cache_ids=True,   # default - identifier called once, result reused
 )
 ```
 
@@ -189,10 +186,8 @@ the case).
     Your identifier runs on **every request**. An identifier that makes a database
     query or an external HTTP call to resolve a user ID will add that latency to
     every single request that hits any throttle. Consider caching resolved identities
-    in `request.state` yourself, or keep the identifier to headers and path
+    in `request.state` or a cache backend yourself, or keep the identifier to headers and path
     parameters only.
 
     If you must do I/O, at least make sure `cache_ids=True` (the default) so the
     I/O only happens once per request, not once per throttle per request.
-
-

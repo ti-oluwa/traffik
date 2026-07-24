@@ -159,7 +159,7 @@ premium_middleware_throttle = MiddlewareThrottle(
 ```
 
 !!! warning "Keep predicates fast"
-    The predicate runs on every matching request before the throttle strategy executes. Avoid blocking I/O or expensive computation. If you need database lookups, consider caching the result in `request.state` from an earlier middleware.
+    The predicate runs on every matching request before the throttle strategy executes. Avoid blocking I/O or expensive computation. If you need database lookups, consider caching the result in `request.state` from an earlier middleware, or in a cache backend like Redis.
 
 ---
 
@@ -205,9 +205,9 @@ app.add_middleware(
 
 For each `MiddlewareThrottle`, filters are evaluated from **cheapest to most expensive**:
 
-1. **Methods** — a set membership check, essentially free.
-2. **Path** — a compiled regex match against the URL string.
-3. **Predicate** — your async callable, potentially involving I/O.
+1. **Methods** - a set membership check, essentially free.
+2. **Path** - a compiled regex match against the URL string.
+3. **Predicate** - your async callable, potentially involving I/O.
 
 If any check fails, the remaining checks are skipped and the throttle is bypassed for that request. The throttle strategy (quota consumption) only runs after all filters pass.
 
@@ -248,7 +248,7 @@ app.add_middleware(
 )
 ```
 
-!!! note "Indeteminable thottle cost is treated as infinite"
+!!! note "Indeterminable throttle cost is treated as infinite"
     A `MiddlewareThrottle` with no explicit `cost` (i.e., `cost=None`), and the wrapped `Throttle` uses a dynamic cost function, is treated as having infinite cost and sorted **last** under `"cheap_first"`. This ensures unconstrained throttles don't block cheap ones from short-circuiting early.
 
 ### Custom sort key
@@ -265,9 +265,9 @@ app.add_middleware(
 
 ---
 
-## MiddlewareThrottle as a convenience wrapper
+## `MiddlewareThrottle` as a convenience wrapper
 
-`MiddlewareThrottle` is a lightweight wrapper around `ThrottleRule` that simplifies the common case of applying path, method, and predicate filters to a throttle in middleware. Since v1.1.0, you can achieve the same result by attaching rules directly to a regular `Throttle` using the [throttle rule API](../advanced/rules.md).
+`MiddlewareThrottle` is a lightweight wrapper around `Rule` that simplifies the common case of applying path, method, and predicate filters to a throttle in middleware. Since v1.1.0, you can achieve the same result by attaching rules directly to a regular `Throttle` using the [throttle rule API](../advanced/rules.md).
 
 This example shows both approaches side-by-side:
 
@@ -341,7 +341,7 @@ write_middleware_throttle = MiddlewareThrottle(
     methods={"POST", "PUT", "DELETE"},
 )
 
-# Used as a dependency — the path/method filters still apply
+# Used as a dependency - the path/method filters still apply
 @app.post("/resource", dependencies=[Depends(write_middleware_throttle)])
 async def create_resource(payload: dict):
     return {"created": True}

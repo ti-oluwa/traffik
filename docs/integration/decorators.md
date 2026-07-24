@@ -11,7 +11,7 @@ Traffik ships **two versions** of `@throttled`: one for Starlette and one for Fa
 | | `traffik.throttles.throttled` | `traffik.decorators.throttled` |
 |---|---|---|
 | **Works with** | Starlette and FastAPI | FastAPI only |
-| **Requires `Request` param** | Yes — the route function must declare a `Request` or `WebSocket` parameter | No — FastAPI's DI injects the connection automatically |
+| **Requires `Request` param** | Yes - the route function must declare a `Request` or `WebSocket` parameter | No - FastAPI's DI injects the connection automatically |
 | **Mechanism** | Inspects function args for an `HTTPConnection` at call time | Wraps the route with a hidden `Depends(throttle)` |
 | **OpenAPI impact** | None | None |
 | **Recommended for** | Starlette apps; Starlette-compatible code | FastAPI apps |
@@ -246,5 +246,3 @@ async def export_data():
 
 app.include_router(router)
 ```
-
-

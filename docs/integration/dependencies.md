@@ -24,7 +24,7 @@ FastAPI's `Depends` mechanism is the most idiomatic way to attach throttles to r
 
 ---
 
-## Basic usage — no Request access needed
+## Basic usage - no Request access needed
 
 The simplest setup: pass the throttle as a list dependency on the route decorator. Your handler function doesn't need to declare any extra parameter.
 
@@ -196,5 +196,3 @@ async def chat(websocket: WebSocket = Depends(ws_throttle)):
 
 !!! note
     For WebSocket throttles that apply per-message (rather than per-connection), use [direct usage](direct-usage.md) inside the message loop instead.
-
-

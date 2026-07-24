@@ -1,6 +1,6 @@
 # Context-Aware Backends (Multi-Tenant)
 
-By default, a throttle picks a backend once — at startup — and uses it for every
+By default, a throttle picks a backend once - at startup - and uses it for every
 request it ever sees. That's the right call for most apps. But in a multi-tenant
 SaaS, "one backend for everyone" creates a problem: tenant A's traffic eats into
 tenant B's quota counters, or worse, their limits bleed into each other.
@@ -16,11 +16,11 @@ the request reaches the throttle; the throttle picks it up automatically.
 
 | Scenario | Use `dynamic_backend`? |
 |---|---|
-| Single shared backend for all users | No — pass `backend=...` directly |
+| Single shared backend for all users | No - pass `backend=...` directly |
 | Different Redis instances per customer tier | **Yes** |
 | A/B testing different backends per route | **Yes** |
 | Swapping backends in tests (nested context managers) | **Yes** |
-| One Redis cluster, namespaced by tenant | No — use a custom `identifier` instead |
+| One Redis cluster, namespaced by tenant | No - use a custom `identifier` instead |
 
 !!! warning "Don't reach for this by default"
     `dynamic_backend=True` adds 1–20 ms of overhead per request (one context variable
@@ -67,7 +67,7 @@ api_throttle = HTTPThrottle(
     identifier=get_user_id,  # Still identify clients the usual way
 )
 
-# api_throttle.backend is None — that's expected and correct.
+# api_throttle.backend is None - that's expected and correct.
 ```
 
 ---
@@ -98,7 +98,7 @@ api_throttle = HTTPThrottle(
     dynamic_backend=True,
 )
 
-# Backend instances — created once at module level, NOT per-request
+# Backend instances - created once at module level, NOT per-request
 enterprise_backend = RedisBackend(
     "redis://enterprise-redis:6379",
     namespace="enterprise",
@@ -154,7 +154,7 @@ async def get_data():
 
 When an enterprise request arrives, the middleware wraps `call_next` in
 `enterprise_backend(...)`. The throttle calls `get_backend(connection)`, finds
-`enterprise_backend` in the ContextVar, and uses it — all without any modification
+`enterprise_backend` in the ContextVar, and uses it - all without any modification
 to the route handler.
 
 ---
@@ -167,12 +167,12 @@ parameter does:
 | Parameter | Value | Meaning |
 |---|---|---|
 | `app` | Your FastAPI/Starlette app | Registers the backend on `app.state` so it's also available to non-async code |
-| `close_on_exit` | `False` | Don't close the Redis connection after each request — that would be catastrophic |
-| `persistent` | `True` | Don't wipe the rate limit counters on context exit — they need to persist between requests |
+| `close_on_exit` | `False` | Don't close the Redis connection after each request - that would be catastrophic |
+| `persistent` | `True` | Don't wipe the rate limit counters on context exit - they need to persist between requests |
 
 !!! warning "Never use `persistent=False` with middleware"
     Without `persistent=True`, every request would clear the rate limit counters
-    for that backend on exit. Your throttle would effectively be disabled — every
+    for that backend on exit. Your throttle would effectively be disabled - every
     client would start fresh on every request.
 
 ---
@@ -202,19 +202,19 @@ async def test_different_backends_isolated():
     request = make_dummy_request()  # Helper that builds a Request object
 
     async with backend_a():
-        await throttle(request)  # Uses backend_a — hit 1
-        await throttle(request)  # Uses backend_a — hit 2
+        await throttle(request)  # Uses backend_a - hit 1
+        await throttle(request)  # Uses backend_a - hit 2
 
         async with backend_b():
-            # Inner context switches to backend_b — fresh counter
-            await throttle(request)  # Uses backend_b — hit 1 (not throttled!)
-            await throttle(request)  # Uses backend_b — hit 2
+            # Inner context switches to backend_b - fresh counter
+            await throttle(request)  # Uses backend_b - hit 1 (not throttled!)
+            await throttle(request)  # Uses backend_b - hit 2
 
-        # Back to backend_a — counter is still at 2
+        # Back to backend_a - counter is still at 2
         # Third hit in backend_a will be throttled
 ```
 
-This is the main reason `dynamic_backend` was designed — it makes integration tests
+This is the main reason `dynamic_backend` was designed - it makes integration tests
 with per-test isolation trivial.
 
 ---
@@ -223,7 +223,7 @@ with per-test isolation trivial.
 
 | Operation | Overhead |
 |---|---|
-| Static backend (normal `backend=...`) | ~0 ms — cached attribute lookup |
+| Static backend (normal `backend=...`) | ~0 ms - cached attribute lookup |
 | Dynamic backend (ContextVar read) | 1–5 ms typical, up to 20 ms under contention |
 
 The overhead comes from reading the `ContextVar` and potentially calling

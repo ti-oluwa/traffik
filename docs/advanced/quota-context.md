@@ -19,13 +19,13 @@ Or the reverse:
 2. If *any* of them would reject the request, you don't want the others consumed either
 3. With standard throttling you'd have to hit each throttle, track which ones fired, and manually undo... which you can't
 
-**Quota Context** solves this. It queues throttle hits and only actually consumes them when you say so — or not at all if something goes wrong.
+**Quota Context** solves this. It queues throttle hits and only actually consumes them when you say so - or not at all if something goes wrong.
 
 !!! warning "This is an advanced feature"
     Quota Context adds real complexity. For most use cases, standard `Depends(throttle)` is simpler and should be preferred. Use Quota Context when you have specific conditional consumption requirements.
 
 !!! warning "QuotaContext is NOT atomic"
-    QuotaContext consumption does **not** guarantee "all or nothing" like an ACID transaction. It prevents optimistic over-consumption (quota is not deducted until `apply()` is called), but if a context partially succeeds before failing during `apply()` — for example, if entry 3 of 5 fails — the quota already consumed by entries 1 and 2 is **not rolled back**. The cost of wasted quota falls on the API, not the client. Design your quota contexts accordingly: keep them small, and use `apply_on_error=False` (the default) to avoid charging clients for server-side failures.
+    QuotaContext consumption does **not** guarantee "all or nothing" like an ACID transaction. It prevents optimistic over-consumption (quota is not deducted until `apply()` is called), but if a context partially succeeds before failing during `apply()` - for example, if entry 3 of 5 fails - the quota already consumed by entries 1 and 2 is **not rolled back**. The cost of wasted quota falls on the API, not the client. Design your quota contexts accordingly: keep them small, and use `apply_on_error=False` (the default) to avoid charging clients for server-side failures.
 
 ---
 
@@ -46,7 +46,7 @@ throttle = HTTPThrottle("api:reports", rate="50/hour", backend=backend)
 
 @app.post("/reports/generate")
 async def generate_report(request: Request):
-    # Queue throttle hits — they are NOT consumed yet
+    # Queue throttle hits - they are NOT consumed yet
     async with throttle.quota(request) as quota:
         await quota(cost=10)        # Queued: cost=10
         await quota(cost=5)         # Aggregated! Still one entry: cost=15
@@ -58,7 +58,7 @@ async def generate_report(request: Request):
     return {"report": report}
 ```
 
-If `generate_expensive_report()` raises an exception, the context exits with an error — and **no quota is consumed**. The client doesn't pay for a failed operation.
+If `generate_expensive_report()` raises an exception, the context exits with an error - and **no quota is consumed**. The client doesn't pay for a failed operation.
 
 ---
 
@@ -91,7 +91,7 @@ Both throttles are consumed atomically on successful exit, or neither is consume
 
 ## Cost Aggregation
 
-Consecutive calls with the same throttle and identical configuration are automatically merged into a single backend operation. This is a performance optimization — fewer round-trips to the backend.
+Consecutive calls with the same throttle and identical configuration are automatically merged into a single backend operation. This is a performance optimization - fewer round-trips to the backend.
 
 ```python
 async with throttle.quota(request) as quota:
@@ -99,7 +99,7 @@ async with throttle.quota(request) as quota:
     await quota(cost=3)          # Aggregated into Entry 1: cost=5
     await quota()                # Aggregated into Entry 1: cost=6
     await quota(other_throttle)  # Entry 2: different throttle, new entry
-    await quota(cost=1)          # Entry 1 again? No — other_throttle broke the streak
+    await quota(cost=1)          # Entry 1 again? No - other_throttle broke the streak
                                  # This becomes Entry 3
 ```
 
@@ -143,7 +143,7 @@ async with throttle.quota(request, apply_on_exit=False) as quota:
 
     is_valid = await validate_business_rules()
     if not is_valid:
-        await quota.cancel()  # Discard — no quota consumed
+        await quota.cancel()  # Discard - no quota consumed
         return {"error": "validation_failed"}
 
     result = await process()
@@ -166,7 +166,7 @@ async with throttle.quota(request, apply_on_exit=False) as quota:
         raise
 ```
 
-`apply()` is idempotent — calling it twice is safe. `cancel()` is final — you cannot un-cancel a context.
+`apply()` is idempotent - calling it twice is safe. `cancel()` is final - you cannot un-cancel a context.
 
 ---
 
@@ -213,7 +213,7 @@ async with throttle.quota(request) as parent:
 # All consumed here: 4 total units
 ```
 
-The parent acquires the lock (if configured). Child contexts under a parent don't acquire their own lock by default — they operate under the parent's lock context.
+The parent acquires the lock (if configured). Child contexts under a parent don't acquire their own lock by default - they operate under the parent's lock context.
 
 ---
 
@@ -225,7 +225,7 @@ Enable locking to make the entire quota context atomic with respect to other con
 # Use throttle UID as lock key (simplest)
 async with throttle.quota(request, lock=True) as quota:
     await quota(cost=5)
-    result = await process()  # Lock held for entire duration — keep this fast!
+    result = await process()  # Lock held for entire duration - keep this fast!
 
 # Custom lock key
 async with throttle.quota(request, lock="user:123:api_calls") as quota:
@@ -315,8 +315,8 @@ Be aware of these before reaching for `QuotaContext`:
 | Limitation | Detail |
 |---|---|
 | No rollback on partial failure | If entry 3 of 5 fails during `apply()`, entries 1 and 2 are already consumed |
-| TOCTOU with `check()` | Quota can change between `check()` and `apply()` — use locks for strong consistency |
+| TOCTOU with `check()` | Quota can change between `check()` and `apply()` - use locks for strong consistency |
 | `cancelled` is final | Once cancelled, a context cannot be un-cancelled or re-used |
-| `apply()` is idempotent | Calling it multiple times only consumes once — safe but not a retry mechanism |
+| `apply()` is idempotent | Calling it multiple times only consumes once - safe but not a retry mechanism |
 | Nested lock ordering | Acquiring locks in different orders in nested contexts can deadlock |
 | Cost functions resolved at apply | If your throttle uses a cost function, `queued_cost` is an estimate |

@@ -25,7 +25,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # Main (full) test service (Python 3.11)
+  # Main (full) test service
   test: &test
     build:
       context: .

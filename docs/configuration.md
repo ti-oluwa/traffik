@@ -1,6 +1,6 @@
 # Configuration
 
-Traffik's locking behavior can be tuned globally — either through environment variables (great for containers) or programmatically at startup.
+Traffik's locking behavior can be tuned globally - either through environment variables (great for containers) or programmatically at startup.
 
 Most of these settings are about lock behavior, because locks are where the tradeoffs between accuracy, latency, and throughput live. The defaults are sensible for most applications, but understanding them lets you squeeze more performance out of Traffik when you need it.
 
@@ -20,7 +20,7 @@ from traffik.config import (
     get_lock_blocking_timeout,
 )
 
-# Set before creating backends/throttles — ideally at app startup
+# Set before creating backends/throttles - ideally at app startup
 set_lock_ttl(30.0)                # Lock expires after 30 seconds
 set_lock_blocking(True)           # Locks block when contended
 set_lock_blocking_timeout(5.0)    # Give up after 5 seconds of waiting
@@ -85,14 +85,14 @@ set_lock_blocking_timeout(1.0)   # Give up after 1 second
 set_lock_ttl(10.0)
 ```
 
-Tradeoff: if the lock can't be acquired within 1 second, We get a `LockTimeoutError`. But you can provide an error handler to reject or allow the request — potentially allowing a small burst above the limit.
+Tradeoff: if the lock can't be acquired within 1 second, We get a `LockTimeoutError`. But you can provide an error handler to reject or allow the request - potentially allowing a small burst above the limit.
 
 ### High-Concurrency Configuration
 
 Use this for very high request volumes where you need maximum throughput and can tolerate allowing clients to use above their quota:
 
 ```python
-set_lock_blocking(False)         # Don't wait at all — fail immediately
+set_lock_blocking(False)         # Don't wait at all - fail immediately
 set_lock_ttl(5.0)
 ```
 
@@ -136,15 +136,15 @@ feed_throttle = HTTPThrottle("feed", rate="1000/min", strategy=fast_strategy)
 ## Sub-Second Windows and Locking
 
 !!! warning "Sub-second windows always use locking"
-    For `FixedWindow` and `SlidingWindowCounter`, windows **smaller than 1 second** always acquire a distributed lock, regardless of global settings. This is necessary because atomic `increment_with_ttl` alone isn't sufficient for sub-millisecond precision — the window boundary tracking requires a separate read/write that must be protected.
+    For `FixedWindow` and `SlidingWindowCounter`, windows **smaller than 1 second** always acquire a distributed lock, regardless of global settings. This is necessary because atomic `increment_with_ttl` alone isn't sufficient for sub-millisecond precision - the window boundary tracking requires a separate read/write that must be protected.
 
     For windows **of 1 second or longer**, `FixedWindow` uses only `increment_with_ttl` (which is atomic) and skips the lock entirely. This is the fastest path.
 
 ```python
-# No lock needed — uses atomic increment_with_ttl
+# No lock needed - uses atomic increment_with_ttl
 throttle = HTTPThrottle("api", rate="100/min")   # 60 seconds >= 1 second
 
-# Always uses locking — requires window boundary management
+# Always uses locking - requires window boundary management
 throttle = HTTPThrottle("api", rate="10/500ms")  # 500ms < 1 second
 ```
 

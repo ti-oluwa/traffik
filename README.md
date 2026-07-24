@@ -1,24 +1,25 @@
 # Traffik
 
+[![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
+[![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/)
+[![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Traffik is a rate limiting library for Starlette applications. With Traffik, you can write the throttle/limit once,
 point it at whatever you want to use as storage and it just works. Traffik also support dependency injection in FastAPI.
 
-By default, throttles used the in-memory storage - which you can keep while you're developing. Switch to Redis or Memcached once you need to share state across processes, especially for production or live setups.
+By default, throttles use the in-memory storage - which you can keep while you're developing. Switch to Redis or Memcached once you need to share state across processes, especially for production or live setups.
 
 This started as a "I need to rate limit an API" project, and grew into a fairly complete (may be over-engineered) toolkit for it.
 
 The core API (fixed window, sliding window, token bucket, a couple of backends) covers what
 you'll mostly need. However, there's more options to choose from if you want it.
 
-[![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
-[![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 ```bash
 pip install traffik
 ```
 
-That is all that is needrd for use with an in-memory backend. No extra dependencies needed. For Redis or Memcached, see
+That is all that's needed for use with an in-memory backend. No extra dependencies needed. For Redis or Memcached, see
 [Backends](#backends) below.
 
 ## Quickstart
@@ -79,12 +80,12 @@ and your real limit pere request becomes `configured_limit × worker_count`.
 
 ### Multi-process shared memory backend - multiple workers, one machine
 
-> EXPERIMENTAL! This is a non-conventional one and still requires a lot of testing to prove its viability. It may be removed in future releases. This only works on UNIX platforms with `"fork"` process start method.
+> EXPERIMENTAL! This is a non-conventional one and still requires a lot of testing to prove its stability. It may be removed in future releases. This only works on UNIX platforms with `"fork"` process start method.
 
 If you're running gunicorn/uvicorn with several workers on a single box and don't want
 to stand up Redis just to get accurate counts across them then you can try out this backend.
 
-I must say, setup may be trickier than other backends as it relies on process forking. Also context usage is constrained. You cannot use a closing context (`close_on_exit=True`) within the application with this one. Although, it is permitted at lifespan level
+I must say, setup may be trickier than other backends as it relies on process forking. Also context usage is constrained. You cannot use a closing context (`close_on_exit=True`) within the application with this one. Although, it is permitted at lifespan (outermost) level
 
 ```python
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
@@ -96,6 +97,8 @@ backend = MultiProcessInMemoryBackend(
     number_of_shards=64,     # rule of thumb: 2 × worker count
     cleanup_frequency=30.0,  # reclaim expired slots periodically
 )
+backend.start() # Call once in parent process
+
 app = FastAPI(lifespan=backend.lifespan)
 ```
 
@@ -346,7 +349,7 @@ async def ws_endpoint(websocket: WebSocket):
         data = await websocket.receive_text()
         await ws_throttle.hit(websocket, context={"scope": "message"}) # Per message level
         if is_throttled(websocket):
-            # The default throttled handler already send a throttle frame to the client
+            # The default throttled handler already sent a *throttled* frame to the client
             # You can override that behaviour if you need something custom.
             continue
         await websocket.send_text(process(data))
@@ -425,12 +428,12 @@ async def my_handler(request, wait_ms, throttle, context):
 Traffik allows you to gate when a throttle applies, or skip it for certain traffic using rules. See examples on how to use them below.
 
 ```python
-from traffik.registry import ThrottleRule, BypassThrottleRule
+from traffik.registry import throttle_if, bypass_if
 
 # Only apply the global throttle to write methods
 write_throttle.add_rules(
     "api:global",
-    ThrottleRule(methods={"POST", "PUT", "PATCH", "DELETE"}),
+    throttle_if(methods={"POST", "PUT", "PATCH", "DELETE"}),
 )
 
 # Skip throttling for internal traffic
@@ -440,7 +443,7 @@ async def is_internal(request: Request) -> bool:
 throttle = HTTPThrottle(
     "api:global",
     rate="100/min",
-    rules=[BypassThrottleRule(predicate=is_internal)],
+    rules=[bypass_if(predicate=is_internal)],
 )
 ```
 

@@ -163,6 +163,7 @@ class SlidingWindowLogStrategy:
 
         async with backend.lock(f"lock:{log_key}", **self.lock_config):
             old_log = await backend.get(log_key)
+            entries: typing.Iterable[typing.Tuple[float, float]]
             # If log exists, load and parse entries as [timestamp, cost] tuples
             if old_log and old_log != "":
                 try:
@@ -173,7 +174,7 @@ class SlidingWindowLogStrategy:
                 entries = []
 
             # Filter entries, sum costs, and find oldest timestamp in one pass for efficiency
-            valid_entries = []
+            valid_entries: typing.List[typing.Tuple[float, float]] = []
             current_total_cost = 0.0
             oldest_timestamp = float("inf")
 
@@ -181,7 +182,7 @@ class SlidingWindowLogStrategy:
                 for timestamp, recorded_cost in entries:
                     timestamp, recorded_cost = float(timestamp), float(recorded_cost)
                     if timestamp > window_start:
-                        valid_entries.append([timestamp, recorded_cost])
+                        valid_entries.append((timestamp, recorded_cost))
                         current_total_cost += recorded_cost
                         oldest_timestamp = min(timestamp, oldest_timestamp)
             except SERDE_ERRORS:
@@ -201,7 +202,7 @@ class SlidingWindowLogStrategy:
                 return wait_ms
 
             # If within limit, add this request as [timestamp, cost] entry
-            valid_entries.append([now, float(cost)])
+            valid_entries.append((now, float(cost)))
             await backend.set(
                 log_key, _encode_two_float_records(valid_entries), expire=ttl_seconds
             )
@@ -237,6 +238,7 @@ class SlidingWindowLogStrategy:
         log_key = f"{full_key}:slidinglog"
 
         old_log = await backend.get(log_key)
+        entries: typing.Iterable[typing.Tuple[float, float]]
         # If log exists, load and parse entries as [timestamp, cost] tuples
         if old_log and old_log != "":
             try:

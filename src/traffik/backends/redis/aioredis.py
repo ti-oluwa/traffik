@@ -1,8 +1,8 @@
 """Redis implementation of the throttle backend using `redis.asyncio`."""
 
 import asyncio
+import logging
 import math
-import sys
 import typing
 from time import monotonic
 from types import TracebackType
@@ -22,12 +22,14 @@ from traffik.exceptions import (
     LockReleaseError,
 )
 from traffik.typing import (
+    AsyncLock,
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
 
+logger = logging.getLogger(__name__)
 _AnyRedis = typing.Union[aioredis.Redis, aioredis.RedisCluster]
 
 _INCREMENT_WITH_TTL_SCRIPT = """
@@ -327,9 +329,9 @@ class _AsyncRedisLock:
                 name,  # KEYS[1]
                 token,  # ARGV[1]
             )
-            if not released:
-                sys.stderr.write(f"Warning: Lock '{name}' expired or stolen\n")
-                sys.stderr.flush()
+            if not released and logger.isEnabledFor(logging.WARNING):
+                logger.warning("Lock '%s' expired or stolen.\n", name)
+
         except NoScriptError:
             # Script was flushed from Redis cache, re-register and retry
             # Update shared dict so backend and future locks see the new SHA
@@ -626,7 +628,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         self._owns_connection: bool = False
 
         self._increment_with_ttl_sha: typing.Optional[str] = None
-        """SHA hash of the loaded Lua script for increment_with_ttl."""
+        """SHA hash of the loaded Lua script for `increment_with_ttl`."""
         self._clear_sha: typing.Optional[str] = None
         """SHA hash of the loaded Lua script for clear."""
 
@@ -819,6 +821,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
     ) -> _GatedNamedLock[typing.Union[_AsyncRedisLock, _AsyncRedLock]]:
         """Returns a distributed Redis lock for the given name."""
         self._assert_ready()
+        lock: AsyncLock
         if not self._use_redlock:
             lock = _AsyncRedisLock(
                 name,
@@ -845,7 +848,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
     ) -> typing.Optional[str]:
         """Get value by key."""
         self._assert_ready()
-        return await self.connection.get(key)  # type: ignore[union-attr]
+        return await self.connection.get(key)  # type: ignore[union-attr,return-value]
 
     async def set(
         self, key: str, value: typing.Any, expire: typing.Optional[float] = None
@@ -853,7 +856,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         """Set value by key with optional expiration."""
         self._assert_ready()
         if expire is not None:
-            await self.connection.set(key, value, px=expire * 1000)  # type: ignore[union-attr]
+            await self.connection.set(key, value, px=expire * 1000)  # type: ignore[arg-type,union-attr,return-value]
         else:
             await self.connection.set(key, value)  # type: ignore[union-attr]
 
@@ -937,7 +940,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         self._assert_ready()
         if not keys:
             return []
-        return await self.connection.mget(keys)  # type: ignore[union-attr]
+        return await self.connection.mget(keys)  # type: ignore[union-attr,return-value]
 
     async def multi_set(
         self,
@@ -996,11 +999,8 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         if self.connection is not None and self._owns_connection:
             try:
                 await self.connection.aclose()
-            except RedisError as exc:
-                sys.stderr.write(
-                    f"Warning: error while closing redis connection: {exc}\n"
-                )
-                sys.stderr.flush()
+            except RedisError:
+                logger.exception("An error occurred while closing redis connection.\n")
 
         self.connection = None
         self._increment_with_ttl_sha = None

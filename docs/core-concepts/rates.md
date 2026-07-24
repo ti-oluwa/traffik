@@ -2,15 +2,14 @@
 
 A `Rate` answers one question: **how many requests are allowed in how much time?**
 
-Traffik gives you two ways to express that: a human-friendly string, or the `Rate`
-object itself. Both end up in exactly the same place.
+Traffik allows you express that in two ways. Either a human-friendly string, or the `Rate`
+object itself. Both end up in exactly the same.
 
 ---
 
 ## String format
 
-The string format is the fastest path to a working rate limit. Traffik parses it
-once, caches the result (LRU, capacity 512), and never touches it again.
+The string format is the fastest path to a working rate limit. Traffik parses it once and caches the result.
 
 ```python
 rate = "100/min"     # 100 requests per minute
@@ -56,7 +55,6 @@ one of the values in the table below.
 | `"10/30 seconds"`       | 10 requests per 30 seconds        |
 | `"1000/500ms"`          | 1000 requests per 500 ms          |
 | `"50/d"`                | 50 requests per day               |
-| `"0/0"`                 | Unlimited (no throttling)         |
 
 !!! tip "Stick to strings for simple limits"
     For everyday limits like "100 per minute" or "5 per second", the string form
@@ -109,7 +107,7 @@ created, every attribute, `limit`, `expire`, `rps`, `rpm`, `rph`, `rpd`,
 ## Parsing with `Rate.parse()`
 
 Internally, string rates go through `Rate.parse()`, which wraps an LRU-cached
-internal function with a capacity of 512 entries. This means the thousandth time you
+internal parser with a capacity of 512 entries. This means the thousandth time you
 hit `"100/min"`, the parse cost is effectively zero.
 
 ```python
@@ -124,16 +122,14 @@ Parsing is case-insensitive. `"100/MIN"` and `"100/min"` hit the same cache entr
 
 ## Dynamic rate functions
 
-Sometimes the right rate limit depends on the request itself. Maybe free users get
-`"10/min"` and pro users get `"1000/min"`. Traffik supports **async rate functions**
-that receive the current connection and context, and return a `Rate`.
+Sometimes the right rate limit depends on the request itself. Maybe free users get `"10/min"` and pro users get `"1000/min"`. Traffik supports **async rate functions** that receive the current connection and context, and return a `Rate`.
 
 ```python
 from traffik.rates import Rate
 from starlette.requests import Request
 
 async def my_rate(connection: Request, context: dict | None) -> Rate:
-    user = connection.state.user
+    user = connection.state.user    # Possibly set by a middleware or dependency
     if user and user.plan == "pro":
         return Rate.parse("1000/min")
     return Rate.parse("10/min")
@@ -159,20 +155,15 @@ throttle = HTTPThrottle(
 
 ## Unlimited rates
 
-To explicitly mark something as unlimited (no throttling at all), use either:
+To explicitly mark something as unlimited (no throttling at all), construct a bare `Rate` with no arguments:
 
 ```python
-Rate()                # no arguments -> unlimited
-Rate.parse("0/0")    # string form
+Rate()  # Unlimited. No limit, no period, no throttling
 ```
 
-Both produce `Rate(unlimited=True)` with `rate.unlimited == True`. Traffik's
-strategies detect this flag and short-circuit immediately, zero backend I/O, zero
-overhead.
+`Rate()` produces `rate.unlimited == True`. Traffik's strategies detect this flag and short-circuit immediately with zero backend I/O, almost zero overhead.
 
 !!! tip "Use unlimited for internal health check endpoints"
     A health check that hits the same throttle as your main API can skew your
     counters. Give it an unlimited rate (or return `EXEMPTED` from the identifier)
     and keep your metrics clean.
-
-

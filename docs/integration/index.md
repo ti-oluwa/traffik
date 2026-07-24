@@ -1,6 +1,6 @@
 # Integration
 
-Traffik doesn't force you into one pattern, use whichever fits your architecture.
+Traffik doesn't force you into one usage pattern.You can use whichever fits your architecture.
 
 Every throttle is a plain Python object. You can attach it to a route via FastAPI's dependency injection, wrap a function with a decorator, drop it into ASGI middleware, or call it directly inside your handler logic. All four approaches use the same underlying throttle instance, they're just different entry points.
 
@@ -84,5 +84,4 @@ async def upload(request: Request):
 | Direct usage | Dynamic costs, conditional logic, multi-step workflows |
 
 There is no wrong choice. Dependency injection and decorators are interchangeable stylistic preferences. Middleware and direct usage solve different structural problems. You can also combine them, for example, a global middleware throttle plus a tighter per-route dependency.
-
 

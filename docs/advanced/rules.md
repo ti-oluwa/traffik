@@ -1,10 +1,10 @@
 # Throttle Rules & Wildcards
 
-Throttles apply globally by default. Attach one to a router and it runs on every request that hits that router, no questions asked. That's perfect for simple cases, but real APIs rarely have simple cases.
+Throttles apply globally by default. Attach one to a router and it runs on every request that hits that router. That's perfect for simple cases, but real APIs rarely have simple cases.
 
 What if your global API throttle should apply to *most* routes but not the health check? What if `GET /users` has its own stricter limit and shouldn't also drain the shared pool? What if you want one throttle to govern anonymous users and a totally different one for premium accounts?
 
-That's what **throttle rules** are for. Rules let a throttle ask "does this connection even apply to me?" before doing anything, before touching the backend, before computing the client identifier, before any of it. If the rule says no, the throttle steps aside cleanly.
+That's what **throttle rules** are for. Rules let a throttle ask "do I even apply to this connection?" before doing anything, before touching the backend, before computing the client identifier, before any of it. If the rule says no, the throttle exempts that connection.
 
 ---
 
@@ -28,19 +28,19 @@ Without rules, you'd have to manually split your routing, duplicate logic, or ac
 
 ---
 
-## `ThrottleRule`: "Only apply when..."
+## `Rule`: "Only apply when..."
 
-A `ThrottleRule` is a gate: the throttle applies **only** when the connection matches the rule. Non-matching connections pass straight through without consuming any quota.
+A `Rule` is a gate: the throttle applies **only** when the connection matches the rule. Non-matching connections pass straight through without consuming any quota.
 
 ```python
-from traffik.registry import ThrottleRule
+from traffik.registry import Rule
 
 # Only throttle GET requests to /api/users
-rule = ThrottleRule(path="/api/users", methods={"GET"})
+rule = Rule(path="/api/users", methods={"GET"})
 throttle = HTTPThrottle("api:users", rate="500/min", rules={rule})
 ```
 
-A `ThrottleRule` accepts three optional parameters, all are conjunctive:
+A `Rule` accepts three optional parameters, all are conjunctive:
 
 - **`path`** - a path pattern (string, glob, or compiled regex). The connection's path must match.
 - **`methods`** - a set of HTTP method strings (e.g. `{"GET", "POST"}`). The connection's method must be in the set. Case-insensitive.
@@ -50,24 +50,36 @@ If *any* of the specified criteria don't match, the throttle is skipped for that
 
 ---
 
-## `BypassThrottleRule`: "Skip when..."
+## `Bypass`: "Skip when..."
 
-`BypassThrottleRule` is the inverse: the throttle is skipped **when** the connection matches.
+`Bypass` is the inverse: the throttle is skipped **when** the connection matches.
 
 ```python
-from traffik.registry import BypassThrottleRule
+from traffik.registry import Bypass
 
 # Global throttle applies to everything EXCEPT GET /api/users
-bypass = BypassThrottleRule(path="/api/users", methods={"GET"})
+bypass = Bypass(path="/api/users", methods={"GET"})
 global_throttle = HTTPThrottle("api:global", rate="1000/min", rules={bypass})
 ```
 
 This is often more ergonomic for global throttles with carve-outs. Rather than listing every path that *should* be throttled (which changes as you add routes), you list the exceptions.
 
-!!! tip "`ThrottleRule` vs `BypassThrottleRule`: which to reach for?"
-    Use `ThrottleRule` when you're building a *targeted* throttle that should only apply to specific routes, e.g., a strict limit on the login endpoint.
+!!! tip "`Rule` vs `Bypass`: which to reach for?"
+    Use `Rule` when you're building a *targeted* throttle that should only apply to specific routes, e.g., a strict limit on the login endpoint.
 
-    Use `BypassThrottleRule` when you have a *broad* throttle (e.g., a global router-level limit) and want to carve out exceptions, e.g., "everything except health checks and the CDN callback."
+    Use `Bypass` when you have a *broad* throttle (e.g., a global router-level limit) and want to carve out exceptions, e.g., "everything except health checks and the CDN callback."
+
+!!! tip "`throttle_if(...)` / `bypass_if(...)`"
+    If `Rule(...)` and `Bypass(...)` read a little flat at the call site, `traffik.registry` also exports `throttle_if(...)` and `bypass_if(...)` which have the same signature, and return the same objects, they are just named for how they read in context:
+
+    ```python
+    from traffik.registry import throttle_if, bypass_if
+
+    rule = throttle_if(path="/api/users", methods={"GET"})
+    bypass = bypass_if(path="/api/users", methods={"GET"})
+    ```
+
+    This is purely a naming preference so pick whichever reads better in your codebase, they're equivalent either way.
 
 ---
 
@@ -91,24 +103,24 @@ The rules are:
 
 ```python
 import re
-from traffik.registry import BypassThrottleRule, ThrottleRule
+from traffik.registry import Bypass, Rule
 
 # Glob wildcards
-BypassThrottleRule(path="/api/v*/users")    # /api/v1/users, /api/v2/users, etc.
-BypassThrottleRule(path="/api/**")           # Anything under /api/
+Bypass(path="/api/v*/users")    # /api/v1/users, /api/v2/users, etc.
+Bypass(path="/api/**")           # Anything under /api/
 
 # Compiled regex (exact control)
-ThrottleRule(path=re.compile(r"^/api/users/\d+$"))  # Only numeric user IDs
+Rule(path=re.compile(r"^/api/users/\d+$"))  # Only numeric user IDs
 
 # Prefix match (no wildcards)
-BypassThrottleRule(path="/api/internal")  # /api/internal, /api/internal/health, etc.
+Bypass(path="/api/internal")  # /api/internal, /api/internal/health, etc.
 ```
 
 !!! note "Regex vs prefix matching"
     When you pass a plain string with no `*`, Traffik compiles it as a regex and uses `re.Pattern.match()`, which matches from the start of the string. Since `match()` doesn't require matching to the end, `/api/users` becomes a prefix match. If you need a full-string match, use a compiled regex with `$` at the end.
 
-!!! tip "`ThrottleMiddleware` path uses `ThrottleRule` internally"
-    The `path` parameter on `MiddlewareThrottle` (used with `ThrottleMiddleware`) uses the same `ThrottleRule` path-matching logic internally. That means it supports the same wildcard patterns: `*`, `**`, plain string prefix match, and compiled `re.Pattern`. See [Middleware](../integration/middleware.md) for usage examples.
+!!! tip "`ThrottleMiddleware` path uses `Rule` internally"
+    The `path` parameter on `MiddlewareThrottle` (used with `ThrottleMiddleware`) uses the same `Rule` path-matching logic internally. That means it supports the same wildcard patterns: `*`, `**`, plain string prefix match, and compiled `re.Pattern`. See [Middleware](../integration/middleware.md) for usage examples.
 
 ---
 
@@ -118,10 +130,10 @@ Pass a `rules` set when constructing the throttle:
 
 ```python
 from traffik import HTTPThrottle
-from traffik.registry import BypassThrottleRule
+from traffik.registry import Bypass
 
-bypass1 = BypassThrottleRule(path="/api/users", methods={"GET"})
-bypass2 = BypassThrottleRule(path="/api/organizations", methods={"POST"})
+bypass1 = Bypass(path="/api/users", methods={"GET"})
+bypass2 = Bypass(path="/api/organizations", methods={"POST"})
 
 global_throttle = HTTPThrottle(
     "api:v1",
@@ -140,16 +152,16 @@ You can also attach rules to *any* registered throttle by its UID after the fact
 
 ```python
 from traffik import HTTPThrottle
-from traffik.registry import BypassThrottleRule
+from traffik.registry import Bypass
 
 global_throttle = HTTPThrottle("api:v1", rate="1000/min")
 
 # Later, when setting up the users router:
 users_throttle = HTTPThrottle("api:users", rate="500/min")
 
-bypass_GET_users = BypassThrottleRule(path="/api/v1/users", methods={"GET"})
+bypass_GET_users = Bypass(path="/api/v1/users", methods={"GET"})
 users_throttle.add_rules("api:v1", bypass_GET_users)
-# ^ Attaches the rule to global_throttle (uid="api:v1"), not to users_throttle
+# ^ Attaches the rule to `global_throttle` (uid="api:v1"), not to `users_throttle`
 ```
 
 Notice the `add_rules` call: the first argument is the **target throttle's UID**, the throttle you want to *modify*. The rule is added to the global registry, and the target throttle will pick it up on its next `hit()` call.
@@ -166,7 +178,7 @@ By default, rules added via `add_rules()` are picked up on the first request aft
 For conditions that path and methods can't express, such as "only throttle premium users" or "skip throttling for internal service calls", use a `predicate`:
 
 ```python
-from traffik.registry import ThrottleRule, BypassThrottleRule
+from traffik.registry import Rule, Bypass
 
 # Only apply this throttle to users on the "premium" tier
 async def only_premium(connection) -> bool:
@@ -175,7 +187,7 @@ async def only_premium(connection) -> bool:
         return False
     return user.tier == "premium"
 
-premium_rule = ThrottleRule(predicate=only_premium)
+premium_rule = Rule(predicate=only_premium)
 premium_throttle = HTTPThrottle("api:premium", rate="5000/min", rules={premium_rule})
 ```
 
@@ -196,15 +208,15 @@ Traffik inspects the predicate's signature and passes `context` only if the func
 
 Rules are evaluated in an order optimised for short-circuit performance. Traffik automatically sorts them:
 
-1. **`BypassThrottleRule` without predicate** - fastest path; a frozenset lookup + regex match. Returns `False` on match (throttle skipped immediately).
-2. **`ThrottleRule` without predicate** - same cost as above. Returns `False` on non-match (throttle skipped immediately).
-3. **`BypassThrottleRule` with predicate** - async; predicate runs after path/method check passes.
-4. **`ThrottleRule` with predicate** - async; slowest. Runs only if all cheaper rules passed.
+1. **`Bypass` without predicate** - fastest path; a frozenset lookup + regex match. Returns `False` on match (throttle skipped immediately).
+2. **`Rule` without predicate** - same cost as above. Returns `False` on non-match (throttle skipped immediately).
+3. **`Bypass` with predicate** - async; predicate runs after path/method check passes.
+4. **`Rule` with predicate** - async; slowest. Runs only if all cheaper rules passed.
 
 You don't need to think about this ordering, Traffik handles it. But it's good to know why **cheap method/path rules should always be preferred over predicates** when they can express the same condition.
 
-!!! note "`BypassThrottleRule` always wins first"
-    `BypassThrottleRule` instances are always checked **before** `ThrottleRule` instances within the same priority tier. This short-circuit means: if any bypass rule matches, the throttle is skipped immediately without evaluating any `ThrottleRule` predicates. Keep bypass rules cheap and tight, they protect everything downstream.
+!!! note "`Bypass` always wins first"
+    `Bypass` instances are always checked **before** `Rule` instances within the same priority tier. This short-circuit means: if any bypass rule matches, the throttle is skipped immediately without evaluating any `Rule` predicates. Keep bypass rules cheap and tight, they protect everything downstream.
 
 ---
 
@@ -217,8 +229,8 @@ from traffik import HTTPThrottle
 from traffik.registry import GLOBAL_REGISTRY, ThrottleRegistry
 
 # Check if a throttle has been registered
-GLOBAL_REGISTRY.exist("api:v1")   # True if HTTPThrottle("api:v1", ...) was called
-GLOBAL_REGISTRY.exist("api:v99")  # False
+GLOBAL_REGISTRY.exists("api:v1")   # True if HTTPThrottle("api:v1", ...) was called
+GLOBAL_REGISTRY.exists("api:v99")  # False
 
 # Add rules directly through the registry
 GLOBAL_REGISTRY.add_rules("api:v1", bypass_rule)
@@ -246,13 +258,13 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 from traffik import HTTPThrottle, Rate
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.decorators import throttled
-from traffik.registry import BypassThrottleRule
+from traffik.registry import Bypass
 
 app = FastAPI(lifespan=InMemoryBackend().lifespan)
 
 # GLOBAL THROTTLE
 # GET: 1000/min, POST: 300/min for everything under /api/v1
-# Exceptions are carved out below with BypassThrottleRules.
+# Exceptions are carved out below with Bypasss.
 
 async def global_rate(
     connection: Request,
@@ -264,8 +276,8 @@ async def global_rate(
 
 
 # Carve-outs: global throttle should NOT apply to these
-bypass_GET_users = BypassThrottleRule(path="/api/v1/users", methods={"GET"})
-bypass_POST_orgs = BypassThrottleRule(path="/api/v1/organizations", methods={"POST"})
+bypass_GET_users = Bypass(path="/api/v1/users", methods={"GET"})
+bypass_POST_orgs = Bypass(path="/api/v1/organizations", methods={"POST"})
 
 global_throttle = HTTPThrottle(
     "api:v1",
@@ -369,10 +381,10 @@ There are three ways to make a throttle apply differently to different connectio
 
     ```python
     # Apply only to admin routes
-    ThrottleRule(path="/api/admin/**")
+    Rule(path="/api/admin/**")
 
     # Skip for health checks
-    BypassThrottleRule(path="/health")
+    Bypass(path="/health")
     ```
 
     Rules are evaluated before any backend I/O. Zero quota is consumed when a rule skips a throttle. They're the cheapest way to make structural decisions.
@@ -398,7 +410,7 @@ There are three ways to make a throttle apply differently to different connectio
     async def only_external(connection) -> bool:
         return not getattr(connection.state, "is_internal", False)
 
-    ThrottleRule(predicate=only_external)
+    Rule(predicate=only_external)
     ```
 
     Predicates run after path/method checks and involve an `await`. Use them for cross-cutting concerns that can't be expressed structurally.
@@ -412,9 +424,9 @@ There are three ways to make a throttle apply differently to different connectio
 
 | Concept | What it does |
 |---|---|
-| `ThrottleRule(path, methods, predicate)` | Apply throttle **only** when connection matches |
-| `BypassThrottleRule(path, methods, predicate)` | Skip throttle **when** connection matches |
-| `BypassThrottleRule` checked first | Short-circuits before any `ThrottleRule` in the same tier |
+| `Rule(path, methods, predicate)` | Apply throttle **only** when connection matches |
+| `Bypass(path, methods, predicate)` | Skip throttle **when** connection matches |
+| `Bypass` checked first | Short-circuits before any `Rule` in the same tier |
 | `rules={...}` in constructor | Attach rules at throttle creation |
 | `throttle.add_rules("uid", rule)` | Attach rules to another throttle by UID after creation |
 | `*` in path pattern | Matches one path segment (no `/`) |
@@ -422,7 +434,5 @@ There are three ways to make a throttle apply differently to different connectio
 | Plain string path | Prefix regex match |
 | `re.compile(...)` path | Exact regex match |
 | `ThrottleRegistry` | The class backing `GLOBAL_REGISTRY`; pass a custom instance via `registry=` |
-| `GLOBAL_REGISTRY.exist("uid")` | Check if a throttle UID is registered |
+| `GLOBAL_REGISTRY.exists("uid")` | Check if a throttle UID is registered |
 | `dynamic_rules=True` | Re-fetch registry rules on every request |
-
-

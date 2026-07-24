@@ -285,5 +285,5 @@ specific throttle you want to bypass.
 throttle_a = HTTPThrottle("api:general", rate="100/min", identifier=admin_aware_id)
 
 # Throttle B: admins still subject to this limit (audit trail, etc.)
-throttle_b = HTTPThrottle("api:audit",   rate="1000/min", identifier=default_identifier)
+throttle_b = HTTPThrottle("api:audit", rate="1000/min", identifier=default_identifier)
 ```

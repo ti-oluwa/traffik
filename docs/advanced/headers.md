@@ -356,5 +356,3 @@ Content-Type: application/json
 | `Headers({...})` | A collection of headers attached to a throttle |
 | `headers_a \| headers_b` | Merge two header collections (non-mutating) |
 | `Header.DISABLE` | Sentinel to suppress a specific header in a call |
-
-

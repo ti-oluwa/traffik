@@ -15,7 +15,7 @@ That's what custom throttled handlers are for.
 Before you customize, it helps to know what you're replacing:
 
 - **HTTPThrottle**: Raises `ConnectionThrottled` which becomes an HTTP `429` response with a plain text body.
-- **WebSocketThrottle**: If the connection is open, sends a JSON message and keeps the connection alive. If the connection isn't open yet, it raises `ConnectionThrottled`.
+- **WebSocketThrottle**: If the connection is open, sends a JSON message and keeps the connection alive. If the connection isn't open (accepted) yet, it raises `ConnectionThrottled`.
 
 The WebSocket default message looks like this:
 
@@ -31,7 +31,7 @@ The WebSocket default message looks like this:
 
 ## Handler Signature
 
-All throttled handlers - HTTP and WebSocket - share the same signature:
+All throttled handlers - HTTP and WebSocket, share the same signature:
 
 ```python
 async def handler(
@@ -51,25 +51,17 @@ The `wait_ms` value is already in milliseconds. Convert to seconds with `math.ce
 
 ### Custom Headers and Status Code
 
+HTTP handlers raise an exception rather than returning a response - the cleanest approach is a Starlette `HTTPException` with custom headers:
+
 ```python
 import math
 from fastapi import FastAPI, Request, Depends
-from starlette.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from traffik import HTTPThrottle
 from traffik.backends.redis import RedisBackend
 
 backend = RedisBackend("redis://localhost:6379", namespace="myapp")
 app = FastAPI(lifespan=backend.lifespan)
-
-
-async def my_http_handler(request, wait_ms, throttle, context):
-    retry_after = math.ceil(wait_ms / 1000)
-    raise Exception  # We raise, not return, from HTTP handlers
-
-# Actually: HTTP handlers raise an HTTP response, not return one.
-# The cleanest approach is to raise a Starlette HTTPException with custom headers:
-
-from starlette.exceptions import HTTPException as StarletteHTTPException
 
 async def rate_limit_handler(request, wait_ms, throttle, context):
     retry_after = math.ceil(wait_ms / 1000)
@@ -112,7 +104,7 @@ async def rich_rate_limit_handler(request, wait_ms, throttle, context):
     headers = {"Retry-After": str(retry_after)}
     if stat:
         headers["X-RateLimit-Limit"] = str(int(stat.rate.limit))
-        headers["X-RateLimit-Remaining"] = "0"
+        headers["X-RateLimit-Remaining"] = str(int(stat.hits_remaining))
 
     raise StarletteHTTPException(
         status_code=429,
@@ -127,7 +119,7 @@ async def rich_rate_limit_handler(request, wait_ms, throttle, context):
 
 WebSocket handlers have two styles: send a message (recommended) or raise an exception.
 
-### Option 1: Send a Message (Recommended)
+### Option 1: Send a Message
 
 The connection stays open. The client gets notified and can back off gracefully:
 
@@ -145,13 +137,13 @@ async def ws_rate_limit_handler(websocket, wait_ms, throttle, context):
             "retry_after": retry_after,
             "throttle": throttle.uid,
         })
-    # Don't raise - just return. The connection stays alive.
+    # Don't raise, just return. The connection stays alive.
 ```
 
 !!! tip "Performance note"
-    Sending a message is significantly faster than raising an exception in WebSocket handlers. Exception propagation has overhead. For high-frequency message throttling (think chat apps or telemetry streams), the send-and-return pattern is measurably better.
+    Sending a message is significantly faster than raising an exception in WebSocket handlers. Exception propagation has overhead. For high-frequency message throttling (think chat apps or telemetry streams), the send-and-return pattern is measurably better. Unless of course, you actually need the connection closed for good reasons.
 
-### Option 2: Raise an Exception (Not Recommended)
+### Option 2: Raise an Exception
 
 This closes the connection from the server side. Only use it when you genuinely want to disconnect the client:
 
@@ -184,7 +176,7 @@ async def ws_close_handler(websocket, wait_ms, throttle, context):
         await websocket.close(code=1008, reason=f"Rate limit exceeded. Retry after {retry_after}s.")
 ```
 
-WebSocket close code `1008` is the standard "Policy Violation" code - the right semantic choice for rate limiting.
+WebSocket close code `1008` is the standard "Policy Violation" code and the right semantic choice for rate limiting.
 
 ---
 

@@ -44,7 +44,7 @@ test_and_set_byte(PyObject *self, PyObject *args)
     Py_buffer view;
     Py_ssize_t offset;
 
-    /* w* requires a writable buffer — rejects read-only memoryviews early */
+    /* w* requires a writable buffer - rejects read-only memoryviews early */
     if (!PyArg_ParseTuple(args, "w*n", &view, &offset)) {
         return NULL;
     }

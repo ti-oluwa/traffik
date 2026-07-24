@@ -5,7 +5,7 @@ Sometimes you want to *look* at the rate limit counter without actually *touchin
 That's what `throttle.stat(...)` is for.
 
 !!! tip "stat() is read-only"
-    Calling `stat(...)` never consumes quota. It reads the current state from the backend and returns it. Your clients can call a stats endpoint as often as they like - it won't move the rate limit needle.
+    Calling `stat(...)` never consumes quota. It reads the current state from the backend and returns it. Your clients can call a stats endpoint as often as they like. It won't move the rate limit needle.
 
 ---
 
@@ -155,7 +155,7 @@ async def get_items(
 ```
 
 !!! tip "Built-in header support"
-    You can also configure headers directly on the throttle using the `headers` parameter and the `Header` API - Traffik will resolve them automatically on each throttled response. See the [Headers reference](../core-concepts/index.md) for details.
+    You can also configure headers directly on the throttle using the `headers` parameter and the `Header` API - Traffik will resolve them on each throttled response. See the [Headers reference](headers.md) for details.
 
 ---
 
@@ -178,7 +178,6 @@ api_throttle = HTTPThrottle("api:standard", rate="1000/hour", backend=backend)
 async def get_usage(request: Request):
     """Returns quota info without consuming quota."""
     stat = await api_throttle.stat(request)
-
     if stat is None:
         return {"message": "No rate limit info available (you may be exempt)"}
 
@@ -190,7 +189,7 @@ async def get_usage(request: Request):
     }
 ```
 
-Clients can hit `/usage` as often as they like - it reads the counter but never writes to it.
+Clients can hit `/usage` as often as they like since it reads the counter but never writes to it.
 
 ---
 
@@ -224,23 +223,21 @@ throttle_hits = Counter(
 @app.middleware("http")
 async def collect_throttle_metrics(request: Request, call_next):
     response = await call_next(request)
-
     stat = await throttle.stat(request)
     if stat:
         quota_remaining.labels(throttle_uid="api").set(stat.hits_remaining)
         throttle_hits.labels(throttle_uid="api").inc()
-
     return response
 ```
 
 !!! warning "Avoid calling `stat(...)` in tight loops"
-    Each `stat(...)` call hits the backend. In a middleware that runs on every request, that's fine - it's one extra read per request. But calling it in a loop for many keys at once is a different story. Batch them if you need to.
+    Each `stat(...)` call hits the backend. In a middleware that runs on every request, that's fine - it's just an extra read per request. But calling it in a loop for many keys at once is a different story. Batch them if you need to.
 
 ---
 
 ## Summary
 
-- `stat(...)` is your window into the rate limiter's current state - **without modifying it**
+- `stat(...)` is your window into the rate limiter's current state **without modifying it**
 - Returns `None` for exempt clients and strategies without stat support
 - Use it for response headers, usage endpoints, dashboards, and metrics
 - All built-in strategies support `stat(...)` with typed metadata

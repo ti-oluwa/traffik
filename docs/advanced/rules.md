@@ -426,6 +426,7 @@ There are three ways to make a throttle apply differently to different connectio
 |---|---|
 | `Rule(path, methods, predicate)` | Apply throttle **only** when connection matches |
 | `Bypass(path, methods, predicate)` | Skip throttle **when** connection matches |
+| `throttle_if(...)` / `bypass_if(...)` | Same as `Rule(...)`/`Bypass(...)`, named for readability |
 | `Bypass` checked first | Short-circuits before any `Rule` in the same tier |
 | `rules={...}` in constructor | Attach rules at throttle creation |
 | `throttle.add_rules("uid", rule)` | Attach rules to another throttle by UID after creation |
@@ -434,5 +435,5 @@ There are three ways to make a throttle apply differently to different connectio
 | Plain string path | Prefix regex match |
 | `re.compile(...)` path | Exact regex match |
 | `ThrottleRegistry` | The class backing `GLOBAL_REGISTRY`; pass a custom instance via `registry=` |
-| `GLOBAL_REGISTRY.exists("uid")` | Check if a throttle UID is registered |
+| `GLOBAL_REGISTRY.exist("uid")` | Check if a throttle UID is registered |
 | `dynamic_rules=True` | Re-fetch registry rules on every request |

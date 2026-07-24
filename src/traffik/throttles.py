@@ -313,7 +313,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             )
 
         if dynamic_backend and backend is not None:
-            raise ValueError(
+            raise ConfigurationError(
                 "Cannot specify an explicit backend with `dynamic_backend=True`"
             )
 

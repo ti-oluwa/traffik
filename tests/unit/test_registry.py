@@ -267,7 +267,7 @@ class TestBaseThrottleRuleCheck:
         assert call_count == 1
 
     async def test_websocket_no_method_in_scope(self) -> None:
-        """WebSocket connections have no 'method' — method filter is skipped."""
+        """WebSocket connections have no 'method' - method filter is skipped."""
         rule = ThrottleRule(methods={"GET"})
         connection = make_connection(HTTPConnection)
         del connection.scope["method"]

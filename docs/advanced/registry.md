@@ -9,7 +9,7 @@ Every throttle in Traffik belongs to a `ThrottleRegistry`. The registry is the c
 `ThrottleRegistry` is a lightweight, thread-safe container that:
 
 - Tracks which throttle UIDs are active ("registered").
-- Stores the `ThrottleRule` / `BypassThrottleRule` sets that gate each throttle's `hit()` call.
+- Stores the `Rule` / `Bypass` sets that gate each throttle's `hit()` call.
 - Keeps a weak reference to each throttle instance so it can forward `disable()` / `enable()` calls without preventing garbage collection.
 
 ```python
@@ -46,7 +46,7 @@ registry.exists("api:v1")   # True
 
 ## Sharing a registry
 
-Multiple throttles sharing a single registry lets you manage them as a group: attach rules to several throttles at once, or disable them all in one call.
+Multiple throttles sharing a single registry lets you manage them as a group. You can attach rules to several throttles at once, or disable them all in one call.
 
 ```python
 from traffik import HTTPThrottle
@@ -63,20 +63,20 @@ admin_throttle = HTTPThrottle("api:admin", rate="500/min", registry=registry)
 
 ## Adding rules
 
-`add_rules()` attaches `ThrottleRule` / `BypassThrottleRule` instances to a throttle by UID. Rules are checked conjunctively on every `hit()` call. If any rule returns `False`, the throttle is skipped for that request.
+`add_rules()` attaches `Rule` / `Bypass` instances to a throttle by UID. Rules are checked conjunctively on every `hit()` call. If any rule returns `False`, the throttle is skipped for that request.
 
 ```python
-from traffik.registry import ThrottleRule, BypassThrottleRule
+from traffik.registry import Rule, Bypass
 
 # Only apply the write throttle on POST/PUT/DELETE
 registry.add_rules(
     "api:write",
-    ThrottleRule(methods={"POST", "PUT", "DELETE"}),
+    Rule(methods={"POST", "PUT", "DELETE"}),
 )
 
 # Exempt health checks from all throttles in the registry
 for uid in ("api:read", "api:write", "api:admin"):
-    registry.add_rules(uid, BypassThrottleRule(path="/health"))
+    registry.add_rules(uid, Bypass(path="/health"))
 ```
 
 See [Throttle Rules & Wildcards](rules.md) for the full path-matching and predicate API.
@@ -90,7 +90,7 @@ See [Throttle Rules & Wildcards](rules.md) for the full path-matching and predic
 Call `disable()` / `enable()` directly on the throttle instance. Both are async and acquire the throttle's internal update lock, so they are safe to call concurrently with `hit()`.
 
 ```python
-# Disable a throttle - subsequent hit() calls return immediately without consuming quota
+# Disable a throttle — subsequent hit() calls return immediately without consuming quota
 await throttle.disable()
 
 # Check status
@@ -134,7 +134,7 @@ Both methods return `True` if the throttle was found and acted upon, or `False` 
 `disable_all()` and `enable_all()` iterate every live throttle in the registry:
 
 ```python
-# Emergency kill switch - let all traffic through
+# Emergency kill switch — let all traffic through
 await registry.disable_all()
 
 # Resume normal throttling
@@ -191,10 +191,10 @@ from traffik.registry import ThrottleRegistry
 registry = ThrottleRegistry()
 
 # Check if a UID is registered
-registry.exists("api:v1")          # True / False
+registry.exist("api:v1")          # True / False
 
 # Retrieve attached rules
-rules = registry.get_rules("api:v1")   # List[ThrottleRule]
+rules = registry.get_rules("api:v1")   # List[Rule]
 
 # Retrieve the live throttle instance (or None if GC'd)
 throttle = registry.get_throttle("api:v1")
@@ -209,7 +209,7 @@ registry.clear()
 
 | Method / attribute | What it does |
 |---|---|
-| `registry.exists(uid)` | Check if a UID is registered |
+| `registry.exist(uid)` | Check if a UID is registered |
 | `registry.add_rules(uid, *rules)` | Attach rules to a throttle |
 | `registry.get_rules(uid)` | Retrieve all rules for a throttle |
 | `registry.get_throttle(uid)` | Return the live throttle instance, or `None` |

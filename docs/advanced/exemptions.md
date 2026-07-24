@@ -4,7 +4,7 @@ Some clients should never hit a rate limit. Your internal health check service.
 Your admin dashboard. A premium user on a contract with a dedicated SLA. A
 whitelisted IP for a partner integration.
 
-Traffik handles this cleanly through the `EXEMPTED` sentinel. When your identifier
+Traffik handles this through the `EXEMPTED` sentinel. When your identifier
 function returns `EXEMPTED`, Traffik short-circuits the entire throttle pipeline:
 no counter is incremented, no backend is consulted, no lock is acquired. The request
 passes through as if the throttle wasn't there.
@@ -233,31 +233,31 @@ throttle = HTTPThrottle(uid="api:tiered", rate=effective_rate)
 
 ---
 
-## `EXEMPTED` vs `BypassThrottleRule`
+## `EXEMPTED` vs `Bypass`
 
 Traffik offers two ways to skip throttling, and they're designed for different
 situations:
 
-| | `EXEMPTED` (from identifier) | `BypassThrottleRule` |
+| | `EXEMPTED` (from identifier) | `Bypass` |
 |---|---|---|
 | **Decision based on** | Who the client is (user, IP, token) | What the request is (path, method) |
 | **Configured on** | The `identifier` function | The throttle's `rules` parameter |
 | **Overhead** | Near zero - stops at identifier stage | Near zero - stops at rule check stage |
 | **Use for** | Trusted clients, premium users, admin tokens | Paths or methods that should never be throttled |
 
-!!! tip "Path-based exemptions: use `BypassThrottleRule`"
+!!! tip "Path-based exemptions: use `Bypass`"
     If you want to skip throttling for `GET /health` or `GET /metrics`, you should
-    use `BypassThrottleRule` rather than encoding path logic in your identifier:
+    use `Bypass` rather than encoding path logic in your identifier:
 
     ```python
-    from traffik.registry import BypassThrottleRule
+    from traffik.registry import Bypass
 
     throttle = HTTPThrottle(
         uid="api:main",
         rate="100/min",
         rules={
-            BypassThrottleRule(path="/health", methods={"GET"}),
-            BypassThrottleRule(path="/metrics", methods={"GET"}),
+            Bypass(path="/health", methods={"GET"}),
+            Bypass(path="/metrics", methods={"GET"}),
         },
     )
     ```
@@ -277,7 +277,7 @@ returns `EXEMPTED` for a given client, both throttles exempt that client. This i
 usually what you want: a true VIP client skips every limit.
 
 If you want selective exemptions - skip throttle A but not throttle B for the same
-client - use separate identifier functions, or use `BypassThrottleRule` on the
+client - use separate identifier functions, or use `Bypass` on the
 specific throttle you want to bypass.
 
 ```python

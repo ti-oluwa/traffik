@@ -28,7 +28,7 @@ from traffik import HTTPThrottle
 | `headers` | `Headers \| dict` | `None` | Response headers to resolve on each hit. See [Response Headers](advanced/headers.md). |
 | `on_error` | `"allow" \| "throttle" \| "raise" \| callable` | `None` | Behaviour when the backend raises. `"allow"` passes the request through; `"throttle"` rejects it; `"raise"` re-raises. |
 | `registry` | `ThrottleRegistry` | `GLOBAL_REGISTRY` | Registry to register this throttle in. |
-| `rules` | `Iterable[ThrottleRule]` | `None` | Gating rules. All must pass for the throttle to fire. |
+| `rules` | `Iterable[Rule]` | `None` | Gating rules. All must pass for the throttle to fire. |
 | `context` | `dict` | `None` | Static context dict passed to rate/cost callables and handlers. |
 | `dynamic_backend` | `bool` | `False` | Resolve the backend from request context on each hit instead of using a fixed instance. |
 | `min_wait_period` | `int` | `None` | Minimum wait floor in milliseconds for throttled responses. |
@@ -220,7 +220,7 @@ Throttles register themselves automatically on construction. You rarely need to 
 
 | Method | Description |
 |---|---|
-| `exists(uid)` | Check if a UID is registered. |
+| `exist(uid)` | Check if a UID is registered. |
 | `add_rules(uid, *rules)` | Attach gating rules to a throttle. Raises `ConfigurationError` if UID not registered. |
 | `get_rules(uid)` | Return all rules attached to a throttle. |
 | `get_throttle(uid)` | Return the live throttle instance, or `None` if garbage-collected. |
@@ -244,12 +244,12 @@ from traffik.registry import GLOBAL_REGISTRY
 
 ## Rules
 
-### `ThrottleRule`
+### `Rule`
 
 A gating rule: the throttle only fires when all attached rules pass.
 
 ```python
-from traffik.registry import ThrottleRule
+from traffik.registry import Rule
 ```
 
 **Guide:** [Throttle Rules & Wildcards](advanced/rules.md)
@@ -264,17 +264,17 @@ All specified conditions are combined with AND: path AND method AND predicate mu
 
 ---
 
-### `BypassThrottleRule`
+### `Bypass`
 
-Skips throttling when the rule matches (inverse logic compared to `ThrottleRule`).
+Skips throttling when the rule matches (inverse logic compared to `Rule`).
 
 ```python
-from traffik.registry import BypassThrottleRule
+from traffik.registry import Bypass
 ```
 
 **Guide:** [Throttle Rules & Wildcards](advanced/rules.md)
 
-Same parameters as `ThrottleRule`. When all conditions match, the throttle is bypassed for that request.
+Same parameters as `Rule`. When all conditions match, the throttle is bypassed for that request.
 
 ---
 

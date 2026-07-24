@@ -2,7 +2,7 @@
 
 Rate limiting is half the battle. The other half is telling clients *how* they're doing before they slam into a wall.
 
-Without response headers, your clients are flying blind - they have no idea how many requests they have left, when their window resets, or why they suddenly got a `429`. With the right headers, a well-behaved client can slow itself down gracefully, show users a meaningful "try again in X seconds" message, and stop hammering your API unnecessarily.
+Without response headers, your clients are flying blind. They have no idea how many requests they have left, when their window resets, or why they suddenly got a `429`. With the right headers, a well-behaved client can slow itself down gracefully, show users a meaningful "try again in X seconds" message, and stop hammering your API unnecessarily.
 
 This page covers the `Header` and `Headers` system that Traffik uses to **resolve** rate limit header values. Traffik does not automatically inject headers into responses, it computes the values and returns them. It's up to you to attach them to your response however you see fit (e.g., via middleware, a custom dependency, or a Starlette response). The `headers=` parameter on a throttle tells Traffik *which* headers to resolve, not which ones to auto-inject.
 
@@ -10,7 +10,7 @@ This page covers the `Header` and `Headers` system that Traffik uses to **resolv
 
 ## Why Headers Matter
 
-Standard rate limit headers have become a de facto convention - GitHub, Stripe, Cloudflare, and most large APIs all use some variation of these three:
+Standard rate limit headers have become a de facto convention. GitHub, Stripe, Cloudflare, and most large APIs all use some variation of these three:
 
 | Header | Meaning |
 |---|---|

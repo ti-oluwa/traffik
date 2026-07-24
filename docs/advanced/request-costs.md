@@ -38,9 +38,7 @@ from fastapi import Depends
 
 # Each request to this throttle burns 10 units - same as 10 normal requests
 export_throttle = HTTPThrottle(
-    uid="api:export",
-    rate="100/min",
-    cost=10,
+    uid="api:export", rate="100/min", cost=10
 )
 
 @app.get("/export", dependencies=[Depends(export_throttle)])
@@ -57,7 +55,7 @@ async def export_data():
 ## Dynamic Cost via Function
 
 When the cost depends on the request itself - file size, number of records, operation
-type - pass an async function instead of an integer. Traffik calls it on every hit,
+type, pass an async function instead of an integer. Traffik calls it on every hit,
 passing the connection and the current context.
 
 ```python
@@ -98,7 +96,7 @@ unless you passed a `context` dict when initializing the throttle or calling `hi
 
 ## Per-Call Override
 
-Sometimes you know the cost only at the moment of the call - for example, after
+Sometimes you know the cost only at the moment of the call. For example, after
 parsing a request body. Pass `cost=N` directly to `hit(...)` or `__call__(...)` to
 override the throttle's default for that one request.
 
@@ -124,9 +122,8 @@ async def process(request: Request):
 
 ## Cost of Zero: The Exemption Shortcut
 
-A cost of `0` is special: Traffik sees it and short-circuits immediately - no counter
-is incremented, no backend is called. The request passes through as if it was never
-throttled.
+A cost of `0` is special. Traffik sees it and short-circuits immediately - no counter
+is incremented, no backend is called. The request just passes through.
 
 ```python
 async def selective_cost(
@@ -141,7 +138,7 @@ async def selective_cost(
 
 !!! warning "Cost 0 vs `EXEMPTED`"
     Returning `0` from a cost function and returning `EXEMPTED` from an identifier
-    function both skip throttling - but they do it at different stages:
+    function both skip throttling, but they do it at different stages:
 
     - **`cost=0`**: Skips *before* the identifier is resolved (immediately `hit(...)` is called).
     - **`EXEMPTED`**: Skips *at the identifier stage*. Nothing downstream runs at all.
@@ -207,7 +204,6 @@ async def selective_cost(
 
         # Now consume that many units of quota
         await token_throttle(request, cost=tokens_used)
-
         return result
     ```
 

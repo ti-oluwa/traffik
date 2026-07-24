@@ -136,7 +136,6 @@ async def export_data(request: Request):
 
     # Consume quota now that the operation completed
     await export_throttle.hit(request, cost=cost)
-
     return result
 ```
 
@@ -220,7 +219,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
         # Record a hit for each message received
         await ws_throttle.hit(websocket)
-
         if is_throttled(websocket):
             # Client was notified by the throttle handler.
             # Optionally close the connection after repeated violations.
@@ -257,7 +255,6 @@ batch_throttle = HTTPThrottle(uid="batch:items", rate="10000/min")
 async def process_batch(request: Request):
     data = await request.json()
     items = data.get("items", [])
-
     if not items:
         return {"processed": 0}
 
@@ -279,6 +276,5 @@ async def process_batch(request: Request):
     # Consume quota - actual cost may differ if some items failed
     actual_cost = len(results)
     await batch_throttle.hit(request, cost=actual_cost)
-
     return {"processed": actual_cost, "results": results}
 ```

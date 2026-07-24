@@ -1,8 +1,8 @@
 # Context-Aware Backends (Multi-Tenant)
 
-By default, a throttle picks a backend once - at startup - and uses it for every
+By default, a throttle picks a backend once at startup, and uses it for every
 request it ever sees. That's the right call for most apps. But in a multi-tenant
-SaaS, "one backend for everyone" creates a problem: tenant A's traffic eats into
+SaaS, "one backend for everyone" can create a problem: tenant A's traffic eats into
 tenant B's quota counters, or worse, their limits bleed into each other.
 
 `dynamic_backend=True` solves this. Instead of caching a backend at startup, the
@@ -54,7 +54,7 @@ the backend's stored data survives the context exit (the counters aren't wiped).
 ## Setting Up a Dynamic Throttle
 
 Creating a dynamic throttle is the same as a normal throttle, except you omit
-`backend` and set `dynamic_backend=True`. Traffik will raise a `ValueError` if you
+`backend` and set `dynamic_backend=True`. Traffik will raise a `ConfigurationError` if you
 provide both.
 
 ```python
@@ -98,7 +98,7 @@ api_throttle = HTTPThrottle(
     dynamic_backend=True,
 )
 
-# Backend instances - created once at module level, NOT per-request
+# Backend instances - created once at module level, not per-request
 enterprise_backend = RedisBackend(
     "redis://enterprise-redis:6379",
     namespace="enterprise",
@@ -154,7 +154,7 @@ async def get_data():
 
 When an enterprise request arrives, the middleware wraps `call_next` in
 `enterprise_backend(...)`. The throttle calls `get_backend(connection)`, finds
-`enterprise_backend` in the ContextVar, and uses it - all without any modification
+`enterprise_backend` in the ContextVar, and uses it all without any modification
 to the route handler.
 
 ---
@@ -172,7 +172,7 @@ parameter does:
 
 !!! warning "Never use `persistent=False` with middleware"
     Without `persistent=True`, every request would clear the rate limit counters
-    for that backend on exit. Your throttle would effectively be disabled - every
+    for that backend on exit. Your throttle would effectively be disabled and every
     client would start fresh on every request.
 
 ---
@@ -214,8 +214,7 @@ async def test_different_backends_isolated():
         # Third hit in backend_a will be throttled
 ```
 
-This is the main reason `dynamic_backend` was designed - it makes integration tests
-with per-test isolation trivial.
+This is one of the reasons `dynamic_backend` was designed. It makes integration tests with per-test isolation trivial.
 
 ---
 
@@ -224,7 +223,7 @@ with per-test isolation trivial.
 | Operation | Overhead |
 |---|---|
 | Static backend (normal `backend=...`) | ~0 ms - cached attribute lookup |
-| Dynamic backend (ContextVar read) | 1–5 ms typical, up to 20 ms under contention |
+| Dynamic backend (ContextVar read) | 1–5 ms typical, up to 20 ms |
 
 The overhead comes from reading the `ContextVar` and potentially calling
 `initialize()` if the backend hasn't been set up yet for that context. This is
@@ -270,19 +269,19 @@ sub-10ms latency requirements.
                 return await call_next(request)
 
     # Good: backend created once, reused across requests
-    _backend = RedisBackend("redis://...", namespace="app", persistent=True)
+    backend = RedisBackend("redis://...", namespace="app", persistent=True)
 
     class GoodMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request, call_next):
-            async with _backend(close_on_exit=False, persistent=True):
+            async with backend(close_on_exit=False, persistent=True):
                 return await call_next(request)
     ```
 
 !!! warning "Don't mix `dynamic_backend=True` with an explicit `backend=...`"
-    Traffik raises a `ValueError` at construction time if you try:
+    Traffik raises a `ConfigurationError` at construction time if you try:
 
     ```python
-    # This raises ValueError
+    # This raises ConfigurationError
     throttle = HTTPThrottle(
         uid="bad",
         rate="100/min",

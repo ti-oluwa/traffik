@@ -1,5 +1,5 @@
 """
-Tests for `BypassThrottleRule`/`ThrottleRule` gating and bypass behavior.
+Tests for `Bypass`/`Rule` gating and bypass behavior.
 """
 
 import pytest
@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse
 from tests.frameworks import ASGIFramework, HTTPRoute
 from tests.utils import default_client_identifier, make_client
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.registry import BypassThrottleRule, ThrottleRegistry, ThrottleRule
+from traffik.registry import Bypass, Rule, ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
 
@@ -20,9 +20,9 @@ class TestThrottleRules:
     async def test_bypass_rule_skips_throttle_for_matching_path(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
     ) -> None:
-        """Requests matching a BypassThrottleRule should never be throttled."""
+        """Requests matching a Bypass should never be throttled."""
         async with inmemory_backend(close_on_exit=True):
-            bypass = BypassThrottleRule(path="/api/users", methods={"GET"})
+            bypass = Bypass(path="/api/users", methods={"GET"})
             throttle = HTTPThrottle(
                 uid=f"bypass-ctor-{web_framework.name}",
                 rate="2/s",
@@ -58,7 +58,7 @@ class TestThrottleRules:
     ) -> None:
         """Bypass only matches the specified method; other methods still throttle."""
         async with inmemory_backend(close_on_exit=True):
-            bypass = BypassThrottleRule(path="/api/items", methods={"GET"})
+            bypass = Bypass(path="/api/items", methods={"GET"})
             throttle = HTTPThrottle(
                 uid=f"bypass-method-{web_framework.name}",
                 rate="2/s",
@@ -91,9 +91,9 @@ class TestThrottleRules:
     async def test_gating_rule_only_throttles_matching_requests(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
     ) -> None:
-        """ThrottleRule gates the throttle - only matching requests consume quota."""
+        """Rule gates the throttle - only matching requests consume quota."""
         async with inmemory_backend(close_on_exit=True):
-            gate = ThrottleRule(methods={"POST"})
+            gate = Rule(methods={"POST"})
             throttle = HTTPThrottle(
                 uid=f"gate-ctor-{web_framework.name}",
                 rate="2/s",
@@ -127,7 +127,7 @@ class TestThrottleRules:
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
     ) -> None:
         """
-        A sub-throttle adds a BypassThrottleRule to a parent/global throttle so
+        A sub-throttle adds a Bypass to a parent/global throttle so
         specific routes skip the global limit.
         """
         async with inmemory_backend(close_on_exit=True):
@@ -150,7 +150,7 @@ class TestThrottleRules:
             )
 
             # Sub-throttle bypasses global for GET /api/v1/users
-            bypass = BypassThrottleRule(path="/api/v1/users", methods={"GET"})
+            bypass = Bypass(path="/api/v1/users", methods={"GET"})
             sub_throttle.add_rules(global_uid, bypass)
 
             async def users_handler(request: Request) -> JSONResponse:
@@ -185,8 +185,8 @@ class TestThrottleRules:
     ) -> None:
         """Multiple bypass rules each independently skip the throttle."""
         async with inmemory_backend(close_on_exit=True):
-            bypass_get_users = BypassThrottleRule(path="/api/users", methods={"GET"})
-            bypass_post_orgs = BypassThrottleRule(path="/api/orgs", methods={"POST"})
+            bypass_get_users = Bypass(path="/api/users", methods={"GET"})
+            bypass_post_orgs = Bypass(path="/api/orgs", methods={"POST"})
 
             throttle = HTTPThrottle(
                 uid=f"multi-bypass-{web_framework.name}",
@@ -230,7 +230,7 @@ class TestThrottleRules:
             async def is_internal(conn: Request) -> bool:
                 return conn.headers.get("x-internal") == "true"
 
-            bypass = BypassThrottleRule(predicate=is_internal)
+            bypass = Bypass(predicate=is_internal)
             throttle = HTTPThrottle(
                 uid=f"bypass-pred-{web_framework.name}",
                 rate="2/s",

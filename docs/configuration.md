@@ -1,6 +1,6 @@
 # Configuration
 
-Traffik's locking behavior can be tuned globally - either through environment variables (great for containers) or programmatically at startup.
+Traffik's locking behavior can be tuned globally. Either through environment variables (great for containers) or programmatically at startup.
 
 Most of these settings are about lock behavior, because locks are where the tradeoffs between accuracy, latency, and throughput live. The defaults are sensible for most applications, but understanding them lets you squeeze more performance out of Traffik when you need it.
 
@@ -33,7 +33,7 @@ timeout = get_lock_blocking_timeout()  # -> 5.0
 
 ### Environment Variables
 
-Configure via environment variables for containerized deployments:
+You can configure Traffik via environment variables for containerized deployments:
 
 ```bash
 # Lock TTL in seconds (float). None = no automatic expiry.
@@ -106,7 +106,7 @@ Each strategy instance can have its own lock configuration that overrides the gl
 
 ```python
 from traffik.strategies import FixedWindow, TokenBucket
-from traffik.types import LockConfig
+from traffik.typing import LockConfig
 
 # High-accuracy lock for a sensitive throttle
 sensitive_strategy = TokenBucket(
@@ -160,18 +160,16 @@ When many requests compete for the same lock, you'll see:
 | Effect | Symptom | Mitigation |
 |---|---|---|
 | Increased latency | p95/p99 response times spike | Reduce `blocking_timeout`; use non-locking strategies |
-| Lock timeouts | `LockTimeout` errors in logs | Increase `lock_ttl`; check backend latency |
+| Lock timeouts | `LockTimeoutError` in logs | Increase `lock_ttl`; check backend latency |
 | Throughput degradation | Requests per second drops | Switch to `FixedWindow` with >= 1s windows; use lock striping |
 
 ### Mitigation Strategies
 
-1. **Use longer windows**: The easiest fix. `rate="100/min"` has no lock overhead; `rate="100/500ms"` does.
+1. **Tune `blocking_timeout`**: Set a low timeout (e.g., 0.5s) to fail fast rather than queue up. Accept minor inaccuracy as the tradeoff.
 
-2. **Tune `blocking_timeout`**: Set a low timeout (e.g., 0.5s) to fail fast rather than queue up. Accept minor inaccuracy as the tradeoff.
+2. **Non-locking strategies for >= 1s windows**: `FixedWindow` with >= 1s windows is lock-free by design. It's the fastest built-in strategy.
 
-3. **Non-locking strategies for >= 1s windows**: `FixedWindow` with >= 1s windows is lock-free by design. It's the fastest built-in strategy.
-
-4. **Lock striping for InMemory**: If you're on `InMemoryBackend`, configure more shards to reduce contention:
+3. **Lock striping for InMemory**: If you're on `InMemoryBackend`, configure more shards to reduce contention:
 
     ```python
     from traffik.backends.inmemory import InMemoryBackend
@@ -182,4 +180,4 @@ When many requests compete for the same lock, you'll see:
     )
     ```
 
-5. **Connection pooling for Redis/Memcached**: Lock acquisition latency is dominated by round-trip time to the backend. Increase pool size to reduce queuing.
+4. **Connection pooling for Redis/Memcached**: Lock acquisition latency is dominated by round-trip time to the backend. Increase pool size to reduce queuing.

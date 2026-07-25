@@ -1,304 +1,254 @@
 # Benchmarks
 
-Numbers, glorious numbers. This page documents benchmark results for Traffik across a wide range of scenarios - HTTP dependencies, middleware, WebSocket, and the overhead of specific features like response headers and throttle rules.
+The benchmark suite exercises Traffik the way it actually runs in production: as a real server process, listening on a real socket, handling real HTTP and WebSocket connections, no just as a Python function called directly in the same process. This page documents how the suite works, how to run it, and how to read its output.
 
-The headline: Traffik wins on throughput in most scenarios - faster across the majority of backends and integration patterns, with both libraries achieving correct throttling when state is properly managed.
-
-!!! note "Run them yourself"
-    All benchmark code lives in the `benchmarks/` directory. Every table and chart here was produced by running those scripts. Numbers will differ on your hardware - run your own suite to get figures that reflect your setup.
+!!! note "No result numbers here"
+    This page deliberately doesn't publish throughput or latency figures. Results depend heavily on your machine (CPU core count especially. See [What To Expect](#what-to-expect) below), so numbers from one machine are not a reliable stand-in for another's. Run the suite yourself to get figures that reflect your setup.
 
 ---
 
-## Test Environment
+## How It Works
 
-Benchmarks were run on:
+Every benchmark run:
 
-- **Machine**: 8-core CPU (WSL2), 16 GB RAM
-- **Python**: 3.9.22
-- **Backend versions**: Redis v6.2, aiomcache v0.8.2
-- **Comparison**: [SlowAPI](https://github.com/laurentS/slowapi) - a popular FastAPI rate limiter
-- **Test client**: `httpx2.AsyncClient` with `ASGITransport` (in-process, no real network)
-- **Iterations**: 5 per scenario (results averaged)
-- **Concurrency**: batches of 50 concurrent requests unless noted otherwise
+1. Spawns the target app as its own OS process. `uvicorn` for a single worker, or `gunicorn` (with `--preload` and the `fork` start method) for multiple workers.
+2. Waits for the process to answer a health check before sending any traffic.
+3. Drives real traffic against it: `httpx2.AsyncClient` over a TCP connection for HTTP/middleware scenarios, and the `websockets` library for WebSocket connections.
+4. Resets the throttle backend's state via an admin endpoint between every iteration, so later iterations aren't skewed by counters left over from earlier ones.
+5. Tears the process down before moving to the next scenario.
 
----
+One process is spun up per scenario and reused across that scenario's warmup and timed iterations, then shut down. It isn't restarted for every single request, and it isn't shared across different scenarios.
 
-## HTTP Dependency Mode
-
-Throttle applied via `Depends(throttle)` on individual endpoints - the most common integration pattern.
-
-### Throughput (req/s) - Higher is better
-
-#### InMemory Backend
-
-| Scenario | Traffik (req/s) | SlowAPI (req/s) | Difference |
-| --- | --- | --- | --- |
-| Low load (50 req, within limit) | 1,163 | 1,343 | −13% |
-| High load (200 req, over limit) | 1,983 | 1,349 | **+47%** |
-| Sustained load (500 req, 50 concurrent) | 412 | 1,904 | −78% |
-| Burst (100 req, 2× limit) | 1,509 | 1,091 | **+38%** |
-
-Traffik wins decisively on scenarios that involve throttling (high load, burst). The sustained load gap is an artefact of the benchmark, not a real-world concern: all 50 concurrent requests share the same identifier key, so they all queue on the same InMemory shard lock. In production, different users produce different keys that distribute across separate shards with no contention. This effect is specific to the InMemory backend - notice that Redis and Memcached (below) show no such gap under sustained load.
-
-#### Redis Backend
-
-| Scenario | Traffik (req/s) | SlowAPI (req/s) | Difference |
-| --- | --- | --- | --- |
-| Low load | 697 | 552 | **+26%** |
-| High load | 1,079 | 1,048 | +3% |
-| Sustained load | 1,248 | 1,138 | **+10%** |
-| Burst | 853 | 759 | **+12%** |
-
-#### Memcached Backend
-
-| Scenario | Traffik (req/s) | SlowAPI (req/s) | Difference |
-| --- | --- | --- | --- |
-| Low load | 683 | 733 | −6.9% |
-| High load | 1,044 | 1,102 | −5.2% |
-| Sustained load | 1,234 | 1,217 | **+1.4%** |
-| Burst | 940 | 873 | **+7.7%** |
-
-Traffik and SlowAPI show competitive performance on Memcached, with each winning 2 out of 4 scenarios. Traffik maintains an edge on sustained load and burst scenarios, while SlowAPI performs slightly better on low and high load tests.
-
-### Latency Percentiles - Lower is better
-
-#### InMemory - High Load (200 req, 50% throttled)
-
-| Percentile | Traffik | SlowAPI |
-| --- | --- | --- |
-| P50 | 0.42ms | 0.50ms |
-| P95 | 0.93ms | 1.86ms |
-| P99 | 1.85ms | 2.97ms |
-
-#### Redis - High Load (200 req, 50% throttled)
-
-| Percentile | Traffik | SlowAPI |
-| --- | --- | --- |
-| P50 | 0.73ms | 0.78ms |
-| P95 | 1.45ms | 1.82ms |
-| P99 | 2.99ms | 3.19ms |
-
-#### Memcached - High Load (200 req, 50% throttled)
-
-| Percentile | Traffik | SlowAPI |
-| --- | --- | --- |
-| P50 | 0.72ms | 0.72ms |
-| P95 | 1.70ms | 1.86ms |
-| P99 | 3.89ms | 2.88ms |
-
-Traffik's tail latency (P95, P99) is mostly lower. Under load, Traffik's operations reduce variance because there's no retry-on-conflict - the lock serialises, computes, and returns.
+Because the app runs as a real process, gunicorn's forked workers behave exactly as they would in a real deployment: `MultiProcessInMemoryBackend.start()` runs once in the master process before `fork()`, and every worker shares that state for real, rather than the benchmark merely asserting that it should.
 
 ---
 
-## Middleware Mode
+## Installation
 
-Throttle applied via `ThrottleMiddleware` with `MiddlewareThrottle` entries - the pattern used when you want to rate-limit without modifying route handlers.
-
-### Throughput (req/s)
-
-| Scenario | Traffik | SlowAPI | Difference |
-| --- | --- | --- | --- |
-| Low load (50 req, within limit) | 1,270 | 951 | **+34%** |
-| High load (200 req, over limit) | 1,957 | 1,443 | **+36%** |
-| Sustained load (500 req, 50 concurrent) | 411 | 1,728 | −76% |
-| Burst (100 req, 2× limit) | 1,099 | 1,052 | +4% |
-| Selective throttling (mixed paths) | 2,264 | 1,601 | **+41%** |
-
-Traffik wins 4 out of 5 middleware scenarios. The sustained load gap follows the same pattern as dependency mode - all benchmark requests share one identifier key, causing single-shard lock contention on the InMemory backend. In production with diverse user keys, this contention does not occur.
-
-### Selective throttling
-
-One benefit of middleware: you can exempt entire paths from throttle evaluation at zero cost. In the selective throttling benchmark, requests to unthrottled paths (`/health`) pass through with no throttle overhead, while throttled paths are correctly enforced:
-
-| Metric | Traffik | SlowAPI |
-| --- | --- | --- |
-| Selective throughput (req/s) | 2,264 | 1,601 |
-| Throttled paths correct | Yes | Yes |
-| Unthrottled paths exempt | Yes | Yes |
-
-!!! tip "Middleware path patterns"
-    `MiddlewareThrottle` uses `ThrottleRule` underneath, so its `path` argument supports the same wildcard patterns: `*` for a single segment, `**` for multiple. See [Throttle Rules & Wildcards](advanced/rules.md) for details.
-
----
-
-## Correctness Under Concurrency
-
-A rate limiter that over-throttles or under-throttles isn't doing its job. Both libraries are tested with a clean backend state before each iteration to ensure fair comparison.
-
-Each test sends 150 fully concurrent requests (across 5 iterations = 750 total) against a limit of 100. The expected outcome per iteration: exactly 100 allowed, 50 blocked.
-
-### Race condition test (Redis)
-
-| Metric | Traffik | SlowAPI | Expected |
-| --- | --- | --- | --- |
-| Allowed | 500 | 500 | 500 |
-| Throttled | 250 | 250 | 250 |
-| Within expected range | Yes | Yes | - |
-
-Both libraries achieve perfect correctness when backend state is flushed between iterations.
-
-### Distributed correctness (Redis)
-
-10 concurrent clients, each sending 120 requests (limit of 100 per client). Expected: ~5,000 total allowed, ~1,000 throttled.
-
-| Metric | Traffik | SlowAPI | Expected |
-| --- | --- | --- | --- |
-| Allowed | 5,000 | 5,000 | ~5,000 |
-| Throttled | 1,000 | 1,000 | ~1,000 |
-| Within expected range | Yes | Yes | - |
-
-### Success rate across scenarios (Redis)
-
-| Scenario | Traffik success rate | SlowAPI success rate | Expected |
-| --- | --- | --- | --- |
-| Low load (within limit) | 100% | 100% | 100% |
-| High load (over limit) | 50% | 50% | 50% |
-| Sustained load | 100% | 100% | 100% |
-| Burst load | 50% | 50% | 50% |
-
-Both libraries achieve correct throttling on Redis when each iteration starts from a clean state. The benchmark suite flushes backend storage between iterations to ensure neither library is penalised by stale counters from previous runs.
-
-!!! note "Why state cleanup matters"
-    Rate limit counters persist in Redis/Memcached across application restarts. If a benchmark runs multiple iterations within the same rate window (e.g. 60 seconds) without clearing counters, later iterations see inflated counts and over-throttle. The benchmark suite calls `FLUSHDB` (Redis) or `flush_all` (Memcached) before each iteration so both libraries start from an identical clean state.
-
----
-
-## WebSocket Benchmarks
-
-WebSocket rate limiting has a different performance profile. Connections are long-lived; messages arrive in bursts. Traffik's per-message throttle check is extremely lightweight.
-
-### Sustained message throughput
-
-| Scenario | Messages/s | P50 latency | P95 latency | P99 latency |
-| --- | --- | --- | --- | --- |
-| Low load (50 msg, within limit) | 3,540 | 0.23ms | 0.40ms | 0.51ms |
-| High load (200 msg, over limit) | 6,517 | 0.12ms | 0.29ms | 0.41ms |
-| Sustained (500 msg, 1000/min limit) | 9,362 | 0.08ms | 0.22ms | 0.33ms |
-| Burst (100 msg, 50/min limit) | 4,774 | 0.16ms | 0.33ms | 0.44ms |
-| 10 concurrent connections | 4,585 | 0.82ms | 1.56ms | 1.97ms |
-
-WebSocket throttle checks are sub-millisecond at P50 and under 2ms at P99 even with 10 concurrent connections. The default throttled handler (which sends a JSON `rate_limit` message back to the client and keeps the connection alive) is faster than raising an exception, because exception propagation carries Python interpreter overhead. See [Custom Throttled Handlers](advanced/throttled-handlers.md) for the send-message pattern.
-
----
-
-## Strategy Comparison
-
-Different strategies have different CPU and memory profiles. All figures are InMemory backend, FixedWindow strategy baseline, 200 requests (100 allowed, 100 throttled).
-
-```mermaid
-%%{init: {"theme": "base", "themeVariables": {"xyChart": {"plotColorPalette": "gray"}}}}%%
-xychart-beta
-    title "Strategy Throughput (InMemory, High Load, req/s)"
-    x-axis ["FixedWindow", "SlidingCounter", "SlidingLog", "TokenBucket", "TokenBucketDebt", "LeakyBucket", "GCRA"]
-    y-axis "req/s" 0 --> 2000
-    bar [1828, 1834, 1025, 1686, 1718, 1719, 1750]
-```
-
-| Strategy | req/s | P50 | P95 | P99 | Correctness |
-| --- | --- | --- | --- | --- | --- |
-| FixedWindow | 1,828 | 0.43ms | 1.12ms | 1.97ms | 100% |
-| SlidingWindowCounter | 1,834 | 0.43ms | 1.25ms | 2.07ms | 100% |
-| SlidingWindowLog | 1,025 | 0.84ms | 1.64ms | 2.17ms | 100% |
-| TokenBucket | 1,686 | 0.46ms | 1.30ms | 2.23ms | 100% |
-| TokenBucketWithDebt | 1,718 | 0.44ms | 1.29ms | 2.13ms | 100% |
-| LeakyBucket | 1,719 | 0.42ms | 1.43ms | 2.19ms | 100% |
-| GCRA | 1,750 | 0.42ms | 1.35ms | 2.02ms | * |
-
-!!! note "GCRA strict rate smoothing"
-    GCRA (Generic Cell Rate Algorithm) enforces a strict arrival interval between requests. With a rate of `100/60s`, GCRA expects at least 0.6s between requests. Requests that arrive faster are rejected - this is by design, not a bug. GCRA is ideal when you need smooth, evenly-spaced traffic (e.g. upstream API calls) rather than bursty allowances. Its throughput is high, but success rate in burst benchmarks is low (~1–2%) because most requests arrive faster than the computed emission interval.
-
-`SlidingWindowLog` is the most accurate (100% - it stores every request timestamp), but it's also the most memory-hungry and the slowest due to the log scan. `SlidingWindowCounter` hits 100% correctness in practice with much lower overhead by using a weighted counter approximation instead of a full log.
-
----
-
-## Feature Overhead Benchmarks
-
-These benchmarks isolate the cost of specific Traffik features on top of a baseline (no-headers, no-rules, InMemory, FixedWindow, 500 requests with 50 concurrent clients).
-
-### Response headers overhead
-
-Adding response headers has negligible cost. The overhead is within noise margin across all configurations.
-
-| Configuration | req/s | vs. baseline | P50 | P99 |
-| --- | --- | --- | --- | --- |
-| No headers (baseline) | 401 | - | 0.37ms | 2.06ms |
-| `DEFAULT_HEADERS_ALWAYS` (3 static+dynamic) | 408 | +1.8% | 0.36ms | 1.60ms |
-| `DEFAULT_HEADERS_THROTTLED` (only on 429) | 409 | +1.9% | 0.36ms | 1.68ms |
-| 3 custom headers (dynamic resolvers) | 408 | +1.7% | 0.36ms | 1.67ms |
-| 8 headers (4 dynamic resolvers) | 411 | +2.6% | 0.35ms | 1.64ms |
-
-Takeaway: Headers add effectively zero overhead - the differences are within measurement noise. Even 8 headers with 4 dynamic resolvers don't produce a measurable performance impact.
-
-!!! tip "Minimize resolver overhead"
-    Static header values (plain strings) are cheaper than dynamic resolver functions. Use static values where you can, and dynamic resolvers only when you need per-request data like `hits_remaining` or `reset_after`.
-
-Run it yourself:
+The benchmark suite has its own dependency group so it doesn't bloat a normal install:
 
 ```bash
-python benchmarks/headers.py --scenarios no-headers,default-always,many-headers
-```
-
-### `ThrottleRule` registry overhead
-
-Registry evaluation runs on every request when rules are configured. The overhead is negligible regardless of rule count or pattern complexity.
-
-| Configuration | req/s | vs. baseline | P50 | P99 |
-| --- | --- | --- | --- | --- |
-| No rules (baseline) | 412 | - | 0.36ms | 1.39ms |
-| Single `ThrottleRule` (exact path) | 408 | −1.0% | 0.36ms | 1.77ms |
-| `ThrottleRule` (`*` single-segment wildcard) | 410 | −0.5% | 0.36ms | 1.67ms |
-| `ThrottleRule` (`**` deep wildcard) | 409 | −0.6% | 0.36ms | 1.55ms |
-| `BypassThrottleRule` + `ThrottleRule` | 409 | −0.7% | 0.37ms | 1.85ms |
-| 10 mixed rules (realistic registry) | 417 | +1.3% | 0.32ms | 1.47ms |
-| Compiled `re.Pattern` rule | 407 | −1.0% | 0.37ms | 1.62ms |
-
-Takeaway: Even a registry of 10 mixed rules does not add overhead due to early short-circuiting. Rules are evaluated with short-circuit logic - `BypassThrottleRule` entries are checked first, so frequently-hit exempted paths (like `/health`) are fast-pathed out before any `ThrottleRule` patterns are evaluated.
-
-Run it yourself:
-
-```bash
-python benchmarks/rules.py --scenarios no-rules,single-rule,many-rules,bypass-rule
-```
-
----
-
-## Running All Benchmarks
-
-Install benchmark dependencies first:
-
-```bash
-pip install "traffik[dev]"
+uv sync --group benchmark --inexact
 # or
-uv sync
+pip install "traffik[benchmark]"
 ```
 
-Then run any combination:
+This pulls in `click`, `rich`, `fastapi`, `uvicorn`, `gunicorn` (POSIX only), `websockets`, and the backend client libraries. `gunicorn` isn't available on Windows as anything requiring more than one worker process needs a POSIX system (Linux or macOS).
+
+If you want to benchmark against Redis or Memcached instead of the default in-memory backend, start real instances first:
 
 ```bash
-# HTTP dependency mode (InMemory backend, no external services needed)
-python benchmarks/https.py
-
-# HTTP dependency mode vs SlowAPI with Redis
-python benchmarks/https.py \
-  --traffik-backend redis --traffik-redis-url redis://localhost:6379/0 \
-  --slowapi-backend redis --slowapi-redis-url redis://localhost:6379/0
-
-# Middleware mode
-python benchmarks/middleware.py
-
-# WebSocket benchmarks
-python benchmarks/websockets.py --scenarios low,high,sustained,burst,concurrent
-
-# Response headers overhead
-python benchmarks/headers.py
-
-# ThrottleRule registry overhead
-python benchmarks/rules.py
-
-# Strategy comparison (Traffik only, single strategy)
-python benchmarks/https.py --libraries traffik --traffik-strategy sliding-window-counter
-python benchmarks/https.py --libraries traffik --traffik-strategy token-bucket
-python benchmarks/https.py --libraries traffik --traffik-strategy gcra
+docker compose up -d redis memcached
 ```
 
-All scripts accept `--help` for full option reference.
+Any backend other than `inmemory` or `multiprocess` needs a real, reachable server. The suite does not stub these out.
+
+---
+
+## Running Benchmarks
+
+The suite is a `click`-based CLI with four commands, one per integration pattern:
+
+```bash
+python -m benchmarks http
+python -m benchmarks middleware
+python -m benchmarks websocket
+python -m benchmarks multiprocess
+```
+
+Or via the Makefile shortcut, which forwards any arguments after `bench`:
+
+```bash
+make bench "http --scenarios below_limit,over_limit"
+```
+
+Each command accepts `--help` for the full option reference.
+
+### Common Options
+
+These options are shared across all four commands:
+
+| Option | Short | Default | Description |
+| --- | --- | --- | --- |
+| `--backend` | `-b` | `inmemory` | Backend to benchmark. See [Backends](#backends) below. |
+| `--strategy` | `-s` | `fixed_window` | Throttling strategy to benchmark. See [Strategies](#strategies) below. |
+| `--iterations` | `-n` | `3` | Number of timed iterations per scenario. |
+| `--warmup` | `-w` | `1` | Number of warmup iterations run (and discarded) before timing starts. |
+| `--concurrency` | `-c` | `50` | Requests per batch in scenarios that send concurrent traffic. |
+| `--workers` | `-W` | `1` (`4` for `multiprocess`) | Number of real worker processes serving the app. `1` spawns a single `uvicorn` process. Greater than `1` spawns `gunicorn` with `--preload`, forking that many real worker processes (POSIX only). |
+| `--output` | `-o` | `table` | `table` (rich-rendered) or `json`. |
+| `--redis-url` | | `redis://localhost:6379/0` | Connection URL, used when `--backend` is `aioredis` or `coredis`. |
+| `--memcached-host` | | `localhost` | Used when `--backend` is `aiomcache` or `emcache`. |
+| `--memcached-port` | | `11211` | Used when `--backend` is `aiomcache` or `emcache`. |
+| `--scenarios` | | `all` | Comma-separated scenario names, or `all`. |
+
+!!! warning "Workers and the in-memory backend"
+    `--workers` greater than `1` combined with `--backend inmemory` will print a warning and still run, but the result is not meaningful: each forked worker gets its own independent copy of in-memory state, so requests routed to different workers won't see each other's counters. Use `--backend multiprocess` (or an external backend like `aioredis`/`coredis`) if you want to see real throttling behaviour across multiple worker processes.
+
+---
+
+## Commands and Scenarios
+
+### `http` - Dependency-Based Throttling
+
+Benchmarks the most common integration pattern: a throttle injected via `Depends(throttle)` on a single endpoint.
+
+| Scenario | What it simulates |
+| --- | --- |
+| `below_limit` | Steady traffic comfortably under the configured rate. |
+| `at_limit` | Traffic that lands exactly on the configured rate. |
+| `over_limit` | Sustained traffic well past the limit, to measure rejection behaviour. |
+| `concurrent` | A burst of concurrent requests all sharing one identity, to measure lock contention on a single key. |
+| `hot_key` | Concurrent requests explicitly pinned to one `X-Client-ID`, similar intent to `concurrent` but with an explicit identity header. |
+| `many_keys` | Concurrent requests spread across many distinct identities, to measure overhead when load is not concentrated on one key. |
+| `window_boundary` | Bursts timed around fixed-window boundaries, to observe behaviour as a window resets. |
+| `sustained` | A large, high-throughput burst against a generous limit, to measure best-case throughput. |
+| `error_recovery` | Traffic against a throttle configured with `on_error="allow"`, to measure the fail-open path. |
+
+### `middleware` - Middleware-Based Throttling
+
+Benchmarks `ThrottleMiddleware` with a `MiddlewareThrottle` entry, applied without touching route handlers. Includes the same nine scenarios as `http`, plus:
+
+| Scenario | What it simulates |
+| --- | --- |
+| `selective` | Traffic split between a throttled path and an exempt path, to confirm exempt routes pay no throttle cost and throttled routes are still enforced correctly. |
+
+!!! note "`concurrent` differs from the `http` version"
+    In `middleware`, the `concurrent` scenario round-robins requests across `--concurrency` distinct identities rather than hammering a single shared one. This is a deliberately different contention pattern from the `http` command's `concurrent` scenario. It's testing overhead under many simultaneously-active keys, not lock contention on one key.
+
+### `websocket` - WebSocket Throttling
+
+Benchmarks a single throttled `/ws` endpoint over real WebSocket connections.
+
+| Scenario | What it simulates |
+| --- | --- |
+| `below_limit` | A steady stream of messages under the limit. |
+| `over_limit` | A steady stream of messages well past the limit. |
+| `burst` | A large burst of messages against a tight limit. |
+| `concurrent` | Multiple simultaneous WebSocket connections, each sending a stream of messages. |
+| `window_boundary` | Message bursts timed around fixed-window boundaries. |
+
+### `multiprocess` - Real Multi-Worker State Sharing
+
+Benchmarks `MultiProcessInMemoryBackend` across real, forked `gunicorn` workers (POSIX only). This command forces `--backend multiprocess` regardless of what `--backend` is passed, and reuses the same `Depends`-based endpoint as `http`. It includes the same nine scenarios as `http`, plus two that specifically stress the shared-memory backend:
+
+| Scenario | What it simulates |
+| --- | --- |
+| `shared_memory` | A large concurrent burst, to stress the shared-memory segment under load spread across workers. |
+| `key_eviction` | Many distinct keys sent in two waves with a pause between them, to observe key cleanup/eviction behaviour over time. |
+
+!!! warning "`--workers` below 2"
+    Running `multiprocess` with `--workers` set below `2` prints a warning: gunicorn won't actually fork multiple workers, so the run won't exercise any cross-process state sharing. Set `--workers` to at least `2` (and realistically, to your CPU core count) to test what this command is for.
+
+---
+
+## Backends
+
+Set with `--backend` / `-b`:
+
+| Value | Description |
+| --- | --- |
+| `inmemory` | Single-process in-memory state. No external services needed. Not safe to share across multiple worker processes - see the warning above. |
+| `multiprocess` | Shared-memory state, safe across real forked worker processes. See [`MultiProcessInMemoryBackend`](core-concepts/backends.md) for how it works. |
+| `aioredis` | Redis via `redis.asyncio`. Requires a reachable Redis server (`--redis-url`). |
+| `coredis` | Redis via `coredis`. Requires a reachable Redis server (`--redis-url`). |
+| `aiomcache` | Memcached via `aiomcache`. Requires a reachable Memcached server (`--memcached-host` / `--memcached-port`). |
+| `emcache` | Memcached via `emcache`. Not available on Windows. Requires a reachable Memcached server. |
+
+## Strategies
+
+Set with `--strategy` / `-s`:
+
+`fixed_window`, `sliding_window_counter`, `sliding_window_log`, `token_bucket`, `token_bucket_debt`, `leaky_bucket`, `leaky_bucket_queue`, `gcra`.
+
+See [Strategies](core-concepts/strategies.md) for what each one does and when to reach for it.
+
+---
+
+## Reading the Output
+
+### Table Output (default)
+
+A `rich`-rendered table, one row per scenario, aggregated across all timed iterations (warmup iterations are discarded and never shown). Columns:
+
+| Column | Meaning |
+| --- | --- |
+| Scenario | Scenario display name. |
+| Backend / Strategy | What was benchmarked. |
+| Requests | Total requests sent across all timed iterations. |
+| RPS | Mean requests per second across iterations. |
+| P50 / P95 / P99 | Latency percentiles, in milliseconds, pooled across all timed iterations. |
+| Success % | Percentage of requests that received a `200`. |
+| Throttled % | Percentage of requests that received a `429`. |
+| Error % | Percentage of requests that failed for any other reason (connection errors, timeouts, unexpected status codes). |
+
+### JSON Output
+
+Pass `--output json` for machine-readable results - useful for feeding into your own reporting or tracking regressions over time in CI. The structure is:
+
+```json
+{
+  "meta": {
+    "backend": "...",
+    "strategy": "...",
+    "iterations": 3,
+    "warmup_iterations": 1,
+    "workers": 1,
+    "timestamp": "...",
+    "platform": "...",
+    "python_version": "..."
+  },
+  "results": [
+    {
+      "scenario_name": "...",
+      "backend_kind": "...",
+      "strategy_kind": "...",
+      "iterations": 3,
+      "total_requests": 0,
+      "mean_rps": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "mean_ms": 0.0,
+      "success_rate": 0.0,
+      "throttle_rate": 0.0,
+      "error_rate": 0.0,
+      "rps_stddev": 0.0
+    }
+  ]
+}
+```
+
+---
+
+## What To Expect
+
+A few things are worth understanding before you interpret a run, so you don't mistake expected behaviour for a bug.
+
+**Success/throttle percentages should match the configured rate.** For a scenario sending `N` requests against a rate that permits `M` of them, expect roughly `M/N × 100` success and the rest throttled (barring the "many distinct keys" scenarios, where each key individually stays under its own limit and everything should succeed). If these don't line up, something's wrong with the run, not with your expectations.
+
+**Numbers reflect real network and process overhead - by design.** Because this suite drives real HTTP/WebSocket traffic against a real server process, every request pays for a real TCP round trip, real HTTP/1.1 framing, and real ASGI request handling. That overhead did not exist in earlier versions of this suite (which called the ASGI app directly in-process) and won't disappear here - it's an accurate reflection of what a deployed instance actually costs per request, not a regression.
+
+**Concurrency and `--workers` only pay off with real CPU cores.** `asyncio` concurrency helps most when there's real I/O wait time to overlap; on loopback that wait time is minimal, so a single worker process is largely CPU-bound on request parsing and routing. Multiple `gunicorn` workers only run in true parallel if there are separate physical cores for them to run on, i.e, on a single-core machine, `--workers 4` will look barely different from `--workers 1`, because there's only one core for either to use. If you want to see `--workers` make a real difference, set it based on how many cores your machine actually has and compare against a `--workers 1` run of the same scenario.
+
+**`window_boundary` scenarios can show some run-to-run variance.** These scenarios time bursts around fixed-window edges, and real request latency plus real sleep timing can shift exactly where a burst lands relative to a window boundary. This is a genuine property of testing against real wall-clock timing, not a flaw in the scenario.
+
+**Warmup iterations are discarded on purpose.** The first iteration against a freshly-started process can be slower (import caches warming, initial connection setup); warmup iterations exist to absorb that before timed iterations begin. Increase `--warmup` if you still see a slow first timed iteration.
+
+---
+
+## Troubleshooting
+
+**`ERROR: Could not start server for <scenario>`**: the spawned `uvicorn`/`gunicorn` process failed its health check within the startup timeout. The error includes a tail of the process's stderr; check it first. Common causes: a missing dependency for the selected backend, or a backend that requires a running external server (Redis/Memcached) that isn't reachable.
+
+**`--workers` greater than `1` fails outright**: this requires a POSIX system. `gunicorn`'s worker model relies on the `fork` start method, which Windows does not support. The `multiprocess` command is unavailable on Windows entirely for the same reason.
+
+**Connection refused for `aioredis`/`coredis`/`aiomcache`/`emcache`**: start the relevant service first (`docker compose up -d redis memcached`), or point `--redis-url` / `--memcached-host` / `--memcached-port` at a server that's actually running.
+
+**A scenario reports a nonzero error rate**: this means requests failed for a reason other than throttling (connection errors, timeouts, unexpected responses). It shouldn't happen in a healthy run; check the scenario's stderr output and the backend you selected.
+
+---
+
+## Extending the Suite
+
+Scenarios are declarative specs, not hand-written functions. See `benchmarks/scenarios.py`. Adding a new scenario to an existing command means adding an entry to the relevant registry (`HTTP_SCENARIOS`, `MIDDLEWARE_SCENARIOS`, `WEBSOCKET_SCENARIOS`, or `MULTIPROCESS_SCENARIOS`) with a rate, request count, and traffic pattern (`sequential`, `concurrent`, `waves`, `unique_keys_batched`, `unique_keys_split`, or `mixed_paths` for HTTP-like scenarios). The actual traffic-generation logic lives in `benchmarks/live/runners.py` and is shared across every scenario of that shape. You shouldn't need to touch it to add a new scenario, only to add a genuinely new traffic pattern.

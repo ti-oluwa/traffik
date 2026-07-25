@@ -1,4 +1,4 @@
-import sys
+import platform
 import typing
 
 from starlette.requests import Request
@@ -27,7 +27,7 @@ from traffik.strategies.token_bucket import (
 
 HAS_EMCACHE: bool = False
 
-if sys.platform not in ("win32", "cygwin"):
+if platform.system() != "Windows":
     try:
         from traffik.backends.memcached.emcache import (
             MemcachedBackend as EmcacheBackend,
@@ -65,7 +65,7 @@ async def get_identifier(connection: Request) -> str:
 
 def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typing.Any]:
     """
-    Instantiate the backend specified by config.backend_kind.
+    Instantiate the backend scenarioified by config.backend_kind.
 
     :param config: Benchmark configuration.
     :return: An uninitialized backend instance.
@@ -128,14 +128,13 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typin
 
 def create_strategy(config: BenchmarkConfig):
     """
-    Instantiate the strategy specified by config.strategy_kind.
+    Instantiate the strategy scenarioified by config.strategy_kind.
 
     :param config: Benchmark configuration.
     :return: An instantiated strategy object.
     :raises ValueError: If strategy_kind is unknown.
     """
     strategy_kind = config.strategy_kind.lower()
-
     if strategy_kind not in STRATEGIES:
         raise ValueError(f"Unknown strategy kind: {strategy_kind}")
 

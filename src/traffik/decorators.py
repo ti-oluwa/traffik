@@ -106,7 +106,7 @@ def route_wrapper(
 
     local_namespace = {"throttle": throttle, "Annotated": Annotated, "Depends": Depends}
     global_namespace = {**globals(), "route": route}
-    exec(  # noqa nosec
+    exec(  # noqa # nosec
         code, globals=global_namespace, locals=local_namespace
     )
     wrapper = local_namespace["route_wrapper"]

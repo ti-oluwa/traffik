@@ -16,7 +16,7 @@ if platform.system() != "Windows":
 setup(
     name="traffik",
     version="1.2.0",
-    description="Rate limiting for Starlette applications.",
+    description="Rate limiting for Starlette and FastAPI applications.",
     readme="README.md",
     authors=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],
     maintainers=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],

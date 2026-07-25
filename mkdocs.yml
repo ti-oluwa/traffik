@@ -14,14 +14,14 @@ theme:
   palette:
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: teal
+      primary: orange
       accent: amber
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: teal
+      primary: orange
       accent: amber
       toggle:
         icon: material/weather-night

@@ -90,7 +90,7 @@ See [Throttle Rules & Wildcards](rules.md) for the full path-matching and predic
 Call `disable()` / `enable()` directly on the throttle instance. Both are async and acquire the throttle's internal update lock, so they are safe to call concurrently with `hit()`.
 
 ```python
-# Disable a throttle — subsequent hit() calls return immediately without consuming quota
+# Disable a throttle - subsequent hit() calls return immediately without consuming quota
 await throttle.disable()
 
 # Check status
@@ -134,7 +134,7 @@ Both methods return `True` if the throttle was found and acted upon, or `False` 
 `disable_all()` and `enable_all()` iterate every live throttle in the registry:
 
 ```python
-# Emergency kill switch — let all traffic through
+# Emergency kill switch - let all traffic through
 await registry.disable_all()
 
 # Resume normal throttling

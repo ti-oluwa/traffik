@@ -1,5 +1,5 @@
+import platform
 import statistics
-import sys
 import typing
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -29,7 +29,7 @@ class BackendKind(Enum):
             "coredis",
             "aiomcache",
         ]
-        if sys.platform != "win32":
+        if platform.system() != "Windows":
             choices.append("emcache")
         return choices
 
@@ -72,7 +72,7 @@ class OutputFormat(Enum):
     JSON = auto()
 
 
-@dataclass
+@dataclass(slots=True)
 class ScenarioResult:
     """
     Results from a single scenario run.
@@ -208,7 +208,7 @@ class ScenarioResult:
         return stddev * 1000
 
 
-@dataclass
+@dataclass(slots=True)
 class AggregatedResult:
     """
     Aggregated statistics across multiple iterations of the same scenario.
@@ -358,7 +358,7 @@ class AggregatedResult:
         return statistics.stdev(rps_values)
 
 
-@dataclass
+@dataclass(slots=True)
 class BenchmarkConfig:
     """
     Global configuration for a benchmark run.
@@ -374,6 +374,10 @@ class BenchmarkConfig:
     :param memcached_port: Memcached port for memcached-backed backends.
     :param multiprocess_shards: Number of shards for MultiProcessInMemoryBackend.
     :param multiprocess_max_keys: Maximum keys for MultiProcessInMemoryBackend.
+    :param workers: Number of real worker processes to serve the benchmark
+        target app. `1` spawns a single `uvicorn` process. `>1` spawns
+        `gunicorn` with `--preload` and the `fork` start method, actually
+        forking that many worker processes rather than simulating them.
     """
 
     backend_kind: str = "inmemory"
@@ -387,3 +391,4 @@ class BenchmarkConfig:
     memcached_port: int = 11211
     multiprocess_shards: int = 32
     multiprocess_max_keys: int = 65536
+    workers: int = 1

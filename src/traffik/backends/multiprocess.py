@@ -981,8 +981,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             This does not start the background cleanup task as `asyncio.create_task`
             requires a running loop.
             `initialize()` handles that part, and does need to be called
-            in every process/event loop that uses this backend, workers included
-            - see its docstring for why that's still necessary even though
+            in every process/event loop that uses this backend, workers included.
+            See its docstring for why that's still necessary even though
             `start()` already ran in the parent.
 
         If a shared memory segment with this name already exists, it's

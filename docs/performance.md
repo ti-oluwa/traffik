@@ -9,7 +9,7 @@ Traffik is designed to be performant out of the box. But like all systems, there
 Before diving into specifics, here are the changes that have the most impact for the least effort:
 
 - [ ] Use >= 1 second rate windows (eliminates lock overhead for FixedWindow/SlidingWindowCounter)
-- [ ] Enable InMemory shard striping: `InMemoryBackend(number_of_shards=32)`
+- [ ] Use shard striping: `InMemoryBackend(number_of_shards=32)`
 - [ ] Use connection pooling: `MemcachedBackend(pool_size=20)`
 - [ ] Don't call DB/external APIs inside identifier functions
 - [ ] Exempt trusted internal clients with `EXEMPTED` (zero backend overhead)
@@ -19,7 +19,7 @@ Before diving into specifics, here are the changes that have the most impact for
 
 ## 1. Use the Right Backend
 
-The backend choice has a larger impact on performance than any other single factor.
+Your backend choice has a larger impact on performance than any other single factor.
 
 | Deployment | Backend | Notes |
 |---|---|---|
@@ -29,7 +29,7 @@ The backend choice has a larger impact on performance than any other single fact
 | Already have Memcached | `MemcachedBackend` | Comparable to Redis, no scripting support |
 | Redis + memory efficiency | `RedisBackend` | Scripts cached on server, minimal overhead |
 
-Don't use `RedisBackend` for a single-process application just because "Redis is production-grade." The network round-trip will cost you 1-5ms per request unnecessarily. `InMemoryBackend` is genuinely the right tool for single-process deployments.
+Don't use `RedisBackend` for a single-process application just because "Redis is production-grade." The network round-trip will cost you 1-5ms per request unnecessarily. `InMemoryBackend` is genuinely the right tool for single-process deployments. Well, except you need persistence across restarts.
 
 ```python
 from traffik.backends.inmemory import InMemoryBackend
@@ -56,7 +56,7 @@ Strategies differ significantly in performance. Here's the order from fastest to
 | `LeakyBucket` | Medium - lock + read/write | Excellent (smooth) | Enforcing constant rate |
 | `SlidingWindowLog` | High - serialization + cleanup | Perfect | Strict correctness, lower traffic |
 
-The default strategy is `FixedWindow`. For most applications, it's the right choice - it's accurate enough, and the performance is hard to beat.
+The default strategy is `FixedWindow`. For most applications, it's the right choice. It's accurate enough, and the performance is hard to beat.
 
 ```python
 from traffik import HTTPThrottle
@@ -91,7 +91,7 @@ A good rule of thumb: set `number_of_shards` to roughly your expected peak concu
 
 ## 4. Use Connection Pooling (Memcached)
 
-Every throttle check requires a backend operation. Without connection pooling, each operation opens and closes a network connection - this is expensive. Use pooling:
+Every throttle check requires a backend operation. Without connection pooling, each operation opens and closes a network connection and that is expensive. Use pooling:
 
 ```python
 from traffik.backends.memcached import MemcachedBackend
@@ -128,33 +128,11 @@ async def slow_identifier(request: Request):
     return user["id"]  # Every request = one DB query
 ```
 
-If you need to look up user information, cache it in the request state after the first lookup, or do the lookup once in authentication middleware and store the result in `request.state.user_id`.
+If you need to look up user information, cache it in the request state or a cache backend after the first lookup, or do the lookup once in authentication middleware and store the result in `request.state.user_id`.
 
 ---
 
-## 6. Avoid Logging in Backend Operations
-
-This sounds minor but it isn't. Logging is synchronous I/O and can block the async event loop under load.
-
-```python
-# This is inside the hot path - every request goes through here
-async def my_backend_increment(self, key: str, amount: int = 1) -> int:
-    # BAD: logging on every request
-    logger.debug(f"Incrementing {key} by {amount}")
-    result = await self._client.incr(key, amount)
-    logger.debug(f"New value: {result}")
-    return result
-
-# Better: no logging in the hot path
-async def my_backend_increment(self, key: str, amount: int = 1) -> int:
-    return await self._client.incr(key, amount)
-```
-
-According to our benchmarks, adding `logger.debug()` calls inside backend operations produces a **~10x slowdown** on high-concurrency workloads. Log in error handlers (which only run on failures), not in the normal execution path.
-
----
-
-## 7. Exempt Trusted Clients with EXEMPTED
+## 6. Exempt Trusted Clients with `EXEMPTED`
 
 For trusted internal services, health check endpoints, or admin users, returning `EXEMPTED` from the identifier completely bypasses throttling - no counter read, no counter write, no lock. Zero overhead:
 
@@ -175,11 +153,11 @@ async def smart_identifier(request: Request):
 throttle = HTTPThrottle("api", rate="1000/min", identifier=smart_identifier)
 ```
 
-This is especially useful for health check endpoints that get hammered by load balancers. There's no point counting those requests - exempt them and save the backend round-trip.
+This is especially useful for health check endpoints that get hammered by load balancers. There's no point counting those requests. Just exempt them and save the backend round-trip.
 
 ---
 
-## 8. Enable Identifier Caching (It's Default)
+## 7. Enable Identifier Caching (It's Default)
 
 `cache_ids=True` is the default and caches the computed identifier on the connection's `state` object. For WebSocket connections especially, this prevents recomputing the identifier on every message:
 
@@ -195,7 +173,7 @@ Only disable `cache_ids` if your identifier might change during a connection's l
 
 ---
 
-## 9. Sort Middleware Throttles Cheap First
+## 8. Sort Middleware Throttles Cheap First
 
 When using multiple throttles in middleware, put the cheapest (lowest limit, most likely to fire) first. A throttle that rejects a request early prevents the more expensive throttles from running at all:
 
@@ -206,8 +184,8 @@ from traffik.middleware import ThrottleMiddleware
 # Sustained throttle (more expensive, higher limit) only runs if burst passes
 app.add_middleware(
     ThrottleMiddleware,
-    throttles=[burst_throttle, sustained_throttle],
-    # cheap_first=True is the default - throttles are automatically sorted
+    middleware_throttles=[burst_throttle, sustained_throttle],
+    # sort="cheap_first" is the default - throttles are automatically sorted
 )
 ```
 
@@ -215,7 +193,7 @@ Traffik's middleware already applies `cheap_first` ordering by default, so this 
 
 ---
 
-## 10. Avoid Sub-Second Rate Windows in Production
+## 9. Avoid Sub-Second Rate Windows in Production
 
 Sub-second windows (e.g., `"100/500ms"`, `"10/100ms"`) trigger locking in `FixedWindow` and `SlidingWindowCounter` - even when they would otherwise be lock-free. This is necessary for accuracy at millisecond precision, but it adds distributed lock overhead on every request.
 
@@ -239,36 +217,3 @@ throttle = HTTPThrottle("api", rate="10/500ms")     # 500ms window, adds lock ov
 Use sub-second windows when you genuinely need millisecond-level burst control. Otherwise, stick to seconds.
 
 ---
-
-## Putting It All Together
-
-Here's a production-optimized configuration for a high-traffic API:
-
-```python
-from traffik import HTTPThrottle, EXEMPTED
-from traffik.backends.redis import RedisBackend
-from traffik.strategies import FixedWindow
-
-# Redis backend (distributed, production-grade)
-backend = RedisBackend(
-    "redis://localhost:6379",
-    namespace="myapp",
-    on_error="allow",  # Fail open on backend errors (tune per your risk tolerance)
-)
-
-# Efficient identifier: fast header read, exempt internal services
-async def api_identifier(request):
-    if request.headers.get("X-Internal") == "true":
-        return EXEMPTED
-    return request.headers.get("X-API-Key") or request.client.host
-
-# Fast strategy: FixedWindow with >= 1s window = lock-free path
-throttle = HTTPThrottle(
-    "api:v1",
-    rate="1000/min",          # 60s window, no lock overhead
-    strategy=FixedWindow(),
-    identifier=api_identifier,
-    cache_ids=True,            # Cache identifier per connection
-    backend=backend,
-)
-```

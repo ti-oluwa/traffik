@@ -4,7 +4,7 @@ Testing rate-limited endpoints should be fast, isolated, and deterministic. Traf
 
 ---
 
-## The Golden Rule
+## Testing Recommendations
 
 Use `InMemoryBackend` with `persistent=False` for tests. This gives you a backend that:
 
@@ -146,7 +146,7 @@ from traffik.exceptions import BackendError
 async def test_error_handler_fallback():
     """When the primary backend fails, the fallback should kick in."""
     primary = InMemoryBackend(namespace="primary", persistent=False)
-    fallback = InMemoryBackend(namespace="fallback", persistent=False)
+    fallback_backend = InMemoryBackend(namespace="fallback", persistent=False)
 
     from traffik.error_handlers import fallback
 
@@ -154,7 +154,7 @@ async def test_error_handler_fallback():
         "test:fallback",
         rate="10/min",
         backend=primary,
-        on_error=fallback(backend=fallback, fallback_on=(BackendError,)),
+        on_error=fallback(backend=fallback_backend, fallback_on=(BackendError,)),
     )
 
     app = FastAPI(lifespan=primary.lifespan)
@@ -247,7 +247,7 @@ If you want to test against real Redis or Memcached, use the Docker testing scri
 # Run fast tests (InMemory only, skips external backends)
 ./docker-test.sh test-fast
 
-# Test across multiple Python versions (3.9, 3.10, 3.11, 3.12)
+# Test across multiple Python versions (3.9, 3.10, 3.11, ...)
 ./docker-test.sh test-matrix
 
 # Start a development environment with Redis running

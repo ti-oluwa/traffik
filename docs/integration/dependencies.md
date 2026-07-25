@@ -24,7 +24,7 @@ FastAPI's `Depends` mechanism is the most idiomatic way to attach throttles to r
 
 ---
 
-## Basic usage - no Request access needed
+## Basic usage - no `Request` object access needed
 
 The simplest setup: pass the throttle as a list dependency on the route decorator. Your handler function doesn't need to declare any extra parameter.
 

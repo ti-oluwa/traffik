@@ -6,7 +6,7 @@ This is one of Traffik's useful features, and also the one most people don't nee
 
 ## The Problem
 
-Standard throttling is optimistic: consume quota first, then do the work. Most of the time that's fine. But imagine this scenario:
+Standard throttling is optimistic. You consume quota first, then do the work. Most of the time that's fine. But imagine this scenario:
 
 1. Client sends a request to generate a report (costs 10 quota)
 2. Traffik immediately deducts 10 from the quota counter
@@ -24,14 +24,14 @@ Or the reverse:
 !!! warning "This is an advanced feature"
     Quota Context adds real complexity. For most use cases, standard `Depends(throttle)` is simpler and should be preferred. Use Quota Context when you have specific conditional consumption requirements.
 
-!!! warning "QuotaContext is NOT atomic"
-    QuotaContext consumption does **not** guarantee "all or nothing" like an ACID transaction. It prevents optimistic over-consumption (quota is not deducted until `apply()` is called), but if a context partially succeeds before failing during `apply()` - for example, if entry 3 of 5 fails - the quota already consumed by entries 1 and 2 is **not rolled back**. The cost of wasted quota falls on the API, not the client. Design your quota contexts accordingly: keep them small, and use `apply_on_error=False` (the default) to avoid charging clients for server-side failures.
+!!! warning "`QuotaContext` is not atomic"
+    `QuotaContext` consumption does **not** guarantee "all or nothing" like an ACID transaction. It prevents optimistic over-consumption (quota is not deducted until `apply()` is called), but if a context partially succeeds before failing during `apply()` - for example, if entry 3 of 5 fails - the quota already consumed by entries 1 and 2 is **not rolled back**. The cost of wasted quota falls on the API, not the client. Design your quota contexts accordingly: keep them small, and use `apply_on_error=False` (the default) to avoid charging clients for server-side failures.
 
 ---
 
 ## Bound Mode
 
-The most common usage: create a context tied to one throttle.
+The most common usage is to create a context tied to one throttle.
 
 ```python
 from fastapi import FastAPI, Request, Depends
@@ -79,7 +79,6 @@ async def create_export(request: Request):
         # Must specify throttle explicitly in unbound mode
         await quota(burst_throttle, cost=5)
         await quota(daily_throttle, cost=5)
-
         result = await run_export()
 
     return {"export": result}
@@ -91,7 +90,7 @@ Both throttles are consumed atomically on successful exit, or neither is consume
 
 ## Cost Aggregation
 
-Consecutive calls with the same throttle and identical configuration are automatically merged into a single backend operation. This is a performance optimization - fewer round-trips to the backend.
+Consecutive calls with the same throttle and identical configuration are automatically merged into a single backend operation. This is a performance optimization as it does fewer round-trips to the backend.
 
 ```python
 async with throttle.quota(request) as quota:
@@ -109,9 +108,9 @@ Aggregation breaks when: different throttle, different context, different retry 
 
 ## Conditional Consumption
 
-### apply_on_error
+### `apply_on_error`
 
-Control whether quota is consumed when an exception occurs:
+This controls whether quota is consumed when an exception occurs:
 
 ```python
 # Default: don't consume on any exception
@@ -133,9 +132,9 @@ async with throttle.quota(request, apply_on_error=(ValueError,)) as quota:
     # Any other exception -> don't consume quota
 ```
 
-### apply_on_exit=False
+### `apply_on_exit=False`
 
-Disable automatic consumption on exit and manage it yourself:
+Disables automatic consumption on exit and manage it yourself:
 
 ```python
 async with throttle.quota(request, apply_on_exit=False) as quota:
@@ -152,7 +151,7 @@ async with throttle.quota(request, apply_on_exit=False) as quota:
 return {"result": result}
 ```
 
-### Manual apply() and cancel()
+### Manual `apply()` and `cancel()`
 
 ```python
 async with throttle.quota(request, apply_on_exit=False) as quota:
@@ -166,11 +165,11 @@ async with throttle.quota(request, apply_on_exit=False) as quota:
         raise
 ```
 
-`apply()` is idempotent - calling it twice is safe. `cancel()` is final - you cannot un-cancel a context.
+`apply()` is idempotent. Calling it twice is safe. `cancel()` is final. You cannot un-cancel a context.
 
 ---
 
-## Pre-checking with check()
+## Pre-checking with `check()`
 
 Sometimes you want to check if quota *would* be available before committing to an operation:
 
@@ -197,7 +196,7 @@ async with throttle.quota(request) as quota:
 
 ## Nested Contexts
 
-Child contexts merge their queued entries into the parent when they exit successfully:
+When you nest contexts, child contexts merge their queued entries into the parent when they exit successfully:
 
 ```python
 async with throttle.quota(request) as parent:
@@ -213,13 +212,13 @@ async with throttle.quota(request) as parent:
 # All consumed here: 4 total units
 ```
 
-The parent acquires the lock (if configured). Child contexts under a parent don't acquire their own lock by default - they operate under the parent's lock context.
+The parent acquires the lock (if configured). Child contexts under a parent don't acquire their own lock by default, they operate under the parent's lock context.
 
 ---
 
 ## Locking
 
-Enable locking to make the entire quota context atomic with respect to other contexts using the same key:
+You can enable locking to make the entire quota context atomic with respect to other contexts using the same key:
 
 ```python
 # Use throttle UID as lock key (simplest)
@@ -310,7 +309,7 @@ print(quota.active)         # False
 
 ## Limitations
 
-Be aware of these before reaching for `QuotaContext`:
+You should be aware of these before reaching for `QuotaContext`:
 
 | Limitation | Detail |
 |---|---|

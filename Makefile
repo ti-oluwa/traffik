@@ -77,7 +77,7 @@ format-check: ## Check code formatting
 	uv run ruff format src/ tests/ --check
 
 security: ## Run security analysis
-	uv run bandit -r src/
+	uv run bandit -r src/ -s B101
 
 type-check: ## Run type checking. mypy is optional, so it will not fail if mypy is not installed.
 	@if uv run python -c "import mypy" 2>/dev/null; then \

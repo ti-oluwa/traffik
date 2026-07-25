@@ -1,7 +1,7 @@
 [project]
 name = "traffik"
 version = "1.2.0"
-description = "Rate limiting for Starlette applications."
+description = "Rate limiting for Starlette and FastAPI applications."
 readme = "README.md"
 authors = [
     { name = "tioluwa", email = "tioluwa.dev@gmail.com" }
@@ -123,6 +123,7 @@ dev = [
     "traffik[all]",
     "psutil>=5.9.5",
     "uvicorn>=0.22.0",
+    "httptools>=0.8.0",
     "memory-profiler>=0.61.0",
     "line-profiler>=5.0.0",
 ]
@@ -146,4 +147,9 @@ benchmark = [
     "httpx2>=0.28.1",
     "fastapi>=0.68.0",
     "requests>=2.32.4",
+    "uvicorn>=0.22.0",
+    "gunicorn>=22.0.0; sys_platform != 'win32'",
+    "websockets>=13.0",
+    "uvloop>=0.22.1",
+    "httptools>=0.8.0",
 ]

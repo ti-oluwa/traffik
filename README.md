@@ -1,4 +1,12 @@
-# Traffik
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="Traffik Logo" width="200">
+</p>
+
+<h1 align="center">Traffik</h1>
+
+<h3 align="center">
+  <strong>Rate limiting for Starlette and FastAPI applications</strong>
+</h3>
 
 [![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
 [![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/)
@@ -385,7 +393,7 @@ Not all requests should count the same. Yes. You can specify cost per request or
 
 ```python
 async def request_cost(request: Request, context=None) -> int:
-    if "/export" in request.url.path:
+    if "/export" in request.scope["path"]:
         return 10
     return 1
 
@@ -438,7 +446,8 @@ write_throttle.add_rules(
 
 # Skip throttling for internal traffic
 async def is_internal(request: Request) -> bool:
-    return request.headers.get("X-Internal") == "1"
+    # Your implementation here
+    ...
 
 throttle = HTTPThrottle(
     "api:global",

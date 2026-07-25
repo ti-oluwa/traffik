@@ -1,5 +1,5 @@
 site_name: Traffik
-site_description: Distributed rate limiting for FastAPI/Starlette applications.
+site_description: Rate limiting for Starlette and FastAPI applications.
 site_author: tioluwa
 site_url: https://ti-oluwa.github.io/traffik/
 repo_url: https://github.com/ti-oluwa/traffik
@@ -14,14 +14,14 @@ theme:
   palette:
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: teal
+      primary: orange
       accent: amber
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: teal
+      primary: orange
       accent: amber
       toggle:
         icon: material/weather-night

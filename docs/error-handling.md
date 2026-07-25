@@ -12,7 +12,7 @@ A custom error handler is an async function that receives the connection and exc
 
 ```python
 from traffik.throttles import ThrottleExceptionInfo
-from traffik.types import WaitPeriod
+from traffik.typing import WaitPeriod
 
 async def my_handler(
     connection,                  # Request or WebSocket
@@ -71,14 +71,14 @@ from traffik.error_handlers import fallback
 from traffik.exceptions import BackendError
 
 primary = RedisBackend("redis://primary:6379", namespace="myapp")
-fallback = InMemoryBackend(namespace="myapp-fallback")
+fallback_backend = InMemoryBackend(namespace="myapp-fallback")
 
 throttle = HTTPThrottle(
     "api",
     rate="100/min",
     backend=primary,
     on_error=fallback(
-        backend=fallback,
+        backend=fallback_backend,
         fallback_on=(BackendError, TimeoutError),
     )
 )
@@ -137,8 +137,8 @@ from traffik.backends.redis import RedisBackend
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.error_handlers import failover, CircuitBreaker
 
-primary = RedisBackend("redis://primary:6379", namespace="myapp")
-fallback = InMemoryBackend(namespace="myapp-fallback")
+primary_backend = RedisBackend("redis://primary:6379", namespace="myapp")
+fallback_backend = InMemoryBackend(namespace="myapp-fallback")
 
 breaker = CircuitBreaker(
     failure_threshold=5,      # Open after 5 consecutive failures
@@ -149,9 +149,9 @@ breaker = CircuitBreaker(
 throttle = HTTPThrottle(
     "api",
     rate="100/min",
-    backend=primary,
+    backend=primary_backend,
     on_error=failover(
-        backend=fallback,
+        backend=fallback_backend,
         breaker=breaker,
         max_retries=2,
         retry_delay=0.05,
@@ -204,7 +204,7 @@ info = breaker.info()
 ```python
 import logging
 from traffik import HTTPThrottle
-from traffik.types import WaitPeriod
+from traffik.typing import WaitPeriod
 from traffik.throttles import ThrottleExceptionInfo
 from traffik.exceptions import BackendError
 

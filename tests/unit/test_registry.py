@@ -10,43 +10,36 @@ from starlette.requests import HTTPConnection
 from tests.utils import ThrottleT, make_connection, requires_throttle_type
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.exceptions import ConfigurationError
-from traffik.registry import (
-    BypassThrottleRule,
-    ThrottleRegistry,
-    ThrottleRule,
-    _prep_rules,
-)
+from traffik.registry import Bypass, Rule, ThrottleRegistry, _prep_rules
 from traffik.throttles import Throttle
 
-RULE_TYPES = [ThrottleRule, BypassThrottleRule]
+RULE_TYPES = [Rule, Bypass]
 
 
 @pytest.mark.parametrize("rule_type", RULE_TYPES)
 class TestThrottleRuleBasic:
-    def test_no_args(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
-    ) -> None:
+    def test_no_args(self, rule_type: typing.Type[Rule[HTTPConnection]]) -> None:
         rule = rule_type()
         assert rule.path is None
         assert rule.methods is None
         assert rule.predicate is None
 
     def test_string_path_compiled_to_regex(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         rule = rule_type(path="/api/")
         assert isinstance(rule.path, re.Pattern)
         assert rule.path.pattern == "/api/"
 
     def test_regex_path_stored_as_is(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         pattern = re.compile(r"/api/\d+")
         rule = rule_type(path=pattern)
         assert rule.path is pattern
 
     def test_methods_stored_as_frozenset_with_both_cases(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         rule = rule_type(methods={"GET", "POST"})
         assert isinstance(rule.methods, frozenset)
@@ -55,14 +48,12 @@ class TestThrottleRuleBasic:
         assert "POST" in rule.methods
         assert "post" in rule.methods
 
-    def test_none_methods(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
-    ) -> None:
+    def test_none_methods(self, rule_type: typing.Type[Rule[HTTPConnection]]) -> None:
         rule = rule_type(methods=None)
         assert rule.methods is None
 
     def test_predicate_stored(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         async def predicate(connection):
             return True
@@ -71,7 +62,7 @@ class TestThrottleRuleBasic:
         assert rule.predicate is predicate
 
     def test_predicate_context_detection(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         async def predicate_no_ctx(connection):
             return True
@@ -87,56 +78,56 @@ class TestThrottleRuleBasic:
 
     # TestThrottleRuleImmutability:
     def test_cannot_reassign_path(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         rule = rule_type(path="/api/")
         with pytest.raises(AttributeError, match="immutable"):
             rule.path = re.compile("/other/")
 
     def test_cannot_reassign_methods(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         rule = rule_type(methods={"GET"})
         with pytest.raises(AttributeError, match="immutable"):
             rule.methods = frozenset(["POST"])
 
     def test_cannot_reassign_predicate(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         rule = rule_type()
         with pytest.raises(AttributeError, match="immutable"):
             rule.predicate = lambda c: True  # type: ignore
 
     def test_same_args_same_hash(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         r1 = rule_type(path="/api/", methods={"GET"})
         r2 = rule_type(path="/api/", methods={"GET"})
         assert hash(r1) == hash(r2)
 
     def test_different_path_different_hash(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         r1 = rule_type(path="/api/")
         r2 = rule_type(path="/other/")
         assert hash(r1) != hash(r2)
 
     def test_different_methods_different_hash(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         r1 = rule_type(methods={"GET"})
         r2 = rule_type(methods={"POST"})
         assert hash(r1) != hash(r2)
 
     def test_same_instance_deduplicates_in_set(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         """Same object instance deduplicates in a set."""
         r = rule_type(path="/api/", methods={"GET"})
         assert len({r, r}) == 1
 
     def test_distinct_instances_not_deduplicated(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         """Two instances with same args are distinct (identity-based equality)."""
         r1 = rule_type(path="/api/", methods={"GET"})
@@ -147,7 +138,7 @@ class TestThrottleRuleBasic:
 @pytest.mark.anyio
 class TestBaseThrottleRuleCheck:
     async def test_no_constraints_matches_everything(self) -> None:
-        rule = ThrottleRule()
+        rule = Rule()
         assert (
             await rule.check(
                 make_connection(HTTPConnection, method="GET", path="/anything")
@@ -156,7 +147,7 @@ class TestBaseThrottleRuleCheck:
         )
 
     async def test_method_match(self) -> None:
-        rule = ThrottleRule(methods={"GET"})
+        rule = Rule(methods={"GET"})
         assert (
             await rule.check(make_connection(HTTPConnection, method="GET", path="/"))
             is True
@@ -167,14 +158,14 @@ class TestBaseThrottleRuleCheck:
         )
 
     async def test_method_case_insensitive(self) -> None:
-        rule = ThrottleRule(methods={"get"})
+        rule = Rule(methods={"get"})
         assert (
             await rule.check(make_connection(HTTPConnection, method="GET", path="/"))
             is True
         )
 
     async def test_path_match(self) -> None:
-        rule = ThrottleRule(path="/api/")
+        rule = Rule(path="/api/")
         assert (
             await rule.check(make_connection(HTTPConnection, path="/api/users")) is True
         )
@@ -183,7 +174,7 @@ class TestBaseThrottleRuleCheck:
         )
 
     async def test_path_regex(self) -> None:
-        rule = ThrottleRule(path=re.compile(r"/api/v\d+/"))
+        rule = Rule(path=re.compile(r"/api/v\d+/"))
         assert (
             await rule.check(make_connection(HTTPConnection, path="/api/v1/users"))
             is True
@@ -194,7 +185,7 @@ class TestBaseThrottleRuleCheck:
         )
 
     async def test_path_and_method_combined(self) -> None:
-        rule = ThrottleRule(path="/api/", methods={"POST"})
+        rule = Rule(path="/api/", methods={"POST"})
         assert (
             await rule.check(
                 make_connection(HTTPConnection, method="POST", path="/api/data")
@@ -218,7 +209,7 @@ class TestBaseThrottleRuleCheck:
         async def only_admin(connection):
             return connection.scope.get("is_admin", False)
 
-        rule = ThrottleRule(predicate=only_admin)
+        rule = Rule(predicate=only_admin)
 
         admin_connection = make_connection(HTTPConnection, is_admin=True)
         assert await rule.check(admin_connection) is True
@@ -230,7 +221,7 @@ class TestBaseThrottleRuleCheck:
         async def check_tier(connection, ctx):
             return ctx and ctx.get("tier") == "premium"
 
-        rule = ThrottleRule(predicate=check_tier)
+        rule = Rule(predicate=check_tier)
         connection = make_connection(HTTPConnection)
         assert await rule.check(connection, context={"tier": "premium"}) is True
         assert await rule.check(connection, context={"tier": "free"}) is False
@@ -244,7 +235,7 @@ class TestBaseThrottleRuleCheck:
             call_count += 1
             return True
 
-        rule = ThrottleRule(
+        rule = Rule(
             path="/api/",
             methods={"GET"},
             predicate=counting_predicate,
@@ -268,7 +259,7 @@ class TestBaseThrottleRuleCheck:
 
     async def test_websocket_no_method_in_scope(self) -> None:
         """WebSocket connections have no 'method' - method filter is skipped."""
-        rule = ThrottleRule(methods={"GET"})
+        rule = Rule(methods={"GET"})
         connection = make_connection(HTTPConnection)
         del connection.scope["method"]
         # No method in scope -> method check skipped -> rule passes
@@ -277,10 +268,10 @@ class TestBaseThrottleRuleCheck:
 
 @pytest.mark.anyio
 class TestBypassThrottleRuleCheck:
-    """BypassThrottleRule inverts check: returns False when conditions match (bypass)."""
+    """Bypass inverts check: returns False when conditions match (bypass)."""
 
     async def test_no_constraints_always_bypasses(self) -> None:
-        rule = BypassThrottleRule()
+        rule = Bypass()
         assert (
             await rule.check(
                 make_connection(HTTPConnection, method="GET", path="/anything")
@@ -289,7 +280,7 @@ class TestBypassThrottleRuleCheck:
         )
 
     async def test_method_match_bypasses(self) -> None:
-        rule = BypassThrottleRule(methods={"GET"})
+        rule = Bypass(methods={"GET"})
         # GET matches -> bypass (False)
         assert (
             await rule.check(make_connection(HTTPConnection, method="GET", path="/"))
@@ -302,7 +293,7 @@ class TestBypassThrottleRuleCheck:
         )
 
     async def test_path_match_bypasses(self) -> None:
-        rule = BypassThrottleRule(path="/api/")
+        rule = Bypass(path="/api/")
         assert (
             await rule.check(make_connection(HTTPConnection, path="/api/users"))
             is False
@@ -312,7 +303,7 @@ class TestBypassThrottleRuleCheck:
         )
 
     async def test_path_and_method_combined(self) -> None:
-        rule = BypassThrottleRule(path="/api/", methods={"GET"})
+        rule = Bypass(path="/api/", methods={"GET"})
         # Both match -> bypass
         assert (
             await rule.check(
@@ -339,7 +330,7 @@ class TestBypassThrottleRuleCheck:
         async def is_internal(connection):
             return connection.scope.get("internal", False)
 
-        rule = BypassThrottleRule(predicate=is_internal)
+        rule = Bypass(predicate=is_internal)
 
         internal = make_connection(HTTPConnection)
         internal.scope["internal"] = True  # type: ignore
@@ -352,7 +343,7 @@ class TestBypassThrottleRuleCheck:
         async def check_ctx(connection, ctx):
             return ctx and ctx.get("bypass") is True
 
-        rule = BypassThrottleRule(predicate=check_ctx)
+        rule = Bypass(predicate=check_ctx)
         connection = make_connection(HTTPConnection)
         assert await rule.check(connection, context={"bypass": True}) is False
         assert await rule.check(connection, context={"bypass": False}) is True
@@ -365,8 +356,8 @@ class TestPrepRules:
         assert _prep_rules(set()) == ()
 
     def test_bypass_before_regular(self) -> None:
-        regular = ThrottleRule(path="/a/")
-        bypass = BypassThrottleRule(path="/b/")
+        regular = Rule(path="/a/")
+        bypass = Bypass(path="/b/")
         result = _prep_rules([regular, bypass])
         assert result == (bypass, regular)
 
@@ -374,8 +365,8 @@ class TestPrepRules:
         async def predicate(connection):
             return True
 
-        with_pred = ThrottleRule(path="/a/", predicate=predicate)
-        without_pred = ThrottleRule(path="/b/")
+        with_pred = Rule(path="/a/", predicate=predicate)
+        without_pred = Rule(path="/b/")
         result = _prep_rules([with_pred, without_pred])
         assert result == (without_pred, with_pred)
 
@@ -385,18 +376,20 @@ class TestPrepRules:
         async def predicate(connection):
             return True
 
-        regular_no_predicate = ThrottleRule(path="/r/")
-        regular_with_predicate = ThrottleRule(path="/rp/", predicate=predicate)
-        bypass_no_predicate = BypassThrottleRule(path="/b/")
-        bypass_with_predicate = BypassThrottleRule(path="/bp/", predicate=predicate)
+        regular_no_predicate = Rule(path="/r/")
+        regular_with_predicate = Rule(path="/rp/", predicate=predicate)
+        bypass_no_predicate = Bypass(path="/b/")
+        bypass_with_predicate = Bypass(path="/bp/", predicate=predicate)
 
         # Deliberately shuffled
-        result = _prep_rules([
-            regular_with_predicate,
-            bypass_with_predicate,
-            regular_no_predicate,
-            bypass_no_predicate,
-        ])
+        result = _prep_rules(
+            [
+                regular_with_predicate,
+                bypass_with_predicate,
+                regular_no_predicate,
+                bypass_no_predicate,
+            ]
+        )
         assert result == (
             bypass_no_predicate,
             regular_no_predicate,
@@ -405,16 +398,16 @@ class TestPrepRules:
         )
 
     def test_returns_tuple(self) -> None:
-        result = _prep_rules([ThrottleRule()])
+        result = _prep_rules([Rule()])
         assert isinstance(result, tuple)
 
     def test_accepts_set(self) -> None:
-        r = ThrottleRule(path="/a/")
+        r = Rule(path="/a/")
         result = _prep_rules({r})
         assert result == (r,)
 
     def test_single_rule_unchanged(self) -> None:
-        rule = ThrottleRule(path="/x/")
+        rule = Rule(path="/x/")
         result = _prep_rules([rule])
         assert result == (rule,)
 
@@ -444,7 +437,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_to_registered_uid(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         registry.register("foo")
@@ -454,7 +447,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_to_unregistered_uid_raises(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         rule = rule_type(path="/api/")
@@ -479,7 +472,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_deduplicates(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         registry.register("foo")
@@ -489,7 +482,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_multiple_calls_accumulate(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         registry.register("foo")
@@ -504,7 +497,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_unregister_removes_rules(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         registry.register("foo")
@@ -514,7 +507,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_rules_isolated_between_uids(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         registry.register("a")
@@ -526,7 +519,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_get_rules_returns_list_copy(
-        self, rule_type: typing.Type[ThrottleRule[HTTPConnection]]
+        self, rule_type: typing.Type[Rule[HTTPConnection]]
     ) -> None:
         """Mutating the returned list should not affect internal state."""
         registry = ThrottleRegistry()

@@ -210,7 +210,11 @@ def inmemory_backend() -> InMemoryBackend:
 @pytest.fixture(scope="function")
 async def backend() -> typing.AsyncGenerator[InMemoryBackend, None]:
     """Provides a fresh instance of `InMemoryBackend` for each test, ensuring isolation and cleanup."""
-    backend = InMemoryBackend()
+    # Do not propulate the lock pool here as the event loop used by this
+    # fixture may be different from that in which the test will run.
+    # The asyncio.Lock used by the inmemory backend is loop bound so we would
+    # mostlikely get an error if we try to acquire it in another loop.
+    backend = InMemoryBackend(prepopulate_lock_pool=False)
     async with backend(persistent=False, close_on_exit=True):
         yield backend
 

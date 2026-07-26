@@ -25,8 +25,12 @@ jobs:
           SOURCE_BRANCH="${{ github.head_ref }}"
           TARGET_BRANCH="${{ github.base_ref }}"
 
-          echo "🔍 Checking source: $SOURCE_BRANCH -> target: $TARGET_BRANCH"
+          if [[ "$SOURCE_BRANCH" == "develop" ]]; then
+            exit 0
+          fi
 
+          echo "🔍 Checking source: $SOURCE_BRANCH -> target: $TARGET_BRANCH"
+          
           if [[ "$SOURCE_BRANCH" == release/* ]]; then
             BASE_BRANCH="develop"
           elif [[ "$SOURCE_BRANCH" == hotfix/* ]]; then

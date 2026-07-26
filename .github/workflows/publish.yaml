@@ -45,8 +45,8 @@ jobs:
         os:
           - ubuntu-latest       # manylinux x86_64
           - ubuntu-24.04-arm    # manylinux aarch64 (native runner, no QEMU)
-          - macos-13            # macOS x86_64 (Intel)
-          - macos-14            # macOS arm64 (Apple Silicon)
+          - macos-26-intel      # macOS x86_64 (Intel)
+          - macos-latest        # macOS arm64 (Apple Silicon)
 
     steps:
       - name: Checkout code

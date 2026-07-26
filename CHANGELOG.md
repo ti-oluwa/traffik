@@ -51,13 +51,13 @@
 **This release contains breaking changes** - read the section below before upgrading.
 
 - **Breaking Changes**:
-  - `ThrottleRule` and `BypassThrottleRule` have been renamed to `Rule` and `Bypass`, and the `ThrottlePredicate` type has been renamed to `Predicate`. There are no compatibility aliases for these - update any direct imports or usages.
+  - `ThrottleRule` and `BypassThrottleRule` have been renamed to `Rule` and `Bypass`, and the `ThrottlePredicate` type has been renamed to `Predicate`. With `ThrottleRule` and `BypassThrottleRule` kept as compatibility aliases - will be removed in future versions.
   - `throttle_if(...)` and `bypass_if(...)` are now the preferred way to construct `Rule`/`Bypass` instances.
-  - Strategy state serialization (used by Redis- and Memcached-backed backends) switched from `msgpack` to a custom struct-based format, for performance and to drop the `msgpack` dependency. State persisted by pre-1.2.0 versions will not deserialize correctly under 1.2.0. Flush your Redis/Memcached keyspace after upgrading.
+  - Strategy state serialization (used by Redis- and Memcached-backed backends) switched from `msgpack` to a custom struct-based format, for performance and to drop the `msgpack` dependency. State persisted by pre-1.2.0 versions will not deserialize correctly under 1.2.0. Although you may not see errors, the previous stored states are invalidated. Preferably, flush your Redis/Memcached keyspace after upgrading.
 
 - **Enhancements**:
   - Added `MultiProcessInMemoryBackend`: shares rate-limit state across real, forked worker processes (e.g. `gunicorn` running multiple workers) via shared memory, without needing Redis or Memcached. Uses a small C extension (not built on Windows) for fast hashing.
-  - Redis and Memcached backends restructured into per-client submodules. `traffik.backends.redis.aioredis`/`.coredis` and `traffik.backends.memcached.aiomcache`/`.emcache` (new: `emcache` client support for Memcached, generally faster than `aiomcache`). Existing top-level imports (`traffik.backends.redis`/`traffik.backends.memcached`) still work unchanged as long as the relevant client library is installed.
+  - Redis and Memcached backends are restructured into per-client submodules. `traffik.backends.redis.aioredis`/`.coredis` and `traffik.backends.memcached.aiomcache`/`.emcache` (new: `emcache` client support for Memcached, generally faster than `aiomcache`). Existing top-level imports (`traffik.backends.redis`/`traffik.backends.memcached`) still work unchanged as long as the relevant client library is installed.
   - Added `Throttle.as_middleware(...)`, returning a ready-to-use Starlette `Middleware` entry built directly from a throttle instance.
   - Expanded lock-related exceptions: new `LockError`, `LockAcquisitionError`, `LockReleaseError`, and `LockPoolError`, all still catchable via the existing `BackendError`/`TimeoutError` handlers.
   - Internal locking overhaul across all backends: pooled, reference-counted named locks with optional reentrancy, reducing lock-related memory growth and improving throughput under contention on shared keys.

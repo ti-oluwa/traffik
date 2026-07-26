@@ -382,14 +382,12 @@ class TestPrepRules:
         bypass_with_predicate = Bypass(path="/bp/", predicate=predicate)
 
         # Deliberately shuffled
-        result = _prep_rules(
-            [
-                regular_with_predicate,
-                bypass_with_predicate,
-                regular_no_predicate,
-                bypass_no_predicate,
-            ]
-        )
+        result = _prep_rules([
+            regular_with_predicate,
+            bypass_with_predicate,
+            regular_no_predicate,
+            bypass_no_predicate,
+        ])
         assert result == (
             bypass_no_predicate,
             regular_no_predicate,
@@ -546,6 +544,7 @@ def _make_throttle(
     )
 
 
+@pytest.mark.anyio
 class TestThrottleRegistryGetThrottle:
     @requires_throttle_type
     def test_returns_instance(self, throttle_type: typing.Type[Throttle]) -> None:
@@ -567,7 +566,7 @@ class TestThrottleRegistryGetThrottle:
 
 
 @requires_throttle_type
-@pytest.mark.asyncio
+@pytest.mark.anyio
 class TestThrottleRegistryDisableEnable:
     async def test_disable_returns_true_when_found(
         self, throttle_type: typing.Type[Throttle]

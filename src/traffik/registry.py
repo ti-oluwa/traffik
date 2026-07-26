@@ -2,6 +2,7 @@ import inspect
 import re
 import threading
 import typing
+import warnings
 import weakref
 from collections.abc import Collection
 
@@ -245,6 +246,30 @@ class Bypass(Rule[HTTPConnectionT]):
                 return True
 
         return False
+
+
+class ThrottleRule(Rule):
+    """Deprecated alias for `Rule`."""
+
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "`ThrottleRule` is deprecated; use `Rule` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
+
+
+class BypassThrottleRule(Rule):
+    """Deprecated alias for `Bypass`."""
+
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "`BypassThrottleRule` is deprecated; use `Bypass` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
 
 
 def throttle_if(

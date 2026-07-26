@@ -45,3 +45,29 @@
 - **Bug Fixes**:
   - Minor bug fixes and code cleanups.
   - Small fixes to docstrings and type hints and names for better clarity and accuracy.
+
+## Version 1.2.0 (2026-07-25)
+
+**This release contains breaking changes** - read the section below before upgrading.
+
+- **Breaking Changes**:
+  - `ThrottleRule` and `BypassThrottleRule` have been renamed to `Rule` and `Bypass`, and the `ThrottlePredicate` type has been renamed to `Predicate`. With `ThrottleRule` and `BypassThrottleRule` kept as compatibility aliases - will be removed in future versions.
+  - `throttle_if(...)` and `bypass_if(...)` are now the preferred way to construct `Rule`/`Bypass` instances.
+  - Strategy state serialization (used by Redis- and Memcached-backed backends) switched from `msgpack` to a custom struct-based format, for performance and to drop the `msgpack` dependency. State persisted by pre-1.2.0 versions will not deserialize correctly under 1.2.0. Although you may not see errors, the previous stored states are invalidated. Preferably, flush your Redis/Memcached keyspace after upgrading.
+
+- **Enhancements**:
+  - Added `MultiProcessInMemoryBackend`: shares rate-limit state across real, forked worker processes (e.g. `gunicorn` running multiple workers) via shared memory, without needing Redis or Memcached. Uses a small C extension (not built on Windows) for fast hashing.
+  - Redis and Memcached backends are restructured into per-client submodules. `traffik.backends.redis.aioredis`/`.coredis` and `traffik.backends.memcached.aiomcache`/`.emcache` (new: `emcache` client support for Memcached, generally faster than `aiomcache`). Existing top-level imports (`traffik.backends.redis`/`traffik.backends.memcached`) still work unchanged as long as the relevant client library is installed.
+  - Added `Throttle.as_middleware(...)`, returning a ready-to-use Starlette `Middleware` entry built directly from a throttle instance.
+  - Expanded lock-related exceptions: new `LockError`, `LockAcquisitionError`, `LockReleaseError`, and `LockPoolError`, all still catchable via the existing `BackendError`/`TimeoutError` handlers.
+  - Internal locking overhaul across all backends: pooled, reference-counted named locks with optional reentrancy, reducing lock-related memory growth and improving throughput under contention on shared keys.
+  - Rewrote the benchmark suite (`benchmarks/`) to run against real, separately spawned server processes. A single `uvicorn` instance, or `gunicorn` with real forked workers via a new `--workers` option, driven by real HTTP/WebSocket clients, instead of calling the ASGI app in-process. This is the only way the suite can meaningfully exercise `MultiProcessInMemoryBackend`.
+  - Documentation migrated to Zensical, reorganized, and expanded.
+  - Test suite reorganized into `tests/unit/` and `tests/integration/` for clarity.
+  - Maximum supported Python version bumped to 3.14.
+
+- **Bug Fixes**:
+  - Fixed `get_stat(...).wait_ms` across all strategies to correctly report the time to wait before the next request is allowed, rather than a stale, misleading value.
+  - Fixed a data-loss issue in Memcached key-tracking: replaced a get-update-set cycle with an atomic append, and sharded tracking keys to avoid Memcached's 1MB value size ceiling.
+  - Fixed lock release and error propagation issues under contention in Redis- and Memcached-backed locks.
+  - Minor bug fixes, docstring corrections, and code cleanups throughout.

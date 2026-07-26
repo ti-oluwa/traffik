@@ -1,6 +1,6 @@
 # Strategies
 
-A strategy is the algorithm that decides **"how Traffik counts'**. Every strategy
+A strategy is the algorithm that decides **"how Traffik counts"**. Every strategy
 receives the same inputs - a key, a rate, a backend, and the cost, and returns a wait time in
 milliseconds. Zero means "go ahead". Anything positive means "slow down".
 

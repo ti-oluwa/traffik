@@ -19,7 +19,7 @@ new_connection = functools.partial(
 )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.quota
 @requires_throttle_type
 class TestQuotaContext:

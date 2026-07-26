@@ -1014,7 +1014,29 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             size=self._shared_memory_size,
         )
         buffer = memoryview(shared_memory.buf)  # type: ignore[arg-type]
-        buffer[:] = bytes(self._shared_memory_size)
+
+        # The OS is free to allocate more than requested. POSIX shared memory
+        # segments are page-aligned, and on macOS in particular, `buffer` can
+        # come back noticeably larger than `self._shared_memory_size` (e.g.
+        # rounded up to a 16KiB page). It should never come back *smaller*;
+        # if it does, something is wrong at the platform level and we'd
+        # rather fail clearly here than hit a confusing out-of-bounds error
+        # later when shard/lock-pool offsets are computed against
+        # `self._shared_memory_size`.
+        if len(buffer) < self._shared_memory_size:
+            buffer.release()
+            shared_memory.close()
+            shared_memory.unlink()
+            raise BackendConnectionError(
+                f"Shared memory segment {self._shared_memory_name!r} was "
+                f"allocated smaller ({len(buffer)} bytes) than required "
+                f"({self._shared_memory_size} bytes)."
+            )
+
+        # Only zero the region we actually use as `buffer` may be larger than
+        # `self._shared_memory_size` (see above), and the surplus, if any, is
+        # never addressed by any offset this backend computes.
+        buffer[: self._shared_memory_size] = bytes(self._shared_memory_size)
 
         try:
             self._slot_map_semaphores = [

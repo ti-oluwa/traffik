@@ -61,6 +61,17 @@ emcache = [
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.cibuildwheel]
+# traffik ships a compiled C extension (src/traffik/backends/_cext), so
+# wheels are platform- and interpreter-specific. Build one per supported
+# CPython version, skipping 32-bit targets, musllinux (untested against
+# our C extension), and PyPy (unsupported - see classifiers).
+build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
+skip = "*-musllinux* pp* *-win32 *-manylinux_i686"
+build-frontend = "build[uv]"
+test-command = "python {project}/ci/wheel_smoke_test.py"
+
+
 [[tool.uv.index]]
 name = "testpypi"
 url = "https://test.pypi.org/simple/"

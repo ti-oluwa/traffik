@@ -26,12 +26,74 @@ jobs:
     uses: ./.github/workflows/test.yaml
 
 
-  # Build and validate package
-  build:
-    name: Build Package
-    runs-on: ubuntu-latest
+  # Build a correctly-tagged wheel for every supported platform and Python
+  # version via cibuildwheel. traffik ships a compiled C extension
+  # (src/traffik/backends/_cext), so a wheel built with a plain `uv build`
+  # on a single runner is only valid for that exact machine and gets tagged
+  # e.g. `linux_x86_64` - not a portable manylinux/macOS/Windows tag, and
+  # PyPI rejects it outright. cibuildwheel builds inside the correct
+  # manylinux container (or natively on macOS/Windows) and produces wheels
+  # PyPI will actually accept, for every CPython version this project
+  # supports - not just whatever's on the build runner.
+  build-wheels:
+    name: Build wheels (${{ matrix.os }})
     needs: [quality-gate, test-gate]
-    
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest       # manylinux x86_64
+          - ubuntu-24.04-arm    # manylinux aarch64 (native runner, no QEMU)
+          - macos-13            # macOS x86_64 (Intel)
+          - macos-14            # macOS arm64 (Apple Silicon)
+          - windows-latest      # Windows x86_64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  # The source distribution is platform-independent so we build it once.
+  build-sdist:
+    name: Build source distribution
+    needs: [quality-gate, test-gate]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Build sdist
+        run: uv build --sdist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  # Collect every wheel and the sdist into one `dist/` artifact, named the
+  # same as before (`dist-${{ github.sha }}`) so every downstream job below
+  # keeps working unchanged.
+  build:
+    name: Collect Build Artifacts
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -45,7 +107,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      
+
       - name: Verify version consistency
         run: |
           # Extract version from pyproject.toml and git tag
@@ -59,35 +121,51 @@ jobs:
           fi
           echo "Version: $PROJECT_VERSION"
 
-      - name: Build package
-        run: uv build
+      - name: Download built wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Download sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
 
       - name: Validate build artifacts
         run: |
           ls -la dist/
-          # Verify both wheel and sdist are created
-          test -f dist/*.whl || (echo "No wheel found" && exit 1)
+          # Verify both wheels and an sdist were produced
+          test -n "$(ls dist/*.whl 2>/dev/null)" || (echo "No wheels found" && exit 1)
           test -f dist/*.tar.gz || (echo "No source distribution found" && exit 1)
-          
-          # Check package contents
-          uv run python -m zipfile -l dist/*.whl
-          uv run python -m tarfile -l dist/*.tar.gz
+
+          # Guard against ever shipping a wheel with a bare, non-portable
+          # 'linux_*' platform tag again (only manylinux tags start with
+          # 'many', so this pattern can't false-positive on a good tag).
+          if ls dist/*.whl | grep -E -- '-linux_[a-z0-9_]+\.whl$'; then
+            echo "Found a wheel with an unsupported bare 'linux_*' platform tag"
+            exit 1
+          fi
+
+          echo "Built artifacts:"
+          for f in dist/*; do echo " - $(basename "$f")"; done
 
           echo "✅ Build artifacts created successfully"
 
-      - name: Install and test built package
+      - name: Verify sdist installs and compiles cleanly
         run: |
-          # Install the wheel in a clean environment
-          uv venv test-env
-          uv pip install dist/*.whl
+          uv venv sdist-test-env
+          uv pip install dist/*.tar.gz
           uv run python -c "
           import traffik
           from traffik.backends.inmemory import InMemoryBackend
           from traffik.throttles import HTTPThrottle
-          print('✅ Built package works correctly')
+          print('✅ sdist installs and compiles correctly')
           "
-      
-      - name: Upload build artifacts
+
+      - name: Upload combined build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist-${{ github.sha }}

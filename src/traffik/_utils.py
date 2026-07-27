@@ -4,6 +4,8 @@ import asyncio
 import enum
 import functools
 import inspect
+import ipaddress
+import socket
 import sys
 import time as pytime
 import typing
@@ -20,37 +22,180 @@ from traffik.config import (  # noqa
     set_lock_blocking_timeout,
     set_lock_ttl,
 )
-from traffik.typing import AsyncCallable, T
+from traffik.typing import AsyncCallable, Network, T, TrustedProxy
 
-__all__ = [
-    "CircuitBreaker",
-    "CircuitState",
-    "_TaskTimer",
-    "get_remote_address",
-    "time",
-]
+__all__ = ["CircuitBreaker", "CircuitState", "_TaskTimer", "get_remote_address", "time"]
 
 
-def get_remote_address(connection: HTTPConnection) -> typing.Optional[str]:
+class ProxyHeaders(enum.IntFlag):
+    NONE = 0
+    FORWARDED = enum.auto()
+    X_FORWARDED_FOR = enum.auto()
+    X_REAL_IP = enum.auto()
+    TRUE_CLIENT_IP = enum.auto()
+    CF_CONNECTING_IP = enum.auto()
+    ALL = FORWARDED | X_FORWARDED_FOR | X_REAL_IP | TRUE_CLIENT_IP | CF_CONNECTING_IP
+
+
+def _as_cache_key(
+    trusted_proxies: typing.Sequence[TrustedProxy],
+) -> typing.Tuple[TrustedProxy, ...]:
+    """Coerce to a hashable tuple for `_split_trusted_proxies`'s cache."""
+    return (
+        trusted_proxies
+        if isinstance(trusted_proxies, tuple)
+        else tuple(trusted_proxies)
+    )
+
+
+@functools.lru_cache(maxsize=128)
+def _split_trusted_proxies(
+    trusted_proxies: typing.Tuple[TrustedProxy, ...],
+) -> typing.Tuple[typing.FrozenSet[str], typing.Tuple[Network, ...]]:
     """
-    Returns the Remote/IP address of the connection client.
+    Split configured trusted proxies into single addresses and networks
+    (checked by containment, only when needed).
 
-    This function attempts to extract the IP address from the `x-forwarded-for` header
-    or the `remote-addr` header. If neither is present, it falls back to the `client.host`
-    attribute of the connection.
-
-    :param connection: The HTTP connection
-    :return: The Remote/IP address of the connection client, or None if it cannot be determined.
+    This is cached per distinct `trusted_proxies` tuple as this is a static
+    configuration, so there's no reason to redo the split, or re-stringify
+    every address, on every request that reuses the same configuration.
     """
-    x_forwarded_for = connection.headers.get(
-        "x-forwarded-for"
-    ) or connection.headers.get("remote-addr")
-    if x_forwarded_for:
-        return x_forwarded_for.split(",")[0].strip()
+    exact: typing.Set[str] = set()
+    networks: typing.List[Network] = []
 
-    if connection.client:
-        return connection.client.host
-    return None
+    for proxy in trusted_proxies:
+        if isinstance(proxy, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
+            exact.add(str(proxy))
+        else:
+            networks.append(proxy)
+
+    return frozenset(exact), tuple(networks)
+
+
+def _is_trusted_proxy(
+    address: str, exact: typing.FrozenSet[str], networks: typing.Tuple[Network, ...]
+) -> bool:
+    """Returns whether an address belongs to a trusted proxy."""
+    if address in exact:
+        return True
+
+    if not networks:
+        return False
+
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+
+    return any(ip in network for network in networks)
+
+
+def _is_ip(value: str) -> bool:
+    """
+    Returns whether *value* is a valid IPv4 or IPv6 address.
+
+    Uses `socket.inet_pton`, a thin wrapper over the C library address
+    parser, format validation only instead of `ipaddress.ip_address`.
+
+    Note: Unlike `ipaddress.IPv6Address`, `inet_pton` doesn't accept
+    zone IDs (e.g. `fe80::1%eth0`). This a deliberate trade-off here.
+    Scoped link-local addresses showing up in a proxy header is not a
+    real-world case worth paying for on every request.
+    """
+    if not value:
+        return False
+
+    family = socket.AF_INET6 if ":" in value else socket.AF_INET
+    try:
+        socket.inet_pton(family, value)
+    except OSError:
+        return False
+    return True
+
+
+def get_remote_address(
+    connection: HTTPConnection,
+    *,
+    trusted_proxies: typing.Optional[typing.Sequence[TrustedProxy]] = None,
+    proxy_headers: ProxyHeaders = ProxyHeaders.X_FORWARDED_FOR,
+) -> typing.Optional[str]:
+    """
+    Returns the originating client IP address.
+
+    If the immediate peer is a trusted proxy, configured proxy headers are
+    consulted to recover the original client IP. Otherwise, the socket peer
+    address is returned.
+
+    :param connection: The incoming HTTP connection.
+    :param trusted_proxies: Normalized trusted proxy IP addresses and/or CIDR networks.
+        Pass the same object (e.g. a module- or config-level tuple) on every call if
+        you can as trust-checking is cached per distinct `trusted_proxies`
+        value, so reusing it avoids redoing that work on every request.
+    :param proxy_headers: Proxy headers that may be trusted.
+    :return: The client IP address, or `None`.
+    """
+    client = connection.client
+    if client is None:
+        return None
+
+    peer = client.host
+    exact: typing.FrozenSet[str] = frozenset()
+    networks: typing.Tuple[Network, ...] = ()
+    if trusted_proxies:
+        exact, networks = _split_trusted_proxies(_as_cache_key(trusted_proxies))
+
+    if not trusted_proxies or not _is_trusted_proxy(peer, exact, networks):
+        return peer
+
+    headers = connection.headers
+
+    # RFC 7239 Forwarded
+    if ProxyHeaders.FORWARDED in proxy_headers:
+        forwarded = headers.get("forwarded")
+        if forwarded:
+            for element in forwarded.split(","):
+                for parameter in element.split(";"):
+                    parameter = parameter.strip()
+                    key, _, value = parameter.partition("=")
+                    if key.strip().lower() != "for":
+                        continue
+
+                    value = value.strip().strip('"')
+                    if value.startswith("["):
+                        end = value.find("]")
+                        if end != -1:
+                            value = value[1:end]
+                    elif value.count(":") == 1 and "." in value:
+                        value = value.rsplit(":", 1)[0]
+
+                    if _is_ip(value):
+                        return value
+
+    # X-Forwarded-For
+    if ProxyHeaders.X_FORWARDED_FOR in proxy_headers:
+        x_forwarded_for = headers.get("x-forwarded-for")
+        if x_forwarded_for:
+            # Walk from the proxy nearest to us backwards, removing trusted proxies.
+            for candidate in reversed(x_forwarded_for.split(",")):
+                candidate = candidate.strip()
+                if not _is_ip(candidate):
+                    continue
+                if not _is_trusted_proxy(candidate, exact, networks):
+                    return candidate
+
+    # Single-IP headers
+    for flag, header in (
+        (ProxyHeaders.CF_CONNECTING_IP, "cf-connecting-ip"),
+        (ProxyHeaders.TRUE_CLIENT_IP, "true-client-ip"),
+        (ProxyHeaders.X_REAL_IP, "x-real-ip"),
+    ):
+        if flag not in proxy_headers:
+            continue
+
+        value = headers.get(header)
+        if value and _is_ip(value):
+            return value
+    return peer
 
 
 def _add_parameter_to_signature(
@@ -301,10 +446,10 @@ class _TaskTimer:
         return False
 
 
-class CircuitState(enum.IntEnum):
-    CLOSED = 0
-    OPEN = 1
-    HALF_OPEN = 2
+class CircuitState(enum.Enum):
+    CLOSED = enum.auto()
+    OPEN = enum.auto()
+    HALF_OPEN = enum.auto()
 
 
 class CircuitBreaker:

@@ -3,8 +3,7 @@ Run by cibuildwheel against every wheel it builds, on every target
 platform, before any of them are allowed into a release.
 
 This exists specifically so a platform-specific problem in the compiled
-`traffik.backends._ext` C extension gets caught here, on the actual target platform,
-instead of by a user after publishing.
+C extension gets caught here, on the actual target platform, instead of by a user after publishing.
 """
 
 import platform

@@ -20,9 +20,9 @@ class TestBackendConcurrency:
                 key = backend.get_key("counter")
 
                 # 100 concurrent increments
-                results = await asyncio.gather(*[
-                    backend.increment(key) for _ in range(100)
-                ])
+                results = await asyncio.gather(
+                    *[backend.increment(key) for _ in range(100)]
+                )
 
                 # All values should be unique (atomicity guarantee)
                 assert len(set(results)) == 100, (
@@ -45,9 +45,9 @@ class TestBackendConcurrency:
                 await backend.set(key, "100")
 
                 # 100 concurrent decrements
-                results = await asyncio.gather(*[
-                    backend.decrement(key) for _ in range(100)
-                ])
+                results = await asyncio.gather(
+                    *[backend.decrement(key) for _ in range(100)]
+                )
 
                 # All values should be unique
                 assert len(set(results)) == 100, (
@@ -68,9 +68,12 @@ class TestBackendConcurrency:
                 key = backend.get_key("ttl_counter")
 
                 # 50 concurrent increments with TTL
-                results = await asyncio.gather(*[
-                    backend.increment_with_ttl(key, amount=1, ttl=60) for _ in range(50)
-                ])
+                results = await asyncio.gather(
+                    *[
+                        backend.increment_with_ttl(key, amount=1, ttl=60)
+                        for _ in range(50)
+                    ]
+                )
 
                 # All values should be unique
                 assert len(set(results)) == 50, (
@@ -109,9 +112,9 @@ class TestBackendConcurrency:
                 key = backend.get_key("stress_counter")
 
                 # 300 concurrent increments
-                results = await asyncio.gather(*[
-                    backend.increment(key) for _ in range(300)
-                ])
+                results = await asyncio.gather(
+                    *[backend.increment(key) for _ in range(300)]
+                )
 
                 # Verify atomicity
                 assert len(set(results)) == 300, "Race condition under stress!"

@@ -382,12 +382,14 @@ class TestPrepRules:
         bypass_with_predicate = Bypass(path="/bp/", predicate=predicate)
 
         # Deliberately shuffled
-        result = _prep_rules([
-            regular_with_predicate,
-            bypass_with_predicate,
-            regular_no_predicate,
-            bypass_no_predicate,
-        ])
+        result = _prep_rules(
+            [
+                regular_with_predicate,
+                bypass_with_predicate,
+                regular_no_predicate,
+                bypass_no_predicate,
+            ]
+        )
         assert result == (
             bypass_no_predicate,
             regular_no_predicate,

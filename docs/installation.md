@@ -89,7 +89,7 @@ Traffik ships with one extra per Redis/Memcached client library. Install only wh
 
 ## Choosing a Backend
 
-!!! tip "Start with InMemory, graduate to Redis"
+!!! tip "Start with In-Memory, graduate to Redis"
     During local development and in CI, `InMemoryBackend` is perfect: zero configuration, zero external services. When you deploy, swap it for `RedisBackend` and the rest of your code stays the same.
 
     ```python
@@ -102,7 +102,7 @@ Traffik ships with one extra per Redis/Memcached client library. Install only wh
     backend = RedisBackend("redis://localhost:6379/0", namespace="myapp")
     ```
 
-!!! warning "InMemory doesn't share state across processes"
+!!! warning "In-Memory doesn't share state across processes"
     `InMemoryBackend` lives in a single Python process. If you run your app with multiple workers (`uvicorn --workers 4`, gunicorn, ...), each worker counts independently. Your real limit becomes `configured_limit × worker_count`, silently. For a multi-worker, single-machine setup without Redis, look at `MultiProcessInMemoryBackend` instead. For anything multi-host, use `RedisBackend` or `MemcachedBackend`.
 
 !!! info "Memcached caveats"

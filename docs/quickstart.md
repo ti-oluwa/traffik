@@ -14,7 +14,7 @@ from fastapi import FastAPI, Depends
 from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend
 
-# 1. Create a backend. InMemory needs no configuration.
+# 1. Create a backend. In-Memory needs no configuration.
 backend = InMemoryBackend(namespace="myapp")
 
 # 2. Give FastAPI the backend's lifespan (initializes on startup, cleans up on shutdown).
@@ -193,7 +193,7 @@ redis_backend = RedisBackend(
     lock_blocking_timeout=2.0,  # Give up waiting on a lock after 2 seconds
 )
 
-# Fallback: InMemory (used only when Redis is unavailable)
+# Fallback: In-Memory (used only when Redis is unavailable)
 fallback_backend = InMemoryBackend(namespace="myapp:fallback")
 
 # --- Circuit breaker ---

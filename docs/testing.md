@@ -241,10 +241,10 @@ async def test_websocket_rate_limiting():
 If you want to test against real Redis or Memcached, use the Docker testing script:
 
 ```bash
-# Run the full test suite (InMemory + Redis + Memcached)
+# Run the full test suite (In-Memory + Redis + Memcached)
 ./docker-test.sh test
 
-# Run fast tests (InMemory only, skips external backends)
+# Run fast tests (In-Memory only, skips external backends)
 ./docker-test.sh test-fast
 
 # Test across multiple Python versions (3.9, 3.10, 3.11, ...)

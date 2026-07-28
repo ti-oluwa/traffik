@@ -92,7 +92,7 @@ throttle = HTTPThrottle(
 4. If the fallback also fails: re-raises the exception
 5. If no: re-raises the original exception immediately
 
-!!! tip "InMemory as fallback"
+!!! tip "In-Memory as fallback"
     `InMemoryBackend` makes an excellent fallback for Redis/Memcached. It's always available (no network), starts up instantly, and provides reasonable throttling even without distributed coordination. In a single-node failure scenario, per-process rate limiting is usually better than no rate limiting.
 
 ---
@@ -251,7 +251,7 @@ throttle = HTTPThrottle(
 | Development / low stakes | `on_error="allow"` - fail open, keep dev experience smooth |
 | Security-sensitive API | `on_error="throttle"` - fail closed, protect the resource |
 | Debugging backend issues | `on_error="raise"` - propagate exceptions for visibility |
-| Redis down, InMemory fallback | `fallback(fallback_backend)` |
+| Redis down, In-Memory fallback | `fallback(fallback_backend)` |
 | Transient network blips | `retry(max_retries=3, retry_on=(TimeoutError,))` |
 | Production with HA requirements | `failover(fallback, breaker=CircuitBreaker(...))` |
 | Custom logic + logging | Custom async function |

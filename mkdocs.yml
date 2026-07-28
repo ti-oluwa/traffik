@@ -56,7 +56,7 @@ theme:
   
   font:
     text: Manrope
-    code: Roboto Mono
+    code: Cascadia
 
 plugins:
   - search:

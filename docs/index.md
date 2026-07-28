@@ -80,7 +80,7 @@ Backends expose a `lifespan` context manager, which is what you pass to FastAPI 
 | `MemcachedBackend` | High-throughput, cache-friendly workloads | Yes | `aiomcache` or `emcache` |
 
 !!! warning "`MultiProcessInMemoryBackend` is experimental"
-    It works, and it's tested, but the setup constraints are real: it needs the `fork` start method (Linux, or macOS with it set explicitly), and there's exactly one correct way to stand it up - construct and `start()` it once in a parent process *before* forking, and let every worker inherit it through the fork. See [Backends](core-concepts/backends.md#multiprocessinmemorybackend) before reaching for this one.
+    It works, and it's tested, but the setup constraints are real: it needs the `fork` start method (Linux, or macOS with it set explicitly), and there's exactly one correct way to stand it up - construct and `start()` it once in a parent process *before* forking, and let every worker inherit it through the fork. See [Backends](core-concepts/backends.md#multi-process-in-memory-backend) before reaching for this one.
 
 ---
 

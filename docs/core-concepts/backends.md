@@ -8,7 +8,7 @@ the first architectural decision you'll make when adding Traffik to a project.
 
 ## Choosing a backend
 
-| Feature               | InMemory                   | MultiProcess (experimental)         | Redis                                    | Memcached                                                         |
+| Feature               | In-Memory                   | MultiProcess (experimental)         | Redis                                    | Memcached                                                         |
 |-----------------------|----------------------------|--------------------------------------|-------------------------------------------|--------------------------------------------------------------------|
 | Best for              | Dev, tests, single process | Multiple workers, one machine        | Production, distributed                  | Existing Memcached stacks                                         |
 | Persistence           | No                         | No                                    | Optional (`persistent=True`)             | Optional (`persistent=True` & `track_keys=True`(enables resets))  |
@@ -23,7 +23,7 @@ the first architectural decision you'll make when adding Traffik to a project.
 
 ---
 
-## InMemory backend
+## In-Memory Backend
 
 The `InMemoryBackend` stores everything in process memory using sharded `OrderedDict`
 stores. It is not suitable for multi-process or distributed deployments, but it is perfect for development and testing.
@@ -56,14 +56,14 @@ backend = InMemoryBackend(
 **When to use:** Local development, unit tests, or genuinely single-process
 deployments where you never need to share state between workers.
 
-!!! tip "Always use InMemory in tests"
+!!! tip "Always use In-Memory in tests"
     Swap out your production backend for `InMemoryBackend` in your test suite. It
     requires no external services, resets itself cleanly between test runs, and adds
     no I/O latency. Your tests will be fast enough to make you smile.
 
 ---
 
-## `MultiProcessInMemoryBackend`
+## Multi-Process In-Memory Backend
 
 !!! warning "Experimental"
     Works, and is tested, but the setup is unforgiving if you skip the constraints below. Read this whole section before using it in production.
@@ -86,17 +86,17 @@ app = FastAPI(lifespan=backend.lifespan)
 Run it with gunicorn, `preload_app=True`, and a fork-based worker class:
 
 ```python
-# gunicorn_conf.py
+# gunicorn_config.py
 preload_app = True
 workers = 4
-worker_class = "uvicorn_worker.UvicornWorker"
+worker_class = "uvicorn_worker.UvicornWorker"   # Needs `uvicorn-worker` installed
 ```
 
 ```bash
-gunicorn -c gunicorn_conf.py main:app
+gunicorn -c gunicorn_config.py main:app
 ```
 
-Every forked worker inherits a fully-working copy automatically - shared memory, semaphores, all of it. Workers don't call anything to "join" it; `lifespan=backend.lifespan` running in each worker's own event loop is enough.
+Every forked worker inherits a fully-working copy automatically - shared memory, semaphores, all of it. Workers don't need to call anything to "join" it; `lifespan=backend.lifespan` running in each worker's own event loop is enough.
 
 !!! danger "Don't use `uvicorn --workers N` with this backend"
     Uvicorn's native multi-worker mode spawns workers with Python's `spawn` start method, not `fork`. Each worker re-imports your app fresh, with no shared memory inheritance at all. You'd get one independent, uncoordinated instance per worker, silently. Use gunicorn (or another genuinely fork-based process manager) instead.
@@ -112,6 +112,8 @@ Every forked worker inherits a fully-working copy automatically - shared memory,
 - **Self-healing on restart.** If a segment with the target name already exists when `start()` runs, it's treated as a stale leftover from a previous run (never an actively-used peer - nothing can safely attach to one anyway) and recreated.
 
 ---
+
+## Redis Backend
 
 `RedisBackend` is a go-to choice for production. It uses `redis.asyncio` for all operations, pre-loads Lua scripts for atomic increment-with-TTL, and supports two distinct distributed lock implementations.
 
@@ -178,7 +180,7 @@ backend = RedisBackend(
 
 ---
 
-## Memcached backend
+## Memcached Backend
 
 `MemcachedBackend` uses `aiomcache` for async Memcached operations. It is a solid
 choice when your stack already runs Memcached and adding Redis would increase

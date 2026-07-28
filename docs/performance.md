@@ -71,7 +71,7 @@ throttle = HTTPThrottle("api", rate="100/sec", strategy=TokenBucket())
 
 ---
 
-## 3. Configure Lock Striping (InMemory)
+## 3. Configure Lock Striping (In-Memory)
 
 `InMemoryBackend` uses internal locks to prevent race conditions. By default it uses a small number of shards. Increasing the shard count distributes lock contention across more buckets, dramatically improving throughput under high concurrency:
 

@@ -281,9 +281,8 @@ api_throttle = HTTPThrottle(
 
 @app.get("/items")
 async def list_items(
-    request: Request,
     response: Response,  # (2)!
-    _=Depends(api_throttle),
+    request: Request = Depends(api_throttle),
 ):
     # Resolve headers for the current request and attach them to the response.
     # get_headers() fetches live stats from the backend automatically.
@@ -301,7 +300,7 @@ async def list_items(
     ```python
     from fastapi.responses import JSONResponse
     @app.get("/items")
-    async def list_items(request: Request, _=Depends(api_throttle)):
+    async def list_items(request: Request = Depends(api_throttle)):
         headers = await api_throttle.get_headers(request)
         return JSONResponse({"items": ["widget", "gizmo"]}, headers=headers)
     ```

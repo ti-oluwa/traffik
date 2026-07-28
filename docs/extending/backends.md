@@ -1,6 +1,6 @@
 # Building Custom Backends
 
-Traffik ships with InMemory, Redis, and Memcached backends. Those cover the vast majority of use cases. But if you have a custom storage layer - DynamoDB, Cassandra, a SQL database, an in-house cache - you can plug it in by subclassing `ThrottleBackend`.
+Traffik ships with In-Memory, Redis, and Memcached backends. Those cover the vast majority of use cases. But if you have a custom storage layer - DynamoDB, Cassandra, a SQL database, an in-house cache - you can plug it in by subclassing `ThrottleBackend`.
 
 The contract is well-defined, the base class handles a lot of the plumbing for you, and you only need to implement the storage operations themselves.
 

@@ -169,7 +169,7 @@ When many requests compete for the same lock, you'll see:
 
 2. **Non-locking strategies for >= 1s windows**: `FixedWindow` with >= 1s windows is lock-free by design. It's the fastest built-in strategy.
 
-3. **Lock striping for InMemory**: If you're on `InMemoryBackend`, configure more shards to reduce contention:
+3. **Lock striping for In-Memory**: If you're on `InMemoryBackend`, configure more shards to reduce contention:
 
     ```python
     from traffik.backends.inmemory import InMemoryBackend

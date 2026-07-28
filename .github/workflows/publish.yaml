@@ -19,22 +19,12 @@ jobs:
     name: Code Quality Assurance Gate
     uses: ./.github/workflows/code-quality.yaml
 
-
   # Run the full test suite first
   test-gate:
     name: Test Suite Gate
     uses: ./.github/workflows/test.yaml
 
-
-  # Build a correctly-tagged wheel for every supported platform and Python
-  # version via cibuildwheel. traffik ships a compiled C extension
-  # (src/traffik/backends/_cext), so a wheel built with a plain `uv build`
-  # on a single runner is only valid for that exact machine and gets tagged
-  # e.g. `linux_x86_64` - not a portable manylinux/macOS/Windows tag, and
-  # PyPI rejects it outright. cibuildwheel builds inside the correct
-  # manylinux container (or natively on macOS/Windows) and produces wheels
-  # PyPI will actually accept, for every CPython version this project
-  # supports - not just whatever's on the build runner.
+  # Build a correctly-tagged wheel for every supported platform and Python version
   build-wheels:
     name: Build wheels (${{ matrix.os }})
     needs: [quality-gate, test-gate]
@@ -50,10 +40,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v9
         with:
           version: "latest"
 
@@ -61,7 +51,7 @@ jobs:
         uses: pypa/cibuildwheel@v4.1.1
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: wheels-${{ matrix.os }}
           path: wheelhouse/*.whl
@@ -74,10 +64,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v9
         with:
           version: "latest"
 
@@ -85,7 +75,7 @@ jobs:
         run: uv build --sdist
 
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: sdist
           path: dist/*.tar.gz
@@ -100,15 +90,15 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v9
         with:
           version: "latest"
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -170,7 +160,7 @@ jobs:
           "
 
       - name: Upload combined build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dist-${{ github.sha }}
           path: dist/
@@ -197,15 +187,15 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v9
         with:
           version: "latest"
 
@@ -267,7 +257,7 @@ jobs:
 
     steps:
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -324,15 +314,15 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v9
         with:
           version: "latest"
 
@@ -395,7 +385,7 @@ jobs:
     
     steps:
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 

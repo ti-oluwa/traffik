@@ -190,7 +190,7 @@ backend = MemcachedBackend(
 )
 ```
 
-This ones has Rendezvous hashing across nodes, adaptive connection pool, and has better overall throughput than `aiomcache`, although it is Linux/macOS only.
+This one has Rendezvous hashing across nodes, adaptive connection pool, and has better overall throughput than `aiomcache`, although it is Linux/macOS only.
 
 In summary, the required dependencies are;
 
@@ -233,7 +233,7 @@ SLAs, not "please don't hammer my API").
 
 ### Advanced strategies
 
-Other bespoke stragies available are in `traffik.strategies.custom`.
+Other bespoke strategies available are in `traffik.strategies.custom`.
 
 `traffik.strategies.custom` has six more: `TieredRateStrategy`,
 `AdaptiveThrottleStrategy`, `PriorityQueueStrategy`, `QuotaWithRolloverStrategy`,
@@ -311,7 +311,7 @@ async def upload(request: Request):
     ...
 ```
 
-> Note that the decorators are imported from different path. The FastAPI specific decorator uses dependnecy injection under the hood, while the ones used for Starlette is a regular wrapper decorator and can be use for both Starlette and FastAPI.
+> Note that the decorators are imported from different path. The FastAPI specific decorator uses dependency injection under the hood, while the ones used for Starlette is a regular wrapper decorator and can be use for both Starlette and FastAPI.
 
 ### Middleware (blanket rules across routes)
 
@@ -488,7 +488,7 @@ async with throttle.quota(request) as quota:
 
 ## Error handling and resilience
 
-Errors occur always at runtime when processing requests. The throttling path is also prone to errors sometimes. Redis backend may hiccup due to temporary Redis unavailability. That raises the question, "What happens when the backend itself fails?". You can provide an error handler to handle these type of errors. The default handlers allow the throttle to fail open or close intelligently or switch to a fallback/backup backend temporarily until the main backned recovers. You could even switch backends permanently. Custom error handlers are also supported if you need one.
+Errors occur always at runtime when processing requests. The throttling path is also prone to errors sometimes. Redis backend may hiccup due to temporary Redis unavailability. That raises the question, "What happens when the backend itself fails?". You can provide an error handler to handle these type of errors. The default handlers allow the throttle to fail open or close intelligently or switch to a fallback/backup backend temporarily until the main backend recovers. You could even switch backends permanently. Custom error handlers are also supported if you need one.
 
 Example:
 

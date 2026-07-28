@@ -1,6 +1,6 @@
 [project]
 name = "traffik"
-version = "1.2.0"
+version = "1.2.1"
 description = "Rate limiting for Starlette and FastAPI applications."
 readme = "README.md"
 authors = [
@@ -62,10 +62,6 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.cibuildwheel]
-# traffik ships a compiled C extension (src/traffik/backends/_cext), so
-# wheels are platform- and interpreter-specific. Build one per supported
-# CPython version, skipping 32-bit targets, musllinux (untested against
-# our C extension), and PyPy (unsupported - see classifiers).
 build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux* *-win* *-manylinux_i686"
 build-frontend = "build[uv]"

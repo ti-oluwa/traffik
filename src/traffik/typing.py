@@ -1,6 +1,7 @@
 """Type definitions and protocols."""
 
 import asyncio
+import ipaddress
 import typing
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ __all__ = [
     "Matchable",
     "Stringable",
     "WaitPeriod",
+    "TrustedProxy",
+    "Network",
 ]
 
 P = ParamSpec("P")
@@ -150,6 +153,15 @@ A type alias for a callable that takes an HTTP connection (and an optional conte
 
 This is used as a predicate to determine if the throttle should apply.
 """
+
+
+TrustedProxy: TypeAlias = typing.Union[
+    ipaddress.IPv4Address,
+    ipaddress.IPv6Address,
+    ipaddress.IPv4Network,
+    ipaddress.IPv6Network,
+]
+Network: TypeAlias = typing.Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
 
 
 class _ExceptionInfo(TypedDict):

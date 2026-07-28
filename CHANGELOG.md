@@ -71,3 +71,20 @@
   - Fixed a data-loss issue in Memcached key-tracking: replaced a get-update-set cycle with an atomic append, and sharded tracking keys to avoid Memcached's 1MB value size ceiling.
   - Fixed lock release and error propagation issues under contention in Redis- and Memcached-backed locks.
   - Minor bug fixes, docstring corrections, and code cleanups throughout.
+
+## Version 1.2.1 (2026-07-28)
+
+**Security-relevant behavior change** - read this before upgrading if you use `get_remote_address`.
+
+- **Security Fix**:
+  - `get_remote_address` no longer trusts proxy headers unconditionally. Previously, any direct client could set `X-Forwarded-For` (or the non-standard `Remote-Addr` header, which was never a real proxy convention) and have it accepted as the client's identity with no verification at all. Therefore easily defeating IP-based rate limiting by spoofing a different address on every request. `get_remote_address` now only consults proxy headers when the immediate connection peer matches an explicitly configured `trusted_proxies` list (exact addresses and/or CIDR networks); otherwise the real socket peer address is returned, unaffected by any header content. **`trusted_proxies` defaults to `None` (trust nothing)**. If you rely on `X-Forwarded-For` or any other proxy header for client identification, you must now pass `trusted_proxies` explicitly.
+  
+- **Enhancements**:
+  - Added `ProxyHeaders`, a flag enum selecting which proxy header conventions `get_remote_address` will consult: RFC 7239 `Forwarded`, `X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`, and `CF-Connecting-IP`, independently, or combined via `ProxyHeaders.ALL`.
+  - `X-Forwarded-For` chains are walked from the nearest hop backwards, stopping at the first address that isn't itself a trusted proxy. Making this resistant to a client prepending forged entries to the header.
+  - RFC 7239 `Forwarded` parsing handles bracketed IPv6, `:port` suffixes, and optional whitespace around `=`.
+  - Trusted-proxy matching checks exact addresses via a set lookup first, and then falling back to CIDR containment only when networks are actually configured; the split is cached per distinct `trusted_proxies` value so static configuration isn't reprocessed on every request.
+  - Added test coverage for the trust boundary, header precedence, RFC 7239 edge cases, and a regression test asserting the `X-Forwarded-For` walk can't be tricked by forged entries prepended ahead of a real, untrusted hop.
+  
+- **Removed**:
+  - The non-standard `Remote-Addr` header is no longer consulted by `get_remote_address` as it was never a real proxy convention, and honoring it was exactly the same spoofing vector as the unauthenticated `X-Forwarded-For` handling described above.

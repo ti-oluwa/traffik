@@ -103,7 +103,7 @@ def _is_ip(value: str) -> bool:
     parser, format validation only instead of `ipaddress.ip_address`.
 
     Note: Unlike `ipaddress.IPv6Address`, `inet_pton` doesn't accept
-    zone IDs (e.g. `fe80::1%eth0`). This a deliberate trade-off here.
+    zone IDs on some platforms (e.g. `fe80::1%eth0`). This a deliberate trade-off here.
     Scoped link-local addresses showing up in a proxy header is not a
     real-world case worth paying for on every request.
     """

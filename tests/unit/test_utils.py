@@ -436,14 +436,6 @@ class TestIsIp:
     def test_invalid(self, value):
         assert _is_ip(value) is False
 
-    def test_ipv6_zone_id_rejected(self):
-        """
-        Documented trade-off: unlike ipaddress.IPv6Address, `inet_pton` doesn't
-        accept zone IDs. Scoped link-local addresses in a proxy header aren't
-        a real-world case worth validating for on every request.
-        """
-        assert _is_ip("fe80::1%eth0") is False
-
 
 class TestSplitTrustedProxies:
     """Tests for `_split_trusted_proxies` and its cache."""

@@ -24,7 +24,14 @@ from traffik.config import (  # noqa
 )
 from traffik.typing import AsyncCallable, Network, T, TrustedProxy
 
-__all__ = ["CircuitBreaker", "CircuitState", "_TaskTimer", "get_remote_address", "time"]
+__all__ = [
+    "CircuitBreaker",
+    "CircuitState",
+    "ProxyHeaders",
+    "_TaskTimer",
+    "get_remote_address",
+    "time",
+]
 
 
 class ProxyHeaders(enum.IntFlag):
@@ -78,7 +85,6 @@ def _is_trusted_proxy(
     """Returns whether an address belongs to a trusted proxy."""
     if address in exact:
         return True
-
     if not networks:
         return False
 
@@ -86,7 +92,6 @@ def _is_trusted_proxy(
         ip = ipaddress.ip_address(address)
     except ValueError:
         return False
-
     return any(ip in network for network in networks)
 
 
@@ -191,8 +196,7 @@ def get_remote_address(
     ):
         if flag not in proxy_headers:
             continue
-
-        value = headers.get(header)
+        value = headers.get(header)  # type: ignore[assignment]
         if value and _is_ip(value):
             return value
     return peer

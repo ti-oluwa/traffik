@@ -25,6 +25,8 @@ __all__ = [
     "Matchable",
     "Stringable",
     "WaitPeriod",
+    "TrustedProxy",
+    "Network",
 ]
 
 P = ParamSpec("P")
@@ -153,13 +155,13 @@ This is used as a predicate to determine if the throttle should apply.
 """
 
 
-TrustedProxy: TypeAlias = (
-    ipaddress.IPv4Address
-    | ipaddress.IPv6Address
-    | ipaddress.IPv4Network
-    | ipaddress.IPv6Network
-)
-Network: TypeAlias = ipaddress.IPv4Network | ipaddress.IPv6Network
+TrustedProxy: TypeAlias = typing.Union[
+    ipaddress.IPv4Address,
+    ipaddress.IPv6Address,
+    ipaddress.IPv4Network,
+    ipaddress.IPv6Network,
+]
+Network: TypeAlias = typing.Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
 
 
 class _ExceptionInfo(TypedDict):

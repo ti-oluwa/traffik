@@ -1,8 +1,5 @@
 """
-Turns one `HttpScenario`/`WebSocketScenario` plus a running
-`Server` into a single `ScenarioResult` - the one place that actually
-knows how to drive each traffic pattern, shared by every benchmark
-category instead of being reimplemented per scenario.
+Turns one `HttpScenario`/`WebSocketScenario` plus a running `Server` into a single `ScenarioResult`.
 """
 
 import asyncio

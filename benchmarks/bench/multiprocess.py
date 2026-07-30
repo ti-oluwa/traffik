@@ -11,10 +11,10 @@ from benchmarks.base import AggregatedResult, BenchmarkConfig
 from benchmarks.live.orchestrators import run_http_scenarios
 from benchmarks.scenarios import MULTIPROCESS_SCENARIOS
 
-# Reuses the plain HTTP (Depends-based) app - what makes this "multiprocess"
+# Reuses the plain HTTP (Depends-based) app. What makes this "multiprocess"
 # is BENCH_BACKEND=multiprocess (forced below) plus real gunicorn workers
 # forked from a master that already ran `MultiProcessInMemoryBackend.start()`
-# at import time (see benchmarks.apps._config.backend_from_env).
+# at import time (see benchmarks.apps.config.backend_from_env).
 app_path = "benchmarks.apps.http:app"
 
 

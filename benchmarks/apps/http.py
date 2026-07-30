@@ -1,13 +1,13 @@
 """
 HTTP dependency-mode benchmark target: a single throttled `GET /test`,
-via `Depends(throttle)` - the most common Traffik integration pattern.
+via `Depends(throttle)`.
 
 Run directly for manual poking:
 
     BENCH_RATE=100/60s uvicorn benchmarks.apps.http:app --port 8000
 
 Also reused, with `BENCH_BACKEND=multiprocess`, as the target for the
-`multiprocess` benchmark command - its scenarios exercise the same
+`multiprocess` benchmark command. Its scenarios exercise the same
 `Depends`-based `/test` endpoint, just under gunicorn with multiple
 forked workers sharing one backend instance.
 """

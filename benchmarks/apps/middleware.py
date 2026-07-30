@@ -27,9 +27,9 @@ throttle = HTTPThrottle(
 middleware_throttle = MiddlewareThrottle(throttle, path="/test", methods={"GET"})
 
 app = FastAPI(lifespan=backend.lifespan)
-app.add_middleware(  # type: ignore[arg-type]
+app.add_middleware(
     ThrottleMiddleware,
-    middleware_throttles=[middleware_throttle],  # type: ignore[arg-type]
+    middleware_throttles=[middleware_throttle],
 )
 
 

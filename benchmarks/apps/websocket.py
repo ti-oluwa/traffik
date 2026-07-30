@@ -1,8 +1,7 @@
 """
 WebSocket benchmark target: a single throttled `/ws` endpoint that echoes
 each received JSON message, or replies `{"type": "rate_limit"}` once
-throttled - checked over a real WebSocket upgrade, not the ASGI in-process
-WebSocket session `tests/client.py` uses for unit tests.
+throttled.
 
     BENCH_RATE=100/60s uvicorn benchmarks.apps.websocket:app --port 8000
 """

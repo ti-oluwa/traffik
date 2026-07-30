@@ -1,8 +1,7 @@
 """
 Declarative scenario definitions.
 
-`mode` determines which traffic pattern `runner.run_http_like_scenario`
-uses:
+`mode` determines which traffic pattern is used:
 
 - `"sequential"`         one request after another, same connection.
 - `"concurrent"`         batches of `config.concurrency` requests via
@@ -32,7 +31,7 @@ class HttpScenario:
     :param name: Human-readable scenario name shown in output.
     :param rate: Throttle rate string, e.g. `"100/60s"`.
     :param total_requests: Total requests sent across the whole scenario.
-    :param mode: Traffic pattern - see module docstring.
+    :param mode: Traffic pattern.
     :param on_error: `Throttle(on_error=...)` value.
     :param headers: Fixed extra headers sent with every request.
     :param waves: For `mode="waves"`: `[(count, sleep_after_seconds), ...]`.
@@ -95,10 +94,9 @@ class WebSocketScenario:
     messages_per_connection: int = 0
 
 
-# --------------------------------------------------------------------------
-# HTTP (Depends-based) scenarios - also reused, with BENCH_BACKEND=multiprocess
-# and workers > 1, as the "multiprocess" command's base scenario set.
-# --------------------------------------------------------------------------
+# -------------------------------
+# HTTP (Depends-based) scenarios
+# -------------------------------
 
 HTTP_SCENARIOS: typing.Dict[str, HttpScenario] = {
     "below_limit": HttpScenario(
@@ -266,7 +264,7 @@ MIDDLEWARE_SCENARIOS: typing.Dict[str, HttpScenario] = {
 # --------------------------------------------------------------------------
 # Multiprocess scenarios - the HTTP set again (forced onto
 # BENCH_BACKEND=multiprocess, run under gunicorn's forked workers), plus two
-# scenarios scenarioific to the shared-memory backend's own characteristics.
+# scenarios specific to the shared-memory backend's own characteristics.
 # --------------------------------------------------------------------------
 
 MULTIPROCESS_SCENARIOS: typing.Dict[str, HttpScenario] = {

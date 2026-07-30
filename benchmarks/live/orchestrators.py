@@ -6,8 +6,7 @@ resetting throttle state between every single iteration, then tear the
 process down before moving to the next scenario.
 
 One server process is reused across all iterations of the *same*
-scenario (matching how a real deployment stays up across many requests,
-not just one), but a fresh process per scenario since each scenario
+scenario, but a fresh process per scenario since each scenario
 configures its own rate/uid/on_error via environment variables the app
 module reads once, at import time.
 """
@@ -19,7 +18,7 @@ import uuid
 from benchmarks.base import AggregatedResult, BenchmarkConfig, ScenarioResult
 from benchmarks.live import client as live_client
 from benchmarks.live.runners import run_http_like_scenario, run_websocket_scenario
-from benchmarks.live.server import Server, ServerStartupError, start_server
+from benchmarks.live.server import ServerStartupError, start_server
 from benchmarks.scenarios import HttpScenario, WebSocketScenario
 
 
@@ -43,7 +42,7 @@ def _build_env(
         "BENCH_REDIS_URL": config.redis_url,
         "BENCH_MEMCACHED_HOST": config.memcached_host,
         "BENCH_MEMCACHED_PORT": str(config.memcached_port),
-        "BENCH_MP_SHARDS": str(config.multiprocess_shards),
+        "BENCH_SHARDS": str(config.shards),
         "BENCH_MP_MAX_KEYS": str(config.multiprocess_max_keys),
     }
 
@@ -195,9 +194,7 @@ async def run_websocket_scenarios(
         )
 
         try:
-            server: Server = await start_server(
-                app_path, env=env, workers=config.workers
-            )
+            server = await start_server(app_path, env=env, workers=config.workers)
         except ServerStartupError as exc:
             print(
                 f"ERROR: Could not start server for {scenario_key}: {exc}",

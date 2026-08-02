@@ -86,6 +86,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         "_default_context",
         "cost",
         "rule",
+        "skip_handler",
         "throttle",
     )
 
@@ -97,6 +98,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         predicate: typing.Optional[Predicate[HTTPConnectionT]] = None,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        skip_handler: typing.Optional[bool] = None,
     ) -> None:
         """
         Initialize the middleware throttle.
@@ -116,15 +118,26 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             If provided, the throttle will only apply if this returns True for the connection.
             This is useful for more complex conditions that cannot be expressed with just path and methods.
             It is run after checking the path and methods, so it should be used for more expensive checks.
+
         :param context: An optional mapping of context to pass to the throttle.
             This is merged with the default context provided at initialization,
             with the provided context taking precedence.
+
+        :param skip_handler: If `True` (overrides `throttle.skip_handler` for every hit),
+            a throttled connection still updates the strategy's state and is still marked
+            throttled (`is_throttled(connection)` returns `True`), but `throttle.handle_throttled`
+            is never invoked - no exception, no response, no side effects from the handler.
+            Retry/wait information is still computed and available via `get_wait()`, `get_stat()`
+            or the connection's throttle headers. Use this when you want to check `get_wait()`/
+            `is_throttled()` yourself and decide what happens next, rather than letting the throttle react for you.
+            Defaults to `False`.
         """
         self.throttle = throttle
         self.cost = cost
         self.rule = Rule[HTTPConnectionT](
             path=path, methods=methods, predicate=predicate
         )
+        self.skip_handler = skip_handler
         self._default_context = dict(context or {})
 
         # Set a clean `__signature__` so FastAPI's dependency injection only
@@ -160,6 +173,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         *,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        skip_handler: typing.Optional[bool] = None,
     ) -> HTTPConnectionT:
         """
         Checks if the throttle applies to the connection and applies it if so.
@@ -169,6 +183,16 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         :param context: An optional mapping of context to pass to the throttle.
             This is merged with the default context provided at initialization,
             with the provided context taking precedence.
+
+        :param skip_handler: If `True` (overrides `skip_handler` for every hit),
+            a throttled connection still updates the strategy's state and is still marked
+            throttled (`is_throttled(connection)` returns `True`), but `throttle.handle_throttled`
+            is never invoked - no exception, no response, no side effects from the handler.
+            Retry/wait information is still computed and available via `get_wait()`, `get_stat()`
+            or the connection's throttle headers. Use this when you want to check `get_wait()`/
+            `is_throttled()` yourself and decide what happens next, rather than letting the throttle react for you.
+            Defaults to `False`.
+
         :return: The connection, possibly modified by the throttle. If throttling criteria
             are not met, returns the original connection unchanged. If throttled, may return
             a modified connection or raise a throttling exception.
@@ -194,8 +218,13 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
                 merged_context.update(context)
             else:
                 merged_context = self._default_context
+
+        skip = skip_handler if skip_handler is not None else self.skip_handler
         return await self.throttle.hit(
-            connection, cost=cost or self.cost, context=merged_context
+            connection,
+            cost=cost or self.cost,
+            context=merged_context,
+            skip_handler=skip,
         )
 
     async def __call__(

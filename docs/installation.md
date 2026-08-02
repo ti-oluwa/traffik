@@ -9,7 +9,7 @@ Getting Traffik installed takes about thirty seconds. Let's make sure you get th
 Before you install, make sure you have:
 
 - **Python 3.9+** (up to 3.14) - Traffik uses modern async features and type hints throughout.
-- **FastAPI** or **Starlette** - Traffik integrates with Starlette's `HTTPConnection` model, which FastAPI is built on.
+- Any **Starlette** based framework - Traffik integrates with Starlette's `HTTPConnection` model. FastAPI is built on Starlette so it should work without issues.
 
 That's it. No mandatory external services, no heavyweight dependencies. The in-memory backend works with no additional setup.
 
@@ -128,10 +128,7 @@ python -c "import traffik; print(traffik.__version__)"
 
 ## Fully Typed
 
-Traffik is a [PEP 561](https://peps.python.org/pep-0561/) compliant package. It ships with a `py.typed` marker, so type checkers like `mypy` and `pyright` pick up its annotations automatically.
-
-!!! tip "Pyright / Pylance users"
-    Traffik's generics (`Throttle[Request]`, `ThrottleBackend[..., Request]`) resolve correctly under strict mode. If you see false positives, make sure you're on a recent type checker version first.
+Traffik is a [PEP 561](https://peps.python.org/pep-0561/) compliant package. It ships with a `py.typed` marker, so type checkers and language servers like `mypy`, `ty`, `pyright` pick up its type annotations automatically.
 
 ---
 

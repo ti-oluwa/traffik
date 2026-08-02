@@ -2,6 +2,7 @@ import os
 import typing
 
 __all__ = [
+    "ANONYMOUS_IDENTIFIER",
     "get_lock_blocking",
     "get_lock_blocking_timeout",
     "get_lock_ttl",

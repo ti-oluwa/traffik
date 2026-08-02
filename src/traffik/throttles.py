@@ -318,7 +318,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         if not uid or not isinstance(uid, str):
             raise ValueError("uid is required and must be a non-empty string")
 
-        registry = registry or GLOBAL_REGISTRY
+        registry = registry if registry is not None else GLOBAL_REGISTRY
         if registry.exists(uid):
             raise ConfigurationError(
                 f"Throttle UID must be unique. Throttle with UID {uid!r} already exists."

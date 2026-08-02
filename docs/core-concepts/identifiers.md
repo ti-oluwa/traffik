@@ -306,11 +306,9 @@ get_client_ip = functools.partial(
 
 async def identifier_with_allowlist(connection: HTTPConnection):
     ip = get_client_ip(connection)
-
     # Internal health checkers, CI runners, etc.
     if ip in {"10.0.0.1", "10.0.0.2"}:
         return EXEMPTED  # this connection is completely untouched
-
     return ip
 ```
 

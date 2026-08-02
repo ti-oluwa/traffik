@@ -40,6 +40,13 @@ from traffik.typing import (
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "ThrottleBackend",
+    "connection_throttled",
+    "default_identifier",
+    "get_throttle_backend",
+]
+
 
 async def default_identifier(connection: HTTPConnection) -> typing.Any:
     """

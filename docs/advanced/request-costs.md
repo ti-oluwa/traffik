@@ -131,7 +131,7 @@ async def selective_cost(
     context: typing.Optional[typing.Dict[str, typing.Any]],
 ) -> int:
     # Health checks and metrics scrapes don't count against the limit
-    if request.url.path in {"/health", "/metrics", "/readyz"}:
+    if request.scope["path"] in {"/health", "/metrics", "/readyz"}:
         return 0
     return 1
 ```

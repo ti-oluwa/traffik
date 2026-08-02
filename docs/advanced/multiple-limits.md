@@ -37,20 +37,12 @@ from traffik.backends.redis import RedisBackend
 backend = RedisBackend("redis://localhost:6379", namespace="myapp")
 
 # Tier 1: No more than 10 requests per minute (burst protection)
-burst_throttle = HTTPThrottle(
-    uid="api:burst",
-    rate="10/min",
-    backend=backend,
-)
+burst_throttle = HTTPThrottle(uid="api:burst", rate="10/min")
 
 # Tier 2: No more than 100 requests per hour (sustained fairness)
-sustained_throttle = HTTPThrottle(
-    uid="api:sustained",
-    rate="100/hour",
-    backend=backend,
-)
+sustained_throttle = HTTPThrottle(uid="api:sustained", rate="100/hour")
 
-app = FastAPI()
+app = FastAPI(lifespan=backend.lifespan)
 
 @app.get(
     "/api/data",
@@ -71,14 +63,8 @@ The `@throttled` decorator from `traffik.decorators` is the FastAPI-native way t
 apply multiple throttles as a route decorator. Pass all throttles in a single call.
 
 ```python
-from fastapi import FastAPI
-from traffik import HTTPThrottle
+...
 from traffik.decorators import throttled  # FastAPI-specific decorator
-
-burst_throttle = HTTPThrottle(uid="api:burst", rate="10/min")
-sustained_throttle = HTTPThrottle(uid="api:sustained", rate="100/hour")
-
-app = FastAPI()
 
 @app.get("/api/data")
 @throttled(burst_throttle, sustained_throttle)
@@ -89,9 +75,9 @@ async def get_data():
 !!! note "Import the right `throttled`"
     There are two `throttled` functions in Traffik:
 
-    - `traffik.decorators.throttled` - designed for **FastAPI**, works with its
-      dependency injection system. Routes do not need an explicit connection parameter.
-    - `traffik.throttles.throttled` - the **Starlette** version. The decorated route
+    - `traffik.decorators.throttled`: designed for **FastAPI**, works with its 
+        dependency injection system. Routes do not need an explicit connection parameter.
+    - `traffik.throttles.throttled`: the **Starlette** version. The decorated route
       must have a `Request` or `WebSocket` parameter.
 
     For FastAPI, always use `from traffik.decorators import throttled`.
@@ -161,27 +147,15 @@ from traffik.backends.redis import RedisBackend
 backend = RedisBackend("redis://localhost:6379", namespace="myapp")
 
 # 1. Per-second burst cap: no firehosing
-per_second = HTTPThrottle(
-    uid="api:per-second",
-    rate="5/s",
-    backend=backend,
-)
+per_second = HTTPThrottle(uid="api:per-second", rate="5/s")
 
 # 2. Per-minute envelope: sustained usage
-per_minute = HTTPThrottle(
-    uid="api:per-minute",
-    rate="60/min",
-    backend=backend,
-)
+per_minute = HTTPThrottle(uid="api:per-minute", rate="60/min")
 
 # 3. Daily quota: long-term fair use
-per_day = HTTPThrottle(
-    uid="api:per-day",
-    rate="5000/day",
-    backend=backend,
-)
+per_day = HTTPThrottle(uid="api:per-day", rate="5000/day")
 
-app = FastAPI()
+app = FastAPI(lifespan=backend.lifespan)
 
 @app.get(
     "/api/data",

@@ -1,6 +1,6 @@
 # Quota Context (Deferred Throttling)
 
-This is one of Traffik's useful features, and also the one most people don't need on day one. But when you do need it, you'll be very glad it exists.
+This is one of Traffik's useful features, and also the one most people don't need immediately. But when you do need it, you'll be very glad it exists.
 
 ---
 
@@ -41,14 +41,15 @@ from traffik.backends.redis import RedisBackend
 backend = RedisBackend("redis://localhost:6379", namespace="myapp")
 app = FastAPI(lifespan=backend.lifespan)
 
-throttle = HTTPThrottle("api:reports", rate="50/hour", backend=backend)
+throttle = HTTPThrottle("api:reports", rate="50/hour")
 
 
 @app.post("/reports/generate")
 async def generate_report(request: Request):
-    # Queue throttle hits - they are NOT consumed yet
+    # Queue throttle hits - they are not consumed yet
     async with throttle.quota(request) as quota:
         await quota(cost=10)        # Queued: cost=10
+        await some_prep_work()
         await quota(cost=5)         # Aggregated! Still one entry: cost=15
 
         # Do the expensive work
@@ -69,8 +70,8 @@ When you need to control multiple throttles together, use `QuotaContext` directl
 ```python
 from traffik.quotas import QuotaContext
 
-burst_throttle = HTTPThrottle("api:burst", rate="20/min", backend=backend)
-daily_throttle = HTTPThrottle("api:daily", rate="500/day", backend=backend)
+burst_throttle = HTTPThrottle("api:burst", rate="20/min")
+daily_throttle = HTTPThrottle("api:daily", rate="500/day")
 
 
 @app.post("/exports")
@@ -181,7 +182,6 @@ if not await throttle.check(request, cost=10):
 # Check inside a quota context
 async with throttle.quota(request) as quota:
     await quota(cost=10)
-
     if not await quota.check():  # Check using the owner throttle
         await quota.cancel()
         raise HTTPException(429, "Rate limit would be exceeded")
@@ -201,7 +201,6 @@ When you nest contexts, child contexts merge their queued entries into the paren
 ```python
 async with throttle.quota(request) as parent:
     await parent(cost=2)
-
     async with parent.nested() as child:
         await child(cost=1)
         # child exits successfully -> merges cost=1 into parent's queue

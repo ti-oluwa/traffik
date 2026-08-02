@@ -83,7 +83,6 @@ async def rate_limit_handler(request, wait_ms, throttle, context):
 throttle = HTTPThrottle(
     "api:read",
     rate="100/min",
-    backend=backend,
     handle_throttled=rate_limit_handler,
 )
 ```
@@ -129,7 +128,6 @@ from starlette.websockets import WebSocketState
 
 async def ws_rate_limit_handler(websocket, wait_ms, throttle, context):
     retry_after = math.ceil(wait_ms / 1000)
-
     if websocket.application_state == WebSocketState.CONNECTED:
         await websocket.send_json({
             "type": "rate_limit",
@@ -141,7 +139,7 @@ async def ws_rate_limit_handler(websocket, wait_ms, throttle, context):
 ```
 
 !!! tip "Performance note"
-    Sending a message is significantly faster than raising an exception in WebSocket handlers. Exception propagation has overhead. For high-frequency message throttling (think chat apps or telemetry streams), the send-and-return pattern is measurably better. Unless of course, you actually need the connection closed for good reasons.
+    Sending a message is significantly faster than raising an exception in WebSocket handlers, especially when the connection is made by an internal/familiar client/service. Exception propagation has overhead. For high-frequency message throttling (think chat apps or telemetry streams), the send-and-return pattern is measurably better. Unless of course, you actually need the connection closed for good reasons.
 
 ### Option 2: Raise an Exception
 

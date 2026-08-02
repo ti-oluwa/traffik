@@ -63,10 +63,8 @@ else is throttled by user ID.
 from traffik import EXEMPTED, HTTPThrottle, default_identifier
 from starlette.requests import Request
 
-ADMIN_SECRET = "super-secret-admin-token"  # Load from env in practice
-
 async def admin_aware_identifier(request: Request):
-    if request.headers.get("x-admin-token") == ADMIN_SECRET:
+    if is_admin_token(request.headers.get("x-admin-token")):
         return EXEMPTED
     # Fall back to the default (remote IP address)
     return await default_identifier(request)
@@ -83,23 +81,22 @@ throttle = HTTPThrottle(
 Load the user from your database (or a JWT claim) and branch on their tier:
 
 ```python
-from traffik import EXEMPTED, HTTPThrottle
+from traffik import EXEMPTED, HTTPThrottle, ANONYMOUS_IDENTIFIER
 from starlette.requests import Request
 
 async def tiered_identifier(request: Request):
     user = getattr(request.state, "user", None)
-
     if user is None:
         # Unauthenticated - throttle by IP
-        return request.client.host or "anonymous"
+        return request.client.host or ANONYMOUS_IDENTIFIER
 
     if user.tier == "enterprise":
-        return EXEMPTED          # Enterprise: no limit
+        return EXEMPTED     # Enterprise: no limit
 
     if user.tier == "premium":
         return f"premium:{user.id}"   # Premium: separate (generous) bucket
 
-    return f"free:{user.id}"          # Free: the default (strict) bucket
+    return f"free:{user.id}"    # Free: the default (strict) bucket
 
 throttle = HTTPThrottle(
     uid="api:tiered",
@@ -110,10 +107,10 @@ throttle = HTTPThrottle(
 
 ### Exempt by IP Allowlist (Internal Services)
 
-Internal services that call your API from known IP ranges shouldn't consume quota:
+Internal services that call your API from known IP ranges may not need to consume quota:
 
 ```python
-from traffik import EXEMPTED, HTTPThrottle
+from traffik import ANONYMOUS_IDENTIFIER, EXEMPTED, HTTPThrottle
 from starlette.requests import Request
 import ipaddress
 
@@ -132,9 +129,9 @@ def is_internal_ip(ip_str: str) -> bool:
 
 async def allowlist_identifier(request: Request):
     client_ip = request.client.host or ""
-    if is_internal_ip(client_ip):
+    if client_ip and is_internal_ip(client_ip):
         return EXEMPTED
-    return client_ip
+    return client_ip or ANONYMOUS_IDENTIFIER
 
 internal_throttle = HTTPThrottle(
     uid="api:external-only",
@@ -154,11 +151,10 @@ from starlette.requests import Request
 
 async def smart_identifier(request: Request):
     # 1. Internal admin token? Exempt entirely.
-    if request.headers.get("x-admin-token") == ADMIN_TOKEN:
+    if is_admin_token(request.headers.get("x-admin-token")):
         return EXEMPTED
 
     user = getattr(request.state, "user", None)
-
     # 2. No authenticated user? Fall back to IP.
     if user is None:
         return await default_identifier(request)
@@ -182,7 +178,7 @@ api_throttle = HTTPThrottle(
 ## Alternative Exemption Mechanisms
 
 `EXEMPTED` is the cleanest way to skip throttling for a specific client, but it's
-not the only tool in the box. Two lighter-weight alternatives are worth knowing:
+not the only way to do it. Two lighter-weight alternatives are worth knowing:
 
 ### `cost=0` - Silent Pass-Through
 
@@ -219,7 +215,7 @@ from traffik import HTTPThrottle, Rate
 
 async def effective_rate(connection, context=None) -> Rate:
     user = getattr(connection.state, "user", None)
-    if user and user.tier == "enterprise":
+    if user is not None and user.tier == "enterprise":
         return Rate.parse("1000000/min")  # Effectively unlimited, but tracked
     return Rate.parse("100/min")
 

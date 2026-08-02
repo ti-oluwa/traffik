@@ -68,7 +68,7 @@ deployments where you never need to share state between workers.
 !!! warning "Experimental"
     Works, and is tested, but the setup is unforgiving if you skip the constraints below. Read this whole section before using it in production.
 
-Runs multiple worker processes on one machine, sharing rate-limit state without standing up Redis. Data lives in a `multiprocessing.shared_memory` segment; locking uses `multiprocessing.Semaphore`.
+Runs multiple worker processes on one machine, sharing rate-limit state without standing up Redis. Data lives in a `multiprocessing.shared_memory.SharedMemory` segment; locking uses `multiprocessing.Semaphore`.
 
 That second detail is what drives every constraint here: shared memory can be *attached to by name* from any process, but semaphores can't. They only work when created once and inherited through `fork()`. Hence, there is exactly one correct way to use this backend:
 
@@ -253,7 +253,7 @@ Every backend needs to be started before use and closed when you are done. Traff
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        async with backend.lifespan(app):
+        async with backend(app):
             yield
 
     app = FastAPI(lifespan=lifespan)

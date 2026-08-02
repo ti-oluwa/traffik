@@ -199,7 +199,7 @@ async def test_different_backends_isolated():
     backend_a = InMemoryBackend(persistent=True)
     backend_b = InMemoryBackend(persistent=True)
 
-    request = make_dummy_request()  # Helper that builds a Request object
+    request = mock_request()  # Helper that mocks/builds a Request object
 
     async with backend_a():
         await throttle(request)  # Uses backend_a - hit 1

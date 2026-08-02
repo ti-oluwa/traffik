@@ -284,35 +284,31 @@ backend = RedisBackend("redis://localhost:6379/0", namespace="ws")
 app = FastAPI(lifespan=backend.lifespan)
 
 # Max 10 simultaneous connections from the same IP
-connection_throttle = WebSocketThrottle("ws:connect", rate="10/min")
+connection_throttle = WebSocketThrottle("ws:chat:connect", rate="10/min")
 
 # Max 60 messages per minute within a connection
-message_throttle = WebSocketThrottle("ws:messages", rate="60/min")
+message_throttle = WebSocketThrottle("ws:chat:messages", rate="60/min")
 
 @app.websocket("/ws/chat")
 async def chat_endpoint(
     websocket: WebSocket = Depends(connection_throttle),  # (1)!
 ):
     await websocket.accept()
-
     close_code = 1000
     reason = "Normal closure"
 
     try:
         while True:
             data = await websocket.receive_json()
-
-            await message_throttle(websocket, context={"scope": "chat"})  # (2)!
-            if is_throttled(websocket):  # (3)!
+            wait_ms = await message_throttle(websocket, context={"scope": "chat"})  # (2)!
+            if wait_ms or is_throttled(websocket):  # (3)!
                 continue
 
             response = {"echo": data, "type": "message"}
             await websocket.send_json(response)
-
     except Exception:
         close_code = 1011
         reason = "Internal error"
-
     await websocket.close(code=close_code, reason=reason)
 ```
 

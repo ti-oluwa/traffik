@@ -355,8 +355,8 @@ async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     while True:
         data = await websocket.receive_text()
-        await ws_throttle.hit(websocket, context={"scope": "message"}) # Per message level
-        if is_throttled(websocket):
+        wait_ms = await ws_throttle.hit(websocket, context={"scope": "message"}) # Per message level
+        if wait_ms or is_throttled(websocket):
             # The default throttled handler already sent a *throttled* frame to the client
             # You can override that behaviour if you need something custom.
             continue

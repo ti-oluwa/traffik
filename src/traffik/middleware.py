@@ -408,6 +408,7 @@ class ThrottleMiddleware:
         "context",
         "get_exception_handler",
         "middleware_throttles",
+        "skip_handler",
     )
 
     def __init__(
@@ -425,6 +426,7 @@ class ThrottleMiddleware:
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         sort: _SortThrottles[HTTPConnection] = "cheap_first",
+        skip_handler: typing.Optional[bool] = None,
     ) -> None:
         """
         Initialize the middleware with the application and throttles.
@@ -436,10 +438,12 @@ class ThrottleMiddleware:
             retrieve a backend from the application context on each request, which allows it to work with backends
             that are set up in the application's lifespan. However, for better performance, it's recommended to
             provide the backend directly to the middleware if possible.
+
         :param exception_handler_getter: An optional callable that takes an exception and returns an ASGI exception handler.
         :param context: An optional mapping of context to pass to the throttles.
             This is merged with any context provided by individual throttles, with the
             throttle-specific context taking precedence.
+
         :param sort: Determines the sorting order of throttles based on their cost. This can be used to optimize the order in which throttles are applied.
             If you want ot preseve the order of throttles as provided, set this to False or None.
 
@@ -448,6 +452,15 @@ class ThrottleMiddleware:
             - False or None: No sorting is applied, and throttles are categorized in the order they are provided.
             - A custom callable that takes a `MiddlewareThrottle` and returns a value to sort by.
                 Ensure to return `float("inf")` for throttles without a specified cost if you want them to be sorted last.
+
+        :param skip_handler: If `True` (overrides `skip_handler` for every throttle hit),
+            a throttled connection still updates the strategy's state and is still marked
+            throttled (`is_throttled(connection)` returns `True`), but `throttle.handle_throttled`
+            is never invoked - no exception, no response, no side effects from the handler.
+            Retry/wait information is still computed and available via `get_wait()`, `get_stat()`
+            or the connection's throttle headers. Use this when you want to check `get_wait()`/
+            `is_throttled()` yourself and decide what happens next, rather than letting the throttle react for you.
+            Defaults to `False`.
         """
         self.app = app
         self.middleware_throttles = _prep_throttles(middleware_throttles, sort=sort)
@@ -457,6 +470,7 @@ class ThrottleMiddleware:
         self._backend_ok = False
         self.get_exception_handler = exception_handler_getter
         self.context = context
+        self.skip_handler = skip_handler
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """
@@ -500,6 +514,7 @@ class ThrottleMiddleware:
                     connection = await throttle.hit(
                         connection,  # type: ignore[arg-type]
                         context=context,
+                        skip_handler=self.skip_handler,
                     )
                 except _EXEMPT_EXCEPTIONS:
                     raise
@@ -533,7 +548,6 @@ class ThrottleMiddleware:
                         if response is not None:
                             await response(scope, receive, send)  # type: ignore[call-arg]
                             return
-
                     raise
 
         # Ensure that the next middleware or application call is not nested

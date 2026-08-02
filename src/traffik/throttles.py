@@ -268,7 +268,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
             See documentation on "Context-Aware Backends" section for full examples.
 
-        :param min_wait_period: The minimum allowable wait period (in milliseconds) for a throttled connection.
+        :param min_wait_period: The minimum allowable wait period (in milliseconds) for a **throttled** connection.
         :param headers: Optional headers to include in throttling responses. A use case can
             be to include additional throttle/throttling information in the response headers.
             This will be merged with any headers provided in `context`.
@@ -936,14 +936,17 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             )
 
         wait_ms = (
-            max(wait_ms, self.min_wait_period) if self.min_wait_period else wait_ms
+            max(wait_ms, self.min_wait_period)
+            if self.min_wait_period is not None
+            else wait_ms
         )
-        skip = skip_handler if skip_handler is not None else self.skip_handler
-        if wait_ms and not skip:
-            handle_throttled = self.handle_throttled or backend.handle_throttled
+        if wait_ms:
             # Mark connection as throttled
             setattr(connection.state, THROTTLED_STATE_KEY, wait_ms)
-            await handle_throttled(connection, wait_ms, self, merged_context)  # type: ignore[arg-type]
+            skip = skip_handler if skip_handler is not None else self.skip_handler
+            if not skip:
+                handle_throttled = self.handle_throttled or backend.handle_throttled
+                await handle_throttled(connection, wait_ms, self, merged_context)  # type: ignore[arg-type]
             return connection
 
         # Mark connection as not throttled
@@ -1670,14 +1673,12 @@ async def websocket_throttled(
 
     wait_seconds = math.ceil(wait_ms / 1000)
     try:
-        await connection.send_json(
-            {
-                "type": "rate_limit",
-                "error": "Too many messages",
-                "retry_after": wait_seconds,
-                **context.get("extras", {}),
-            }
-        )
+        await connection.send_json({
+            "type": "rate_limit",
+            "error": "Too many messages",
+            "retry_after": wait_seconds,
+            **context.get("extras", {}),
+        })
     except RuntimeError:
         # Connection was closed (by client) between check and send
         # Silently ignore since client is already disconnected

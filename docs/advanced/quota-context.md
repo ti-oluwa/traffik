@@ -29,6 +29,9 @@ Or the reverse:
 
 ---
 
+!!! tip "Need to mark the client as throttled without triggering the default throttled handler?"
+    See [Skip Handler](skip-handler.md) for the quota-context and per-hit override pattern.
+
 ## Bound Mode
 
 The most common usage is to create a context tied to one throttle.

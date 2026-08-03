@@ -19,15 +19,13 @@ from traffik.backends.inmemory import InMemoryBackend
 from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware, _prep_throttles
 from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
-from traffik.throttles import HTTPThrottle, WebSocketThrottle
+from traffik.throttles import HTTPThrottle, WebSocketThrottle, get_wait, is_throttled
 
 
 @pytest.mark.throttle
 @pytest.mark.middleware
 @pytest.mark.anyio
-class TestMiddlewareThrottleFiltering:
-    """`MiddlewareThrottle` filter mechanics"""
-
+class TestMiddlewareThrottleBasic:
     async def test_initialization(self) -> None:
         throttle = HTTPThrottle(
             uid="test-mw-throttle-init",
@@ -88,20 +86,16 @@ class TestMiddlewareThrottleFiltering:
             )
             middleware_throttle = MiddlewareThrottle(throttle=throttle, path="/api/")
 
-            api_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/api/users",
-                }
-            )
-            public_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/public/info",
-                }
-            )
+            api_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/api/users",
+            })
+            public_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/public/info",
+            })
 
             assert await middleware_throttle(api_request) is api_request
             assert await middleware_throttle(public_request) is public_request
@@ -142,22 +136,18 @@ class TestMiddlewareThrottleFiltering:
                 throttle=throttle, predicate=is_premium_user
             )
 
-            premium_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/test",
-                    "headers": {"x-user-tier": "premium"},
-                }
-            )
-            free_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/test",
-                    "headers": {"x-user-tier": "free"},
-                }
-            )
+            premium_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/test",
+                "headers": {"x-user-tier": "premium"},
+            })
+            free_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/test",
+                "headers": {"x-user-tier": "free"},
+            })
 
             assert await middleware_throttle(premium_request) is premium_request
             assert await middleware_throttle(free_request) is free_request
@@ -191,15 +181,43 @@ class TestMiddlewareThrottleFiltering:
             ]
             for method, path, has_auth in test_cases:
                 headers = [(b"authorization", b"Bearer token")] if has_auth else []
-                request = Request(
-                    {
-                        "type": "http",
-                        "method": method,
-                        "path": path,
-                        "headers": headers,
-                    }
-                )
+                request = Request({
+                    "type": "http",
+                    "method": method,
+                    "path": path,
+                    "headers": headers,
+                })
                 assert await middleware_throttle(request) is request
+
+    async def test_skip_handler_marks_throttled_without_invoking_handler(
+        self, inmemory_backend: InMemoryBackend
+    ) -> None:
+        calls = 0
+
+        async def _throttled_handler(
+            connection: HTTPConnection, wait_ms: float, *args, **kwargs
+        ) -> None:
+            nonlocal calls
+            calls += 1
+
+        throttle = HTTPThrottle(
+            uid="middleware-skip-handler",
+            rate="1/s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
+            handle_throttled=_throttled_handler,
+            backend=inmemory_backend,
+        )
+        middleware_throttle = MiddlewareThrottle(throttle=throttle, skip_handler=True)
+
+        first = Request({"type": "http", "method": "GET", "path": "/test"})
+        second = Request({"type": "http", "method": "GET", "path": "/test"})
+
+        await middleware_throttle(first)
+        await middleware_throttle(second)
+
+        assert calls == 0
+        assert is_throttled(second)
 
 
 @pytest.mark.throttle
@@ -251,13 +269,11 @@ class TestMiddlewareThrottleRegexMatching:
             assert middleware_throttle.rule.path.pattern == "/api/"
 
             matching = Request({"type": "http", "method": "GET", "path": "/api/users"})
-            non_matching = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/public/data",
-                }
-            )
+            non_matching = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/public/data",
+            })
             assert await middleware_throttle(matching) is matching
             assert await middleware_throttle(non_matching) is non_matching
 
@@ -276,22 +292,18 @@ class TestMiddlewareThrottleRegexMatching:
             )
 
             for _ in range(2):
-                request = Request(
-                    {
-                        "type": "http",
-                        "method": "GET",
-                        "path": "/api/search",
-                    }
-                )
-                assert await middleware_throttle(request) is request
-
-            request = Request(
-                {
+                request = Request({
                     "type": "http",
                     "method": "GET",
-                    "path": "/api/search/results",
-                }
-            )
+                    "path": "/api/search",
+                })
+                assert await middleware_throttle(request) is request
+
+            request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/api/search/results",
+            })
             assert await middleware_throttle(request) is request
 
     async def test_case_sensitive_regex(
@@ -359,6 +371,48 @@ class TestThrottleMiddlewareBasic:
             assert "Retry-After" in response3.headers
 
             assert (await client.get("/public/data")).status_code == 200
+
+    async def test_skip_handler_marks_wait_without_invoking_handler(
+        self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
+    ) -> None:
+        calls = 0
+
+        async def _throttled_handler(
+            connection: HTTPConnection, wait_ms: float, *args, **kwargs
+        ) -> None:
+            nonlocal calls
+            calls += 1
+
+        throttle = HTTPThrottle(
+            uid=f"middleware-skip-handler-{web_framework.name}",
+            rate="1/s",
+            identifier=default_client_identifier,
+            registry=ThrottleRegistry(),
+            handle_throttled=_throttled_handler,
+        )
+        middleware_throttle = MiddlewareThrottle(throttle, cost=2, skip_handler=True)
+
+        async def endpoint(request: Request) -> JSONResponse:
+            assert calls == 0
+            assert is_throttled(request)
+            assert get_wait(request) > 0
+            return JSONResponse({"ok": True})
+
+        app = web_framework.build_app(
+            http_routes=[HTTPRoute("/skip", endpoint)],
+            lifespan=inmemory_backend.lifespan,
+            middleware=[
+                Middleware(
+                    ThrottleMiddleware,
+                    middleware_throttles=[middleware_throttle],
+                )
+            ],
+        )
+
+        async with make_client(app, base_url="http://0.0.0.0") as client:
+            response = await client.get("/skip")
+            assert response.status_code == 200
+            assert response.json() == {"ok": True}
 
     async def test_multiple_throttles(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework

@@ -60,6 +60,9 @@ throttle = HTTPThrottle(
 
 The `headers=` parameter tells Traffik which headers to *resolve* on a hit. On every hit (throttled or not, depending on the preset), the header values are computed from the current strategy statistics and returned by `throttle.get_headers()`. You are responsible for attaching them to your response, for example by calling `response.headers.update(resolved)` in a custom handler or middleware.
 
+!!! tip "Need a custom app-level response instead of the default throttled handler?"
+    See [Skip Handler](skip-handler.md) for the pattern that keeps the throttle state while letting your app decide the response.
+
 ---
 
 ## The `Header` Class

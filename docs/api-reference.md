@@ -25,6 +25,7 @@ from traffik import HTTPThrottle
 | `identifier` | `async callable` | `None` | Async callable `(request) -> str` that returns the throttle key. Defaults to the backend's identifier. Return `EXEMPTED` to skip throttling. |
 | `strategy` | `ThrottleStrategy` | `None` | Throttling algorithm. Defaults to the backend's default strategy. |
 | `handle_throttled` | `async callable` | `None` | Custom handler called when the client is throttled. Receives `(request, wait_ms, throttle, context)`. |
+| `skip_handler` | `bool` | `False` | If `True`, the connection is marked throttled but `handle_throttled` is not invoked. See [Skip Handler](advanced/skip-handler.md). |
 | `headers` | `Headers \| dict` | `None` | Response headers to resolve on each hit. See [Response Headers](advanced/headers.md). |
 | `on_error` | `"allow" \| "throttle" \| "raise" \| callable` | `None` | Behaviour when the backend raises. `"allow"` passes the request through; `"throttle"` rejects it; `"raise"` re-raises. |
 | `registry` | `ThrottleRegistry` | `GLOBAL_REGISTRY` | Registry to register this throttle in. |
@@ -44,6 +45,7 @@ from traffik import HTTPThrottle
 | `await check(request, cost=None, context=None)` | Check quota without consuming it. Returns `True` if the request would pass. |
 | `await stat(request, cost=None, context=None)` | Return a `StrategyStat` snapshot for the current connection. |
 | `await get_headers(request, headers=None)` | Resolve rate limit headers for the current connection. |
+| `await set_headers(response, request, headers=None)` | Apply the resolved throttle headers directly to a Starlette response object. |
 | `await disable()` | Disable this throttle. Subsequent `hit()` calls return immediately. |
 | `await enable()` | Re-enable a disabled throttle. |
 | `is_disabled` | `True` if the throttle is currently disabled. |
@@ -87,6 +89,25 @@ from traffik.throttles import MiddlewareThrottle
 | `throttle` | `HTTPThrottle` | required | The underlying `HTTPThrottle` to wrap. |
 | `cost` | `int \| async callable \| None` | `None` | Override cost for middleware context. `None` uses the wrapped throttle's cost. |
 | `predicate` | `async callable \| None` | `None` | Async callable `(request) -> bool`. If provided, the throttle only applies when it returns `True`. |
+| `skip_handler` | `bool \| None` | `None` | Override the wrapped throttle's default `skip_handler` behavior for every hit. See [Skip Handler](advanced/skip-handler.md). |
+
+---
+
+### `ThrottleMiddleware`
+
+ASGI middleware wrapper that applies any number of `MiddlewareThrottle` rules before route handling.
+
+```python
+from traffik.middleware import ThrottleMiddleware
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `middleware_throttles` | `Sequence[MiddlewareThrottle \| Throttle]` | required | Throttles to apply on the current request/connection. |
+| `backend` | `ThrottleBackend \| None` | `None` | Explicit backend to use. If omitted, Traffik resolves one from the app lifespan context. |
+| `context` | `dict \| None` | `None` | Shared context passed into each throttle hit. |
+| `sort` | `"cheap_first" \| "cheap_last" \| False \| callable` | `"cheap_first"` | Ordering strategy for throttle evaluation. |
+| `skip_handler` | `bool \| None` | `None` | If `True`, the middleware marks the connection as throttled without invoking the throttled handler and leaves the downstream app to decide what to do. |
 
 ---
 
@@ -390,6 +411,33 @@ from traffik.types import StrategyStat
 ---
 
 ## Utilities
+
+### `get_wait`
+
+Returns the last recorded wait period for the current connection, or `0.0` if it was not throttled.
+
+```python
+from traffik.throttles import get_wait
+
+wait_ms = get_wait(request)
+```
+
+Use this together with `skip_handler=True` to decide how the app should respond.
+
+---
+
+### `is_throttled`
+
+Returns `True` when the last throttle hit marked the connection as throttled.
+
+```python
+from traffik.throttles import is_throttled
+
+if is_throttled(request):
+    ...
+```
+
+---
 
 ### `get_remote_address`
 

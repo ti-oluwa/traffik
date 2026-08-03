@@ -38,6 +38,9 @@ app.add_middleware(
 
 This applies the throttle to every HTTP request. `MiddlewareThrottle` without any `path`, `methods`, or `predicate` arguments matches all connections.
 
+!!! tip "Need the request marked as throttled without the middleware invoking the normal throttled handler?"
+    See [Skip Handler](../advanced/skip-handler.md). The same idea applies to both `MiddlewareThrottle` and `ThrottleMiddleware`.
+
 ---
 
 ## HTTP and WebSocket throttles in middleware

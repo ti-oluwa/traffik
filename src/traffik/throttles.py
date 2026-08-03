@@ -629,40 +629,6 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             context=context,
         )
 
-    async def set_headers(
-        self,
-        response: Response,
-        connection: HTTPConnectionT,
-        *,
-        headers: typing.Optional[
-            typing.Mapping[str, typing.Union[Header[HTTPConnectionT], str]]
-        ] = None,
-        stat: typing.Optional[
-            StrategyStat[typing.Mapping[typing.Hashable, typing.Any]]
-        ] = None,
-        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-    ) -> None:
-        """
-        Resolve and apply throttling headers to an HTTP response.
-
-        This helper resolves the configured headers for the current connection,
-        merges any per-call overrides, and updates the response header collection.
-
-        :param response: The HTTP response whose headers should be updated.
-        :param connection: The current HTTP connection used to resolve dynamic headers.
-        :param headers: Optional additional headers for this specific response.
-        :param stat: Optional strategy statistics used in dynamic header resolution.
-        :param context: Optional request context passed to header resolvers.
-        """
-        resolved_headers = await self.get_headers(
-            connection=connection,
-            headers=headers,
-            stat=stat,
-            context=context,
-        )
-        if resolved_headers:
-            response.headers.update(resolved_headers)
-
     def _make_signature(self) -> inspect.Signature:
         """
         Internal method to create a clean signature for the throttle's `__call__` method.
@@ -1328,7 +1294,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self.registry.add_rules(target_uid, *rules)
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.uid!s} rate={self.rate!r} cost={self.cost!r} backend={self.backend!r})"
+        uid = getattr(self, "uid", None)
+        return f"{self.__class__.__name__}({(uid or 'not initialized')!s})"
 
 
 def _make_throttle_signature(
@@ -1678,6 +1645,40 @@ class HTTPThrottle(Throttle[Request]):
         scope = context["scope"] if context else THROTTLE_DEFAULT_SCOPE
         return f"{typ}:{method}:{path}:{scope}"
 
+    async def set_headers(
+        self,
+        response: Response,
+        connection: Request,
+        *,
+        headers: typing.Optional[
+            typing.Mapping[str, typing.Union[Header[Request], str]]
+        ] = None,
+        stat: typing.Optional[
+            StrategyStat[typing.Mapping[typing.Hashable, typing.Any]]
+        ] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+    ) -> None:
+        """
+        Resolve and apply throttling headers to an HTTP response.
+
+        This helper resolves the configured headers for the current connection,
+        merges any per-call overrides, and updates the response header collection.
+
+        :param response: The HTTP response whose headers should be updated.
+        :param connection: The current HTTP connection used to resolve dynamic headers.
+        :param headers: Optional additional headers for this specific response.
+        :param stat: Optional strategy statistics used in dynamic header resolution.
+        :param context: Optional request context passed to header resolvers.
+        """
+        resolved_headers = await self.get_headers(
+            connection=connection,
+            headers=headers,
+            stat=stat,
+            context=context,
+        )
+        if resolved_headers:
+            response.headers.update(resolved_headers)
+
 
 RequestThrottle = HTTPThrottle  # Alias for semantic clarity
 
@@ -1795,8 +1796,6 @@ def throttled(
     [typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]],
     typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
 ]: ...
-
-
 @typing.overload
 def throttled(
     *throttles: Throttle[HTTPConnectionT],

@@ -459,7 +459,14 @@ class ThrottleMiddleware:
             is never invoked - no exception, no response, no side effects from the handler.
             Retry/wait information is still computed and available via `get_wait()`, `get_stat()`
             or the connection's throttle headers. Use this when you want to check `get_wait()`/
-            `is_throttled()` yourself and decide what happens next, rather than letting the throttle react for you.
+            `is_throttled()` yourself and decide what happens next, rather than letting the
+            throttle react for you.
+
+            Note that at the middleware level, "deciding what happens next" necessarily means
+            your downstream route/application. The middleware has nothing else to hand off
+            to. With `skip_handler=True`, a throttled request is passed through to `app` exactly
+            like an unthrottled one; nothing here stops it. Check `is_throttled(connection)` in
+            your route (or in another middleware layered after this one) if you need to act on it.
             Defaults to `False`.
         """
         self.app = app
@@ -486,7 +493,8 @@ class ThrottleMiddleware:
         elif typ == "websocket":
             connection = WebSocket(scope, receive, send)
         else:
-            # Ignore unsupported connection types and pass through to the next middleware or application.
+            # Ignore unsupported connection types and pass through
+            # to the next middleware or application.
             await self.app(scope, receive, send)
             return
 
@@ -524,7 +532,7 @@ class ThrottleMiddleware:
                         # This helps in recovery in case of transient backend connection issues.
                         self._backend_ok = False
 
-                    # This approach allows custom throttles to raise custom exceptions
+                    # This approach allows throttles to raise custom exceptions
                     # that will be handled if they register an exception handler with
                     # the application. If not, the exception will propagate and the
                     # `ServerErrorMiddleware` will properly handle it.

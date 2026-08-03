@@ -113,7 +113,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
             if cost is not None
             else (throttle.cost if not throttle._uses_cost_func else 1)  # type: ignore[assignment]
         )
-        # Determine retry_on type for fast checks during retries
+        # Determine `retry_on` type for fast checks during retries
         if retry_on is None:
             self._retry_type: typing.Optional[str] = None
         elif isinstance(retry_on, type) or (
@@ -121,7 +121,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         ):
             self._retry_type = "exception_type"
         elif callable(retry_on) and inspect.iscoroutinefunction(retry_on):
-            self._retry_type = "coroutine"
+            self._retry_type = "coroutine_function"
         elif callable(retry_on):
             self._retry_type = "callable"
         else:
@@ -639,7 +639,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         normalized_context = merged_context if merged_context else None
         # Resolve backoff to actual instance (needed for aggregation checks since backoff
         # can be a callable or a strategy instance)
-        backoff_to_use = backoff or DEFAULT_BACKOFF
+        backoff_to_use = backoff if backoff is not None else DEFAULT_BACKOFF
 
         can_aggregate = False
         if self._queue:
@@ -889,7 +889,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             cost=entry.resolved_cost,
             context=entry.context,
         )
-        if entry._retry_type == "coroutine":
+        if entry._retry_type == "coroutine_function":
             return await entry.retry_on(exc_info)  # type: ignore[misc,operator,arg-type]
         return entry.retry_on(exc_info)  # type: ignore[misc,operator,arg-type,return-value]
 

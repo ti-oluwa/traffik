@@ -630,28 +630,34 @@ class TestWebSocketThrottle:
                         try:
                             data = await websocket.receive_json()
                             await throttle(websocket)
-                            await websocket.send_json({
-                                "status": "success",
-                                "status_code": 200,
-                                "detail": "Request successful",
-                                "data": data,
-                            })
+                            await websocket.send_json(
+                                {
+                                    "status": "success",
+                                    "status_code": 200,
+                                    "detail": "Request successful",
+                                    "data": data,
+                                }
+                            )
                         except HTTPException as exc:
-                            await websocket.send_json({
-                                "status": "error",
-                                "status_code": exc.status_code,
-                                "detail": exc.detail,
-                                "data": None,
-                            })
+                            await websocket.send_json(
+                                {
+                                    "status": "error",
+                                    "status_code": exc.status_code,
+                                    "detail": exc.detail,
+                                    "data": None,
+                                }
+                            )
                             close_reason = exc.detail
                             break
                         except Exception:
-                            await websocket.send_json({
-                                "status": "error",
-                                "status_code": 500,
-                                "detail": "Operation failed",
-                                "data": None,
-                            })
+                            await websocket.send_json(
+                                {
+                                    "status": "error",
+                                    "status_code": 500,
+                                    "detail": "Operation failed",
+                                    "data": None,
+                                }
+                            )
                             close_code, close_reason = 1011, "Internal error"
                             break
 

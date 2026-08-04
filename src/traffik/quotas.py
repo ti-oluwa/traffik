@@ -804,7 +804,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             await self._hit(entry)
         self._consumed = True
 
-        # Detach from parent so it stops being double-counted / referenced
+        # Detach from parent so it stops being double-counted and referenced
         if (
             self.is_nested and id(self) in self.parent._children  # type: ignore[union-attr]
         ):

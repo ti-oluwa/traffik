@@ -12,7 +12,7 @@ from traffik.backends.inmemory import InMemoryBackend
 from traffik.exceptions import QuotaAppliedError, QuotaCancelledError, QuotaError
 from traffik.quotas import QuotaContext
 from traffik.registry import ThrottleRegistry
-from traffik.throttles import Throttle
+from traffik.throttles import Throttle, is_throttled
 
 new_connection = functools.partial(
     make_connection, path="/", query_string=b"", server=("testserver", 80)
@@ -101,6 +101,36 @@ class TestQuotaContext:
             # Should raise ValueError when no throttle is provided
             with pytest.raises(ValueError, match="No throttle specified"):
                 quota.consume()
+
+    async def test_quota_context_skip_handler_does_not_invoke_throttled_handler(
+        self,
+        backend: InMemoryBackend,
+        throttle_type: typing.Type[Throttle[HTTPConnection]],
+    ):
+        """Queued quota consumption can skip the handler while still marking the connection as throttled."""
+        calls = 0
+
+        async def _throttled_handler(
+            connection: HTTPConnection, wait_ms: float, *args, **kwargs
+        ) -> None:
+            nonlocal calls
+            calls += 1
+
+        throttle = throttle_type(
+            "test-quota-skip-handler",
+            rate="1/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
+            handle_throttled=_throttled_handler,
+        )
+        connection = new_connection(throttle_type.connection_type)  # type: ignore
+
+        async with throttle.quota(connection) as quota:
+            quota.consume(cost=1, skip_handler=True)
+            quota.consume(cost=1, skip_handler=True)
+
+        assert calls == 0
+        assert is_throttled(connection) is True
 
     async def test_quota_context_cost_aggregation(
         self,

@@ -26,7 +26,7 @@ throttle = HTTPThrottle("export", rate="100/min", cost=10)
 Production APIs rarely need just one limit. You need a strict burst cap *and* a generous hourly envelope. Stack throttles to enforce both simultaneously, with a clear failure model.
 
 ```python
-burst  = HTTPThrottle("api:burst",     rate="20/min")
+burst  = HTTPThrottle("api:burst", rate="20/min")
 hourly = HTTPThrottle("api:sustained", rate="500/hour")
 
 # Both must pass. First failure wins
@@ -47,7 +47,7 @@ Some clients should never be throttled, such as your internal services, premium 
 from traffik import EXEMPTED
 
 async def tiered_identifier(request: Request):
-    if request.headers.get("x-admin-token") == ADMIN_TOKEN:
+    if is_admin_token(request.headers.get("x-admin-token")):
         return EXEMPTED       # Admin? Go right through.
     return request.client.host  # Everyone else: throttled by IP.
 ```

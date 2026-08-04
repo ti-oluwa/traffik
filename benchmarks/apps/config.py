@@ -1,12 +1,6 @@
 """
 Reads `BENCH_*` environment variables into the pieces a target app module
 needs: a throttle backend, a strategy, and the throttle's own settings.
-
-Kept separate from `benchmarks.backends` (used by the harness process
-itself to *describe* a run) because this module runs inside the spawned
-server process and has different concerns - notably, constructing and
-`start()`-ing a `MultiProcessInMemoryBackend` synchronously at import time,
-before gunicorn (if used) forks.
 """
 
 import os
@@ -66,18 +60,17 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
             namespace=namespace,
             identifier=get_identifier,
             persistent=False,
-            number_of_shards=8,
+            number_of_shards=int_env("BENCH_SHARDS", 32),
         )
     elif kind == "multiprocess":
         backend = MultiProcessInMemoryBackend(
             namespace=namespace,
             identifier=get_identifier,
             persistent=False,
-            number_of_shards=int_env("BENCH_MP_SHARDS", 32),
+            number_of_shards=int_env("BENCH_SHARDS", 32),
             max_keys=int_env("BENCH_MP_MAX_KEYS", 65536),
             cleanup_frequency=30.0,
         )
-        # Must happen before fork - see module docstring.
         backend.start()
         return backend
     elif kind == "aioredis":
@@ -101,6 +94,7 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
             namespace=namespace,
             identifier=get_identifier,
             persistent=False,
+            track_keys=True,
         )
     elif kind == "emcache":
         from traffik.backends.memcached.emcache import (
@@ -113,6 +107,7 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
             namespace=namespace,
             identifier=get_identifier,
             persistent=False,
+            track_keys=True,
         )
     else:
         raise ValueError(f"Unknown `BENCH_BACKEND`: {kind!r}")
@@ -122,5 +117,5 @@ def strategy_from_env():
     """Build the throttling strategy selected by `BENCH_STRATEGY`."""
     kind = env("BENCH_STRATEGY", "fixed_window").lower()
     if kind not in STRATEGIES:
-        raise ValueError(f"Unknown BENCH_STRATEGY: {kind!r}")
+        raise ValueError(f"Unknown `BENCH_STRATEGY`: {kind!r}")
     return STRATEGIES[kind]()

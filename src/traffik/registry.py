@@ -374,14 +374,28 @@ class ThrottleRegistry:
         self._throttle_refs: typing.Dict[str, weakref.ref] = {}  # type: ignore[type-arg]
         """Weak references to registered throttle instances, keyed by UID"""
 
+    def count(self) -> int:
+        """
+        Returns the number of throttle **currently known** to be registered to this registry.
+
+        There is a small chance that the count may include GC'd throttles,
+        as the registry hold weakrefs to the throttle, not the throttle objects them self.
+        """
+        with self._lock:
+            return len(self._throttle_refs)
+
     def exists(self, uid: str) -> bool:
         """
-        Check if a throttle UID has already been registered in this registry.
+        Check if a throttle UID is currently registered in this registry.
+
+        Note: The throttle may have been previously registered but once the
+        throttle has been GC'd, the registry will mostlikely have de-registered it.
 
         :param uid: The UID to check.
         :return: True if registered, else False.
         """
-        return uid in self._registered
+        with self._lock:
+            return uid in self._registered
 
     def register(self, uid: str, throttle: typing.Any = None) -> None:
         """
@@ -452,11 +466,21 @@ class ThrottleRegistry:
         """
         with self._lock:
             ref = self._throttle_refs.get(uid)
-        return ref() if ref is not None else None
+
+        if ref is not None:
+            throttle = ref()
+            if throttle is None:
+                with self._lock:
+                    self._throttle_refs.pop(uid, None)
+                    if uid in self._registered:
+                        self._registered.remove(uid)
+                return None
+            return throttle
+        return None
 
     async def disable(self, uid: str) -> bool:
         """
-        Disable the throttle registered under *uid*.
+        Disable the throttle registered as *uid*.
 
         Calls `disable` on the live throttle instance so that subsequent
         `hit` calls return immediately
@@ -474,7 +498,7 @@ class ThrottleRegistry:
 
     async def enable(self, uid: str) -> bool:
         """
-        Re-enable the throttle registered under *uid*.
+        Re-enable the throttle registered as *uid*.
 
         :param uid: The UID of the throttle to enable.
         :return: True if the throttle was found and enabled, False
@@ -490,12 +514,17 @@ class ThrottleRegistry:
         """
         Disable every live throttle currently registered in this registry.
 
-        Throttles that have already been garbage-collected are silently skipped.
+        Throttles that have already been garbage-collected are
+        de-registered and silently skipped.
         """
         with self._lock:
-            refs = list(self._throttle_refs.values())
-        for ref in refs:
-            throttle = ref()
+            # Copy once so we don't need to hold the lock
+            # throughout all the disable calls for consistency
+            uids = self._registered.copy()
+
+        for uid in uids:
+            # Should de-register any GC'd throttle safely too
+            throttle = self.get_throttle(uid)
             if throttle is not None:
                 await throttle.disable()
 
@@ -503,12 +532,14 @@ class ThrottleRegistry:
         """
         Re-enable every live throttle currently registered in this registry.
 
-        Throttles that have already been garbage-collected are silently skipped.
+        Throttles that have already been garbage-collected are
+        de-registered and silently skipped.
         """
         with self._lock:
-            refs = list(self._throttle_refs.values())
-        for ref in refs:
-            throttle = ref()
+            uids = self._registered.copy()
+
+        for uid in uids:
+            throttle = self.get_throttle(uid)
             if throttle is not None:
                 await throttle.enable()
 
@@ -518,6 +549,12 @@ class ThrottleRegistry:
             self._registered = set()
             self._rules = {}
             self._throttle_refs = {}
+
+    def __len__(self) -> int:
+        return self.count()
+
+    def __contains__(self, uid: str, /) -> bool:
+        return self.exists(uid)
 
 
 GLOBAL_REGISTRY = ThrottleRegistry()

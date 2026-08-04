@@ -33,12 +33,12 @@ R = TypeVar("R")
 
 
 def options(
-    workers_default: int = 1,
+    default_workers: int = 1,
 ) -> typing.Callable[[typing.Callable[P, R]], typing.Callable[P, R]]:
     """
     Common click options for all benchmark commands.
 
-    :param workers_default: Default for `--workers`. The `multiprocess`
+    :param default_workers: Default for `--workers`. The `multiprocess`
         command wants this >1 by default (that's the whole point of it);
         the others default to a single real process.
     """
@@ -83,7 +83,7 @@ def options(
             "--workers",
             "-W",
             type=int,
-            default=workers_default,
+            default=default_workers,
             help=(
                 "Real worker processes serving the benchmark app. 1 = a single "
                 "uvicorn process. >1 = gunicorn with --preload, forking that "
@@ -313,7 +313,7 @@ def websocket_command(
 
 
 @cli.command("multiprocess")
-@options(workers_default=4)
+@options(default_workers=4)
 def multiprocess_command(
     backend,
     strategy,

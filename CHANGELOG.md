@@ -88,3 +88,17 @@
   
 - **Removed**:
   - The non-standard `Remote-Addr` header is no longer consulted by `get_remote_address` as it was never a real proxy convention, and honoring it was exactly the same spoofing vector as the unauthenticated `X-Forwarded-For` handling described above.
+
+## Version 1.2.2 (2026-08-04)
+
+- **Enhancements**:
+  - Added `skip_handler` support across `Throttle`, `HTTPThrottle`, `WebSocketThrottle`, `MiddlewareThrottle`, `ThrottleMiddleware`, and `QuotaContext`. When enabled (at init, or per-hit/per-entry as an override), a throttled connection still updates the strategy's state and is still marked throttled, but the configured `handle_throttled` is never invoked so you get no exception, no response, no side effects. Useful when you want to check `get_wait()`/`is_throttled()` yourself and decide what happens next instead of letting the throttle react for you.
+  - Added `get_wait(connection)`: returns the last active wait period (in ms) if the connection was throttled, `0` otherwise.`THROTTLED_STATE_KEY` now stores this wait value directly instead of a bare `True`/`False`, so `is_throttled(...)` is now just `get_wait(...) != 0.0` under the hood.
+  - Added `HTTPThrottle.set_headers(...)`: resolves and applies throttling headers directly onto a `Response` object, for cases where you're not raising/returning a throttled response yourself and just want the headers set.
+  - `QuotaContext` gets a new `merge()` method: explicitly folds a nested context's queued entries into its parent without touching the backend. This is now what runs on successful exit of a nested context (previously handled by an internal, undocumented method), so `merge()` and `apply()` now have clearly separate and predictable meanings. `merge()` defers, `apply()` always consumes immediately, regardless of nesting.
+  - `ThrottleRegistry` gains `count()`, `__len__`, and `__contains__`. `exists(...)` is now lock-protected for consistency with the rest of the registry's API.
+  - `ThrottleRegistry.get_throttle(...)` now automatically de-registers a UID whose throttle has already been garbage-collected, instead of just returning `None` and leaving the stale weakref/UID behind.
+
+- **Bug Fixes**:
+  - Fixed `QuotaContext.apply()` leaving itself registered in its parent's internal children tracking when called directly on a nested context, which inflated the parent's `queued_cost` and held a stale reference indefinitely. `apply()` now always detaches and clears its own queue after consuming, regardless of nesting.
+  - Fixed `ThrottleRegistry.disable_all()`/`enable_all()` skipping garbage-collected throttles without de-registering them; they now de-register stale UIDs as they go, same as `get_throttle(...)`.

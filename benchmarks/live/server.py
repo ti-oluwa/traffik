@@ -12,8 +12,7 @@ Two shapes:
   process (satisfying `--preload`), then forks `N` worker processes from
   it - the same `fork` start method
   `traffik.backends.multiprocess.MultiProcessInMemoryBackend` is built
-  around (see its module docstring). This is the only way to actually
-  exercise cross-worker state sharing rather than just asserting it works.
+  around (see its module docstring).
 """
 
 import asyncio
@@ -34,7 +33,7 @@ HEALTH_PATH = "/__bench__/health"
 RESET_PATH = "/__bench__/reset"
 
 # Gunicorn (and its forked workers booting up) can take noticeably longer
-# than a single uvicorn process, escenarioially for the first run before
+# than a single uvicorn process, especially for the first run before
 # bytecode is cached.
 DEFAULT_READY_TIMEOUT = 20.0
 DEFAULT_SHUTDOWN_TIMEOUT = 8.0
@@ -45,7 +44,7 @@ class ServerStartupError(RuntimeError):
     """Raised when a spawned server process fails to become ready in time."""
 
 
-@dataclass(slots=True)
+@dataclass
 class Server:
     """
     A running benchmark server process (or gunicorn cluster), reachable

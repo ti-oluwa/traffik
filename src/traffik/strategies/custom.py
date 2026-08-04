@@ -777,7 +777,8 @@ class PriorityQueueStrategy:
 
             # Enforce max queue size (remove oldest low priority if needed)
             if len(queue) > self.max_queue_size:
-                # Keep the highest priority items. Also keep newest items within same priority (negative timestamp for max-heap behavior)
+                # Keep the highest priority items. Also keep newest items within same
+                # priority (negative timestamp for max-heap behavior)
                 queue = heapq.nlargest(
                     self.max_queue_size,
                     queue,
@@ -1115,14 +1116,14 @@ class TimeOfDayStrategy:
         if not self.time_windows:
             raise ValueError("`time_windows` cannot be empty")
 
-        for start, end, mult in self.time_windows:
-            if not (0 <= start < 24) or not (0 < end <= 24):
+        for window_start, window_end, multiplier in self.time_windows:
+            if not (0 <= window_start < 24) or not (0 < window_end <= 24):
                 raise ValueError(
                     "Start and end hours must be in 0-24 range (24 exclusive for start)"
                 )
-            if start >= end:
+            if window_start >= window_end:
                 raise ValueError("Start hour must be less than end hour")
-            if mult <= 0:
+            if multiplier <= 0:
                 raise ValueError("Multiplier must be positive")
 
         if self.timezone_offset < -12 or self.timezone_offset > 14:

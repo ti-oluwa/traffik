@@ -8,9 +8,7 @@ app_path = "benchmarks.apps.websocket:app"
 
 
 async def run_scenarios(
-    config: BenchmarkConfig,
-    scenario_keys: typing.List[str],
-    warmup_iterations: int = 1,
+    config: BenchmarkConfig, scenario_keys: typing.List[str], warmup_iterations: int = 1
 ) -> typing.List[AggregatedResult]:
     """
     Run each selected WebSocket scenario as a real `uvicorn`/`gunicorn`

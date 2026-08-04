@@ -287,7 +287,7 @@ class _AsyncSharedMemoryLock:
        increment the counter and return immediately.
     2. Call `cext.test_and_set_byte` (atomic XCHG).
     3. If old value was 0, we acquired the lock; record task ownership and return `True`.
-    4. Otherwise yield to the event loop via `asyncio.sleep(0)`
+    4. Otherwise yield to the event loop via `asyncio.sleep(...)`
        (first `max_spins_before_backoff` attempts) or with an
        exponentially increasing delay up to `spin_max_delay_seconds`.
     5. Repeat until acquired, non-blocking return, or timeout.
@@ -548,7 +548,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     Use the table below as a quick reference:
 
     +------------------+--------------------+-------------------+--------------------------+----------------+---------------------------------------------+
-    | ``max_keys``     | ``number_of_shards``| ``max_value_size``| ``executor_max_workers`` | Approx. memory | Notes                                        |
+    | `max_keys`     | `number_of_shards`| `max_value_size`| `executor_max_workers` | Approx. memory | Notes                                        |
     +==================+=====================+===================+===========================+================+===============================================+
     | 65 536 (default) | 64                  | 512               | 64 (default)              | ~64 MB         | Default; tight for sliding-window strategies |
     +------------------+---------------------+--------------------+---------------------------+----------------+-----------------------------------------------+
@@ -774,9 +774,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         # Captured once here so we can tell "the process that actually
         # called `start()`" apart from "a forked worker that inherited this
-        # object via `fork()`". `fork()` duplicates plain attributes verbatim.
-        # `os.getpid()`, on the other hand, is necessarily different in a
-        # forked child. This is also used in `close()` to make sure only
+        # object via `fork()`". This is especially used in `close()` to make sure only
         # the real creator ever unlinks the shared memory segment, not
         # every worker that happens to recycle/shut down.
         self._creator_pid = os.getpid()
@@ -919,7 +917,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         Hook to rebuild fork-unsafe resources in a freshly-forked child process.
 
-        Register via `os.register_at_fork(after_in_child=...)` on initialization.
+        Registered via `os.register_at_fork(after_in_child=...)` on initialization.
         Runs in the child immediately after `fork()`, before any other
         code in that process executes.
 
@@ -937,7 +935,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         Neither is explicitly shut down/cancelled here. Their internal
         state may be inconsistent, copied mid-operation from a thread/loop
-        that no longer exists in this process, so they're simply discarded.
+        that does not exists in this process, so they're simply discarded.
         `initialize()` rebuilds both fresh the next time it's called in this
         process (which `lifespan=backend.lifespan` does automatically on
         ASGI startup, in each worker's own event loop).
@@ -1033,7 +1031,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 f"({self._shared_memory_size} bytes)."
             )
 
-        # Only zero the region we actually use as `buffer` may be larger than
+        # We only zero the region we actually use as `buffer` may be larger than
         # `self._shared_memory_size` (see above), and the surplus, if any, is
         # never addressed by any offset this backend computes.
         buffer[: self._shared_memory_size] = bytes(self._shared_memory_size)
@@ -1428,7 +1426,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         Pop and return a free slot index from the shard's free stack,
         incrementing the slot's `shard_idx` generation counter.
 
-        The generation increment is the core of ABA-problem mitigation. Every
+        The generation increment is the core of the ABA-problem mitigation. Every
         re-allocation changes the slot's `shard_idx` generation, making stale references
         detectable.
 
@@ -1611,9 +1609,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :raises BackendError: If the encoded value exceeds `max_value_size`.
         """
         encoded = value.encode("utf-8")
-        if len(encoded) > self._max_value_size:
+        value_size = len(encoded)
+        if value_size > self._max_value_size:
             raise BackendError(
-                f"Value size {len(encoded)} bytes exceeds `max_value_size` "
+                f"Value size {value_size} bytes exceeds `max_value_size` "
                 f"({self._max_value_size}). Increase `max_value_size`."
             )
 
@@ -1622,10 +1621,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             buffer, offset + self._slot_kind_offset, _STRING_SLOT_KIND
         )
         self._VALUE_LENGTH_STRUCT.pack_into(
-            buffer, offset + self._value_length_offset, len(encoded)
+            buffer, offset + self._value_length_offset, value_size
         )
         buffer[
-            offset + self._value_offset : offset + self._value_offset + len(encoded)
+            offset + self._value_offset : offset + self._value_offset + value_size
         ] = encoded
         self._EXPIRY_STRUCT.pack_into(buffer, offset + self._expiry_offset, expires_at)
         self._OCCUPIED_FLAG_STRUCT.pack_into(

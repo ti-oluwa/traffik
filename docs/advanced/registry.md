@@ -54,7 +54,7 @@ from traffik.registry import ThrottleRegistry
 
 registry = ThrottleRegistry()
 
-read_throttle  = HTTPThrottle("api:read",  rate="200/min", registry=registry)
+read_throttle = HTTPThrottle("api:read",  rate="200/min", registry=registry)
 write_throttle = HTTPThrottle("api:write", rate="50/min",  registry=registry)
 admin_throttle = HTTPThrottle("api:admin", rate="500/min", registry=registry)
 ```

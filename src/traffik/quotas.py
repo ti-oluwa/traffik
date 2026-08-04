@@ -79,6 +79,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         "resolved_cost",
         "retry",
         "retry_on",
+        "skip_handler",
         "throttle",
     )
 
@@ -87,6 +88,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         throttle: Throttle[HTTPConnectionT],
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Dict[str, typing.Any]] = None,
+        skip_handler: typing.Optional[bool] = None,
         retry: int = 0,
         retry_on: typing.Optional[RetryOn] = None,
         backoff: typing.Optional[BackoffStrategy] = None,
@@ -99,6 +101,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         self.retry_on = retry_on
         self.backoff = backoff or DEFAULT_BACKOFF
         self.base_delay = base_delay
+        self.skip_handler = skip_handler
 
         # Precompute values for fast apply
         self.max_attempts = retry + 1
@@ -110,7 +113,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
             if cost is not None
             else (throttle.cost if not throttle._uses_cost_func else 1)  # type: ignore[assignment]
         )
-        # Determine retry_on type for fast checks during retries
+        # Determine `retry_on` type for fast checks during retries
         if retry_on is None:
             self._retry_type: typing.Optional[str] = None
         elif isinstance(retry_on, type) or (
@@ -118,7 +121,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         ):
             self._retry_type = "exception_type"
         elif callable(retry_on) and inspect.iscoroutinefunction(retry_on):
-            self._retry_type = "coroutine"
+            self._retry_type = "coroutine_function"
         elif callable(retry_on):
             self._retry_type = "callable"
         else:
@@ -383,7 +386,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
             if should_apply:
                 if self.is_nested:
-                    self._merge_into_parent(mark_as_consumed=True)
+                    self.merge()
                 else:
                     await self.apply()
             return None
@@ -434,6 +437,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         *,
+        skip_handler: typing.Optional[bool] = None,
         retry: int = 0,
         retry_on: typing.Optional[RetryOn] = None,
         backoff: typing.Optional[BackoffStrategy] = None,
@@ -449,6 +453,10 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             throttle (only valid for bound contexts).
         :param cost: Override cost for this quota entry.
         :param context: Override context for this quota entry.
+        :param skip_handler: If `True` (overrides `throttle.skip_handler` for this entry),
+            this entry's throttled handler is skipped and the connection is just marked
+            as throttled. Otherwise if False, the handler is used, and `None` just defaults to
+            whatever the throttle default is.
         :param retry: Number of retry attempts if an error occurs.
         :param retry_on: Conditions for retrying. Can be:
             - A tuple of exception types to retry on
@@ -481,6 +489,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             throttle=throttle,
             cost=cost,
             context=context,
+            skip_handler=skip_handler,
             retry=retry,
             retry_on=retry_on,
             backoff=backoff,
@@ -496,6 +505,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         throttle: Throttle[HTTPConnectionT],
         cost: typing.Optional[int],
         context: typing.Optional[typing.Mapping[str, typing.Any]],
+        skip_handler: typing.Optional[bool],
         retry: int,
         retry_on: typing.Optional[RetryOn],
         backoff: BackoffStrategy,
@@ -522,6 +532,10 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         :param throttle: The throttle for the new entry.
         :param cost: The cost for the new entry (must be fixed, not None).
         :param context: The context for the new entry.
+        :param skip_handler: If `True` (overrides `throttle.skip_handler` for this entry),
+            this entry's throttled handler is skipped and the connection is just marked
+            as throttled. Otherwise if False, the handler is used, and `None` just defaults to
+            whatever the throttle default is.
         :param retry: Number of retry attempts for the new entry.
         :param retry_on: Retry condition for the new entry.
         :param backoff: Backoff strategy for the new entry.
@@ -533,8 +547,12 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             return False
 
         # Both must have identical context dictionaries
-        # Note: This checks exact equality; {"a": 1} != {"a": 1, "b": None}
+        # This checks exact equality; {"a": 1} != {"a": 1, "b": None}
         if last_entry.context != context:
+            return False
+
+        # Both must have same `skip_handler` directive
+        if last_entry.skip_handler != skip_handler:
             return False
 
         # Both must have fixed costs (no cost functions)
@@ -570,6 +588,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         *,
+        skip_handler: typing.Optional[bool] = None,
         retry: int = 0,
         retry_on: typing.Optional[RetryOn] = None,
         backoff: typing.Optional[BackoffStrategy] = None,
@@ -581,6 +600,10 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         :param throttle: The throttle to queue.
         :param cost: Override cost for this throttle.
         :param context: Override context for this throttle.
+        :param skip_handler: If `True` (overrides `throttle.skip_handler` for this entry),
+            this entry's throttled handler is skipped and the connection is just marked
+            as throttled. Otherwise if False, the handler is used, and `None` just defaults to
+            whatever the throttle default is.
         :param retry: Number of retry attempts.
         :param retry_on: Conditions for retrying.
         :param backoff: Backoff strategy for retries.
@@ -616,7 +639,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         normalized_context = merged_context if merged_context else None
         # Resolve backoff to actual instance (needed for aggregation checks since backoff
         # can be a callable or a strategy instance)
-        backoff_to_use = backoff or DEFAULT_BACKOFF
+        backoff_to_use = backoff if backoff is not None else DEFAULT_BACKOFF
 
         can_aggregate = False
         if self._queue:
@@ -626,6 +649,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 throttle=_throttle,
                 cost=cost,
                 context=normalized_context,
+                skip_handler=skip_handler,
                 retry=retry,
                 retry_on=retry_on,
                 backoff=backoff_to_use,
@@ -644,6 +668,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                 throttle=_throttle,
                 cost=cost,
                 context=normalized_context,
+                skip_handler=skip_handler,
                 retry=retry,
                 retry_on=retry_on,
                 backoff=backoff_to_use,
@@ -779,6 +804,41 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             await self._hit(entry)
         self._consumed = True
 
+        # Detach from parent so it stops being double-counted and referenced
+        if (
+            self.is_nested and id(self) in self.parent._children  # type: ignore[union-attr]
+        ):
+            self.parent._children.pop(id(self), None)  # type: ignore[union-attr]
+            self._queue.clear()  # Optional, but keeps `queued_cost` honest post-apply
+            self._queued_cost = 0
+
+    def merge(self) -> None:
+        """
+        Merge this context's queued entries into its parent, without consuming.
+
+        This is the deferred counterpart to `apply()`. Entries stay queued and
+        nothing is hit against the backend here. They simply become the
+        parent's responsibility. The parent (or whichever ancestor eventually
+        applies) will consume them, still in order, still aggregated with
+        matching entries.
+
+        This context is marked consumed once merged (its own queue should not
+        be touched or inspected afterward), and it detaches from the parent's
+        bookkeeping.
+
+        :raises `QuotaError`: If this context has no parent (nothing to merge into).
+        :raises `QuotaCancelledError`: If this context was cancelled.
+        :raises `QuotaAppliedError`: If this context was already applied/merged.
+        """
+        if self.parent is None:
+            raise QuotaError("Cannot merge a context with no parent")
+        if self._cancelled:
+            raise QuotaCancelledError("Cannot merge a cancelled quota context")
+        if self._consumed:
+            raise QuotaAppliedError("Quota context has already been applied/merged")
+
+        self._merge_into_parent(mark_as_consumed=True)
+
     async def cancel(self) -> None:
         """
         Cancel the quota context, clearing all queued entries without consuming them.
@@ -864,7 +924,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             cost=entry.resolved_cost,
             context=entry.context,
         )
-        if entry._retry_type == "coroutine":
+        if entry._retry_type == "coroutine_function":
             return await entry.retry_on(exc_info)  # type: ignore[misc,operator,arg-type]
         return entry.retry_on(exc_info)  # type: ignore[misc,operator,arg-type,return-value]
 
@@ -886,6 +946,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                     self.connection,
                     cost=actual_cost,
                     context=entry.context,
+                    skip_handler=entry.skip_handler,
                 )
                 # Track applied cost
                 self._applied_cost += actual_cost

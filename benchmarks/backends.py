@@ -77,14 +77,14 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typin
             namespace="bench",
             identifier=get_identifier,
             persistent=False,
-            number_of_shards=8,
+            number_of_shards=config.shards,
         )
     elif kind == "multiprocess":
         return MultiProcessInMemoryBackend(
             namespace="bench",
             identifier=get_identifier,
             persistent=False,
-            number_of_shards=config.multiprocess_shards,
+            number_of_shards=config.shards,
             max_keys=config.multiprocess_max_keys,
         )
     elif kind == "aioredis":
@@ -108,6 +108,7 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typin
             namespace="bench",
             identifier=get_identifier,
             persistent=False,
+            track_keys=True,
         )
     elif kind == "emcache":
         if not HAS_EMCACHE:
@@ -121,6 +122,7 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typin
             namespace="bench",
             identifier=get_identifier,
             persistent=False,
+            track_keys=True,
         )
     else:
         raise ValueError(f"Unknown backend kind: {kind}")

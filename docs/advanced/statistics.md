@@ -171,7 +171,7 @@ from traffik.backends.redis import RedisBackend
 backend = RedisBackend("redis://localhost:6379", namespace="myapp")
 app = FastAPI(lifespan=backend.lifespan)
 
-api_throttle = HTTPThrottle("api:standard", rate="1000/hour", backend=backend)
+api_throttle = HTTPThrottle("api:standard", rate="1000/hour")
 
 
 @app.get("/usage")

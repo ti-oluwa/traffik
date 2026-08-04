@@ -56,5 +56,4 @@ def print_json(
         "meta": meta,
         "results": [result_to_dict(r) for r in results],
     }
-
     print(json.dumps(output, indent=2))

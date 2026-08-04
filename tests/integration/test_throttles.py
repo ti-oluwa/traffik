@@ -33,7 +33,13 @@ from traffik.headers import DEFAULT_HEADERS_ALWAYS
 from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
 from traffik.strategies.sliding_window import SlidingWindowLogStrategy
-from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
+from traffik.throttles import (
+    HTTPThrottle,
+    Throttle,
+    WebSocketThrottle,
+    get_wait,
+    is_throttled,
+)
 
 
 @pytest.mark.throttle
@@ -280,7 +286,7 @@ class TestThrottleBasic:
 async def test_disabled_http_throttle_skips_hit() -> None:
     """A disabled throttle passes all requests through, even past the rate limit.
 
-    No app needed -- `.hit()` just needs *some* HTTPConnection to key off of.
+    No app needed. `.hit()` just needs *some* `HTTPConnection` to key off of.
     """
     throttle = HTTPThrottle(
         uid="dis-skip-hit",
@@ -307,6 +313,80 @@ async def test_disabled_http_throttle_skips_hit() -> None:
 @pytest.mark.throttle
 @pytest.mark.anyio
 class TestHTTPThrottle:
+    async def test_http_throttle_skip_handler_marks_wait_without_handler(
+        self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
+    ) -> None:
+        calls = 0
+
+        async def _throttled_handler(
+            connection: HTTPConnection, wait_ms: float, *args, **kwargs
+        ) -> None:
+            nonlocal calls
+            calls += 1
+
+        throttle = HTTPThrottle(
+            uid="http-skip-handler-basic",
+            rate="1/s",
+            identifier=default_client_identifier,
+            handle_throttled=_throttled_handler,
+            skip_handler=True,
+            registry=ThrottleRegistry(),
+        )
+
+        async def endpoint(request: Request) -> JSONResponse:
+            await throttle(request, cost=2)
+            assert calls == 0
+            assert is_throttled(request)
+            assert get_wait(request) > 0
+            return JSONResponse({"ok": True})
+
+        app = web_framework.build_app(
+            http_routes=[HTTPRoute("/skip", endpoint)],
+            lifespan=inmemory_backend.lifespan,
+        )
+
+        async with make_client(app, base_url="http://0.0.0.0") as client:
+            response = await client.get("/skip")
+            assert response.status_code == 200
+            assert response.json() == {"ok": True}
+
+    async def test_http_throttle_skip_handler_override_on_hit(
+        self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
+    ) -> None:
+        calls = 0
+
+        async def _throttled_handler(
+            connection: HTTPConnection, wait_ms: float, *args, **kwargs
+        ) -> None:
+            nonlocal calls
+            calls += 1
+
+        throttle = HTTPThrottle(
+            uid="http-skip-handler-hit-override",
+            rate="1/s",
+            identifier=default_client_identifier,
+            handle_throttled=_throttled_handler,
+            registry=ThrottleRegistry(),
+        )
+
+        async def endpoint(request: Request) -> JSONResponse:
+            await throttle(request)
+            await throttle(request, skip_handler=True)
+            assert calls == 0
+            assert is_throttled(request)
+            assert get_wait(request) > 0
+            return JSONResponse({"ok": True})
+
+        app = web_framework.build_app(
+            http_routes=[HTTPRoute("/skip", endpoint)],
+            lifespan=inmemory_backend.lifespan,
+        )
+
+        async with make_client(app, base_url="http://0.0.0.0") as client:
+            response = await client.get("/skip")
+            assert response.status_code == 200
+            assert response.json() == {"ok": True}
+
     async def test_http_throttle(
         self, backends: BackendGen, web_framework: ASGIFramework
     ) -> None:
@@ -349,12 +429,6 @@ class TestHTTPThrottle:
     async def test_http_throttle_with_lifespan(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
     ) -> None:
-        """
-        Sync test, `starlette.testclient.TestClient` -- needs the app's lifespan
-        to actually run so the throttle can resolve its backend, which neither
-        `httpx2.AsyncClient`+`ASGITransport` nor `make_client` do for plain
-        HTTP (see module docstring in test_throttle_dynamic_backend.py).
-        """
         throttle = HTTPThrottle(
             f"test-throttle-app-lifespan-{web_framework.name}",
             rate="2/s",
@@ -447,6 +521,96 @@ class TestHTTPThrottle:
 @pytest.mark.websocket
 @pytest.mark.anyio
 class TestWebSocketThrottle:
+    async def test_websocket_throttle_skip_handler_marks_wait_without_handler(
+        self,
+        inmemory_backend: InMemoryBackend,
+        web_framework: ASGIFramework,
+    ) -> None:
+        calls = 0
+
+        async def _throttled_handler(
+            connection: HTTPConnection, wait_ms: float, *args, **kwargs
+        ) -> None:
+            nonlocal calls
+            calls += 1
+
+        throttle = WebSocketThrottle(
+            uid="ws-skip-handler-basic",
+            rate="1/s",
+            identifier=default_client_identifier,
+            handle_throttled=_throttled_handler,
+            skip_handler=True,
+            registry=ThrottleRegistry(),
+        )
+
+        async def ws_endpoint(websocket: WebSocket) -> None:
+            await websocket.accept()
+            await throttle(websocket, cost=2)
+            assert calls == 0
+            assert is_throttled(websocket)
+            assert get_wait(websocket) > 0
+            await websocket.send_json({"ok": True})
+            await websocket.close()
+
+        app = web_framework.build_app(
+            ws_routes=[WSRoute("/ws/", ws_endpoint)],
+            lifespan=inmemory_backend.lifespan,
+        )
+
+        async with (
+            make_client(
+                app, base_url="http://0.0.0.0", loop=asyncio.get_running_loop()
+            ) as client,
+            client.websocket_connect(url="/ws/") as ws,
+        ):
+            response = await ws.receive_json()
+            assert response == {"ok": True}
+
+    async def test_websocket_throttle_skip_handler_override_on_hit(
+        self,
+        inmemory_backend: InMemoryBackend,
+        web_framework: ASGIFramework,
+    ) -> None:
+        calls = 0
+
+        async def _throttled_handler(
+            connection: HTTPConnection, wait_ms: float, *args, **kwargs
+        ) -> None:
+            nonlocal calls
+            calls += 1
+
+        throttle = WebSocketThrottle(
+            uid="ws-skip-handler-hit-override",
+            rate="1/s",
+            identifier=default_client_identifier,
+            handle_throttled=_throttled_handler,
+            registry=ThrottleRegistry(),
+        )
+
+        async def ws_endpoint(websocket: WebSocket) -> None:
+            await websocket.accept()
+            await throttle(websocket)
+            await throttle(websocket, skip_handler=True)
+            assert calls == 0
+            assert is_throttled(websocket)
+            assert get_wait(websocket) > 0
+            await websocket.send_json({"ok": True})
+            await websocket.close()
+
+        app = web_framework.build_app(
+            ws_routes=[WSRoute("/ws/", ws_endpoint)],
+            lifespan=inmemory_backend.lifespan,
+        )
+
+        async with (
+            make_client(
+                app, base_url="http://0.0.0.0", loop=asyncio.get_running_loop()
+            ) as client,
+            client.websocket_connect(url="/ws/") as ws,
+        ):
+            response = await ws.receive_json()
+            assert response == {"ok": True}
+
     async def test_websocket_throttle(
         self, backends: BackendGen, web_framework: ASGIFramework
     ) -> None:
@@ -569,7 +733,7 @@ class TestWebSocketThrottle:
                     response = await ws.receive_json()
                     assert response == {"message": "PONG"}
 
-            # 3rd connection is throttled -- sent a rate_limit message, not dropped.
+            # 3rd connection is throttled. Sent a `rate_limit` message, not dropped.
             async with client.websocket_connect(url="/ws/") as ws:
                 response = await ws.receive_json()
                 assert response["type"] == "rate_limit"

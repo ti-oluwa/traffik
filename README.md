@@ -62,7 +62,7 @@ A request encounters three main pieces on arriving at a throttled route or endpo
 
 - Next we have the **Strategy** API. A strategy defines how we implement or enforce the limit specified on the throttle object. It is like a middleman that takes the limit definition from the throttle, fetches existing info about the current request been processed from the backend, does a check against its "algorithm" and returns a decision - whether to wait because the request has been limited or we can proceed to serve the request. It then stores the "decision" in the backend finally.
 
-It mainly returns how long the client needs to wait before making its next request, that is if the request hit the limit set. The strategies included are  `FixedWindow`, `TokenBucket`, `LeakyBucket`, `GCRA`, and other unique variants.
+It mainly returns how long the client needs to wait before making its next request, that is if the request hit the limit set. The strategies included are  `FixedWindow`, `SlidingWindow`, `TokenBucket`, `LeakyBucket`, `GCRA`, and other unique variants.
 
 Simply put, it decides, "Given a key identifying a request, and a rate, should we let a request through?"
 
@@ -382,7 +382,7 @@ Return the `EXEMPTED` sentinel to let specific connections through unconditional
 from traffik.types import EXEMPTED
 
 async def identifier(request: Request):
-    if request.headers.get("X-Internal-Token") == SECRET:
+    if await is_internal(request.headers.get("X-Internal-Token")):
         return EXEMPTED
     return request.client.host
 ```

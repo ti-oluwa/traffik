@@ -389,6 +389,6 @@ class BenchmarkConfig:
     redis_url: str = "redis://localhost:6379/0"
     memcached_host: str = "localhost"
     memcached_port: int = 11211
-    multiprocess_shards: int = 32
+    shards: int = 32
     multiprocess_max_keys: int = 65536
     workers: int = 1

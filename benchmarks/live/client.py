@@ -1,20 +1,3 @@
-"""
-Load generation against a real, running server.
-
-HTTP goes through `httpx2.AsyncClient` with its default (real) transport -
-actual TCP connections to `127.0.0.1`, actual HTTP/1.1 framing, actual
-connection pooling. This is the same async client family used elsewhere in
-the project (`tests/client.py`), just pointed at a socket instead of
-`ASGITransport`, since ASGITransport is for calling the app in-process and
-that's exactly what we're trying to stop doing.
-
-WebSocket connections use the `websockets` library since httpx/httpx2 don't
-implement the client side of a real WebSocket upgrade - only the ASGI
-in-process half (which is what `tests/client.py`'s
-`AsyncWebSocketTestSession` hand-rolls). `websockets` is fully async and
-talks a real WS handshake over a real socket.
-"""
-
 import asyncio
 import json
 import time

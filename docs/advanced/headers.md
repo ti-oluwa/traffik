@@ -1,10 +1,10 @@
 # Response Headers
 
-Rate limiting is half the battle. The other half is telling clients *how* they're doing before they slam into a wall.
+Rate limiting is half the battle. The other half is telling clients *how* they're doing before they *'slam into a wall'*.
 
 Without response headers, your clients are flying blind. They have no idea how many requests they have left, when their window resets, or why they suddenly got a `429`. With the right headers, a well-behaved client can slow itself down gracefully, show users a meaningful "try again in X seconds" message, and stop hammering your API unnecessarily.
 
-This page covers the `Header` and `Headers` system that Traffik uses to **resolve** rate limit header values. Traffik does not automatically inject headers into responses, it computes the values and returns them. It's up to you to attach them to your response however you see fit (e.g., via middleware, a custom dependency, or a Starlette response). The `headers=` parameter on a throttle tells Traffik *which* headers to resolve, not which ones to auto-inject.
+This page covers the `Header` and `Headers` API that Traffik uses to **resolve** rate limit header values. Traffik does not automatically inject headers into responses, it computes the values and returns them. It's up to you to attach them to your response however you see fit (e.g., via middleware, a custom dependency, or a Starlette response). The `headers=` parameter on a throttle tells Traffik *which* headers to resolve, not which ones to auto-inject.
 
 ---
 
@@ -59,6 +59,9 @@ throttle = HTTPThrottle(
 ```
 
 The `headers=` parameter tells Traffik which headers to *resolve* on a hit. On every hit (throttled or not, depending on the preset), the header values are computed from the current strategy statistics and returned by `throttle.get_headers()`. You are responsible for attaching them to your response, for example by calling `response.headers.update(resolved)` in a custom handler or middleware.
+
+!!! tip "Need a custom app-level response instead of the default throttled handler?"
+    See [Skip Handler](skip-handler.md) for the pattern that keeps the throttle state while letting your app decide the response.
 
 ---
 
@@ -222,14 +225,14 @@ my_copy["X-Service-Name"] = Header("my-api")
 
 ## Disabling a Header Per-Request
 
-Sometimes you want to suppress a specific header for a particular call, for example you have a global `DEFAULT_HEADERS_ALWAYS` on a throttle but want to hide `X-RateLimit-Remaining` on one specific endpoint.
+Sometimes you want to suppress a specific header for a particular call, for example you have a global `DEFAULT_HEADERS_ALWAYS` on a throttle but want to hide `"X-RateLimit-Remaining"` on one specific endpoint.
 
 Use `Header.DISABLE` as a sentinel value in an override mapping passed to `throttle.get_headers()`:
 
 ```python
 from traffik.headers import Header
 
-# Resolve headers, but skip X-RateLimit-Remaining for this call
+# Resolve headers, but skip `"X-RateLimit-Remaining"` for this call
 resolved = await throttle.get_headers(
     connection,
     headers={"X-RateLimit-Remaining": Header.DISABLE},
@@ -253,7 +256,7 @@ from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.headers import Headers, Header
 
-# --- Build a custom header collection ---
+# Build a custom header collection
 api_headers = Headers({
     # Core rate limit headers - always present
     "X-RateLimit-Limit": Header.LIMIT(when="always"),
@@ -269,7 +272,7 @@ api_headers = Headers({
     "RateLimit-Policy": Header("1000;w=60"),
 })
 
-# --- Wire everything up ---
+# Wire everything up
 backend = InMemoryBackend(namespace="myapi")
 app = FastAPI(lifespan=backend.lifespan)
 

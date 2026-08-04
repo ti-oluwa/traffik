@@ -44,7 +44,7 @@ test_and_set_byte(PyObject *self, PyObject *args)
     Py_buffer view;
     Py_ssize_t offset;
 
-    /* w* requires a writable buffer - rejects read-only memoryviews early */
+    /* w* requires a writable buffer. Reject read-only memoryviews early */
     if (!PyArg_ParseTuple(args, "w*n", &view, &offset)) {
         return NULL;
     }
@@ -149,8 +149,8 @@ static PyMethodDef ExtMethods[] = {
         METH_VARARGS,
         "test_and_set_byte(buffer, offset) -> int\n"
         "\n"
-        "Atomic test-and-set on buffer[offset].  Writes 1 and returns the\n"
-        "previous value.  0 = acquired, 1 = was already held.\n"
+        "Atomic test-and-set on buffer[offset]. Writes 1 and returns the\n"
+        "previous value. 0 = acquired, 1 = was already held.\n"
         "\n"
         "buffer must be a writable bytes-like object (e.g. the memoryview\n"
         "of a multiprocessing.SharedMemory segment).\n"

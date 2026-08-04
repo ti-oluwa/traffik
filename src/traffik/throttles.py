@@ -58,6 +58,7 @@ __all__ = [
     "Throttle",
     "ThrottleExceptionInfo",
     "WebSocketThrottle",
+    "get_wait",
     "is_throttled",
     "throttled",
     "websocket_throttled",
@@ -162,6 +163,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         "on_error",
         "rate",
         "registry",
+        "skip_handler",
         "strategy",
         "uid",
         "use_fixed_backend",
@@ -196,6 +198,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         rules: typing.Optional[typing.Iterable[Rule[HTTPConnectionT]]] = None,
         cache_ids: bool = True,
         dynamic_rules: bool = False,
+        skip_handler: bool = False,
     ) -> None:
         """
         Initialize the throttle instance.
@@ -265,7 +268,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
             See documentation on "Context-Aware Backends" section for full examples.
 
-        :param min_wait_period: The minimum allowable wait period (in milliseconds) for a throttled connection.
+        :param min_wait_period: The minimum allowable wait period (in milliseconds) for a **throttled** connection.
         :param headers: Optional headers to include in throttling responses. A use case can
             be to include additional throttle/throttling information in the response headers.
             This will be merged with any headers provided in `context`.
@@ -302,11 +305,20 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             first hit are picked up on subsequent calls. The overhead is minimal (a dict
             lookup + length comparison per hit), but only enable this if you need to add
             rules after the throttle has already started processing requests.
+
+        :param skip_handler: If `True`, a throttled connection still updates the
+            strategy's state and is still marked throttled (`is_throttled(connection)`
+            returns `True`), but `handle_throttled` is never invoked - no exception,
+            no response, no side effects from the handler. Retry/wait information is
+            still computed and available via `get_wait()`, `get_stat()` or the connection's throttle
+            headers. Use this when you want to check `get_wait()`/`is_throttled()` yourself and
+            decide what happens next, rather than letting the throttle react for you.
+            Defaults to `False`.
         """
         if not uid or not isinstance(uid, str):
             raise ValueError("uid is required and must be a non-empty string")
 
-        registry = registry or GLOBAL_REGISTRY
+        registry = registry if registry is not None else GLOBAL_REGISTRY
         if registry.exists(uid):
             raise ConfigurationError(
                 f"Throttle UID must be unique. Throttle with UID {uid!r} already exists."
@@ -335,6 +347,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self._rules_resolved = False
         self._rules_count = 0
         self.dynamic_rules = dynamic_rules
+        self.skip_handler = skip_handler
         self.cache_ids = cache_ids
         self._disabled = False
         self._guard = asyncio.Lock()
@@ -805,6 +818,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         *,
         cost: typing.Optional[int] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+        skip_handler: typing.Optional[bool] = None,
     ) -> HTTPConnectionT:
         """
         Hit the connection throttle.
@@ -818,6 +832,16 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
             **Keys to be set in the context:**
             - "scope": A string to differentiate throttling for different contexts within the same connection.
+
+        :param skip_handler: If `True` (overrides `throttle.skip_handler` for this hit),
+            a throttled connection still updates the
+            strategy's state and is still marked throttled (`is_throttled(connection)`
+            returns `True`), but `handle_throttled` is never invoked - no exception,
+            no response, no side effects from the handler. Retry/wait information is
+            still computed and available via `get_wait()`, `get_stat()` or the connection's throttle
+            headers. Use this when you want to check `get_wait()`/`is_throttled()` yourself and
+            decide what happens next, rather than letting the throttle react for you.
+            Defaults to `False`.
 
         :return: The throttled HTTP connection.
         """
@@ -912,17 +936,21 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             )
 
         wait_ms = (
-            max(wait_ms, self.min_wait_period) if self.min_wait_period else wait_ms
+            max(wait_ms, self.min_wait_period)
+            if self.min_wait_period is not None
+            else wait_ms
         )
         if wait_ms:
-            handle_throttled = self.handle_throttled or backend.handle_throttled
             # Mark connection as throttled
-            setattr(connection.state, THROTTLED_STATE_KEY, True)
-            await handle_throttled(connection, wait_ms, self, merged_context)  # type: ignore[arg-type]
+            setattr(connection.state, THROTTLED_STATE_KEY, wait_ms)
+            skip = skip_handler if skip_handler is not None else self.skip_handler
+            if not skip:
+                handle_throttled = self.handle_throttled or backend.handle_throttled
+                await handle_throttled(connection, wait_ms, self, merged_context)  # type: ignore[arg-type]
             return connection
 
         # Mark connection as not throttled
-        setattr(connection.state, THROTTLED_STATE_KEY, False)
+        setattr(connection.state, THROTTLED_STATE_KEY, 0.0)
         return connection
 
     async def __call__(
@@ -1266,7 +1294,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         self.registry.add_rules(target_uid, *rules)
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.uid!s} rate={self.rate!r} cost={self.cost!r} backend={self.backend!r})"
+        uid = getattr(self, "uid", None)
+        return f"{self.__class__.__name__}({(uid or 'not initialized')!s})"
 
 
 def _make_throttle_signature(
@@ -1353,7 +1382,7 @@ def is_throttled(connection: HTTPConnection) -> bool:
     """
     Check if the connection has been throttled.
 
-    This is especially important to check if a connection has been throttled and/or disconnected.
+    This can be especially important to check if a connection has been throttled and/or disconnected.
     You will mostlikely need to call this function immediately after every throttle hit
     especially for websocket connections.
 
@@ -1410,7 +1439,27 @@ def is_throttled(connection: HTTPConnection) -> bool:
     :param connection: The HTTP connection to check.
     :return: True if the connection has been throttled, False otherwise.
     """
-    return getattr(connection.state, THROTTLED_STATE_KEY, False)
+    return get_wait(connection) != 0.0
+
+
+def get_wait(connection: HTTPConnection) -> WaitPeriod:
+    """
+    Returns the last active wait period if the connection was been throttled.
+
+    This can be important to check if a connection has been throttled and/or disconnected.
+
+    **NOTE**:
+        For websockets, never attempt to send or receive frames once the connection
+        is throttled as the connected as mostlikely been closed by the server
+        (by send a close frame or raising a discnnect exception), or by the
+        client (by send a disconnect frame to the server - as an acknowledgement or not).
+        Attempting to send/receive will likely lead to a `RuntimeError` been raised
+        (by the ASGI app).
+
+    :param connection: The HTTP connection to check.
+    :return: True if the connection has been throttled, False otherwise.
+    """
+    return getattr(connection.state, THROTTLED_STATE_KEY, 0.0)
 
 
 class HTTPThrottle(Throttle[Request]):
@@ -1447,6 +1496,7 @@ class HTTPThrottle(Throttle[Request]):
         rules: typing.Optional[typing.Iterable[Rule[Request]]] = None,
         cache_ids: bool = True,
         dynamic_rules: bool = False,
+        skip_handler: bool = False,
         use_method: bool = True,
     ) -> None:
         """
@@ -1549,6 +1599,15 @@ class HTTPThrottle(Throttle[Request]):
             lookup + length comparison per hit), but only enable this if you need to add
             rules after the throttle has already started processing requests.
 
+        :param skip_handler: If `True`, a throttled connection still updates the
+            strategy's state and is still marked throttled (`is_throttled(connection)`
+            returns `True`), but `handle_throttled` is never invoked - no exception,
+            no response, no side effects from the handler. Retry/wait information is
+            still computed and available via `get_wait()`, `get_stat()` or the connection's throttle
+            headers. Use this when you want to check `get_wait()`/`is_throttled()` yourself and
+            decide what happens next, rather than letting the throttle react for you.
+            Defaults to `False`.
+
         :param use_method: Whether to include the HTTP method in the scoped key for throttling.
             Defaults to True. If set to False, the throttle will ignore the HTTP method and only use the path for throttling.
             This can be useful if you want to apply the same throttling to all methods for a given path (e.g., GET, POST, etc.),
@@ -1571,6 +1630,7 @@ class HTTPThrottle(Throttle[Request]):
             rules=rules,
             cache_ids=cache_ids,
             dynamic_rules=dynamic_rules,
+            skip_handler=skip_handler,
         )
         self.use_method = use_method
 
@@ -1584,6 +1644,40 @@ class HTTPThrottle(Throttle[Request]):
         path = connection.scope["path"]
         scope = context["scope"] if context else THROTTLE_DEFAULT_SCOPE
         return f"{typ}:{method}:{path}:{scope}"
+
+    async def set_headers(
+        self,
+        response: Response,
+        connection: Request,
+        *,
+        headers: typing.Optional[
+            typing.Mapping[str, typing.Union[Header[Request], str]]
+        ] = None,
+        stat: typing.Optional[
+            StrategyStat[typing.Mapping[typing.Hashable, typing.Any]]
+        ] = None,
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
+    ) -> None:
+        """
+        Resolve and apply throttling headers to an HTTP response.
+
+        This helper resolves the configured headers for the current connection,
+        merges any per-call overrides, and updates the response header collection.
+
+        :param response: The HTTP response whose headers should be updated.
+        :param connection: The current HTTP connection used to resolve dynamic headers.
+        :param headers: Optional additional headers for this specific response.
+        :param stat: Optional strategy statistics used in dynamic header resolution.
+        :param context: Optional request context passed to header resolvers.
+        """
+        resolved_headers = await self.get_headers(
+            connection=connection,
+            headers=headers,
+            stat=stat,
+            context=context,
+        )
+        if resolved_headers:
+            response.headers.update(resolved_headers)
 
 
 RequestThrottle = HTTPThrottle  # Alias for semantic clarity
@@ -1662,6 +1756,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
         rules: typing.Optional[typing.Iterable[Rule[WebSocket]]] = None,
         cache_ids: bool = True,
         dynamic_rules: bool = False,
+        skip_handler: bool = False,
     ) -> None:
         if handle_throttled is None:
             handle_throttled = websocket_throttled
@@ -1682,6 +1777,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
             rules=rules,
             cache_ids=cache_ids,
             dynamic_rules=dynamic_rules,
+            skip_handler=skip_handler,
         )
 
     def get_scoped_key(
@@ -1702,8 +1798,6 @@ def throttled(
     [typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]],
     typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
 ]: ...
-
-
 @typing.overload
 def throttled(
     *throttles: Throttle[HTTPConnectionT],

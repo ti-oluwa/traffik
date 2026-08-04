@@ -53,7 +53,7 @@ theme:
       info: octicons/info-16
       success: octicons/check-16
       example: octicons/beaker-16
-  
+
   font:
     text: Manrope
     code: Cascadia
@@ -96,7 +96,6 @@ markdown_extensions:
   - def_list
   - pymdownx.tasklist:
       custom_checkbox: true
-
 
 extra:
   social:
@@ -153,6 +152,7 @@ nav:
       - Context-Aware Backends: advanced/context-backends.md
       - Strategy Statistics: advanced/statistics.md
       - Custom Throttled Handlers: advanced/throttled-handlers.md
+      - Skip Handler: advanced/skip-handler.md
       - Quota Context: advanced/quota-context.md
   - Configuration: configuration.md
   - Error Handling: error-handling.md

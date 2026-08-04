@@ -134,8 +134,6 @@ def route_wrapper(
 def throttled(
     *throttles: Throttle[HTTPConnectionT],
 ) -> _DecoratorDepends[typing.Any, typing.Any, typing.Any, HTTPConnectionT]: ...  # type: ignore[misc]
-
-
 @typing.overload
 def throttled(
     *throttles: Throttle[HTTPConnectionT],

@@ -385,7 +385,7 @@ from traffik import EXEMPTED
 
 ```python
 async def my_identifier(request):
-    if request.headers.get("x-admin-key") == ADMIN_KEY:
+    if is_admin(request.headers.get("x-admin-key")):
         return EXEMPTED  # skip throttling
     return request.client.host
 ```

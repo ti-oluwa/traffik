@@ -1417,10 +1417,10 @@ def is_throttled(connection: HTTPConnection) -> bool:
         while True:
             try:
                 data = await websocket.receive_text()
-                wait_ms = await ws_throttle(websocket)
+                await ws_throttle(websocket)
                 # If throttled, break immediately (since the handler closed the connection)
                 # If not, the next `send_text(...)` will raise a runtime error.
-                if wait_ms or is_throttled(websocket):
+                if is_throttled(websocket):
                     break
 
                 await websocket.send_text(f"Echo: {data}")

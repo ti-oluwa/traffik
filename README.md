@@ -355,8 +355,8 @@ async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     while True:
         data = await websocket.receive_text()
-        wait_ms = await ws_throttle.hit(websocket, context={"scope": "message"}) # Per message level
-        if wait_ms or is_throttled(websocket):
+        await ws_throttle.hit(websocket, context={"scope": "message"}) # Per message level
+        if is_throttled(websocket):
             # The default throttled handler already sent a *throttled* frame to the client
             # You can override that behaviour if you need something custom.
             continue
@@ -382,7 +382,7 @@ Return the `EXEMPTED` sentinel to let specific connections through unconditional
 from traffik.types import EXEMPTED
 
 async def identifier(request: Request):
-    if request.headers.get("X-Internal-Token") == SECRET:
+    if await is_internal(request.headers.get("X-Internal-Token")):
         return EXEMPTED
     return request.client.host
 ```

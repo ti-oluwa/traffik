@@ -386,7 +386,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
             if should_apply:
                 if self.is_nested:
-                    self._merge_into_parent(mark_as_consumed=True)
+                    self.merge()
                 else:
                     await self.apply()
             return None
@@ -803,6 +803,41 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         for entry in self._queue:
             await self._hit(entry)
         self._consumed = True
+
+        # Detach from parent so it stops being double-counted / referenced
+        if (
+            self.is_nested and id(self) in self.parent._children  # type: ignore[union-attr]
+        ):
+            self.parent._children.pop(id(self), None)  # type: ignore[union-attr]
+            self._queue.clear()  # Optional, but keeps `queued_cost` honest post-apply
+            self._queued_cost = 0
+
+    def merge(self) -> None:
+        """
+        Merge this context's queued entries into its parent, without consuming.
+
+        This is the deferred counterpart to `apply()`. Entries stay queued and
+        nothing is hit against the backend here. They simply become the
+        parent's responsibility. The parent (or whichever ancestor eventually
+        applies) will consume them, still in order, still aggregated with
+        matching entries.
+
+        This context is marked consumed once merged (its own queue should not
+        be touched or inspected afterward), and it detaches from the parent's
+        bookkeeping.
+
+        :raises `QuotaError`: If this context has no parent (nothing to merge into).
+        :raises `QuotaCancelledError`: If this context was cancelled.
+        :raises `QuotaAppliedError`: If this context was already applied/merged.
+        """
+        if self.parent is None:
+            raise QuotaError("Cannot merge a context with no parent")
+        if self._cancelled:
+            raise QuotaCancelledError("Cannot merge a cancelled quota context")
+        if self._consumed:
+            raise QuotaAppliedError("Quota context has already been applied/merged")
+
+        self._merge_into_parent(mark_as_consumed=True)
 
     async def cancel(self) -> None:
         """

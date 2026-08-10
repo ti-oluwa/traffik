@@ -18,7 +18,7 @@ from traffik.exceptions import (
     _build_exception_handler_getter,
 )
 from traffik.registry import Rule
-from traffik.throttles import Throttle
+from traffik.throttles.base import Throttle
 from traffik.typing import (
     ExceptionHandler,
     HTTPConnectionT,
@@ -368,7 +368,7 @@ def _prep_throttles(
 
 class ThrottleMiddleware:
     """
-    Traffik ASGI middleware.
+    Traffik ASGI middleware._predicate_takes_context
 
     This middleware processes incoming HTTP connections and applies throttles based on
     the provided `MiddlewareThrottle` instances. It integrates with throttle backends
@@ -487,10 +487,10 @@ class ThrottleMiddleware:
         :param receive: The receive function for incoming messages.
         :param send: The send function for outgoing messages.
         """
-        typ = scope["type"]
-        if typ == "http":
+        connection_type = scope["type"]
+        if connection_type == "http":
             connection = HTTPConnection(scope)
-        elif typ == "websocket":
+        elif connection_type == "websocket":
             connection = WebSocket(scope, receive, send)
         else:
             # Ignore unsupported connection types and pass through
@@ -517,7 +517,7 @@ class ThrottleMiddleware:
             # We can now say the backend is OK after a successful context entry
             self._backend_ok = True
             context = self.context
-            for throttle in self.middleware_throttles[typ]:
+            for throttle in self.middleware_throttles[connection_type]:
                 try:
                     connection = await throttle.hit(
                         connection,  # type: ignore[arg-type]

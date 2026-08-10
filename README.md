@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="Traffik Logo" width="200">
+  <img src="docs/assets/logo.svg" alt="Traffik Logo" width="150">
 </p>
 
 <h1 align="center">Traffik</h1>
@@ -263,7 +263,7 @@ Rate limit application and definition may differ by context and based on the way
 
 ### FastAPI dependency
 
-You can use throttles as dependencies on your routes:
+You can use throttles as dependencies on your routers:
 
 ```python
 router = APIRouter(dependencies=[Depends(throttle)])
@@ -311,7 +311,7 @@ async def upload(request: Request):
     ...
 ```
 
-> Note that the decorators are imported from different path. The FastAPI specific decorator uses dependency injection under the hood, while the ones used for Starlette is a regular wrapper decorator and can be use for both Starlette and FastAPI.
+> Note that the decorators are imported from different paths. The FastAPI specific decorator uses dependency injection under the hood, while the ones used for Starlette is a regular wrapper decorator and can be use for both Starlette and FastAPI.
 
 ### Middleware (blanket rules across routes)
 
@@ -346,16 +346,32 @@ app.add_middleware(
 Yes, Traffik supports rate limiting websockets both at connection level and at per message level
 
 ```python
+import typing
+from fastapi import FastAPI, WebSocket, Depends
 from traffik.throttles import WebSocketThrottle, is_throttled
 
-ws_throttle = WebSocketThrottle("ws:messages", rate="30/min")
+async def rate_func(connection: WebSocket, context: typing.Optional[typing.Dict[str, typing.Any]] = None) -> str:
+    # Here we have different rate for the default connection and per message level.
+    scope = context.get("scope") if context else None
+    if scope == "ws:default":
+        return "10/min"
+    elif scope == "ws:message":
+        return "30/min"
+    return "5/min"
 
-@app.websocket("/ws", dependencies=[Depends(ws_throttle)]) # Connection level
+ws_throttle = WebSocketThrottle(
+    "ws:messages", 
+    rate=rate_func, 
+    context={"scope": "ws:default"}
+)
+
+@app.websocket("/ws", dependencies=[Depends(ws_throttle)]) # Connection level. Uses `ws:default` context 
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     while True:
         data = await websocket.receive_text()
-        await ws_throttle.hit(websocket, context={"scope": "message"}) # Per message level
+        # Per message level. Uses `ws:message` context.
+        await ws_throttle.hit(websocket, context={"scope": "ws:message"}) 
         if is_throttled(websocket):
             # The default throttled handler already sent a *throttled* frame to the client
             # You can override that behaviour if you need something custom.
@@ -523,7 +539,7 @@ After 5 consecutive Redis failures, the circuit opens and new requests fall back
 in-memory immediately, no waiting on a timeout. It half-opens after 30 seconds, lets one
 probe request through, and closes again on success.
 
-For transient errors you can use th `retry` handler:
+For transient errors you can use the `retry` handler:
 
 ```python
 from traffik.error_handlers import retry
@@ -537,7 +553,7 @@ throttle = HTTPThrottle(
 
 ## Dynamic backends (multi-tenant)
 
-With Traffik, you can route different requests, clients, or even tenants to different backends at runtime, without having to define a unique throttles per case. Here's a simple example below. You can refer to the main documentation, implementaion docstrings or even look at the library's tests for more info on usage.
+With Traffik, you can route different requests, clients, or even tenants to different backends at runtime, without having to define a unique throttles per case. Here's a simple example below. You can refer to the main documentation, implementation docstrings or even look at the library's tests for more info on usage.
 
 ```python
 throttle = HTTPThrottle("api", rate="100/min", dynamic_backend=True)

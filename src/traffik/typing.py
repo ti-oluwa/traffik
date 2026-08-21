@@ -107,7 +107,7 @@ ConnectionIdentifier = typing.Callable[
 """Type definition for connection identifier functions."""
 
 ConnectionThrottledHandler = typing.Callable[
-    [HTTPConnectionTcon, WaitPeriod, T, typing.Dict[str, typing.Any]],
+    [HTTPConnectionTcon, WaitPeriod, T, dict[str, typing.Any]],
     typing.Awaitable[typing.Any],
 ]
 """
@@ -118,12 +118,12 @@ Returns an awaitable response.
 """
 
 RateFunc = typing.Callable[
-    [HTTPConnectionT, typing.Optional[typing.Dict[str, typing.Any]]],
+    [HTTPConnectionT, typing.Optional[dict[str, typing.Any]]],
     typing.Awaitable[Rate],
 ]
 """Type definition for a rate function."""
 CostFunc = typing.Callable[
-    [HTTPConnectionT, typing.Optional[typing.Dict[str, typing.Any]]],
+    [HTTPConnectionT, typing.Optional[dict[str, typing.Any]]],
     typing.Awaitable[int],
 ]
 """Type definition for a cost function."""
@@ -175,8 +175,8 @@ class _ExceptionInfo(TypedDict):
 
 
 RetryOn = typing.Union[
-    typing.Type[BaseException],
-    typing.Tuple[typing.Type[BaseException], ...],
+    type[BaseException],
+    tuple[type[BaseException], ...],
     typing.Callable[
         [_ExceptionInfo],
         typing.Union[bool, typing.Awaitable[bool]],
@@ -191,9 +191,7 @@ Can be either:
 - A callable that takes (connection, exception, cost, context, attempt) and returns bool
 """
 
-ApplyOnError = typing.Union[
-    bool, typing.Type[BaseException], typing.Tuple[typing.Type[BaseException], ...]
-]
+ApplyOnError = typing.Union[bool, type[BaseException], tuple[type[BaseException], ...]]
 """
 Type definition for applying throttles on error.
 

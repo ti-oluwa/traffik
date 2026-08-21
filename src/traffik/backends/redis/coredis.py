@@ -320,7 +320,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
     ```
     """
 
-    wrap_methods: typing.Tuple[str, ...] = ("clear",)
+    wrap_methods: tuple[str, ...] = ("clear",)
 
     INCREMENT_WITH_TTL_SCRIPT: typing.ClassVar[str] = _INCREMENT_WITH_TTL_SCRIPT
     """Lua script for atomic increment with TTL on first creation."""
@@ -333,9 +333,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             str,
             _AnyRedis,
             Sentinel,
-            typing.Sequence[
-                typing.Union[TCPLocation, typing.Dict[str, typing.Any], Node]
-            ],
+            typing.Sequence[typing.Union[TCPLocation, dict[str, typing.Any], Node]],
             typing.Callable[[], typing.Awaitable[_AnyRedis]],
         ],
         *,
@@ -414,8 +412,8 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         self._raw_connection = connection
         self._sentinel_service_name = sentinel_service_name
         self._sentinel_stream_timeout = sentinel_stream_timeout
-        self._cluster_kwargs: typing.Dict[str, typing.Any] = dict(cluster_kwargs or {})
-        self._url_kwargs: typing.Dict[str, typing.Any] = dict(url_kwargs or {})
+        self._cluster_kwargs: dict[str, typing.Any] = dict(cluster_kwargs or {})
+        self._url_kwargs: dict[str, typing.Any] = dict(url_kwargs or {})
         self._lock_sleep = lock_sleep
         self._is_cluster: bool = False
 
@@ -461,7 +459,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
                     "`sentinel_service_name` is required when using a `Sentinel` connection."
                 )
 
-            kwargs: typing.Dict[str, typing.Any] = {"decode_responses": True}
+            kwargs: dict[str, typing.Any] = {"decode_responses": True}
             if self._sentinel_stream_timeout is not None:
                 kwargs["stream_timeout"] = self._sentinel_stream_timeout
             self._owns_connection = False
@@ -647,7 +645,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         )
         return int(result)  # type: ignore[arg-type]
 
-    async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
+    async def multi_get(self, *keys: str) -> list[typing.Optional[str]]:
         """
         Retrieve multiple keys in a single `MGET` command.
 

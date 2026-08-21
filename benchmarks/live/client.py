@@ -6,8 +6,8 @@ import typing
 import httpx2
 import websockets
 
-Headers = typing.Optional[typing.Dict[str, str]]
-SendResult = typing.Tuple[typing.List[float], int, int, int]
+Headers = typing.Optional[dict[str, str]]
+SendResult = tuple[list[float], int, int, int]
 # latencies, ok, throttled, error
 
 
@@ -38,7 +38,7 @@ def make_http_client(
 
 async def make_request(
     client: httpx2.AsyncClient, path: str, headers: Headers
-) -> typing.Tuple[float, int]:
+) -> tuple[float, int]:
     try:
         start = time.perf_counter()
         response = await client.get(path, headers=headers)
@@ -49,8 +49,8 @@ async def make_request(
 
 
 def tally(
-    latency: float, status_code: int, latencies: typing.List[float]
-) -> typing.Tuple[int, int, int]:
+    latency: float, status_code: int, latencies: list[float]
+) -> tuple[int, int, int]:
     if latency > 0:
         latencies.append(latency)
     if status_code == 200:
@@ -72,7 +72,7 @@ async def send_sequential(
 
     :return: `(latencies_seconds, successful, throttled, errors)`.
     """
-    latencies: typing.List[float] = []
+    latencies: list[float] = []
     successful = throttled = errors = 0
 
     for _ in range(n):
@@ -106,14 +106,14 @@ async def send_concurrent(
         `key_header` is set.
     :return: `(latencies_seconds, successful, throttled, errors)`.
     """
-    latencies: typing.List[float] = []
+    latencies: list[float] = []
     successful = throttled = errors = 0
     num_batches = (n + concurrency - 1) // concurrency
 
     for batch_idx in range(num_batches):
         batch_size = min(concurrency, n - batch_idx * concurrency)
 
-        async def _request(index: int) -> typing.Tuple[float, int]:
+        async def _request(index: int) -> tuple[float, int]:
             request_headers = dict(headers or {})
             if key_header and key_mod:
                 request_headers[key_header] = f"user-{index % key_mod}"
@@ -135,7 +135,7 @@ async def send_concurrent(
 
 async def send_waves(
     client: httpx2.AsyncClient,
-    waves: typing.Sequence[typing.Tuple[int, float]],
+    waves: typing.Sequence[tuple[int, float]],
     path: str = "/test",
     headers: Headers = None,
 ) -> SendResult:
@@ -146,7 +146,7 @@ async def send_waves(
     :param waves: `[(requests_in_wave, seconds_to_sleep_after), ...]`.
     :return: `(latencies_seconds, successful, throttled, errors)`.
     """
-    all_latencies: typing.List[float] = []
+    all_latencies: list[float] = []
     total_successful = total_throttled = total_errors = 0
 
     for i, (count, sleep_after) in enumerate(waves):
@@ -169,7 +169,7 @@ async def send_waves(
 
 async def ws_send_messages(
     uri: str, n: int, connect_timeout: float = 10.0
-) -> typing.Tuple[typing.List[float], int, int]:
+) -> tuple[list[float], int, int]:
     """
     Open one real WebSocket connection and send `n` JSON messages
     sequentially over it, timing each round trip.
@@ -178,7 +178,7 @@ async def ws_send_messages(
     :param n: Number of messages to send.
     :return: `(latencies_seconds, successful, throttled)`.
     """
-    latencies: typing.List[float] = []
+    latencies: list[float] = []
     successful = throttled = 0
 
     async with websockets.connect(uri, open_timeout=connect_timeout) as ws:
@@ -203,9 +203,9 @@ async def ws_send_messages(
 
 async def ws_send_waves(
     uri: str,
-    waves: typing.Sequence[typing.Tuple[int, float]],
+    waves: typing.Sequence[tuple[int, float]],
     connect_timeout: float = 10.0,
-) -> typing.Tuple[typing.List[float], int, int]:
+) -> tuple[list[float], int, int]:
     """
     Open one real WebSocket connection and send several waves of messages
     over it, sleeping between waves - for window-boundary scenarios.
@@ -215,7 +215,7 @@ async def ws_send_waves(
     :return: `(latencies_seconds, successful, throttled)`.
     """
 
-    all_latencies: typing.List[float] = []
+    all_latencies: list[float] = []
     total_successful = total_throttled = 0
 
     async with websockets.connect(uri, open_timeout=connect_timeout) as ws:
@@ -247,7 +247,7 @@ async def ws_concurrent_connections(
     connections: int,
     messages_per_connection: int,
     connect_timeout: float = 10.0,
-) -> typing.Tuple[typing.List[float], int, int]:
+) -> tuple[list[float], int, int]:
     """
     Open several real, concurrent WebSocket connections, each sending
     `messages_per_connection` sequential messages.
@@ -259,7 +259,7 @@ async def ws_concurrent_connections(
         all connections.
     """
 
-    async def _one_connection() -> typing.Tuple[typing.List[float], int, int]:
+    async def _one_connection() -> tuple[list[float], int, int]:
         try:
             return await ws_send_messages(
                 uri, messages_per_connection, connect_timeout=connect_timeout
@@ -269,7 +269,7 @@ async def ws_concurrent_connections(
 
     results = await asyncio.gather(*[_one_connection() for _ in range(connections)])
 
-    all_latencies: typing.List[float] = []
+    all_latencies: list[float] = []
     total_successful = total_throttled = 0
     for latencies, successful, throttled in results:
         all_latencies.extend(latencies)

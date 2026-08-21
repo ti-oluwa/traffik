@@ -18,7 +18,7 @@ from traffik.exceptions import (
     _build_exception_handler_getter,
 )
 from traffik.registry import Rule
-from traffik.throttles import Throttle
+from traffik.throttles.base import Throttle
 from traffik.typing import (
     ExceptionHandler,
     HTTPConnectionT,
@@ -164,7 +164,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             )
 
     @property
-    def connection_type(self) -> typing.Type[HTTPConnection]:
+    def connection_type(self) -> type[HTTPConnection]:
         return self.throttle.connection_type
 
     async def hit(
@@ -303,9 +303,7 @@ def _prep_throttles(
     sort: _SortThrottles = "cheap_first",
 ) -> typing.Mapping[
     typing.Literal["http", "websocket"],
-    typing.List[
-        typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]
-    ],
+    list[typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]],
 ]:
     """
     Prepare throttles by sorting them based on their cost and categorizing by connection type.
@@ -344,9 +342,9 @@ def _prep_throttles(
             f"Invalid value for `sort`: {sort}. Must be 'cheap_first', 'cheap_last', False, None, or a callable."
         )
 
-    categorized: typing.Dict[
+    categorized: dict[
         typing.Literal["http", "websocket"],
-        typing.List[
+        list[
             typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]
         ],
     ] = {
@@ -368,7 +366,7 @@ def _prep_throttles(
 
 class ThrottleMiddleware:
     """
-    Traffik ASGI middleware.
+    Traffik ASGI middleware._predicate_takes_context
 
     This middleware processes incoming HTTP connections and applies throttles based on
     the provided `MiddlewareThrottle` instances. It integrates with throttle backends
@@ -487,10 +485,10 @@ class ThrottleMiddleware:
         :param receive: The receive function for incoming messages.
         :param send: The send function for outgoing messages.
         """
-        typ = scope["type"]
-        if typ == "http":
+        connection_type = scope["type"]
+        if connection_type == "http":
             connection = HTTPConnection(scope)
-        elif typ == "websocket":
+        elif connection_type == "websocket":
             connection = WebSocket(scope, receive, send)
         else:
             # Ignore unsupported connection types and pass through
@@ -517,7 +515,7 @@ class ThrottleMiddleware:
             # We can now say the backend is OK after a successful context entry
             self._backend_ok = True
             context = self.context
-            for throttle in self.middleware_throttles[typ]:
+            for throttle in self.middleware_throttles[connection_type]:
                 try:
                     connection = await throttle.hit(
                         connection,  # type: ignore[arg-type]

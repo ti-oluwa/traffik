@@ -3,8 +3,6 @@ Tests for `dynamic_backend=True` throttles i.e, backend resolved from context at
 call time instead of being fixed on the throttle instance.
 """
 
-import typing
-
 import pytest
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -29,7 +27,7 @@ from traffik.throttles import HTTPThrottle, Throttle
 @pytest.mark.anyio
 async def test_dynamic_backend_resolves_from_context(
     inmemory_backend: InMemoryBackend,
-    throttle_type: typing.Type[Throttle[HTTPConnection]],
+    throttle_type: type[Throttle[HTTPConnection]],
 ) -> None:
     """
     A `dynamic_backend=True` throttle:

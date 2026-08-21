@@ -29,7 +29,7 @@ def _build_env(
     uid: str,
     on_error: str,
     backend_kind: typing.Optional[str] = None,
-) -> typing.Dict[str, str]:
+) -> dict[str, str]:
     """Environment variables a `benchmarks.apps.*` module reads at import time."""
     run_id = uuid.uuid4().hex[:8]
     return {
@@ -62,13 +62,13 @@ def _maybe_warn_unshared_state(config: BenchmarkConfig) -> None:
 
 async def run_http_scenarios(
     config: BenchmarkConfig,
-    scenario_keys: typing.List[str],
+    scenario_keys: list[str],
     warmup_iterations: int,
-    scenarios: typing.Dict[str, HttpScenario],
+    scenarios: dict[str, HttpScenario],
     app_path: str,
     *,
     forced_backend_kind: typing.Optional[str] = None,
-) -> typing.List[AggregatedResult]:
+) -> list[AggregatedResult]:
     """
     Run each selected HTTP/middleware/multiprocess scenario as a real
     subprocess-backed benchmark.
@@ -84,7 +84,7 @@ async def run_http_scenarios(
     :return: One `AggregatedResult` per successfully-run scenario.
     """
     _maybe_warn_unshared_state(config)
-    results: typing.List[AggregatedResult] = []
+    results: list[AggregatedResult] = []
 
     for scenario_key in scenario_keys:
         if scenario_key not in scenarios:
@@ -109,7 +109,7 @@ async def run_http_scenarios(
             )
             continue
 
-        scenario_results: typing.List[ScenarioResult] = []
+        scenario_results: list[ScenarioResult] = []
         try:
             async with live_client.make_http_client(
                 server.base_url, concurrency=config.concurrency
@@ -161,11 +161,11 @@ async def run_http_scenarios(
 
 async def run_websocket_scenarios(
     config: BenchmarkConfig,
-    scenario_keys: typing.List[str],
+    scenario_keys: list[str],
     warmup_iterations: int,
-    scenarios: typing.Dict[str, WebSocketScenario],
+    scenarios: dict[str, WebSocketScenario],
     app_path: str,
-) -> typing.List[AggregatedResult]:
+) -> list[AggregatedResult]:
     """
     Run each selected WebSocket scenario as a real subprocess-backed
     benchmark, driven by real WebSocket connections.
@@ -178,7 +178,7 @@ async def run_websocket_scenarios(
     :return: One `AggregatedResult` per successfully-run scenario.
     """
     _maybe_warn_unshared_state(config)
-    results: typing.List[AggregatedResult] = []
+    results: list[AggregatedResult] = []
 
     for scenario_key in scenario_keys:
         if scenario_key not in scenarios:
@@ -203,7 +203,7 @@ async def run_websocket_scenarios(
             continue
 
         ws_url = f"{server.ws_base_url}/ws"
-        scenario_results: typing.List[ScenarioResult] = []
+        scenario_results: list[ScenarioResult] = []
         try:
             async with live_client.make_http_client(server.base_url) as http_client:
                 print(f"Running warmup for {scenario_key}...", file=sys.stderr)

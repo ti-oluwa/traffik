@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="Traffik Logo" width="200">
+  <img src="docs/assets/logo.svg" alt="Traffik Logo" width="150">
 </p>
 
 <h1 align="center">Traffik</h1>
@@ -16,12 +16,11 @@
 Traffik is a rate limiting library for Starlette applications. With Traffik, you can write the throttle/limit once,
 point it at whatever you want to use as storage and it just works. Traffik also support dependency injection in FastAPI.
 
-By default, throttles use the in-memory storage - which you can keep while you're developing. Switch to Redis or Memcached once you need to share state across processes, especially for production or live setups.
+By default, throttles use the in-memory storage - which you can keep while you're developing. You can then switch to Redis or Memcached once you need to share state across processes, and especially for production or live setups.
 
-This started as a "I need to rate limit an API" project, and grew into a fairly complete (may be over-engineered) toolkit for it.
+Well, this started as a "I need to rate limit an API" project, and grew into a fairly complete (may be over-engineered) toolkit for it.
 
-The core API (fixed window, sliding window, token bucket, a couple of backends) covers what
-you'll mostly need. However, there's more options to choose from if you want it.
+The core API (fixed window, sliding window, token bucket, a couple of backends) covers what you'll mostly need. However, there are more options to choose from if you want it.
 
 ```bash
 pip install traffik
@@ -88,12 +87,12 @@ and your real limit pere request becomes `configured_limit × worker_count`.
 
 ### Multi-process shared memory backend - multiple workers, one machine
 
-> EXPERIMENTAL! This is a non-conventional one and still requires a lot of testing to prove its stability. It may be removed in future releases. This only works on UNIX platforms with `"fork"` process start method.
+> [!WARNING]
+> EXPERIMENTAL! This is a unconventional one and still requires a lot of production testing to prove its stability, although the library contains detailed coverage for it. It may be removed in future releases. This only works on UNIX platforms with `"fork"` process start method.
 
-If you're running gunicorn/uvicorn with several workers on a single box and don't want
-to stand up Redis just to get accurate counts across them then you can try out this backend.
+If you're running gunicorn/uvicorn with several workers on a single box and don't want to setup up Redis just to get accurate counts across them then you can try out this backend.
 
-I must say, setup may be trickier than other backends as it relies on process forking. Also context usage is constrained. You cannot use a closing context (`close_on_exit=True`) within the application with this one. Although, it is permitted at lifespan (outermost) level
+I must say, setup may be a little hands-on than other backends as it relies on process forking. Also context usage is constrained. You cannot use a closing context (`close_on_exit=True`) within the application with this one. Although, it is permitted at lifespan (outermost) level
 
 ```python
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
@@ -190,7 +189,7 @@ backend = MemcachedBackend(
 )
 ```
 
-This one has Rendezvous hashing across nodes, adaptive connection pool, and has better overall throughput than `aiomcache`, although it is Linux/macOS only.
+This one uses Rendezvous hashing across nodes, adaptive connection pool, and claims to have better overall throughput than `aiomcache`, although it is Linux/macOS only.
 
 In summary, the required dependencies are;
 
@@ -225,11 +224,9 @@ from traffik.strategies import (
 throttle = HTTPThrottle("api", rate="100/min", strategy=SlidingWindowCounter())
 ```
 
-When initializing a throttle, you can skip the throttle's `strategy` argument and it uses `FixedWindow` by default. It is the cheapest one, and works correctl for most APIs. It is also the only strategy that never needs a lock, so it is
-fast on every backend, including the ones where locking gets expensive (see [Performance](#performance)).
+When initializing a throttle, you can skip the throttle's `strategy` argument and it uses `FixedWindow` by default. It is the cheapest one, and works correctly for most APIs. It is also the only strategy that never needs a lock (atleast for the common cases), so it is fast on every backend, including the ones where locking gets expensive (see [Performance](#performance)).
 
-Use `SlidingWindowCounter` if you encounter boundary bursts in practice, `TokenBucket` if you want to allow short bursts on top of a sustained rate, `GCRA` if you need genuinely even request spacing (think telecom-style
-SLAs, not "please don't hammer my API").
+Use `SlidingWindowCounter` if you encounter boundary bursts in practice, `TokenBucket` if you want to allow short bursts on top of a sustained rate, `GCRA` if you need genuinely even request spacing (e.g, think telecom-style SLAs).
 
 ### Advanced strategies
 
@@ -239,8 +236,7 @@ Other bespoke strategies available are in `traffik.strategies.custom`.
 `AdaptiveThrottleStrategy`, `PriorityQueueStrategy`, `QuotaWithRolloverStrategy`,
 `TimeOfDayStrategy`, `CostBasedTokenBucketStrategy`.
 
-Honestly, these exist because the problems were interesting to solve, not because most APIs need them. Per-tier limits, load-adaptive throttling, are real problems, bit just not *your* problem most of the time. Each has its own docs and example in the [full documentation](https://ti-oluwa.github.io/traffik/) if one of these genuinely
-matches something you're dealing with.
+Honestly, these exist because the problems were interesting to solve, not because most APIs need them. Per-tier limits, load-adaptive throttling, are real problems, but may just not be your problem most of the time. Each has its own docs and example in the [full documentation](https://ti-oluwa.github.io/traffik/) if one of these genuinely matches something you're dealing with.
 
 ## Rate formats
 
@@ -248,7 +244,7 @@ Traffik permits you to specify your rate limits in various string format, the mo
 
 ```python
 "100/min"      # 100 per minute
-"5/s"          # 5 per second
+"5 per second"  
 "10/30s"       # 10 per 30 seconds
 "1000/hour"
 "500/day"
@@ -263,7 +259,7 @@ Rate limit application and definition may differ by context and based on the way
 
 ### FastAPI dependency
 
-You can use throttles as dependencies on your routes:
+You can use throttles as dependencies on your routers:
 
 ```python
 router = APIRouter(dependencies=[Depends(throttle)])
@@ -311,7 +307,7 @@ async def upload(request: Request):
     ...
 ```
 
-> Note that the decorators are imported from different path. The FastAPI specific decorator uses dependency injection under the hood, while the ones used for Starlette is a regular wrapper decorator and can be use for both Starlette and FastAPI.
+> Note that the decorators are imported from different paths. The FastAPI specific decorator uses dependency injection under the hood, while the ones used for Starlette is a regular wrapper decorator and can be use for both Starlette and FastAPI.
 
 ### Middleware (blanket rules across routes)
 
@@ -343,19 +339,35 @@ app.add_middleware(
 
 ### WebSockets
 
-Yes, Traffik supports rate limiting websockets both at connection level and at per message level
+Traffik supports rate limiting websockets both at connection level and at per message level. You can either create separate throttles for them, or use the context `"scope"` to determine what level, and how to throttle.
 
 ```python
+import typing
+from fastapi import FastAPI, WebSocket, Depends
 from traffik.throttles import WebSocketThrottle, is_throttled
 
-ws_throttle = WebSocketThrottle("ws:messages", rate="30/min")
+async def rate_func(connection: WebSocket, context: typing.Optional[typing.Dict[str, typing.Any]] = None) -> str:
+    # Here we have different rate for the default connection and per message level.
+    scope = context.get("scope") if context else None
+    if scope == "ws:default":
+        return "10/min"
+    elif scope == "ws:message":
+        return "30/min"
+    return "5/min"
 
-@app.websocket("/ws", dependencies=[Depends(ws_throttle)]) # Connection level
+ws_throttle = WebSocketThrottle(
+    "ws:messages", 
+    rate=rate_func, 
+    context={"scope": "ws:default"}
+)
+
+@app.websocket("/ws", dependencies=[Depends(ws_throttle)]) # Connection level. Uses `ws:default` context 
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     while True:
         data = await websocket.receive_text()
-        await ws_throttle.hit(websocket, context={"scope": "message"}) # Per message level
+        # Per message level. Uses `ws:message` context.
+        await ws_throttle.hit(websocket, context={"scope": "ws:message"}) 
         if is_throttled(websocket):
             # The default throttled handler already sent a *throttled* frame to the client
             # You can override that behaviour if you need something custom.
@@ -389,7 +401,7 @@ async def identifier(request: Request):
 
 ## Cost-based throttling
 
-Not all requests should count the same. Yes. You can specify cost per request or provide a function to compute it at runtime based on request info.
+Not all requests count the same. You can specify cost per request or provide a function to compute it at runtime based on request or context info.
 
 ```python
 async def request_cost(request: Request, context=None) -> int:
@@ -488,7 +500,9 @@ async with throttle.quota(request) as quota:
 
 ## Error handling and resilience
 
-Errors occur always at runtime when processing requests. The throttling path is also prone to errors sometimes. Redis backend may hiccup due to temporary Redis unavailability. That raises the question, "What happens when the backend itself fails?". You can provide an error handler to handle these type of errors. The default handlers allow the throttle to fail open or close intelligently or switch to a fallback/backup backend temporarily until the main backend recovers. You could even switch backends permanently. Custom error handlers are also supported if you need one.
+Errors occur always at runtime when processing requests. The throttling path is also prone to errors sometimes. Redis backend may hiccup due to temporary Redis unavailability. That raises the question, "What happens when the backend itself fails?".
+
+You can provide an error handler to handle these type of errors. The default handlers allow the throttle to fail open or close intelligently or switch to a fallback/backup backend temporarily until the main backend recovers. You could even switch backends permanently. Custom error handlers are also supported if you need one.
 
 Example:
 
@@ -519,11 +533,9 @@ throttle = HTTPThrottle(
 )
 ```
 
-After 5 consecutive Redis failures, the circuit opens and new requests fall back to
-in-memory immediately, no waiting on a timeout. It half-opens after 30 seconds, lets one
-probe request through, and closes again on success.
+After 5 consecutive Redis failures, the circuit opens and new requests fall back to in-memory immediately, no waiting on a timeout. It half-opens after 30 seconds, lets one probe request through, and closes again on success.
 
-For transient errors you can use th `retry` handler:
+For transient errors you can use the `retry` handler:
 
 ```python
 from traffik.error_handlers import retry
@@ -537,7 +549,7 @@ throttle = HTTPThrottle(
 
 ## Dynamic backends (multi-tenant)
 
-With Traffik, you can route different requests, clients, or even tenants to different backends at runtime, without having to define a unique throttles per case. Here's a simple example below. You can refer to the main documentation, implementaion docstrings or even look at the library's tests for more info on usage.
+With Traffik, you can route different requests, clients, or even tenants to different backends at runtime, without having to define a unique throttles per case. Here's a simple example below. You can refer to the main documentation, implementation docstrings or even look at the library's tests for more info on usage.
 
 ```python
 throttle = HTTPThrottle("api", rate="100/min", dynamic_backend=True)
@@ -550,8 +562,8 @@ async def data(request: Request):
     # Goes back to global backend on context exit
 ```
 
-This adds roughly 1–20ms of backend-resolution overhead per request though - just something to note. Use an explicit
-`backend=` instead, or leave it unset, if you don't actually need per-case backend routing and context switching.
+> [!NOTE]
+> This adds roughly 1–20ms of backend-resolution overhead per request though - just something to note. Use an explicit `backend=` instead, or leave it unset, if you don't actually need per-case backend routing and context switching.
 
 ## Runtime updates
 
@@ -594,33 +606,20 @@ if not await throttle.check(request, cost=5):
 Two things determine your actual overhead, and they are not necessarily coupled. They are; the backend
 you pick, and the strategy you pick.
 
-The **Backend** chosen decides your baseline cost. In-memory has no network or IPC involved. You get sub-
-millisecond backend ops. Redis and Memcached are dominated by the round trip to wherever
-those services live, not by anything Traffik itself is doing. Multi-process shared
-memory skips the network entirely, but that's not a free lunch either.
+The **Backend** chosen decides your baseline cost. In-memory has no network or IPC involved. You get sub-millisecond backend ops. Redis and Memcached are dominated by the round trip to wherever those services live, not by anything Traffik itself is doing. Multi-process shared memory skips the network entirely, but that's not a free lunch either.
 
-Your **Strategy** decides whether you pay a locking tax on top of that baseline.
-`FixedWindow` (`GCRA` too) does one atomic increment and never takes a lock and is therefore cheap on every backend,
-including the ones where locking is expensive. `TokenBucket` and anything else that
-needs to read state, do math, and write it back *has* to hold a lock across all three
-steps, or two concurrent requests can both read "3 tokens left" and both spend one and then record "two tokens left",
-which quietly breaks your rate limit. It is not a bug, it is the correctness costs we have to pay for
-those types of algorithms. However, that means the backend you would otherwise pick on gut feel can
-behave differently once a distributed lock is involved.
+Your **Strategy** decides whether you pay a locking tax on top of that baseline. `FixedWindow` (`GCRA` too) does one atomic increment and never takes a lock and is therefore cheap on every backend, including the ones where locking is expensive. `TokenBucket` and anything else that needs to read state, do math, and write it back *has* to hold a lock across all three steps, or two concurrent requests can both read "3 tokens left" and both spend one and then record "two tokens left", which quietly breaks your rate limit. This is not a bug. It is the correctness costs we have to pay for those types of algorithms. However, that means the backend you would otherwise pick on gut feel can behave differently once a distributed lock is involved.
 
 **Multi process backend cavaet - Why it may not be better than just using Redis or Memcached.**
 
-The multi-process backend can get more expensive than you would normally expect.
-Every read and write has to hop through a thread pool (`run_in_executor`) because
-the underlying primitives are blocking, not async. `FixedWindow` pays that tax once per
-request. `TokenBucket` pays it twice - once for the read, once for the write, while
-holding a per-shard lock the whole time. Stack fifty concurrent requests on one hot key
-and that adds up fast. Hence, you need to avoid hot keys with this backend.
+The multi-process backend can get more expensive than you would normally expect. Every read and write has to hop through a thread pool (`run_in_executor`) because the underlying primitives are blocking, not async. `FixedWindow` pays that tax once per request. `TokenBucket` pays it twice - once for the read, once for the write, while
+holding a per-shard lock the whole time. Load 50+ concurrent requests on one hot key and that adds up fast. Hence, you need to avoid single hot keys with this backend.
 
-Redis (local), despite paying real network round trips for the same **get-lock-read-write-unlock** sequence, ends up faster here, because a socket write to localhost is cheaper than a thread-pool handoff plus an OS semaphore under contention. Hosted Redis may perform simlar to or slightly better than the multi-process backend for this scenario.
-Not the result I'd have guessed either, and I believe it's a good reminder that "avoids the network" doesn't automatically mean "faster."
+Redis (local), despite paying real network round trips for the same **get-lock-read-write-unlock** sequence, may end up faster here especially if you host redis locally (although that's rarely the case). Because a socket write to localhost is cheaper than a thread-pool handoff plus an OS semaphore under contention. Hosted Redis may perform similar to or slightly worse than the multi-process backend for this scenario.
 
 None of this is something you should take on my word without checking. You can run benchmarks yourself, against your own traffic shape (key cardinality, concurrency, strategy).
+
+Another caveat of the multi-process backend is that you have to specify your expected load once, as it does the shared memory allocation once on startup. If the expected load exceeds what's configured, you get an error at runtime. Hence its best to set a fallback policy (say to a simple inmemory backend) even if you are sure the allocation configured cannot be exceed. Production loads can spike unexpectedly.
 
 ### Running the benchmarks
 
@@ -628,14 +627,13 @@ Traffik includes a simple bechmark suite for performance and correctness testing
 
 ```bash
 make install-bench   # pulls in the benchmark-only deps
-make bench http                                  # everything, defaults (in-memory, fixed window)
+make bench http      # everything, defaults (in-memory, fixed window)
 make bench "http --backend aioredis --strategy token_bucket"
 make bench "middleware --backend multiprocess"
 make bench "http --scenarios hot_key,many_keys -n 5"   # just these two, 5 iterations
 ```
 
-`make bench` forwards whatever you type after it straight to the CLI, so anything below
-works the same way with `make bench` in front instead of `uv run -m benchmarks`.
+`make bench` forwards whatever you type after it straight to the CLI, so anything below works the same way with `make bench` in front instead of `uv run -m benchmarks`.
 
 Or skip `make` and call the CLI directly:
 
@@ -646,29 +644,19 @@ uv run -m benchmarks middleware --backend multiprocess
 uv run -m benchmarks websocket --backend inmemory
 ```
 
-`--backend` is `inmemory` / `multiprocess` / `aioredis` / `coredis` / `aiomcache` /
-`emcache`. `--strategy` is any of the eight core strategies from
-[Strategies](#strategies) above, lowercased and snake_cased (`fixed_window`,
-`token_bucket`, `gcra`, ...). Redis/Memcached backends need the corresponding service
-running locally. `docker compose up -d redis memcached` handles that if you don't
-already have them.
+`--backend` is `inmemory` / `multiprocess` / `aioredis` / `coredis` / `aiomcache` / `emcache`. `--strategy` is any of the eight core strategies from [Strategies](#strategies) above, lowercased and snake_cased (`fixed_window`,`token_bucket`, `gcra`, ...). Redis/Memcached backends need the corresponding service running locally. `docker compose up -d redis memcached` handles that if you don't already have them.
 
-Results print as a table by default; pass `--output json` if you want to feed them into
-something else. `--concurrency` controls how wide the concurrent-scenario batches are
-(default 50), `-n`/`--iterations` controls how many timed runs you get per scenario
-(default 3, plus one discarded warmup run).
+Results print as a table by default; pass `--output json` if you want to feed them into something else. `--concurrency` controls how wide the concurrent-scenario batches are (default 50), `-n`/`--iterations` controls how many timed runs you get per scenario (default 3, plus one discarded warmup run).
 
 ## Full documentation
 
-[https://ti-oluwa.github.io/traffik/](https://ti-oluwa.github.io/traffik/) - Advanced
-strategies, WebSocket per-message throttling, testing patterns, full API reference.
-Everything that didn't fit here.
+[https://ti-oluwa.github.io/traffik/](https://ti-oluwa.github.io/traffik/) - Advanced strategies, WebSocket per-message throttling, testing patterns, full API reference. Everything that didn't fit here.
 
 ## Contributing
 
-Issues and PRs welcome. `make dev-setup` gets you a working dev environment,
-`make test-fast` for a quick sanity check before you push, `make quality` before you
-open a PR. See `CONTRIBUTING.md` for the actual details.
+Issues and PRs welcome. `make dev-setup` gets you a working dev environment, `make test-fast` for a quick sanity check before you push, `make quality` before you open a PR. See `CONTRIBUTING.md` for the actual details.
+
+Kindly give the project a star and/or recommendation if you found it useful. It helps make the project more visible and incentivizes people to contribute.
 
 ## License
 

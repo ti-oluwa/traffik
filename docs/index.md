@@ -98,9 +98,9 @@ Every backend operation, identifier resolution, and error handler is a coroutine
 
 `WebSocketThrottle` allows you enforce both connection-level gating (reject the handshake) and per-message throttling. When a client sends too many messages, Traffik sends a structured JSON notification by default instead of just killing the connection.
 
-**Robust and custome error handling.**
+**Robust and custom error handling.**
 
-Is your backend down because of a transient Redis error? You can choose how that scenario is handle. You can decide to let requests through (`on_error="allow"`), treat them as throttled (`"throttle"`, the default), raise it yourself (`"raise"`), wire up a circuit breaker with automatic failover to a secondary backend, or setup a custom failure recovery policy.
+Is your backend down because of a transient Redis error? You can choose how that scenario is handled. You can decide to let requests through (`on_error="allow"`), treat them as throttled (`"throttle"`, the default), raise it yourself (`"raise"`), wire up a circuit breaker with automatic failover to a secondary backend, or setup a custom failure recovery policy.
 
 **Identifiers are just async functions.**
 

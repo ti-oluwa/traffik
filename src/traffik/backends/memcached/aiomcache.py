@@ -723,7 +723,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[union-attr]
         return new_value  # type: ignore[return-value]
 
-    async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
+    async def multi_get(self, *keys: str) -> list[typing.Optional[str]]:
         """
         Batch get multiple keys.
 
@@ -736,7 +736,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
 
         encoded_keys = [k.encode() for k in keys]
         values = await self.connection.multi_get(*encoded_keys)  # type: ignore[union-attr]
-        results: typing.List[typing.Optional[str]] = []
+        results: list[typing.Optional[str]] = []
         for value in values:
             if value is not None:
                 results.append(value.decode())
@@ -817,7 +817,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             keys = tracked.decode().split("||")
             # Delete the tracking key itself finally (added as last key)
             keys.append(tracking_key)
-            tasks = [
+            tasks: list[asyncio.Task[bool]] = [
                 asyncio.create_task(self.connection.delete(key.encode()))  # type: ignore[arg-type,union-attr]
                 for key in keys
             ]

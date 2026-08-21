@@ -114,9 +114,9 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         self._allocated = 0
         self._lock = threading.RLock()
 
-        self._idle: typing.List[AsyncLockT] = []
+        self._idle: list[AsyncLockT] = []
         """Idle reusable lock instances."""
-        self._in_use: typing.Dict[str, typing.Tuple[AsyncLockT, int]] = {}
+        self._in_use: dict[str, tuple[AsyncLockT, int]] = {}
         """Mapping of in-use names to (lock, reference_count)"""
         self._closed = False
 
@@ -912,8 +912,8 @@ class _NamedGateRegistry:
             raise ValueError("`contention_threshold` must be at least 1.")
 
         self._contention_threshold = contention_threshold
-        self._gates: typing.Dict[str, asyncio.Lock] = {}
-        self._waiters: typing.Dict[str, int] = {}
+        self._gates: dict[str, asyncio.Lock] = {}
+        self._waiters: dict[str, int] = {}
         self._closed = False
         self._lock = threading.RLock()
 
@@ -1247,7 +1247,7 @@ class _NamedGateHandle:
 
     async def __aexit__(
         self,
-        exc_type: typing.Optional[typing.Type[BaseException]],
+        exc_type: typing.Optional[type[BaseException]],
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> None:
@@ -1441,7 +1441,7 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
 
     async def __aexit__(
         self,
-        exc_type: typing.Optional[typing.Type[BaseException]],
+        exc_type: typing.Optional[type[BaseException]],
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> None:

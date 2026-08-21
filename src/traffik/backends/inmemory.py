@@ -209,9 +209,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             raise ValueError("`number_of_shards` must be at least 1")
 
         self._number_of_shards = number_of_shards
-        self._shard_locks: typing.List[asyncio.Lock] = []
+        self._shard_locks: list[asyncio.Lock] = []
         """Locks for each shard to allow concurrent access."""
-        self._shards: typing.List[OrderedDict[str, typing.Any]] = []
+        self._shards: list[OrderedDict[str, typing.Any]] = []
         """In-memory storage shards."""
 
         self._lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
@@ -280,12 +280,12 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 "Connection error! Ensure backend is initialized."
             )
 
-    def _get_shard(self, key: str) -> typing.Tuple[int, asyncio.Lock, OrderedDict]:
+    def _get_shard(self, key: str) -> tuple[int, asyncio.Lock, OrderedDict]:
         """Get shard index, lock, and shard for a key."""
         shard_idx = hash(key) % self._number_of_shards
         return shard_idx, self._shard_locks[shard_idx], self._shards[shard_idx]
 
-    async def keys(self) -> typing.List[str]:
+    async def keys(self) -> list[str]:
         """Get all keys in the backend."""
         self._assert_ready()
 
@@ -519,7 +519,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             shard[key] = (str(new_value), expires_at)
             return new_value
 
-    async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
+    async def multi_get(self, *keys: str) -> list[typing.Optional[str]]:
         """
         Batch get all values retrieved atomically.
 
@@ -531,8 +531,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             return []
 
         # Group keys by shard
-        shard_keys: typing.Dict[int, typing.List[str]] = {}
-        key_to_shard: typing.Dict[str, int] = {}
+        shard_keys: dict[int, list[str]] = {}
+        key_to_shard: dict[str, int] = {}
 
         for key in keys:
             shard_idx, _, _ = self._get_shard(key)
@@ -542,7 +542,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             shard_keys[shard_idx].append(key)
 
         # Acquire locks in sorted order to prevent deadlocks
-        results: typing.Dict[str, typing.Optional[str]] = {}
+        results: dict[str, typing.Optional[str]] = {}
         now = monotonic()
 
         for shard_idx in sorted(shard_keys.keys()):
@@ -584,7 +584,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             return
 
         # Group items by shard
-        shard_items: typing.Dict[int, typing.List[typing.Tuple[str, str]]] = {}
+        shard_items: dict[int, list[tuple[str, str]]] = {}
         for key, value in items.items():
             shard_idx, _, _ = self._get_shard(key)
             if shard_idx not in shard_items:

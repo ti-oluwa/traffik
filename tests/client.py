@@ -382,7 +382,7 @@ class AsyncTestClient:
             port = default_port
 
         request_headers = dict(headers or {})
-        header_pairs: typing.List[typing.Tuple[bytes, bytes]] = []
+        header_pairs: list[tuple[bytes, bytes]] = []
         if "host" not in {k.lower() for k in request_headers}:
             if port == default_port:
                 header_pairs.append((b"host", connection_host.encode()))

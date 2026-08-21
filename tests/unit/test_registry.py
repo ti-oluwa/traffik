@@ -2,7 +2,6 @@
 
 import gc
 import re
-import typing
 
 import pytest
 from starlette.requests import HTTPConnection
@@ -18,28 +17,28 @@ RULE_TYPES = [Rule, Bypass]
 
 @pytest.mark.parametrize("rule_type", RULE_TYPES)
 class TestThrottleRuleBasic:
-    def test_no_args(self, rule_type: typing.Type[Rule[HTTPConnection]]) -> None:
+    def test_no_args(self, rule_type: type[Rule[HTTPConnection]]) -> None:
         rule = rule_type()
         assert rule.path is None
         assert rule.methods is None
         assert rule.predicate is None
 
     def test_string_path_compiled_to_regex(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         rule = rule_type(path="/api/")
         assert isinstance(rule.path, re.Pattern)
         assert rule.path.pattern == "/api/"
 
     def test_regex_path_stored_as_is(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         pattern = re.compile(r"/api/\d+")
         rule = rule_type(path=pattern)
         assert rule.path is pattern
 
     def test_methods_stored_as_frozenset_with_both_cases(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         rule = rule_type(methods={"GET", "POST"})
         assert isinstance(rule.methods, frozenset)
@@ -48,13 +47,11 @@ class TestThrottleRuleBasic:
         assert "POST" in rule.methods
         assert "post" in rule.methods
 
-    def test_none_methods(self, rule_type: typing.Type[Rule[HTTPConnection]]) -> None:
+    def test_none_methods(self, rule_type: type[Rule[HTTPConnection]]) -> None:
         rule = rule_type(methods=None)
         assert rule.methods is None
 
-    def test_predicate_stored(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
-    ) -> None:
+    def test_predicate_stored(self, rule_type: type[Rule[HTTPConnection]]) -> None:
         async def predicate(connection):
             return True
 
@@ -62,7 +59,7 @@ class TestThrottleRuleBasic:
         assert rule.predicate is predicate
 
     def test_predicate_context_detection(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         async def predicate_no_ctx(connection):
             return True
@@ -77,57 +74,53 @@ class TestThrottleRuleBasic:
         assert rule2._predicate_takes_context is True
 
     # TestThrottleRuleImmutability:
-    def test_cannot_reassign_path(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
-    ) -> None:
+    def test_cannot_reassign_path(self, rule_type: type[Rule[HTTPConnection]]) -> None:
         rule = rule_type(path="/api/")
         with pytest.raises(AttributeError, match="immutable"):
             rule.path = re.compile("/other/")
 
     def test_cannot_reassign_methods(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         rule = rule_type(methods={"GET"})
         with pytest.raises(AttributeError, match="immutable"):
             rule.methods = frozenset(["POST"])
 
     def test_cannot_reassign_predicate(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         rule = rule_type()
         with pytest.raises(AttributeError, match="immutable"):
             rule.predicate = lambda c: True  # type: ignore
 
-    def test_same_args_same_hash(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
-    ) -> None:
+    def test_same_args_same_hash(self, rule_type: type[Rule[HTTPConnection]]) -> None:
         r1 = rule_type(path="/api/", methods={"GET"})
         r2 = rule_type(path="/api/", methods={"GET"})
         assert hash(r1) == hash(r2)
 
     def test_different_path_different_hash(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         r1 = rule_type(path="/api/")
         r2 = rule_type(path="/other/")
         assert hash(r1) != hash(r2)
 
     def test_different_methods_different_hash(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         r1 = rule_type(methods={"GET"})
         r2 = rule_type(methods={"POST"})
         assert hash(r1) != hash(r2)
 
     def test_same_instance_deduplicates_in_set(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         """Same object instance deduplicates in a set."""
         r = rule_type(path="/api/", methods={"GET"})
         assert len({r, r}) == 1
 
     def test_distinct_instances_not_deduplicated(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         """Two instances with same args are distinct (identity-based equality)."""
         r1 = rule_type(path="/api/", methods={"GET"})
@@ -437,7 +430,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_to_registered_uid(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         registry.register("foo")
@@ -447,7 +440,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_to_unregistered_uid_raises(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         rule = rule_type(path="/api/")
@@ -472,7 +465,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_deduplicates(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         registry.register("foo")
@@ -482,7 +475,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_add_rules_multiple_calls_accumulate(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         registry.register("foo")
@@ -497,7 +490,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_unregister_removes_rules(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         registry.register("foo")
@@ -507,7 +500,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_rules_isolated_between_uids(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         registry = ThrottleRegistry()
         registry.register("a")
@@ -519,7 +512,7 @@ class TestThrottleRegistryBasic:
 
     @pytest.mark.parametrize("rule_type", RULE_TYPES)
     def test_get_rules_returns_list_copy(
-        self, rule_type: typing.Type[Rule[HTTPConnection]]
+        self, rule_type: type[Rule[HTTPConnection]]
     ) -> None:
         """Mutating the returned list should not affect internal state."""
         registry = ThrottleRegistry()
@@ -534,7 +527,7 @@ class TestThrottleRegistryBasic:
 
 def _make_throttle(
     uid: str,
-    throttle_type: typing.Type[ThrottleT],
+    throttle_type: type[ThrottleT],
     registry: ThrottleRegistry,
 ) -> ThrottleT:
     """Create a `Throttle` bound to the given registry."""
@@ -549,7 +542,7 @@ def _make_throttle(
 @pytest.mark.anyio
 class TestThrottleRegistryGetThrottle:
     @requires_throttle_type
-    async def test_returns_instance(self, throttle_type: typing.Type[Throttle]) -> None:
+    async def test_returns_instance(self, throttle_type: type[Throttle]) -> None:
         registry = ThrottleRegistry()
         throttle = _make_throttle("t1", throttle_type, registry)
         assert registry.get_throttle("t1") is throttle
@@ -559,9 +552,7 @@ class TestThrottleRegistryGetThrottle:
         assert registry.get_throttle("unknown") is None
 
     @requires_throttle_type
-    async def test_returns_none_after_gc(
-        self, throttle_type: typing.Type[Throttle]
-    ) -> None:
+    async def test_returns_none_after_gc(self, throttle_type: type[Throttle]) -> None:
         registry = ThrottleRegistry()
         _make_throttle("t-gc", throttle_type, registry)
         # The throttle is not held by a local variable; collect it.
@@ -573,7 +564,7 @@ class TestThrottleRegistryGetThrottle:
 @pytest.mark.anyio
 class TestThrottleRegistryDisableEnable:
     async def test_disable_returns_true_when_found(
-        self, throttle_type: typing.Type[Throttle]
+        self, throttle_type: type[Throttle]
     ) -> None:
         registry = ThrottleRegistry()
         throttle = _make_throttle("t1", throttle_type, registry)
@@ -582,14 +573,14 @@ class TestThrottleRegistryDisableEnable:
         del throttle
 
     async def test_disable_returns_false_when_not_found(
-        self, throttle_type: typing.Type[Throttle]
+        self, throttle_type: type[Throttle]
     ) -> None:
         registry = ThrottleRegistry()
         result = await registry.disable("missing")
         assert result is False
 
     async def test_disable_sets_throttle_disabled(
-        self, throttle_type: typing.Type[Throttle]
+        self, throttle_type: type[Throttle]
     ) -> None:
         registry = ThrottleRegistry()
         throttle = _make_throttle("t1", throttle_type, registry)
@@ -597,7 +588,7 @@ class TestThrottleRegistryDisableEnable:
         assert throttle.is_disabled is True
 
     async def test_enable_returns_true_when_found(
-        self, throttle_type: typing.Type[Throttle]
+        self, throttle_type: type[Throttle]
     ) -> None:
         registry = ThrottleRegistry()
         throttle = _make_throttle("t1", throttle_type, registry)
@@ -607,14 +598,14 @@ class TestThrottleRegistryDisableEnable:
         assert throttle.is_disabled is False
 
     async def test_enable_returns_false_when_not_found(
-        self, throttle_type: typing.Type[Throttle]
+        self, throttle_type: type[Throttle]
     ) -> None:
         registry = ThrottleRegistry()
         result = await registry.enable("missing")
         assert result is False
 
     async def test_disable_all_disables_every_live_throttle(
-        self, throttle_type: typing.Type[Throttle]
+        self, throttle_type: type[Throttle]
     ) -> None:
         registry = ThrottleRegistry()
         t1 = _make_throttle("ta", throttle_type, registry)
@@ -624,7 +615,7 @@ class TestThrottleRegistryDisableEnable:
         assert t2.is_disabled is True
 
     async def test_enable_all_re_enables_every_throttle(
-        self, throttle_type: typing.Type[Throttle]
+        self, throttle_type: type[Throttle]
     ) -> None:
         registry = ThrottleRegistry()
         t1 = _make_throttle("ta", throttle_type, registry)
@@ -635,7 +626,7 @@ class TestThrottleRegistryDisableEnable:
         assert t2.is_disabled is False
 
     async def test_disable_all_skips_garbage_collected_throttles(
-        self, throttle_type: typing.Type[Throttle]
+        self, throttle_type: type[Throttle]
     ) -> None:
         """disable_all() must not raise when a throttle has been GC'd."""
         registry = ThrottleRegistry()
@@ -647,7 +638,7 @@ class TestThrottleRegistryDisableEnable:
         assert alive.is_disabled is True
 
     async def test_clear_removes_throttle_refs(
-        self, throttle_type: typing.Type[Throttle]
+        self, throttle_type: type[Throttle]
     ) -> None:
         registry = ThrottleRegistry()
         _make_throttle("t1", throttle_type, registry)

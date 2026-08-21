@@ -10,7 +10,7 @@ _UINT32 = struct.Struct("=I")
 
 
 def _encode_two_float_records(
-    entries: typing.Sequence[typing.Tuple[float, float]],
+    entries: typing.Sequence[tuple[float, float]],
 ) -> str:
     """
     Serialize a sequence of two-float pairs into a compact Latin-1
@@ -35,7 +35,7 @@ def _encode_two_float_records(
     return out.decode("latin-1")
 
 
-def _decode_two_float_records(raw: str) -> typing.List[typing.Tuple[float, float]]:
+def _decode_two_float_records(raw: str) -> list[tuple[float, float]]:
     """
     Deserialize a Latin-1 encoded binary string into a list of float pairs.
 
@@ -53,7 +53,7 @@ def _decode_two_float_records(raw: str) -> typing.List[typing.Tuple[float, float
     if len(view) < expected_size:
         raise struct.error(f"buffer too small for {count} records")
 
-    records: typing.List[typing.Tuple[float, float]] = [None] * count  # type: ignore[list-item]
+    records: list[tuple[float, float]] = [None] * count  # type: ignore[list-item]
     offset = _UINT32.size
     for index in range(count):
         records[index] = _TWO_FLOATS.unpack_from(view, offset)
@@ -86,7 +86,7 @@ def _iter_two_float_records(raw: str) -> typing.Iterator[tuple[float, float]]:
 
 
 def _encode_three_float_records(
-    entries: typing.Sequence[typing.Tuple[float, float, float]],
+    entries: typing.Sequence[tuple[float, float, float]],
 ) -> str:
     """
     Serialize a sequence of three-float records into a compact Latin-1 encoded
@@ -113,7 +113,7 @@ def _encode_three_float_records(
 
 def _decode_three_float_records(
     raw: str,
-) -> typing.List[typing.Tuple[float, float, float]]:
+) -> list[tuple[float, float, float]]:
     """
     Deserialize a Latin-1 encoded binary string into a list of three-float
     records.
@@ -128,7 +128,7 @@ def _decode_three_float_records(
     if len(view) < expected_size:
         raise struct.error(f"buffer too small for {count} records")
 
-    records: typing.List[typing.Tuple[float, float, float]] = [None] * count  # type: ignore[list-item]
+    records: list[tuple[float, float, float]] = [None] * count  # type: ignore[list-item]
     offset = _UINT32.size
     for index in range(count):
         records[index] = _THREE_FLOATS.unpack_from(view, offset)
@@ -138,7 +138,7 @@ def _decode_three_float_records(
 
 def _iter_three_float_records(
     raw: str,
-) -> typing.Iterator[typing.Tuple[float, float, float]]:
+) -> typing.Iterator[tuple[float, float, float]]:
     """
     Lazily iterate over three-float records stored in a Latin-1 encoded binary
     string.
@@ -160,7 +160,7 @@ def _iter_three_float_records(
 
 
 def _encode_two_float_records_and_float(
-    entries: typing.Sequence[typing.Tuple[float, float]],
+    entries: typing.Sequence[tuple[float, float]],
     last_float: float,
 ) -> str:
     """
@@ -192,8 +192,8 @@ def _encode_two_float_records_and_float(
 
 def _decode_two_float_records_and_float(
     raw: str,
-) -> typing.Tuple[
-    typing.List[typing.Tuple[float, float]],
+) -> tuple[
+    list[tuple[float, float]],
     float,
 ]:
     """
@@ -214,7 +214,7 @@ def _decode_two_float_records_and_float(
             f"buffer too small for {count} records: need {expected_size} bytes, got {len(view)}"
         )
 
-    entries: typing.List[typing.Tuple[float, float]] = [None] * count  # type: ignore[list-item]
+    entries: list[tuple[float, float]] = [None] * count  # type: ignore[list-item]
     offset = _UINT32.size
     for index in range(count):
         entries[index] = _TWO_FLOATS.unpack_from(view, offset)
@@ -248,7 +248,7 @@ def _encode_float_list(values: typing.Sequence[float]) -> str:
     return out.decode("latin-1")
 
 
-def _decode_float_list(raw: str) -> typing.List[float]:
+def _decode_float_list(raw: str) -> list[float]:
     """
     Deserialize a Latin-1 encoded binary string into a list of floating-point
     values.
@@ -263,7 +263,7 @@ def _decode_float_list(raw: str) -> typing.List[float]:
     if len(view) < expected_size:
         raise struct.error(f"buffer too small for {count} values")
 
-    values: typing.List[float] = [0.0] * count
+    values: list[float] = [0.0] * count
     offset = _UINT32.size
     for index in range(count):
         (values[index],) = _FLOAT.unpack_from(view, offset)
@@ -304,7 +304,7 @@ def _encode_two_floats(a: float, b: float) -> str:
     return _TWO_FLOATS.pack(a, b).decode("latin-1")
 
 
-def _decode_two_floats(raw: str) -> typing.Tuple[float, float]:
+def _decode_two_floats(raw: str) -> tuple[float, float]:
     """
     Deserialize two double-precision floating-point values from a Latin-1
     encoded binary string.

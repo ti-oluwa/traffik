@@ -292,7 +292,7 @@ class TieredRateStrategy:
     - `{key}:tiered:{tier}:{window}` - Counter per tier per window
     """
 
-    tier_multipliers: typing.Dict[str, float] = field(
+    tier_multipliers: dict[str, float] = field(
         default_factory=lambda: {
             "free": 1.0,
             "premium": 5.0,
@@ -738,7 +738,7 @@ class PriorityQueueStrategy:
         async with backend.lock(f"lock:{queue_key}", **self.lock_config):
             # Get current queue
             raw_queue = await backend.get(queue_key)
-            queue: typing.Iterable[typing.Tuple[float, float, float]]
+            queue: typing.Iterable[tuple[float, float, float]]
             if raw_queue:
                 try:
                     queue = _iter_three_float_records(raw_queue)
@@ -749,7 +749,7 @@ class PriorityQueueStrategy:
 
             # Filter expired, sum higher priority cost, find oldest high-priority timestamp in one pass
             cutoff = now - rate.expire
-            filtered_queue: typing.List[typing.Tuple[float, float, float]] = []
+            filtered_queue: list[tuple[float, float, float]] = []
             higher_priority_cost = 0.0
             oldest_high_priority_timestamp = float("inf")
 
@@ -822,7 +822,7 @@ class PriorityQueueStrategy:
         queue_key = f"{full_key}:priority:queue"
 
         raw_queue = await backend.get(queue_key)
-        queue: typing.Iterable[typing.Tuple[float, float, float]]
+        queue: typing.Iterable[tuple[float, float, float]]
         if raw_queue:
             try:
                 queue = _iter_three_float_records(raw_queue)
@@ -833,7 +833,7 @@ class PriorityQueueStrategy:
 
         # Filter expired, sum costs, find oldest high-priority timestamp in one pass
         cutoff = now - rate.expire
-        filtered_queue: typing.List[typing.Tuple[float, float, float]] = []
+        filtered_queue: list[tuple[float, float, float]] = []
         higher_priority_cost = 0.0
         total_cost = 0.0
         oldest_high_priority_timestamp = float("inf")
@@ -1084,7 +1084,7 @@ class TimeOfDayStrategy:
     - `{key}:tod:{window_id}:counter` - Counter per time window
     """
 
-    time_windows: typing.List[typing.Tuple[int, int, float]] = field(
+    time_windows: list[tuple[int, int, float]] = field(
         default_factory=lambda: [
             (0, 8, 2.0),  # Night (00:00-08:00): 2x
             (8, 17, 1.0),  # Business hours (08:00-17:00): 1x

@@ -66,15 +66,15 @@ HTTPConnectionT = TypeVar("HTTPConnectionT", bound=HTTPConnection)
 
 
 def make_connection(
-    typ: typing.Type[HTTPConnectionT],
+    typ: type[HTTPConnectionT],
     /,
     app: typing.Optional[ASGIApp] = None,
     send: Send = empty_send,
     receive: Receive = empty_receive,
     method: str = "GET",
     path: str = "/test",
-    headers: typing.Optional[typing.Sequence[typing.Tuple[bytes, bytes]]] = None,
-    client: typing.Optional[typing.Tuple[str, int]] = ("127.0.0.1", 50000),
+    headers: typing.Optional[typing.Sequence[tuple[bytes, bytes]]] = None,
+    client: typing.Optional[tuple[str, int]] = ("127.0.0.1", 50000),
     **kwargs: typing.Any,
 ) -> HTTPConnectionT:
     """

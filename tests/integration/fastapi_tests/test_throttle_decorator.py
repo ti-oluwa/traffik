@@ -1,7 +1,5 @@
 """Tests for FastAPI decorator-based throttling."""
 
-import typing
-
 import anyio
 import pytest
 from fastapi import Depends, FastAPI, WebSocket
@@ -37,7 +35,7 @@ class TestThrottleDecorator:
 
         @app.get("/throttled", status_code=200)
         @throttled(throttle)
-        async def throttled_endpoint() -> typing.Dict[str, str]:
+        async def throttled_endpoint() -> dict[str, str]:
             return {"message": "Hello, World!"}
 
         base_url = "http://0.0.0.0"
@@ -80,7 +78,7 @@ class TestThrottleDecorator:
         @throttled(burst_throttle)
         async def throttled_endpoint(
             value: str = Depends(random_value),
-        ) -> typing.Dict[str, str]:
+        ) -> dict[str, str]:
             return {"message": value}
 
         base_url = "http://0.0.0.0"
@@ -132,7 +130,7 @@ class TestThrottleDecorator:
 
         @app.get("/multi-throttled")
         @throttled(burst_throttle, sustained_throttle)
-        async def multi_throttled_endpoint() -> typing.Dict[str, str]:
+        async def multi_throttled_endpoint() -> dict[str, str]:
             return {"status": "ok"}
 
         base_url = "http://0.0.0.0"
@@ -191,7 +189,7 @@ class TestThrottleDecorator:
 
         @app.get("/short-circuit")
         @throttled(first_throttle, second_throttle)
-        async def short_circuit_endpoint() -> typing.Dict[str, str]:
+        async def short_circuit_endpoint() -> dict[str, str]:
             return {"status": "ok"}
 
         base_url = "http://0.0.0.0"

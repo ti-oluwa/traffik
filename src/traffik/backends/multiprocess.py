@@ -234,7 +234,7 @@ class _SharedMemoryLockBytePool:
         self._base = base_offset
         self._size = size
         # Pre-populate free stack with every index
-        self._free: typing.List[int] = list(range(base_offset, base_offset + size))
+        self._free: list[int] = list(range(base_offset, base_offset + size))
         self._lock = threading.Lock()
 
     def acquire_index(self) -> int:
@@ -651,7 +651,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     _EXPIRY_SIZE: typing.ClassVar[int] = 8
     _OCCUPIED_FLAG_SIZE: typing.ClassVar[int] = 1
 
-    wrap_methods: typing.Tuple[str, ...] = ("clear",)
+    wrap_methods: tuple[str, ...] = ("clear",)
 
     def __init__(
         self,
@@ -872,8 +872,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._buffer: typing.Optional[memoryview] = None
 
         # One slot-map semaphore and one shard (slot-write) semaphore per shard.
-        self._slot_map_semaphores: typing.Optional[typing.List[Semaphore]] = None
-        self._shard_semaphores: typing.Optional[typing.List[Semaphore]] = None
+        self._slot_map_semaphores: typing.Optional[list[Semaphore]] = None
+        self._shard_semaphores: typing.Optional[list[Semaphore]] = None
 
         self._executor_max_workers = (
             executor_max_workers
@@ -1275,7 +1275,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     def _hash_table_get_slot_with_generation(
         self, buffer: memoryview, shard_base: int, key_bytes: bytes
-    ) -> typing.Optional[typing.Tuple[int, int]]:
+    ) -> typing.Optional[tuple[int, int]]:
         """
         Return `(slot_idx, generation)` for `key_bytes` within the shard,
         or `None` if the key is not present.
@@ -1386,7 +1386,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     def _hash_table_iter_occupied(
         self, buffer: memoryview, shard_base: int
-    ) -> typing.Iterator[typing.Tuple[str, int]]:
+    ) -> typing.Iterator[tuple[str, int]]:
         """
         Iterate over all occupied `(key_str, slot_idx)` pairs in the shard.
 
@@ -1539,7 +1539,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         buffer: memoryview,
         shard_base: int,
         slot_idx: int,
-    ) -> typing.Tuple[typing.Optional[str], typing.Optional[int], float, bool]:
+    ) -> tuple[typing.Optional[str], typing.Optional[int], float, bool]:
         """
         Read a slot and return `(str_value, int_value, expires_at, occupied)`.
 
@@ -2062,8 +2062,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     def _multi_get(
         self,
-        shard_to_keys: typing.Dict[int, typing.List[str]],
-    ) -> typing.Dict[str, typing.Optional[str]]:
+        shard_to_keys: dict[int, list[str]],
+    ) -> dict[str, typing.Optional[str]]:
         """
         Synchronous `multi_get`.
 
@@ -2085,7 +2085,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         buffer = self._buffer
         assert buffer is not None
         now = monotonic()
-        results: typing.Dict[str, typing.Optional[str]] = {}
+        results: dict[str, typing.Optional[str]] = {}
 
         for shard_idx in sorted(shard_to_keys):
             shard_base = self._shard_base(shard_idx)
@@ -2093,7 +2093,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
             self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
             try:
-                slot_info: typing.Dict[str, typing.Optional[typing.Tuple[int, int]]] = {
+                slot_info: dict[str, typing.Optional[tuple[int, int]]] = {
                     k: self._hash_table_get_slot_with_generation(
                         buffer, shard_base, k.encode("utf-8")
                     )
@@ -2134,7 +2134,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     def _multi_set(
         self,
-        shard_to_items: typing.Dict[int, typing.List[typing.Tuple[str, str]]],
+        shard_to_items: dict[int, list[tuple[str, str]]],
         expire: typing.Optional[float],
     ) -> None:
         """
@@ -2161,7 +2161,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         assert buffer is not None
         expires_at = (monotonic() + expire) if expire is not None else 0.0
 
-        slot_assignments: typing.Dict[str, typing.Tuple[int, int]] = {}
+        slot_assignments: dict[str, tuple[int, int]] = {}
 
         for shard_idx in sorted(shard_to_items):
             shard_base = self._shard_base(shard_idx)
@@ -2186,7 +2186,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             finally:
                 self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
 
-        aba_keys: typing.List[str] = []
+        aba_keys: list[str] = []
         for attempt in range(self._max_aba_retries):
             aba_keys = []
 
@@ -2215,7 +2215,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             if attempt == self._max_aba_retries - 1:
                 break
 
-            aba_by_shard: typing.Dict[int, typing.List[str]] = {}
+            aba_by_shard: dict[int, list[str]] = {}
             for key in aba_keys:
                 aba_by_shard.setdefault(self._shard_idx_for_key(key), []).append(key)
 
@@ -2268,7 +2268,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         for shard_idx in range(self._number_of_shards):
             shard_base = self._shard_base(shard_idx)
-            candidates: typing.List[int] = []
+            candidates: list[int] = []
 
             self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
             try:
@@ -2319,7 +2319,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         for shard_idx in range(self._number_of_shards):
             shard_base = self._shard_base(shard_idx)
 
-            candidates: typing.List[typing.Tuple[bytes, int]] = []
+            candidates: list[tuple[bytes, int]] = []
             for key_str, slot_idx in self._hash_table_iter_occupied(buffer, shard_base):
                 _, _, expires_at, occupied = self._read_slot(
                     buffer, shard_base, slot_idx
@@ -2450,7 +2450,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             self._executor, self._increment_with_ttl, key, amount, ttl
         )
 
-    async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
+    async def multi_get(self, *keys: str) -> list[typing.Optional[str]]:
         """
         Retrieve multiple keys in a single operation.
 
@@ -2465,7 +2465,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         if not keys:
             return []
 
-        shard_to_keys: typing.Dict[int, typing.List[str]] = {}
+        shard_to_keys: dict[int, list[str]] = {}
         for key in keys:
             shard_to_keys.setdefault(self._shard_idx_for_key(key), []).append(key)
 
@@ -2493,7 +2493,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         if not items:
             return
 
-        shard_to_items: typing.Dict[int, typing.List[typing.Tuple[str, str]]] = {}
+        shard_to_items: dict[int, list[tuple[str, str]]] = {}
         for key, val in items.items():
             shard_to_items.setdefault(self._shard_idx_for_key(key), []).append(
                 (

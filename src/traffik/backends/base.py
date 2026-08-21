@@ -102,7 +102,7 @@ def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
 
 def _reraise_as_backend_error(
     func: typing.Callable[P, R],
-    target_exc_type: typing.Type[BaseException] = BaseException,
+    target_exc_type: type[BaseException] = BaseException,
 ) -> typing.Callable[P, R]:
     """Decorator to wrap functions to raise target execption types as `BackendError`"""
     if getattr(func, "_error_wrapped_", None):
@@ -185,13 +185,13 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         or before entering and/or after leaving a concurrent context to ensure safety and proper resource handling.
     """
 
-    base_exception_type: typing.ClassVar[typing.Type[BaseException]] = BaseException
+    base_exception_type: typing.ClassVar[type[BaseException]] = BaseException
     """
     The base exception type that backend operations may raise.
 
     This is used to wrap backend methods to re-raise exceptions as `traffik.exceptions.BackendError`
     """
-    _default_wrap_methods: typing.ClassVar[typing.Tuple[str, ...]] = (
+    _default_wrap_methods: typing.ClassVar[tuple[str, ...]] = (
         "initialize",
         "get",
         "set",
@@ -207,7 +207,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         "close",
     )
     """Default methods to wrap for error handling."""
-    wrap_methods: typing.Tuple[str, ...] = ()
+    wrap_methods: tuple[str, ...] = ()
     """Additional methods to wrap for error handling. Meant to be overridden/defined by subclasses."""
 
     def __init_subclass__(cls) -> None:
@@ -523,7 +523,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             await self.expire(key, ttl)
         return value
 
-    async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
+    async def multi_get(self, *keys: str) -> list[typing.Optional[str]]:
         """
         Atomically get multiple keys in one operation.
 

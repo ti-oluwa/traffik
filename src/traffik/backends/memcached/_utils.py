@@ -2,7 +2,7 @@ import typing
 from urllib.parse import urlparse
 
 
-def _parse_memcached_url(url: str) -> typing.Dict[str, typing.Any]:
+def _parse_memcached_url(url: str) -> dict[str, typing.Any]:
     """
     Parse Memcached URL into connection parameters.
 

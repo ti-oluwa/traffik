@@ -1,7 +1,6 @@
 """Tests for `QuotaContext` functionality."""
 
 import functools
-import typing
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -26,7 +25,7 @@ class TestQuotaContext:
     async def test_quota_context_bound_mode(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test `QuotaContext` in bound mode (created via throttle.quota())."""
         throttle = throttle_type(
@@ -59,7 +58,7 @@ class TestQuotaContext:
     async def test_quota_context_unbound_mode(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test `QuotaContext` in unbound mode."""
 
@@ -93,7 +92,7 @@ class TestQuotaContext:
         assert quota.applied_cost == 3
 
     async def test_quota_context_unbound_requires_throttle(
-        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
+        self, throttle_type: type[Throttle[HTTPConnection]]
     ):
         """Test that unbound context requires throttle argument."""
         connection = new_connection(throttle_type.connection_type)  # type: ignore
@@ -105,7 +104,7 @@ class TestQuotaContext:
     async def test_quota_context_skip_handler_does_not_invoke_throttled_handler(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Queued quota consumption can skip the handler while still marking the connection as throttled."""
         calls = 0
@@ -135,7 +134,7 @@ class TestQuotaContext:
     async def test_quota_context_cost_aggregation(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test automatic cost aggregation for consecutive calls."""
         throttle = throttle_type(
@@ -159,7 +158,7 @@ class TestQuotaContext:
     async def test_quota_context_cost_aggregation_different_configs(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test that different configs prevent cost aggregation."""
         throttle1 = throttle_type(
@@ -189,7 +188,7 @@ class TestQuotaContext:
     async def test_quota_context_manual_apply(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test manual apply() with apply_on_exit=False."""
         throttle = throttle_type(
@@ -218,7 +217,7 @@ class TestQuotaContext:
     async def test_quota_context_cancel(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test cancelling quota context."""
         throttle = throttle_type(
@@ -248,7 +247,7 @@ class TestQuotaContext:
     async def test_quota_context_cancel_idempotent(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test that cancel() is idempotent."""
         throttle = throttle_type(
@@ -271,7 +270,7 @@ class TestQuotaContext:
     async def test_quota_context_cannot_enqueue_after_cancel(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test that enqueueing after cancel raises error."""
         throttle = throttle_type(
@@ -292,7 +291,7 @@ class TestQuotaContext:
     async def test_quota_context_cannot_enqueue_after_apply(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test that enqueueing after apply raises error."""
         throttle = throttle_type(
@@ -313,7 +312,7 @@ class TestQuotaContext:
     async def test_quota_context_cannot_cancel_after_apply(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test that cancelling after apply raises error."""
         throttle = throttle_type(
@@ -334,7 +333,7 @@ class TestQuotaContext:
     async def test_quota_context_apply_on_error_false(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test apply_on_error=False (default) - don't apply on exception."""
         throttle = throttle_type(
@@ -360,7 +359,7 @@ class TestQuotaContext:
     async def test_quota_context_apply_on_error_true(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test apply_on_error=True - apply on any exception."""
         throttle = throttle_type(
@@ -386,7 +385,7 @@ class TestQuotaContext:
     async def test_quota_context_apply_on_error_specific(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test apply_on_error with specific exception types."""
 
@@ -430,7 +429,7 @@ class TestQuotaContext:
     async def test_quota_context_nested(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test nested quota contexts."""
 
@@ -466,7 +465,7 @@ class TestQuotaContext:
     async def test_quota_context_nested_multiple_levels(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test multiple levels of nesting."""
 
@@ -537,7 +536,7 @@ class TestQuotaContext:
     async def test_quota_context_nested_cancel(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test cancelling nested quota context."""
 
@@ -565,7 +564,7 @@ class TestQuotaContext:
     async def test_quota_context_check(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test quota availability checking."""
         throttle = throttle_type(
@@ -596,7 +595,7 @@ class TestQuotaContext:
     async def test_quota_context_stat(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test getting throttle statistics."""
 
@@ -624,7 +623,7 @@ class TestQuotaContext:
     async def test_quota_context_retry_basic(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test basic retry functionality."""
 
@@ -660,7 +659,7 @@ class TestQuotaContext:
     async def test_quota_context_retry_exhausted(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test retry exhaustion when max attempts reached."""
 
@@ -692,7 +691,7 @@ class TestQuotaContext:
     async def test_quota_context_retry_on_specific_exception(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test retry_on with specific exception types."""
 
@@ -724,7 +723,7 @@ class TestQuotaContext:
     async def test_quota_context_locking(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test quota context locking."""
 
@@ -753,7 +752,7 @@ class TestQuotaContext:
     async def test_quota_context_nested_lock_deadlock_detection(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test that nested contexts detect potential deadlocks."""
         throttle = throttle_type(
@@ -772,7 +771,7 @@ class TestQuotaContext:
     async def test_quota_context_nested_lock_reentrant(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test nested contexts with reentrant lock flag."""
 
@@ -792,7 +791,7 @@ class TestQuotaContext:
     async def test_quota_context_empty_apply(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test applying empty quota context."""
 
@@ -814,7 +813,7 @@ class TestQuotaContext:
     async def test_quota_context_properties(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test quota context properties."""
 
@@ -846,7 +845,7 @@ class TestQuotaContext:
     async def test_quota_context_aliases(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test quota context method aliases."""
 
@@ -869,7 +868,7 @@ class TestQuotaContext:
     async def test_quota_context_nested_alias(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test that quota() is an alias for nested()."""
 
@@ -892,7 +891,7 @@ class TestQuotaContext:
     async def test_quota_context_default_context_merging(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test default context merging."""
 
@@ -922,7 +921,7 @@ class TestQuotaContext:
     async def test_quota_context_multiple_children(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test parent with multiple child contexts."""
 
@@ -952,7 +951,7 @@ class TestQuotaContext:
     async def test_quota_context_zero_cost(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test handling of zero cost entries."""
 

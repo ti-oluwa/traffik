@@ -33,8 +33,8 @@ def result_to_dict(result: AggregatedResult) -> dict:
 
 
 def print_json(
-    results: typing.List[AggregatedResult],
-    meta: typing.Optional[typing.Dict[str, typing.Any]] = None,
+    results: list[AggregatedResult],
+    meta: typing.Optional[dict[str, typing.Any]] = None,
 ) -> None:
     """
     Print results as a JSON object to stdout.

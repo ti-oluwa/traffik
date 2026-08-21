@@ -26,8 +26,8 @@ __all__ = [
 
 def fallback(
     backend: ThrottleBackend[typing.Any, HTTPConnectionT],
-    fallback_on: typing.Optional[typing.Tuple[typing.Type[BaseException], ...]] = None,
-    on: typing.Tuple[typing.Type[BaseException], ...] = (BackendError,),
+    fallback_on: typing.Optional[tuple[type[BaseException], ...]] = None,
+    on: tuple[type[BaseException], ...] = (BackendError,),
     initialized: bool = True,
 ) -> typing.Callable[
     [HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]
@@ -112,7 +112,7 @@ def retry(
     retry_delay: float = 0.1,
     backoff_multiplier: typing.Optional[float] = None,
     backoff: typing.Optional[BackoffStrategy] = None,
-    retry_on: typing.Tuple[typing.Type[BaseException], ...] = (Exception,),
+    retry_on: tuple[type[BaseException], ...] = (Exception,),
 ) -> typing.Callable[
     [HTTPConnection, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]
 ]:

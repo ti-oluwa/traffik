@@ -112,7 +112,7 @@ show_missing = true
 [tool.ruff]
 line-length = 88
 target-version = "py39"
-lint.extend-select = ["I", "TID", "F"]
+lint.extend-select = ["I", "TID", "F", "UP"]
 
 [tool.mypy]
 namespace_packages = "True"

@@ -2,7 +2,6 @@
 
 import asyncio
 import threading
-import typing
 from collections import defaultdict, deque
 
 import pytest
@@ -695,7 +694,7 @@ class TestThrottleBackend:
                 loop.close()
 
         # 1. Run 10 threads with blocking locks
-        threads: typing.List[threading.Thread] = []
+        threads: list[threading.Thread] = []
         for i in range(10):
             thread = threading.Thread(
                 target=thread_worker,

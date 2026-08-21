@@ -134,7 +134,7 @@ def get_multiprocess_backend(namespace: str, persistent: bool) -> ThrottleBacken
 
 
 MAYBE_POSIX = platform.system() != "Windows"
-BACKEND_FACTORIES: typing.List[
+BACKEND_FACTORIES: list[
     typing.Callable[[str, bool], ThrottleBackend[typing.Any, typing.Any]]
 ] = [get_inmemory_backend, get_aiomcache_backend, get_aioredis_backend]
 
@@ -173,8 +173,8 @@ class BackendGen(typing.Generic[HTTPConnectionT]):
         persistent: bool = False,
         exclude: typing.Optional[
             typing.Union[
-                typing.Type[ThrottleBackend[typing.Any, typing.Any]],
-                typing.Tuple[typing.Type[ThrottleBackend[typing.Any, typing.Any]], ...],
+                type[ThrottleBackend[typing.Any, typing.Any]],
+                tuple[type[ThrottleBackend[typing.Any, typing.Any]], ...],
             ]
         ] = None,
     ) -> typing.Generator[ThrottleBackend[typing.Any, HTTPConnectionT], None, None]:

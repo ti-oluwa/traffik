@@ -34,7 +34,7 @@ from traffik.typing import (
 
 __all__ = ["QuotaContext"]
 
-_NON_RETRYABLE_EXCEPTIONS: typing.Tuple[typing.Type[BaseException], ...] = (
+_NON_RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
     asyncio.CancelledError,
     HTTPException,
     KeyboardInterrupt,
@@ -87,7 +87,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
         self,
         throttle: Throttle[HTTPConnectionT],
         cost: typing.Optional[int] = None,
-        context: typing.Optional[typing.Dict[str, typing.Any]] = None,
+        context: typing.Optional[dict[str, typing.Any]] = None,
         skip_handler: typing.Optional[bool] = None,
         retry: int = 0,
         retry_on: typing.Optional[RetryOn] = None,
@@ -130,7 +130,7 @@ class _QuotaEntry(typing.Generic[HTTPConnectionT]):
     async def resolve_cost(
         self,
         connection: HTTPConnectionT,
-        context: typing.Optional[typing.Dict[str, typing.Any]],
+        context: typing.Optional[dict[str, typing.Any]],
     ) -> int:
         """Resolve the actual cost of the throttle, calling cost function if needed."""
         if self.cost is not None:
@@ -288,8 +288,8 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         self.parent = parent
 
         self._lock_key = _resolve_lock_key(lock, owner)
-        self._queue: typing.Deque[_QuotaEntry[HTTPConnectionT]] = deque()
-        self._children: typing.Dict[int, "QuotaContext[HTTPConnectionT]"] = {}
+        self._queue: deque[_QuotaEntry[HTTPConnectionT]] = deque()
+        self._children: dict[int, QuotaContext[HTTPConnectionT]] = {}
         self._consumed = False
         self._cancelled = False
         self._entered = False
@@ -363,12 +363,12 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
     async def __aexit__(
         self,
-        exc_type: typing.Optional[typing.Type[BaseException]],
+        exc_type: typing.Optional[type[BaseException]],
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
-    ) -> typing.Optional[bool]:
+    ) -> None:
         if not self._entered or not self.active:
-            return None
+            return
 
         exit_exc: typing.Optional[BaseException] = None
         try:
@@ -389,7 +389,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                     self.merge()
                 else:
                     await self.apply()
-            return None
+            return
 
         except BaseException as exc:  # noqa
             # Store exception to raise after lock release
@@ -969,7 +969,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
         *,
         apply_on_error: typing.Optional[
-            typing.Union[bool, typing.Tuple[typing.Type[BaseException], ...]]
+            typing.Union[bool, tuple[type[BaseException], ...]]
         ] = None,
         apply_on_exit: bool = True,
         lock: typing.Union[bool, str, None] = None,

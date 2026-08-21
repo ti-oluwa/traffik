@@ -45,7 +45,7 @@ class TestThrottlesDepedencyInjection:
         )
 
         @app.get("/", dependencies=[Depends(throttle)], status_code=200)
-        async def ping_endpoint() -> typing.Dict[str, str]:
+        async def ping_endpoint() -> dict[str, str]:
             return {"message": "PONG"}
 
         async with make_client(app, base_url="http://0.0.0.0") as client:
@@ -75,7 +75,7 @@ class TestThrottlesDepedencyInjection:
         app = FastAPI()
 
         @app.get("/", dependencies=[Depends(throttle)], status_code=200)
-        async def ping_endpoint() -> typing.Dict[str, str]:
+        async def ping_endpoint() -> dict[str, str]:
             return {"message": "PONG"}
 
         async with make_client(app, base_url="http://0.0.0.0") as client:
@@ -104,7 +104,7 @@ class TestThrottlesDepedencyInjection:
         )
 
         @app.post("/items", dependencies=[Depends(throttle)], status_code=201)
-        async def create_item(item: ItemModel) -> typing.Dict[str, typing.Any]:
+        async def create_item(item: ItemModel) -> dict[str, typing.Any]:
             return {"name": item.name, "price": item.price}
 
         schema = app.openapi()
@@ -156,7 +156,7 @@ class TestThrottlesDepedencyInjection:
         )
 
         @app.post("/create", dependencies=[Depends(throttle)], status_code=201)
-        async def create_item(item: ItemModel) -> typing.Dict[str, typing.Any]:
+        async def create_item(item: ItemModel) -> dict[str, typing.Any]:
             return {"name": item.name, "price": item.price}
 
         async with make_client(app, base_url="http://test") as client:
@@ -183,7 +183,7 @@ class TestThrottlesDepedencyInjection:
 
         @app.post("/create-decorated", status_code=201)
         @throttled(throttle)
-        async def create_item(item: ItemModel) -> typing.Dict[str, typing.Any]:
+        async def create_item(item: ItemModel) -> dict[str, typing.Any]:
             return {"name": item.name, "price": item.price}
 
         async with make_client(app, base_url="http://test") as client:

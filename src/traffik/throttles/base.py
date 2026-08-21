@@ -49,6 +49,7 @@ from traffik.typing import (
 __all__ = [
     "Throttle",
     "ThrottleExceptionInfo",
+    "ThrottleStrategy",
     "get_wait",
     "is_throttled",
     "throttled",
@@ -353,7 +354,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         registry.register(uid, self)
         self.registry = registry
-        self._rules: typing.Tuple[Rule[HTTPConnectionT], ...] = (
+        self._rules: tuple[Rule[HTTPConnectionT], ...] = (
             _prep_rules(set(rules)) if rules else ()
         )
         self._rules_resolved = False
@@ -601,7 +602,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             StrategyStat[typing.Mapping[typing.Hashable, typing.Any]]
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-    ) -> typing.Dict[str, str]:
+    ) -> dict[str, str]:
         """
         Resolves the headers to be included in throttling responses based
         on the provided connection, strategy statistics, and context.
@@ -703,7 +704,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             return connection_id
 
         # Check the connection state cache first
-        cached_connection_ids: typing.Dict[str, Stringable] = getattr(
+        cached_connection_ids: dict[str, Stringable] = getattr(
             connection.state, CONNECTION_IDS_CONTEXT_KEY, {}
         )
         connection_id = cached_connection_ids.get(self.uid, None)
@@ -1318,7 +1319,7 @@ def _make_throttle_signature(
     target_method: str = "__call__",
     include_response: bool = False,
     response_param_name: str = "response",
-    return_annotation: typing.Optional[typing.Type] = None,
+    return_annotation: typing.Optional[type] = None,
 ) -> inspect.Signature:
     """
     Create a custom signature for the `Throttle` object to improve FastAPI integration.
@@ -1623,7 +1624,7 @@ async def _resolve_headers(
         StrategyStat[typing.Mapping[typing.Hashable, typing.Any]]
     ] = None,
     context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-) -> typing.Dict[str, str]:
+) -> dict[str, str]:
     """
     Resolve headers for a throttled response based on the provided header definitions and the throttle's current state.
 

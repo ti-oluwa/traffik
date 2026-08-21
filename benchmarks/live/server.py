@@ -66,7 +66,7 @@ class Server:
     base_url: str = field(init=False)
     ws_base_url: str = field(init=False)
     _stderr_task: typing.Optional[asyncio.Task[None]] = field(default=None, repr=False)
-    _stderr_tail: typing.Deque[str] = field(default_factory=deque, repr=False)
+    _stderr_tail: deque[str] = field(default_factory=deque, repr=False)
 
     def __post_init__(self) -> None:
         self.base_url = f"http://{self.host}:{self.port}"
@@ -133,9 +133,7 @@ class Server:
                 await self._stderr_task
 
 
-async def _read_stderr(
-    process: asyncio.subprocess.Process, sink: typing.Deque[str]
-) -> None:
+async def _read_stderr(process: asyncio.subprocess.Process, sink: deque[str]) -> None:
     """Continuously drain stderr into `sink` so the pipe never backs up."""
     assert process.stderr is not None
     try:
@@ -148,9 +146,7 @@ async def _read_stderr(
         pass
 
 
-def _build_command(
-    app_path: str, host: str, port: int, workers: int
-) -> typing.List[str]:
+def _build_command(app_path: str, host: str, port: int, workers: int) -> list[str]:
     if workers <= 1:
         return [
             sys.executable,
@@ -264,7 +260,7 @@ async def start_server(
         process_env = {**os.environ, **env}
         process_env.setdefault("PYTHONUNBUFFERED", "1")
 
-        kwargs: typing.Dict[str, typing.Any] = {}
+        kwargs: dict[str, typing.Any] = {}
         if platform.system() != "Windows":
             kwargs["start_new_session"] = True
 

@@ -1,7 +1,6 @@
 """Tests for error handling strategies."""
 
 import functools
-import typing
 
 import pytest
 from starlette.requests import HTTPConnection
@@ -24,7 +23,7 @@ class TestBackendFallback:
     """Tests for fallback error handler."""
 
     async def test_fallback_on_connection_error(
-        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
+        self, throttle_type: type[Throttle[HTTPConnection]]
     ):
         """Test falls back to secondary backend on connection error."""
         primary = InMemoryBackend(namespace="primary")
@@ -56,7 +55,7 @@ class TestBackendFallback:
             assert wait >= 0, "Should attempt fallback"
 
     async def test_reraises_on_other_errors(
-        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
+        self, throttle_type: type[Throttle[HTTPConnection]]
     ):
         """Test re-raises errors not in on tuple."""
         secondary = InMemoryBackend(namespace="fallback")
@@ -91,7 +90,7 @@ class TestRetryHandler:
     async def test_retries_on_timeout(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test retries operations on timeout errors."""
         call_count = 0
@@ -131,7 +130,7 @@ class TestRetryHandler:
     async def test_reraises_after_max_retries(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test re-raises exception after exhausting retries."""
 
@@ -165,7 +164,7 @@ class TestRetryHandler:
     async def test_does_not_retry_other_errors(
         self,
         backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ):
         """Test re-raises errors not in retry_on tuple."""
         handler = retry(retry_on=(TimeoutError,))
@@ -197,7 +196,7 @@ class TestFailover:
     """Tests for failover error handler."""
 
     async def test_uses_fallback_when_circuit_open(
-        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
+        self, throttle_type: type[Throttle[HTTPConnection]]
     ):
         """Test uses fallback backend when circuit is open."""
         primary = InMemoryBackend(namespace="primary")
@@ -236,7 +235,7 @@ class TestFailover:
             assert wait >= 0
 
     async def test_retries_primary_when_closed(
-        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
+        self, throttle_type: type[Throttle[HTTPConnection]]
     ):
         """Test retries primary backend when circuit is closed."""
         retry_count = 0
@@ -281,7 +280,7 @@ class TestFailover:
             assert retry_count >= 2, "Should retry primary"
 
     async def test_records_failures_to_circuit_breaker(
-        self, throttle_type: typing.Type[Throttle[HTTPConnection]]
+        self, throttle_type: type[Throttle[HTTPConnection]]
     ):
         """Test records failures to circuit breaker."""
         primary_fail_count = 0

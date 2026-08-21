@@ -551,9 +551,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             str,
             _AnyRedis,
             aioredis.Sentinel,
-            typing.Sequence[
-                typing.Union[typing.Tuple[str, int], typing.Dict[str, typing.Any]]
-            ],
+            typing.Sequence[typing.Union[tuple[str, int], dict[str, typing.Any]]],
             typing.Callable[[], typing.Awaitable[_AnyRedis]],
         ],
         *,
@@ -927,7 +925,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             )
         return int(result) if result is not None else 0
 
-    async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
+    async def multi_get(self, *keys: str) -> list[typing.Optional[str]]:
         """
         Get multiple values by keys.
 

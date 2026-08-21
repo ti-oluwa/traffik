@@ -1,5 +1,3 @@
-import typing
-
 from benchmarks.base import AggregatedResult, BenchmarkConfig
 from benchmarks.live.orchestrators import run_websocket_scenarios
 from benchmarks.scenarios import WEBSOCKET_SCENARIOS
@@ -8,8 +6,8 @@ app_path = "benchmarks.apps.websocket:app"
 
 
 async def run_scenarios(
-    config: BenchmarkConfig, scenario_keys: typing.List[str], warmup_iterations: int = 1
-) -> typing.List[AggregatedResult]:
+    config: BenchmarkConfig, scenario_keys: list[str], warmup_iterations: int = 1
+) -> list[AggregatedResult]:
     """
     Run each selected WebSocket scenario as a real `uvicorn`/`gunicorn`
     subprocess, driven by real WebSocket connections.

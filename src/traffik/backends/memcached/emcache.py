@@ -35,8 +35,8 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_memcached_nodes(
-    nodes: typing.Sequence[typing.Union[str, typing.Tuple[str, int]]],
-) -> typing.List[emcache.MemcachedHostAddress]:
+    nodes: typing.Sequence[typing.Union[str, tuple[str, int]]],
+) -> list[emcache.MemcachedHostAddress]:
     """
     Parse a sequence of node specifiers into `emcache.MemcachedHostAddress` objects.
 
@@ -50,7 +50,7 @@ def _parse_memcached_nodes(
     :return: List of `emcache.MemcachedHostAddress` instances.
     :raises ValueError: If a specifier cannot be parsed.
     """
-    result: typing.List[emcache.MemcachedHostAddress] = []
+    result: list[emcache.MemcachedHostAddress] = []
     for node in nodes:
         if isinstance(node, tuple):
             host, port = node
@@ -305,7 +305,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         port: int = 11211,
         *,
         nodes: typing.Optional[
-            typing.Sequence[typing.Union[str, typing.Tuple[str, int]]]
+            typing.Sequence[typing.Union[str, tuple[str, int]]]
         ] = None,
         max_connections: int = 2,
         min_connections: int = 1,
@@ -464,7 +464,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         if self.connection is None:
             # Build optional kwargs for `create_client` only when values are set,
             # so we don't pass None where `emcache` expects an absent argument.
-            create_kwargs: typing.Dict[str, typing.Any] = {
+            create_kwargs: dict[str, typing.Any] = {
                 "max_connections": self.max_connections,
                 "min_connections": self.min_connections,
                 "autobatching": self.autobatching,
@@ -821,7 +821,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             new_value = await self.connection.increment(encoded_key, amount)  # type: ignore[union-attr]
             return new_value  # type: ignore[return-value]
 
-    async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
+    async def multi_get(self, *keys: str) -> list[typing.Optional[str]]:
         """
         Batch get multiple keys in a single Memcached command.
 
@@ -833,7 +833,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             return []
 
         encoded_keys = [key.encode() for key in keys]
-        items: typing.Dict[bytes, emcache.Item] = await self.connection.get_many(  # type: ignore[union-attr]
+        items: dict[bytes, emcache.Item] = await self.connection.get_many(  # type: ignore[union-attr]
             encoded_keys
         )
         return [

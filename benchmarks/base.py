@@ -1,6 +1,5 @@
 import platform
 import statistics
-import typing
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -16,7 +15,7 @@ class BackendKind(Enum):
     EMCACHE = auto()
 
     @classmethod
-    def choices(cls) -> typing.List[str]:
+    def choices(cls) -> list[str]:
         """
         Return lowercase names of all available backends on this platform.
 
@@ -47,7 +46,7 @@ class StrategyKind(Enum):
     GCRA = auto()
 
     @classmethod
-    def choices(cls) -> typing.List[str]:
+    def choices(cls) -> list[str]:
         """
         Return lowercase names of all strategy members.
 
@@ -97,7 +96,7 @@ class ScenarioResult:
     throttled_requests: int
     error_requests: int
     total_time_seconds: float
-    latencies_seconds: typing.List[float]
+    latencies_seconds: list[float]
     iteration: int
 
     @property
@@ -224,7 +223,7 @@ class AggregatedResult:
     backend_kind: str
     strategy_kind: str
     iterations: int
-    results: typing.List[ScenarioResult]
+    results: list[ScenarioResult]
 
     @property
     def total_requests(self) -> int:

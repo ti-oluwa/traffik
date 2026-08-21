@@ -56,13 +56,13 @@ class HttpScenario:
     total_requests: int
     mode: str = "sequential"
     on_error: str = "raise"
-    headers: typing.Optional[typing.Dict[str, str]] = None
-    waves: typing.Optional[typing.Tuple[typing.Tuple[int, float], ...]] = None
+    headers: typing.Optional[dict[str, str]] = None
+    waves: typing.Optional[tuple[tuple[int, float], ...]] = None
     key_header: typing.Optional[str] = None
     key_mod: typing.Optional[int] = None
     key_mod_is_concurrency: bool = False
     batch_size: typing.Optional[int] = None
-    mixed_paths: typing.Optional[typing.Tuple[typing.Tuple[str, int], ...]] = None
+    mixed_paths: typing.Optional[tuple[tuple[str, int], ...]] = None
     extra_sleep_seconds: float = 0.0
 
 
@@ -89,7 +89,7 @@ class WebSocketScenario:
     rate: str
     mode: str = "sequential"
     total_messages: int = 0
-    waves: typing.Optional[typing.Tuple[typing.Tuple[int, float], ...]] = None
+    waves: typing.Optional[tuple[tuple[int, float], ...]] = None
     connections: int = 0
     messages_per_connection: int = 0
 
@@ -98,7 +98,7 @@ class WebSocketScenario:
 # HTTP (Depends-based) scenarios
 # -------------------------------
 
-HTTP_SCENARIOS: typing.Dict[str, HttpScenario] = {
+HTTP_SCENARIOS: dict[str, HttpScenario] = {
     "below_limit": HttpScenario(
         key="below_limit",
         name="Below-Limit Steady State",
@@ -178,7 +178,7 @@ HTTP_SCENARIOS: typing.Dict[str, HttpScenario] = {
 # rather than hammering a single shared one.
 # --------------------------------------------------------------------------
 
-MIDDLEWARE_SCENARIOS: typing.Dict[str, HttpScenario] = {
+MIDDLEWARE_SCENARIOS: dict[str, HttpScenario] = {
     "below_limit": HttpScenario(
         key="below_limit",
         name="Middleware Below-Limit Steady State",
@@ -267,7 +267,7 @@ MIDDLEWARE_SCENARIOS: typing.Dict[str, HttpScenario] = {
 # scenarios specific to the shared-memory backend's own characteristics.
 # --------------------------------------------------------------------------
 
-MULTIPROCESS_SCENARIOS: typing.Dict[str, HttpScenario] = {
+MULTIPROCESS_SCENARIOS: dict[str, HttpScenario] = {
     "below_limit": HttpScenario(
         key="below_limit",
         name="MP Below-Limit Steady State",
@@ -361,7 +361,7 @@ MULTIPROCESS_SCENARIOS: typing.Dict[str, HttpScenario] = {
 # WebSocket scenarios
 # --------------------------------------------------------------------------
 
-WEBSOCKET_SCENARIOS: typing.Dict[str, WebSocketScenario] = {
+WEBSOCKET_SCENARIOS: dict[str, WebSocketScenario] = {
     "below_limit": WebSocketScenario(
         key="below_limit",
         name="WS Below-Limit",

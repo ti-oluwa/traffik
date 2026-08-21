@@ -290,7 +290,7 @@ class Header(typing.Generic[HTTPConnectionT]):
 
 def _prep_headers(
     headers: typing.Mapping[str, typing.Union[Header, str]],
-) -> typing.Dict[str, typing.Union[Header, str]]:
+) -> dict[str, typing.Union[Header, str]]:
     """
     Prepares the headers, try our best to ensure that the header is static if it can be. i.e, only
     consists of string values and is always included in the response.
@@ -298,7 +298,7 @@ def _prep_headers(
     This allows us to optimize for the common case where headers are static
     and do not require dynamic resolution on each request, while still supporting dynamic headers when needed.
     """
-    prepared_headers: typing.Dict[str, typing.Union[Header, str]] = {}
+    prepared_headers: dict[str, typing.Union[Header, str]] = {}
     for name, value in headers.items():
         if isinstance(value, str):
             prepared_headers[name] = value
@@ -375,7 +375,7 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
             self._is_static = True
         elif _prepped and raw is not None:
             self._raw = typing.cast(
-                typing.Dict[str, typing.Union[str, Header[HTTPConnectionT]]], raw
+                dict[str, typing.Union[str, Header[HTTPConnectionT]]], raw
             )
             self._is_static = _is_static(self._raw) if _static is None else _static
         else:
@@ -449,9 +449,9 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
 
     def __reduce__(
         self,
-    ) -> typing.Tuple[
-        typing.Type[Self],
-        typing.Tuple[
+    ) -> tuple[
+        type[Self],
+        tuple[
             typing.Mapping[str, typing.Union[str, Header[HTTPConnectionT]]],
             typing.Literal[True],
             bool,
@@ -462,7 +462,7 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
     def __copy__(self) -> Self:
         return self.copy()
 
-    def __deepcopy__(self, memo: typing.Dict[int, typing.Any]) -> Self:
+    def __deepcopy__(self, memo: dict[int, typing.Any]) -> Self:
         return self.__class__(
             copy.deepcopy(self._raw, memo), _prepped=True, _static=self._is_static
         )

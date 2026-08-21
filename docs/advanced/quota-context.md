@@ -128,7 +128,6 @@ async with throttle.quota(request, apply_on_error=True) as quota:
     await risky_operation()  # Exception -> quota still consumed
 
 # Consume only for specific exception types
-from fastapi import HTTPException
 async with throttle.quota(request, apply_on_error=(ValueError,)) as quota:
     await quota(cost=5)
     await risky_operation()

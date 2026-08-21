@@ -164,7 +164,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
             )
 
     @property
-    def connection_type(self) -> typing.Type[HTTPConnection]:
+    def connection_type(self) -> type[HTTPConnection]:
         return self.throttle.connection_type
 
     async def hit(
@@ -303,9 +303,7 @@ def _prep_throttles(
     sort: _SortThrottles = "cheap_first",
 ) -> typing.Mapping[
     typing.Literal["http", "websocket"],
-    typing.List[
-        typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]
-    ],
+    list[typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]],
 ]:
     """
     Prepare throttles by sorting them based on their cost and categorizing by connection type.
@@ -344,9 +342,9 @@ def _prep_throttles(
             f"Invalid value for `sort`: {sort}. Must be 'cheap_first', 'cheap_last', False, None, or a callable."
         )
 
-    categorized: typing.Dict[
+    categorized: dict[
         typing.Literal["http", "websocket"],
-        typing.List[
+        list[
             typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]
         ],
     ] = {

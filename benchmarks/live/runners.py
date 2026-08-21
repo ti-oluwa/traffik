@@ -4,7 +4,6 @@ Turns one `HttpScenario`/`WebSocketScenario` plus a running `Server` into a sing
 
 import asyncio
 import time
-import typing
 
 import httpx2
 
@@ -125,9 +124,9 @@ async def _send_sequential_with_keys(
     count: int,
     key_header: str,
     key_mod: int,
-) -> typing.Tuple[typing.List[float], int, int, int]:
+) -> tuple[list[float], int, int, int]:
     """Sequential requests indexed from `start_index`, each with a distinct key."""
-    latencies: typing.List[float] = []
+    latencies: list[float] = []
     successful = throttled = errors = 0
 
     for offset in range(count):

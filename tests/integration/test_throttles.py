@@ -4,7 +4,6 @@ Tests for core `HTTPThrottle`/`WebSocketThrottle` behavior: initialization, enab
 """
 
 import asyncio
-import typing
 from itertools import repeat
 
 import anyio
@@ -49,7 +48,7 @@ class TestThrottleBasic:
     async def test_throttle_initialization(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         with pytest.raises(ValueError):
             throttle_type(
@@ -80,7 +79,7 @@ class TestThrottleBasic:
     async def test_throttle_is_disabled_default_false(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="dis-default",
@@ -93,7 +92,7 @@ class TestThrottleBasic:
     async def test_throttle_disable_sets_flag(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="dis-flag",
@@ -107,7 +106,7 @@ class TestThrottleBasic:
     async def test_throttle_enable_clears_flag(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="dis-enable",
@@ -122,7 +121,7 @@ class TestThrottleBasic:
     async def test_update_rate_string(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-rate-str",
@@ -137,7 +136,7 @@ class TestThrottleBasic:
     async def test_update_rate_rate_object(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-rate-obj",
@@ -153,7 +152,7 @@ class TestThrottleBasic:
     async def test_update_rate_callable(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-rate-fn",
@@ -171,7 +170,7 @@ class TestThrottleBasic:
     async def test_update_cost_static(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-cost",
@@ -186,7 +185,7 @@ class TestThrottleBasic:
     async def test_update_cost_callable(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-cost-fn",
@@ -204,7 +203,7 @@ class TestThrottleBasic:
     async def test_update_min_wait_period(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-mwp",
@@ -220,7 +219,7 @@ class TestThrottleBasic:
     async def test_update_identifier(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-ident",
@@ -238,7 +237,7 @@ class TestThrottleBasic:
     async def test_update_headers_none_clears(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-hdrs",
@@ -253,7 +252,7 @@ class TestThrottleBasic:
     async def test_update_strategy(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-strategy",
@@ -268,7 +267,7 @@ class TestThrottleBasic:
     async def test_update_backend(
         self,
         inmemory_backend: InMemoryBackend,
-        throttle_type: typing.Type[Throttle[HTTPConnection]],
+        throttle_type: type[Throttle[HTTPConnection]],
     ) -> None:
         throttle = throttle_type(
             uid="upd-backend",
@@ -677,7 +676,7 @@ class TestWebSocketThrottle:
                     await backend.reset()
                     await backend.initialize()
 
-                    async def make_ws_request() -> typing.Tuple[str, int]:
+                    async def make_ws_request() -> tuple[str, int]:
                         try:
                             await ws.send_json({"message": "ping"})
                             response = await ws.receive_json()

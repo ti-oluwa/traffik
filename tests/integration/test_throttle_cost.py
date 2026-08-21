@@ -244,7 +244,7 @@ class TestWebSocketThrottleCost:
                 await inmemory_backend.reset()
                 await inmemory_backend.initialize()
 
-                async def make_ws_request(msg_id: int) -> typing.Tuple[str, int]:
+                async def make_ws_request(msg_id: int) -> tuple[str, int]:
                     try:
                         await ws.send_text(f"Message {msg_id}")
                         response = await ws.receive_text()

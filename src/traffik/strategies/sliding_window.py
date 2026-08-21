@@ -163,7 +163,7 @@ class SlidingWindowLogStrategy:
 
         async with backend.lock(f"lock:{log_key}", **self.lock_config):
             old_log = await backend.get(log_key)
-            entries: typing.Iterable[typing.Tuple[float, float]]
+            entries: typing.Iterable[tuple[float, float]]
             # If log exists, load and parse entries as [timestamp, cost] tuples
             if old_log and old_log != "":
                 try:
@@ -174,7 +174,7 @@ class SlidingWindowLogStrategy:
                 entries = []
 
             # Filter entries, sum costs, and find oldest timestamp in one pass for efficiency
-            valid_entries: typing.List[typing.Tuple[float, float]] = []
+            valid_entries: list[tuple[float, float]] = []
             current_total_cost = 0.0
             oldest_timestamp = float("inf")
 
@@ -238,7 +238,7 @@ class SlidingWindowLogStrategy:
         log_key = f"{full_key}:slidinglog"
 
         old_log = await backend.get(log_key)
-        entries: typing.Iterable[typing.Tuple[float, float]]
+        entries: typing.Iterable[tuple[float, float]]
         # If log exists, load and parse entries as [timestamp, cost] tuples
         if old_log and old_log != "":
             try:

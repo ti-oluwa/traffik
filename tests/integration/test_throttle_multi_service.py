@@ -393,7 +393,7 @@ class TestMultiServicePatterns:
 
                     async def make_request(
                         client: AsyncTestClient, service_name: str
-                    ) -> typing.Dict[str, typing.Any]:
+                    ) -> dict[str, typing.Any]:
                         try:
                             response = await client.get("/endpoint")
                             return {

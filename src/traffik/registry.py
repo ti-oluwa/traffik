@@ -324,7 +324,7 @@ def bypass_if(
 
 def _prep_rules(
     rules: typing.Iterable[Rule[typing.Any]],
-) -> typing.Tuple[Rule[typing.Any], ...]:
+) -> tuple[Rule[typing.Any], ...]:
     """
     Sort rules for optimal short-circuit evaluation order.
 
@@ -365,13 +365,13 @@ class ThrottleRegistry:
     __slots__ = ("_lock", "_registered", "_rules", "_throttle_refs")
 
     def __init__(self) -> None:
-        self._registered: typing.Set[str] = set()
+        self._registered: set[str] = set()
         """Set of registered throttle UIDs"""
         self._lock = threading.RLock()
         """Re-entrant lock for thread-safe registry operations"""
-        self._rules: typing.Dict[str, typing.Set[Rule[typing.Any]]] = {}
+        self._rules: dict[str, set[Rule[typing.Any]]] = {}
         """Mapping of throttle UIDs to rules that must pass for the throttle to be applied"""
-        self._throttle_refs: typing.Dict[str, weakref.ref] = {}  # type: ignore[type-arg]
+        self._throttle_refs: dict[str, weakref.ref] = {}  # type: ignore[type-arg]
         """Weak references to registered throttle instances, keyed by UID"""
 
     def count(self) -> int:
@@ -445,7 +445,7 @@ class ThrottleRegistry:
             else:
                 self._rules[target_uid].update(rules)
 
-    def get_rules(self, uid: str) -> typing.List[Rule[typing.Any]]:
+    def get_rules(self, uid: str) -> list[Rule[typing.Any]]:
         """
         Get all rules associated with a throttle.
 

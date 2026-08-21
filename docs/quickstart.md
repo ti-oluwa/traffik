@@ -300,8 +300,8 @@ async def chat_endpoint(
     try:
         while True:
             data = await websocket.receive_json()
-            wait_ms = await message_throttle(websocket, context={"scope": "chat"})  # (2)!
-            if wait_ms or is_throttled(websocket):  # (3)!
+            await message_throttle(websocket, context={"scope": "chat"})  # (2)!
+            if is_throttled(websocket):  # (3)!
                 continue
 
             response = {"echo": data, "type": "message"}

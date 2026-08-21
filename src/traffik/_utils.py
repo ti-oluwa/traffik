@@ -46,7 +46,7 @@ class ProxyHeaders(enum.IntFlag):
 
 def _as_cache_key(
     trusted_proxies: typing.Sequence[TrustedProxy],
-) -> typing.Tuple[TrustedProxy, ...]:
+) -> tuple[TrustedProxy, ...]:
     """Coerce to a hashable tuple for `_split_trusted_proxies`'s cache."""
     return (
         trusted_proxies
@@ -57,8 +57,8 @@ def _as_cache_key(
 
 @functools.lru_cache(maxsize=128)
 def _split_trusted_proxies(
-    trusted_proxies: typing.Tuple[TrustedProxy, ...],
-) -> typing.Tuple[typing.FrozenSet[str], typing.Tuple[Network, ...]]:
+    trusted_proxies: tuple[TrustedProxy, ...],
+) -> tuple[frozenset[str], tuple[Network, ...]]:
     """
     Split configured trusted proxies into single addresses and networks
     (checked by containment, only when needed).
@@ -67,8 +67,8 @@ def _split_trusted_proxies(
     configuration, so there's no reason to redo the split, or re-stringify
     every address, on every request that reuses the same configuration.
     """
-    exact: typing.Set[str] = set()
-    networks: typing.List[Network] = []
+    exact: set[str] = set()
+    networks: list[Network] = []
 
     for proxy in trusted_proxies:
         if isinstance(proxy, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
@@ -80,7 +80,7 @@ def _split_trusted_proxies(
 
 
 def _is_trusted_proxy(
-    address: str, exact: typing.FrozenSet[str], networks: typing.Tuple[Network, ...]
+    address: str, exact: frozenset[str], networks: tuple[Network, ...]
 ) -> bool:
     """Returns whether an address belongs to a trusted proxy."""
     if address in exact:
@@ -144,8 +144,8 @@ def get_remote_address(
         return None
 
     peer = client.host
-    exact: typing.FrozenSet[str] = frozenset()
-    networks: typing.Tuple[Network, ...] = ()
+    exact: frozenset[str] = frozenset()
+    networks: tuple[Network, ...] = ()
     if trusted_proxies:
         exact, networks = _split_trusted_proxies(_as_cache_key(trusted_proxies))
 
@@ -388,7 +388,7 @@ class _TaskTimer:
             self._task = task
             self._timer_handler = self._loop.call_later(self._timeout, self._on_timeout)
 
-    def _handle_timed_out(self, exc_type: typing.Type[BaseException]) -> None:
+    def _handle_timed_out(self, exc_type: type[BaseException]) -> None:
         """
         Handle the case where the timeout was triggered.
 
@@ -406,9 +406,7 @@ class _TaskTimer:
             # it's not a real cancellation, was a timeout
             raise self._error from None  # suppress context of cancellation
 
-    def stop(
-        self, exc_type: typing.Optional[typing.Type[BaseException]] = None
-    ) -> None:
+    def stop(self, exc_type: typing.Optional[type[BaseException]] = None) -> None:
         """
         Stop (and cancel) the timer, handling any timeout cancellation and propagation
         if the timer was triggered.
@@ -441,7 +439,7 @@ class _TaskTimer:
 
     async def __aexit__(
         self,
-        exc_type: typing.Optional[typing.Type[BaseException]],
+        exc_type: typing.Optional[type[BaseException]],
         exc_value: typing.Optional[BaseException],
         traceback: typing.Optional[TracebackType],
     ) -> bool:
@@ -597,7 +595,7 @@ class CircuitBreaker:
         async with self._lock:
             self._close()
 
-    async def info(self) -> typing.Dict[str, typing.Any]:
+    async def info(self) -> dict[str, typing.Any]:
         """Return current breaker information."""
         async with self._lock:
             return {

@@ -133,7 +133,7 @@ class ConnectionThrottled(HTTPException, TraffikException):
 
 # Borrowed from Starlette's exception handling utilities
 def _lookup_exception_handler(
-    exc_handlers: typing.Mapping[typing.Type[typing.Any], StarletteExceptionHandler],
+    exc_handlers: typing.Mapping[type[typing.Any], StarletteExceptionHandler],
     exc: Exception,
 ) -> typing.Optional[StarletteExceptionHandler]:
     for cls in type(exc).__mro__:

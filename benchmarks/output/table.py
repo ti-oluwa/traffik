@@ -1,5 +1,3 @@
-import typing
-
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
@@ -8,7 +6,7 @@ from benchmarks.base import AggregatedResult
 
 
 def print_results_table(
-    results: typing.List[AggregatedResult],
+    results: list[AggregatedResult],
     title: str = "Benchmark Results",
 ) -> None:
     """
@@ -84,7 +82,7 @@ def print_results_table(
 
 def print_comparison_table(
     baseline: AggregatedResult,
-    others: typing.List[AggregatedResult],
+    others: list[AggregatedResult],
 ) -> None:
     """
     Print a comparison table showing delta vs a baseline result.

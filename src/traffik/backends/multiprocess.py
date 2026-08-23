@@ -536,11 +536,17 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     Total shared memory consumed is approximately:
 
     ```
-    number_of_shards * (
-        ceil(max_keys / number_of_shards) * (max_value_size + 37)  # slot data
-        + next_power_of_two(ceil(max_keys / number_of_shards / 0.65)) * 206  # hash table
-        + 4 * ceil(max_keys / number_of_shards) + 4  # shard header
-    ) + lock_pool_size * lock_pool_headroom  # lock byte region
+    (
+        number_of_shards
+        * (
+            ceil(max_keys / number_of_shards) * (max_value_size + 37)  # slot data
+            + next_power_of_two(ceil(max_keys / number_of_shards / 0.65))
+            * 206  # hash table
+            + 4 * ceil(max_keys / number_of_shards)
+            + 4  # shard header
+        )
+        + lock_pool_size * lock_pool_headroom
+    )  # lock byte region
     ```
 
     With the default parameters this is roughly **64 MB**. Verify this fits

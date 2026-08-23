@@ -192,22 +192,20 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
     Example (bound mode with cost aggregation):
 
     ```python
-
     # Before entering the quota context, you may want to check if the
     # expected quota usage is available. This is a best-effort check.
     if not await throttle.check(conn, cost=5):
         raise ConnectionThrottled()
 
     async with throttle.quota(conn, lock=True) as quota:
-        quota(cost=2)          # Entry 1: cost=2
-        quota(cost=3)          # Aggregated into Entry 1: cost=5
+        quota(cost=2)  # Entry 1: cost=2
+        quota(cost=3)  # Aggregated into Entry 1: cost=5
         quota(other_throttle)  # Entry 2: different throttle
     ```
 
     Example (unbound mode):
 
     ```python
-
     async with QuotaContext(conn, lock=True) as quota:
         quota(throttle1, cost=2)
         quota(throttle2)
@@ -471,10 +469,10 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
 
         ```python
         async with throttle.quota(conn) as quota:
-            quota.consume(cost=2)        # Entry 1: cost=2
+            quota.consume(cost=2)  # Entry 1: cost=2
             # `__call__` is alias for `consume`
-            quota(cost=3)        # Aggregated into Entry 1: cost=5
-            quota(other_throttle, cost=1) # Entry 2: different throttle
+            quota(cost=3)  # Aggregated into Entry 1: cost=5
+            quota(other_throttle, cost=1)  # Entry 2: different throttle
         ```
 
         Example (with retry on specific exceptions):

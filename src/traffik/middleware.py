@@ -49,13 +49,15 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
     from traffik.backends.inmemory import InMemoryBackend
     from traffik.middleware import ThrottleMiddleware
 
+
     # Use a predicate to apply throttle for only premium users.
     async def is_premium_user(
         connection: HTTPConnection,
-        context: typing.Optional[typing.Mapping[str, typing.Any]] = None
+        context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
     ) -> bool:
         # Check if the user is a premium user
         return connection.headers.get("X-User-Tier") == "premium"
+
 
     http_throttle = MiddlewareThrottle(
         HTTPThrottle(uid="http-limit", rate="10/min"),
@@ -392,9 +394,9 @@ class ThrottleMiddleware:
                 methods={"GET", "POST"},
             )
         ],
-        backend=backend, # Optional, can be omitted to use the context(lifespan) backend
+        backend=backend,  # Optional, can be omitted to use the context(lifespan) backend
     )
-    ... # Other routes and/or middleware
+    ...  # Other routes and/or middleware
     ```
 
     """

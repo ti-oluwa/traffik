@@ -57,10 +57,7 @@ def fallback(
         uid="api",
         rate="100/min",
         backend=primary,
-        on_error=fallback(
-            backend=secondary,
-            on=(BackendError, TimeoutError)
-        )
+        on_error=fallback(backend=secondary, on=(BackendError, TimeoutError)),
     )
     ```
 
@@ -139,10 +136,10 @@ def retry(
         rate="100/min",
         on_error=retry(
             max_retries=3,
-            retry_delay=0.1,           # Start with 100ms delay
-            backoff_multiplier=2.0,    # Double delay each retry
-            retry_on=(TimeoutError,)   # Only retry timeouts
-        )
+            retry_delay=0.1,  # Start with 100ms delay
+            backoff_multiplier=2.0,  # Double delay each retry
+            retry_on=(TimeoutError,),  # Only retry timeouts
+        ),
     )
     ```
 
@@ -222,9 +219,7 @@ def failover(
     secondary = InMemoryBackend(namespace="fallback")
 
     breaker = CircuitBreaker(
-        failure_threshold=5,
-        recovery_timeout=30.0,
-        success_threshold=2
+        failure_threshold=5, recovery_timeout=30.0, success_threshold=2
     )
 
     throttle = HTTPThrottle(
@@ -232,11 +227,8 @@ def failover(
         rate="100/min",
         backend=primary,
         on_error=failover(
-            backend=secondary,
-            breaker=breaker,
-            max_retries=2,
-            retry_delay=0.05
-        )
+            backend=secondary, breaker=breaker, max_retries=2, retry_delay=0.05
+        ),
     )
     ```
 

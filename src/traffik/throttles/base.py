@@ -1131,9 +1131,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             # Lock is acquired here using throttle.uid as key
 
             # Uses the owner throttle (no throttle argument needed)
-            quota.consume(cost=2)          # Entry 1: cost=2
-            quota.consume(cost=3)          # Aggregated into Entry 1: cost=5
-            quota.consume()                # Aggregated into Entry 1: cost=6
+            quota.consume(cost=2)  # Entry 1: cost=2
+            quota.consume(cost=3)  # Aggregated into Entry 1: cost=5
+            quota.consume()  # Aggregated into Entry 1: cost=6
 
             # Can still use other throttles
             quota.consume(other_throttle, cost=1)  # Entry 2: different throttle
@@ -1153,7 +1153,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         async with throttle.quota(
             conn,
             lock="user:123:api_calls",
-            lock_config={"ttl": 30, "blocking_timeout": 5}
+            lock_config={"ttl": 30, "blocking_timeout": 5},
         ) as quota:
             quota.consume(cost=2)
             await process()
@@ -1421,10 +1421,12 @@ def is_throttled(connection: HTTPConnection) -> bool:
         await asyncio.sleep(0.1)  # Let the message flush before closing
         await connection.close(code=1008, reason="Throttled")
 
+
     ws_throttle = WebSocketThrottle(
         ...,
         handle_throttled=ws_throttled,
     )
+
 
     @app.websocket("/ws/...")
     async def endpoint(websocket: WebSocket) -> None:
@@ -1528,11 +1530,11 @@ def throttled(
 
     app = Starlette()
 
+
     @app.route("/throttled")
     @throttled(burst_throttle, sustained_throttle)
     async def route(request: Request):
         return JSONResponse({"message": "Limited route 1"})
-
     ```
     """
     if len(throttles) == 0:

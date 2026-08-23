@@ -794,6 +794,8 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
 
         ```python
         ...
+
+
         async def clear(self) -> None:
             # Flush entire Memcached cache, if not tracking keys
             if self.connection is not None and not self.track_keys:

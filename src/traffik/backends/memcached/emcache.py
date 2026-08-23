@@ -890,10 +890,11 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         `flush_all()` instead:
 
         ```python
-
         async def clear(self) -> None:
             if self.connection is not None and not self.track_keys:
-                await self.connection.flush_all(self._host_addresses[0]) # Or something of the sort
+                await self.connection.flush_all(
+                    self._host_addresses[0]
+                )  # Or something of the sort
                 return
             await super().clear()
         ```

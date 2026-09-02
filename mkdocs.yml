@@ -56,7 +56,7 @@ theme:
 
   font:
     text: Manrope
-    code: Cascadia
+    code: Fira Code
 
 plugins:
   - search:

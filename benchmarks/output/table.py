@@ -2,7 +2,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from benchmarks.base import AggregatedResult
+from benchmarks.types import AggregatedResult
 
 
 def print_results_table(

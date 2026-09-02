@@ -7,9 +7,9 @@ import time
 
 import httpx2
 
-from benchmarks.base import BenchmarkConfig, ScenarioResult
 from benchmarks.live import client as live_client
 from benchmarks.scenarios import HttpScenario, WebSocketScenario
+from benchmarks.types import BenchmarkConfig, ScenarioResult
 
 
 async def run_http_like_scenario(
@@ -71,7 +71,7 @@ async def run_http_like_scenario(
                 batch_ok,
                 batch_throttled,
                 batch_errors,
-            ) = await _send_sequential_with_keys(
+            ) = await send_sequential_with_keys(
                 client,
                 start_index=start_idx,
                 count=count,
@@ -118,7 +118,7 @@ async def run_http_like_scenario(
     )
 
 
-async def _send_sequential_with_keys(
+async def send_sequential_with_keys(
     client: httpx2.AsyncClient,
     start_index: int,
     count: int,

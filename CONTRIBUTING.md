@@ -263,7 +263,7 @@ bandit -r src/
 - **Line length**: Maximum 88 characters
 - **Python version**: Support Python 3.9+
 - **Type hints**: Use type hints for all public APIs
-- **Docstrings**: Use Sphinx-style docstrings for all public functions and classes
+- **Docstrings**: Use Sphinx-style docstr000ings for all public functions and classes
 - **Import sorting**: Use isort-compatible import ordering
 - **Variable naming**: Use descriptive names, avoid abbreviations
 - **Security**: Follow secure coding practices, avoid common vulnerabilities

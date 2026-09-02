@@ -8,9 +8,9 @@ import click
 import uvloop
 from typing_extensions import ParamSpec, TypeVar
 
-from benchmarks.base import BackendKind, BenchmarkConfig, StrategyKind
 from benchmarks.bench.http import run_scenarios as run_http_scenarios
 from benchmarks.bench.middleware import run_scenarios as run_middleware_scenarios
+from benchmarks.types import BackendKind, BenchmarkConfig, StrategyKind
 
 if IS_WINDOWS := (platform.system() == "Windows"):
     from benchmarks.bench.multiprocess import (
@@ -39,7 +39,7 @@ def options(
     Common click options for all benchmark commands.
 
     :param default_workers: Default for `--workers`. The `multiprocess`
-        command wants this >1 by default (that's the whole point of it);
+        command wants this >1 by default (that'scenario the whole point of it);
         the others default to a single real process.
     """
 
@@ -53,7 +53,7 @@ def options(
         )
         @click.option(
             "--strategy",
-            "-s",
+            "-scenario",
             type=click.Choice(StrategyKind.choices()),
             default="fixed_window",
             help="Strategy to benchmark.",
@@ -127,10 +127,10 @@ def options(
     return decorator
 
 
-def _check_workers_platform(workers: int) -> None:
+def check_workers_platform(workers: int) -> None:
     if workers > 1 and platform.system() == "Windows":
         click.echo(
-            "ERROR: --workers > 1 requires a POSIX system (gunicorn's "
+            "ERROR: --workers > 1 requires a POSIX system (gunicorn'scenario "
             "worker model relies on the 'fork' start method, which "
             "Windows does not support).",
             err=True,
@@ -143,10 +143,10 @@ def cli() -> None:
     """
     Traffik benchmark suite.
 
-    Every command spawns the target app as a real `uvicorn` (single
+    Every command spawns the target app as a `uvicorn` (single
     worker) or `gunicorn` (multiple forked workers, via --workers)
-    process, listening on a real loopback socket, and drives it with a
-    real async HTTP or WebSocket client - not an in-process ASGI call.
+    process, listening on a loopback socket, and drives it with
+    an async HTTP or WebSocket client.
     """
     pass
 
@@ -172,7 +172,7 @@ def http_command(
     Available scenarios: `below_limit`, `at_limit`, `over_limit`, `concurrent`,
     `hot_key`, `many_keys`, `window_boundary`, `sustained`, `error_recovery`.
     """
-    _check_workers_platform(workers)
+    check_workers_platform(workers)
     config = BenchmarkConfig(
         backend_kind=backend,
         strategy_kind=strategy,
@@ -189,7 +189,7 @@ def http_command(
     if scenarios == "all":
         scenario_keys = list(HTTP_SCENARIOS.keys())
     else:
-        scenario_keys = [s.strip() for s in scenarios.split(",")]
+        scenario_keys = [scenario.strip() for scenario in scenarios.split(",")]
 
     results = asyncio.run(run_http_scenarios(config, scenario_keys, warmup))
     if output == "json":
@@ -226,7 +226,7 @@ def middleware_command(
     Available scenarios: `below_limit`, `at_limit`, `over_limit`, `concurrent`,
     `hot_key`, `many_keys`, `window_boundary`, `sustained`, `error_recovery`, `selective`.
     """
-    _check_workers_platform(workers)
+    check_workers_platform(workers)
     config = BenchmarkConfig(
         backend_kind=backend,
         strategy_kind=strategy,
@@ -243,7 +243,7 @@ def middleware_command(
     if scenarios == "all":
         scenario_keys = list(MIDDLEWARE_SCENARIOS.keys())
     else:
-        scenario_keys = [s.strip() for s in scenarios.split(",")]
+        scenario_keys = [scenario.strip() for scenario in scenarios.split(",")]
 
     results = asyncio.run(run_middleware_scenarios(config, scenario_keys, warmup))
     if output == "json":
@@ -279,7 +279,7 @@ def websocket_command(
 
     Available scenarios: `below_limit`, `over_limit`, `burst`, `concurrent`, `window_boundary`.
     """
-    _check_workers_platform(workers)
+    check_workers_platform(workers)
     config = BenchmarkConfig(
         backend_kind=backend,
         strategy_kind=strategy,
@@ -296,7 +296,7 @@ def websocket_command(
     if scenarios == "all":
         scenario_keys = list(WEBSOCKET_SCENARIOS.keys())
     else:
-        scenario_keys = [s.strip() for s in scenarios.split(",")]
+        scenario_keys = [scenario.strip() for scenario in scenarios.split(",")]
 
     results = asyncio.run(run_websocket_scenarios(config, scenario_keys, warmup))
     if output == "json":
@@ -328,7 +328,7 @@ def multiprocess_command(
     scenarios,
 ) -> None:
     """
-    Benchmark MultiProcessInMemoryBackend across real forked gunicorn
+    Benchmark `MultiProcessInMemoryBackend` across real forked gunicorn
     workers (POSIX only).
 
     Available scenarios: `below_limit`, `at_limit`, `over_limit`, `concurrent`,
@@ -362,7 +362,7 @@ def multiprocess_command(
     if scenarios == "all":
         scenario_keys = list(MULTIPROCESS_SCENARIOS.keys())
     else:
-        scenario_keys = [s.strip() for s in scenarios.split(",")]
+        scenario_keys = [scenario.strip() for scenario in scenarios.split(",")]
 
     results = asyncio.run(run_multiprocess_scenarios(config, scenario_keys, warmup))
     if output == "json":

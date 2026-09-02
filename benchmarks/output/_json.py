@@ -4,7 +4,7 @@ import platform
 import sys
 import typing
 
-from benchmarks.base import AggregatedResult
+from benchmarks.types import AggregatedResult
 
 
 def result_to_dict(result: AggregatedResult) -> dict:

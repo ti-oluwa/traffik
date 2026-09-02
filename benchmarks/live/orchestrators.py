@@ -15,14 +15,14 @@ import sys
 import typing
 import uuid
 
-from benchmarks.base import AggregatedResult, BenchmarkConfig, ScenarioResult
 from benchmarks.live import client as live_client
 from benchmarks.live.runners import run_http_like_scenario, run_websocket_scenario
 from benchmarks.live.server import ServerStartupError, start_server
 from benchmarks.scenarios import HttpScenario, WebSocketScenario
+from benchmarks.types import AggregatedResult, BenchmarkConfig, ScenarioResult
 
 
-def _build_env(
+def build_environment_variables(
     config: BenchmarkConfig,
     *,
     rate: str,
@@ -47,7 +47,7 @@ def _build_env(
     }
 
 
-def _maybe_warn_unshared_state(config: BenchmarkConfig) -> None:
+def warn_unshared_state(config: BenchmarkConfig) -> None:
     if config.workers > 1 and config.backend_kind == "inmemory":
         print(
             "WARN: --workers > 1 with --backend inmemory: each forked worker "
@@ -83,7 +83,7 @@ async def run_http_scenarios(
         `"multiprocess"` regardless of what `--backend` was given).
     :return: One `AggregatedResult` per successfully-run scenario.
     """
-    _maybe_warn_unshared_state(config)
+    warn_unshared_state(config)
     results: list[AggregatedResult] = []
 
     for scenario_key in scenario_keys:
@@ -92,7 +92,7 @@ async def run_http_scenarios(
             continue
 
         scenario = scenarios[scenario_key]
-        env = _build_env(
+        env = build_environment_variables(
             config,
             rate=scenario.rate,
             uid=f"bench_{scenario_key}",
@@ -177,7 +177,7 @@ async def run_websocket_scenarios(
     :param app_path: `module:app` path uvicorn/gunicorn will import.
     :return: One `AggregatedResult` per successfully-run scenario.
     """
-    _maybe_warn_unshared_state(config)
+    warn_unshared_state(config)
     results: list[AggregatedResult] = []
 
     for scenario_key in scenario_keys:
@@ -186,7 +186,7 @@ async def run_websocket_scenarios(
             continue
 
         scenario = scenarios[scenario_key]
-        env = _build_env(
+        env = build_environment_variables(
             config,
             rate=scenario.rate,
             uid=f"bench_ws_{scenario_key}",

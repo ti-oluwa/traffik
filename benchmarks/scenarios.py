@@ -1,5 +1,5 @@
 """
-Declarative scenario definitions.
+Benchmark scenario definitions.
 
 `mode` determines which traffic pattern is used:
 
@@ -54,7 +54,14 @@ class HttpScenario:
     name: str
     rate: str
     total_requests: int
-    mode: str = "sequential"
+    mode: typing.Literal[
+        "sequential",
+        "concurrent",
+        "waves",
+        "unique_keys_batched",
+        "unique_keys_split",
+        "mixed_paths",
+    ] = "sequential"
     on_error: str = "raise"
     headers: typing.Optional[dict[str, str]] = None
     waves: typing.Optional[tuple[tuple[int, float], ...]] = None
@@ -172,7 +179,7 @@ HTTP_SCENARIOS: dict[str, HttpScenario] = {
 
 
 # --------------------------------------------------------------------------
-# Middleware scenarios - same shape, plus "selective" (mixed throttled /
+# Middleware scenarios: same shape, plus "selective" (mixed throttled /
 # exempt paths). Note "concurrent" here differs deliberately from the HTTP
 # version: it round-robins across `--concurrency` distinct identities
 # rather than hammering a single shared one.
@@ -262,7 +269,7 @@ MIDDLEWARE_SCENARIOS: dict[str, HttpScenario] = {
 
 
 # --------------------------------------------------------------------------
-# Multiprocess scenarios - the HTTP set again (forced onto
+# Multiprocess scenarios: the HTTP set again (forced onto
 # BENCH_BACKEND=multiprocess, run under gunicorn's forked workers), plus two
 # scenarios specific to the shared-memory backend's own characteristics.
 # --------------------------------------------------------------------------

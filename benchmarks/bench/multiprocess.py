@@ -6,9 +6,9 @@ if platform.system() == "Windows":
         "This module requires the 'fork' multiprocessing start method."
     )
 
-from benchmarks.base import AggregatedResult, BenchmarkConfig
 from benchmarks.live.orchestrators import run_http_scenarios
 from benchmarks.scenarios import MULTIPROCESS_SCENARIOS
+from benchmarks.types import AggregatedResult, BenchmarkConfig
 
 # Reuses the plain HTTP (Depends-based) app. What makes this "multiprocess"
 # is BENCH_BACKEND=multiprocess (forced below) plus real gunicorn workers

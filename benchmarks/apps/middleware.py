@@ -7,7 +7,7 @@ with `/unthrottled` left exempt for the selective-throttling scenario.
 
 from fastapi import FastAPI
 
-from benchmarks.apps.config import backend_from_env, env, strategy_from_env
+from benchmarks.apps.config import backend_from_env, get_env, strategy_from_env
 from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
@@ -17,12 +17,12 @@ strategy = strategy_from_env()
 registry = ThrottleRegistry()
 
 throttle = HTTPThrottle(
-    uid=env("BENCH_UID", "bench_middleware"),
-    rate=env("BENCH_RATE", "100/60s"),
+    uid=get_env("BENCH_UID", "bench_middleware"),
+    rate=get_env("BENCH_RATE", "100/60s"),
     backend=backend,
     strategy=strategy,
     registry=registry,
-    on_error=env("BENCH_ON_ERROR", "raise"),  # type: ignore[arg-type]
+    on_error=get_env("BENCH_ON_ERROR", "raise"),  # type: ignore[arg-type]
 )
 middleware_throttle = MiddlewareThrottle(throttle, path="/test", methods={"GET"})
 

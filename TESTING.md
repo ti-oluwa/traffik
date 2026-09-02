@@ -143,7 +143,7 @@ For manual testing without automation tools:
 ```bash
 # Install and test
 uv sync --group test
-uv run python -c "import traffik; print('✅ Import successful')"
+uv run python -c "import traffik; print('Import successful!')"
 ```
 
 ### Specific Test Categories

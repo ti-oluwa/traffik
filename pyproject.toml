@@ -114,6 +114,9 @@ line-length = 88
 target-version = "py39"
 lint.extend-select = ["I", "TID", "F", "UP"]
 
+[tool.ruff.format]
+docstring-code-format = true
+
 [tool.mypy]
 namespace_packages = "True"
 mypy_path = "src"

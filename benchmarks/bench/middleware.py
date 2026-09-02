@@ -1,6 +1,6 @@
-from benchmarks.base import AggregatedResult, BenchmarkConfig
 from benchmarks.live.orchestrators import run_http_scenarios
 from benchmarks.scenarios import MIDDLEWARE_SCENARIOS
+from benchmarks.types import AggregatedResult, BenchmarkConfig
 
 app_path = "benchmarks.apps.middleware:app"
 

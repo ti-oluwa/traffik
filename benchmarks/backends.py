@@ -3,7 +3,7 @@ import typing
 
 from starlette.requests import Request
 
-from benchmarks.base import BenchmarkConfig
+from benchmarks.types import BenchmarkConfig
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.memcached.aiomcache import MemcachedBackend as AiomcacheBackend

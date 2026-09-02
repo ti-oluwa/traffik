@@ -17,14 +17,14 @@ from traffik.backends.redis.aioredis import RedisBackend as AioredisBackend
 from traffik.backends.redis.coredis import RedisBackend as CoredisBackend
 
 
-def env(name: str, default: str) -> str:
+def get_env(name: str, default: str) -> str:
     """Read a environment variable, falling back to `default`."""
-    return os.environ.get(name, default)
+    return os.getenv(name, default)
 
 
 def int_env(name: str, default: int) -> int:
     """Read a environment variable as an int."""
-    raw = os.environ.get(name)
+    raw = os.getenv(name)
     return int(raw) if raw is not None else default
 
 
@@ -50,10 +50,10 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
     exists, matching `MultiProcessInMemoryBackend`'s documented deployment
     pattern.
     """
-    kind = env("BENCH_BACKEND", "inmemory").lower()
+    kind = get_env("BENCH_BACKEND", "inmemory").lower()
     # Unique per server process (the port is unique per run) so repeated
     # benchmark invocations never collide on namespace/shared-memory names.
-    namespace = env("BENCH_NAMESPACE", "bench")
+    namespace = get_env("BENCH_NAMESPACE", "bench")
 
     if kind == "inmemory":
         return InMemoryBackend(
@@ -75,21 +75,21 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
         return backend
     elif kind == "aioredis":
         return AioredisBackend(
-            connection=env("BENCH_REDIS_URL", "redis://localhost:6379/0"),
+            connection=get_env("BENCH_REDIS_URL", "redis://localhost:6379/0"),
             namespace=namespace,
             identifier=get_identifier,
             persistent=False,
         )
     elif kind == "coredis":
         return CoredisBackend(
-            connection=env("BENCH_REDIS_URL", "redis://localhost:6379/0"),
+            connection=get_env("BENCH_REDIS_URL", "redis://localhost:6379/0"),
             namespace=namespace,
             identifier=get_identifier,
             persistent=False,
         )
     elif kind == "aiomcache":
         return AiomcacheBackend(
-            host=env("BENCH_MEMCACHED_HOST", "localhost"),
+            host=get_env("BENCH_MEMCACHED_HOST", "localhost"),
             port=int_env("BENCH_MEMCACHED_PORT", 11211),
             namespace=namespace,
             identifier=get_identifier,
@@ -102,7 +102,7 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
         )
 
         return EmcacheBackend(
-            host=env("BENCH_MEMCACHED_HOST", "localhost"),
+            host=get_env("BENCH_MEMCACHED_HOST", "localhost"),
             port=int_env("BENCH_MEMCACHED_PORT", 11211),
             namespace=namespace,
             identifier=get_identifier,
@@ -115,7 +115,7 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
 
 def strategy_from_env():
     """Build the throttling strategy selected by `BENCH_STRATEGY`."""
-    kind = env("BENCH_STRATEGY", "fixed_window").lower()
+    kind = get_env("BENCH_STRATEGY", "fixed_window").lower()
     if kind not in STRATEGIES:
         raise ValueError(f"Unknown `BENCH_STRATEGY`: {kind!r}")
     return STRATEGIES[kind]()

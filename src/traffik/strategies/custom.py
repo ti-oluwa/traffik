@@ -272,13 +272,15 @@ class TieredRateStrategy:
     # Free: 100/hour, Premium: 500/hour, Enterprise: 1000/hour
     strategy = TieredRateStrategy(
         tier_multipliers={"free": 1.0, "premium": 5.0, "enterprise": 10.0},
-        default_tier="free"
+        default_tier="free",
     )
+
 
     # Identifier should format as "tier:{tier}:user:{id}"
     async def tier_identifier(connection):
         user = extract_user(connection)
         return f"tier:{user.tier}:user:{user.id}"
+
 
     throttle = HTTPThrottle(
         uid="api",
@@ -451,9 +453,9 @@ class AdaptiveThrottleStrategy:
 
     ```python
     strategy = AdaptiveThrottleStrategy(
-        load_threshold=0.8,        # Start throttling at 80% capacity
-        reduction_factor=0.6,      # Reduce to 60% of normal limit
-        recovery_rate=0.1,         # Recover 10% per window
+        load_threshold=0.8,  # Start throttling at 80% capacity
+        reduction_factor=0.6,  # Reduce to 60% of normal limit
+        recovery_rate=0.1,  # Recover 10% per window
     )
 
     throttle = HTTPThrottle(
@@ -656,11 +658,13 @@ class PriorityQueueStrategy:
         max_queue_size=1000,  # Prevent unbounded growth
     )
 
+
     # Identifier encodes priority: "priority:{level}:user:{id}"
     async def priority_identifier(connection):
         user = extract_user(connection)
         priority = connection.headers.get("X-Priority", "2")
         return f"priority:{priority}:user:{user.id}"
+
 
     throttle = HTTPThrottle(
         uid="priority_api",
@@ -893,7 +897,7 @@ class QuotaWithRolloverStrategy:
     ```python
     strategy = QuotaWithRolloverStrategy(
         rollover_percentage=0.5,  # Roll over 50% of unused quota
-        max_rollover=500,          # Max 500 requests can roll over
+        max_rollover=500,  # Max 500 requests can roll over
     )
 
     throttle = HTTPThrottle(
@@ -1066,8 +1070,8 @@ class TimeOfDayStrategy:
     strategy = TimeOfDayStrategy(
         time_windows=[
             # (start_hour, end_hour, multiplier)
-            (0, 6, 2.0),    # Night: 2x limit (200/hour)
-            (6, 18, 1.0),   # Day: 1x limit (100/hour)
+            (0, 6, 2.0),  # Night: 2x limit (200/hour)
+            (6, 18, 1.0),  # Day: 1x limit (100/hour)
             (18, 24, 1.5),  # Evening: 1.5x limit (150/hour)
         ],
         timezone_offset=0,  # UTC offset in hours
@@ -1268,7 +1272,7 @@ class CostBasedTokenBucketStrategy:
     )
 
     # Usage with dynamic costs
-    await throttle(request, cost=1)   # Simple read
+    await throttle(request, cost=1)  # Simple read
     await throttle(request, cost=10)  # Complex query
     await throttle(request, cost=50)  # Report generation
     ```

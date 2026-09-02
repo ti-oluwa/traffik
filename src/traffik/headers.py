@@ -77,17 +77,17 @@ class Header(typing.Generic[HTTPConnectionT]):
     def resolver(connection, stat, context):
         return f"Custom-{stat.rate.limit}"
 
+
     def when_func(connection, stat, context):
         return stat.hits_remaining < 5
+
 
     headers = {
         # Static/raw header that is always included
         "X-RateLimit-Remaining": Header.REMAINING(when="always"),
         "X-RateLimit-Limit": Header.LIMIT(when="always"),
-
         # This header is only included when the request is throttled (hits_remaining <= 0)
         "X-RateLimit-Reset": Header.RESET_SECONDS(when="throttled"),
-
         # Custom header that is included when hits remaining is less than 5
         "X-Custom-Header": Header(resolver, when=when_func),
     }
@@ -236,9 +236,11 @@ class Header(typing.Generic[HTTPConnectionT]):
         # Create a header that is only included when throttled
         header = Header.REMAINING(when="throttled")
 
+
         # Create a header with a custom condition
         def hits_less_than_5(connection, stat, context):
             return stat.hits_remaining < 5
+
 
         header = Header.REMAINING(when=hits_less_than_5)
         ```
@@ -331,10 +333,12 @@ class Headers(Mapping[str, typing.Union[str, Header[HTTPConnectionT]]]):
     ```python
     from traffik.headers import Headers, Header
 
-    base = Headers({
-        "X-RateLimit-Limit": Header.LIMIT(when="always"),
-        "X-RateLimit-Remaining": Header.REMAINING(when="always"),
-    })
+    base = Headers(
+        {
+            "X-RateLimit-Limit": Header.LIMIT(when="always"),
+            "X-RateLimit-Remaining": Header.REMAINING(when="always"),
+        }
+    )
 
     # Disable a header for a single hit by using the sentinel identity
     overrides = {"X-RateLimit-Remaining": Header.DISABLE}

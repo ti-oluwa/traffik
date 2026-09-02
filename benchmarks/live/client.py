@@ -7,8 +7,7 @@ import httpx2
 import websockets
 
 Headers = typing.Optional[dict[str, str]]
-SendResult = tuple[list[float], int, int, int]
-# latencies, ok, throttled, error
+SendResult = tuple[list[float], int, int, int]  # latencies, ok, throttled, error
 
 
 def make_http_client(
@@ -113,7 +112,7 @@ async def send_concurrent(
     for batch_idx in range(num_batches):
         batch_size = min(concurrency, n - batch_idx * concurrency)
 
-        async def _request(index: int) -> tuple[float, int]:
+        async def request(index: int) -> tuple[float, int]:
             request_headers = dict(headers or {})
             if key_header and key_mod:
                 request_headers[key_header] = f"user-{index % key_mod}"
@@ -121,7 +120,7 @@ async def send_concurrent(
                 client, path=path, headers=request_headers or None
             )
 
-        tasks = [_request(batch_idx * concurrency + i) for i in range(batch_size)]
+        tasks = [request(batch_idx * concurrency + i) for i in range(batch_size)]
         results = await asyncio.gather(*tasks)
 
         for latency, status_code in results:
@@ -259,7 +258,7 @@ async def ws_concurrent_connections(
         all connections.
     """
 
-    async def _one_connection() -> tuple[list[float], int, int]:
+    async def connection() -> tuple[list[float], int, int]:
         try:
             return await ws_send_messages(
                 uri, messages_per_connection, connect_timeout=connect_timeout
@@ -267,7 +266,7 @@ async def ws_concurrent_connections(
         except Exception:  # noqa
             return [], 0, 0
 
-    results = await asyncio.gather(*[_one_connection() for _ in range(connections)])
+    results = await asyncio.gather(*[connection() for _ in range(connections)])
 
     all_latencies: list[float] = []
     total_successful = total_throttled = 0

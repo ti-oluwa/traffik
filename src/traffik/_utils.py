@@ -233,13 +233,15 @@ def _add_parameter_to_signature(
     def my_func(a: int, b: str = "default"):
         pass
 
+
     def decorator(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
         def _wrapper(new_param: str, *args: P.args, **kwargs: P.kwargs) -> R:
             return func(*args, **kwargs)
 
         return functools.wraps(func)(_wrapper)
 
-    wrapped_func = decorator(my_func) # returns wrapper function
+
+    wrapped_func = decorator(my_func)  # returns wrapper function
     assert "new_param" in inspect.signature(wrapped_func).parameters
     # False
 
@@ -251,9 +253,9 @@ def _add_parameter_to_signature(
         parameter=inspect.Parameter(
             name="new_param",
             kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            annotation=str
+            annotation=str,
         ),
-        index=0 # Add the new parameter at the beginning
+        index=0,  # Add the new parameter at the beginning
     )
     assert "new_param" in inspect.signature(wrapped_func).parameters
     # True

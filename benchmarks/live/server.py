@@ -133,7 +133,7 @@ class Server:
                 await self._stderr_task
 
 
-async def _read_stderr(process: asyncio.subprocess.Process, sink: deque[str]) -> None:
+async def read_stderr(process: asyncio.subprocess.Process, sink: deque[str]) -> None:
     """Continuously drain stderr into `sink` so the pipe never backs up."""
     assert process.stderr is not None
     try:
@@ -146,7 +146,7 @@ async def _read_stderr(process: asyncio.subprocess.Process, sink: deque[str]) ->
         pass
 
 
-def _build_command(app_path: str, host: str, port: int, workers: int) -> list[str]:
+def build_command(app_path: str, host: str, port: int, workers: int) -> list[str]:
     if workers <= 1:
         return [
             sys.executable,
@@ -188,7 +188,7 @@ def _build_command(app_path: str, host: str, port: int, workers: int) -> list[st
     ]
 
 
-async def _wait_till_ready(server: Server, timeout: float) -> None:
+async def wait_until_ready(server: Server, timeout: float) -> None:
     """Poll the health endpoint until it responds or the deadline passes."""
     deadline = asyncio.get_running_loop().time() + timeout
     delay = 0.05
@@ -256,7 +256,7 @@ async def start_server(
 
     for _ in range(max(1, port_retries)):
         port = get_free_port(host)
-        command = _build_command(app_path, host, port, workers)
+        command = build_command(app_path, host, port, workers)
         process_env = {**os.environ, **env}
         process_env.setdefault("PYTHONUNBUFFERED", "1")
 
@@ -274,16 +274,16 @@ async def start_server(
         server = Server(process=process, host=host, port=port, workers=workers)
         server._stderr_tail = deque([])
         server._stderr_task = asyncio.ensure_future(
-            _read_stderr(process, server._stderr_tail)
+            read_stderr(process, server._stderr_tail)
         )
 
         try:
-            await _wait_till_ready(server, timeout=ready_timeout)
-            return server
+            await wait_until_ready(server, timeout=ready_timeout)
         except ServerStartupError as exc:
             last_exc = exc
             await server.stop(timeout=3.0)
             continue
+        return server
 
     assert last_exc is not None
     raise last_exc

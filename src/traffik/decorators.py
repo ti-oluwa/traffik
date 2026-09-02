@@ -172,11 +172,11 @@ def throttled(
 
     router = fastapi.APIRouter()
 
+
     @router.get("/throttled2")
     @throttled(burst_throttle, sustained_throttle)
     async def route():
         return {"message": "Limited route 2"}
-
     ```
     """
     if len(throttles) == 0:

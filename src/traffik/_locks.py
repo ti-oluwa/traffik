@@ -415,6 +415,9 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
                 f"Lock handle for '{self._name}' is already acquired."
             )
 
+        if self._pool.closed:
+            raise LockPoolError(f"Cannot acquire lock '{self._name}' from closed pool.")
+
         acquired = await self._lock.acquire(
             blocking=blocking,
             blocking_timeout=blocking_timeout,
@@ -430,7 +433,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         """
         if not self._acquired:
             raise LockReleaseError(
-                f"Cannot release lock '{self._name}': handle does not own the lock."
+                f"Cannot release lock '{self._name}'. Handle does not own the lock."
             )
 
         try:

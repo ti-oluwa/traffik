@@ -60,7 +60,12 @@ logger = logging.getLogger(__name__)
 
 @typing.runtime_checkable
 class SimpleThrottleStrategy(typing.Protocol[HTTPConnectionT]):
-    """Protocol for a simple throttling strategy."""
+    """
+    Protocol for a simple throttling strategy.
+    
+    Note: Every operation that mutates the state belonging to logical key X must 
+    synchronize through lock X or an atomic backend primitive.
+    """
 
     async def __call__(
         self,
@@ -83,7 +88,12 @@ class SimpleThrottleStrategy(typing.Protocol[HTTPConnectionT]):
 
 @typing.runtime_checkable
 class FullThrottleStrategy(typing.Protocol[HTTPConnectionT]):
-    """Protocol for a complete throttling strategy."""
+    """
+    Protocol for a complete throttling strategy.
+    
+    Note: Every operation that mutates the state belonging to logical key X must 
+    synchronize through lock X or an atomic backend primitive.
+    """
 
     async def __call__(
         self,

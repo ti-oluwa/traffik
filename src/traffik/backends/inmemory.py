@@ -610,7 +610,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         # Acquire all shard locks in order
         for lock, shard in zip(self._shard_locks, self._shards):
             async with lock:
-                # All keys in the bacens shard should be in the backend's
+                # All keys in the backends shard should be in the backend's
                 # namespace already so just clear the whole shard
                 shard.clear()
 

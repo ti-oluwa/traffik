@@ -1,19 +1,18 @@
 """Head-to-head comparison benchmark against SlowAPI."""
 
 import asyncio
-import os
-import typing
 
 from benchmarks.live.orchestrators import run_http_scenarios
 from benchmarks.output._json import print_json
-from benchmarks.output.table import print_comparison_table
 from benchmarks.scenarios import HTTP_SCENARIOS
 from benchmarks.types import AggregatedResult, BenchmarkConfig
 
 SLOWAPI_APP_PATH = "benchmarks.apps.slowapi:app"
+TRAFFIK_APP_PATH = "benchmarks.apps.http:app"
 
 
-def _scenario_keys(value: str) -> list[str]:
+def scenario_keys(value: str) -> list[str]:
+    """Resolve the CLI scenario selector."""
     if value == "all":
         return list(HTTP_SCENARIOS)
     return [item.strip() for item in value.split(",") if item.strip()]
@@ -21,18 +20,13 @@ def _scenario_keys(value: str) -> list[str]:
 
 async def run_comparison(
     config: BenchmarkConfig,
-    scenario_keys: list[str],
+    selected_scenarios: list[str],
     warmup_iterations: int,
 ) -> tuple[list[AggregatedResult], list[AggregatedResult]]:
     """Run identical HTTP scenarios against Traffik and SlowAPI."""
     traffik_results = await run_http_scenarios(
-        config,
-        scenario_keys,
-        warmup_iterations,
-        HTTP_SCENARIOS,
-        "benchmarks.apps.http:app",
+        config, selected_scenarios, warmup_iterations, HTTP_SCENARIOS, TRAFFIK_APP_PATH
     )
-
     slowapi_config = BenchmarkConfig(
         backend_kind="slowapi",
         strategy_kind="fixed_window",
@@ -43,97 +37,51 @@ async def run_comparison(
         workers=config.workers,
     )
     slowapi_results = await run_http_scenarios(
-        slowapi_config,
-        scenario_keys,
-        warmup_iterations,
-        HTTP_SCENARIOS,
-        SLOWAPI_APP_PATH,
+        slowapi_config, selected_scenarios, warmup_iterations, HTTP_SCENARIOS, SLOWAPI_APP_PATH
     )
     return traffik_results, slowapi_results
 
 
-def _index(results: list[AggregatedResult]) -> dict[str, AggregatedResult]:
+def _by_scenario(results: list[AggregatedResult]) -> dict[str, AggregatedResult]:
     return {result.scenario_name: result for result in results}
 
 
-def print_comparison(
-    traffik_results: list[AggregatedResult],
-    slowapi_results: list[AggregatedResult],
-) -> None:
-    """Print matched Traffik/SlowAPI results with Traffik as the baseline."""
-    traffik = _index(traffik_results)
-    slowapi = _index(slowapi_results)
-    matched = [name for name in traffik if name in slowapi]
-
-    if not matched:
+def print_comparison(traffik_results: list[AggregatedResult], slowapi_results: list[AggregatedResult]) -> None:
+    """Print SlowAPI deltas relative to the corresponding Traffik result."""
+    traffik = _by_scenario(traffik_results)
+    slowapi = _by_scenario(slowapi_results)
+    names = [name for name in traffik if name in slowapi]
+    if not names:
         raise RuntimeError("No scenarios produced results for both implementations")
 
-    baseline = traffik[matched[0]]
-    others: list[AggregatedResult] = []
-    for name in matched:
-        result = slowapi[name]
-        others.append(result)
-
-    print("\nTraffik vs SlowAPI (SlowAPI delta is relative to Traffik)\n")
-    for name in matched:
+    print("\nTraffik vs SlowAPI (SlowAPI delta relative to Traffik)\n")
+    for name in names:
         left = traffik[name]
         right = slowapi[name]
-        rps_delta = ((right.mean_rps - left.mean_rps) / left.mean_rps * 100) if left.mean_rps else 0
-        p50_delta = ((right.p50_ms - left.p50_ms) / left.p50_ms * 100) if left.p50_ms else 0
-        p95_delta = ((right.p95_ms - left.p95_ms) / left.p95_ms * 100) if left.p95_ms else 0
+        rps_delta = (right.mean_rps - left.mean_rps) / left.mean_rps * 100 if left.mean_rps else 0
+        p50_delta = (right.p50_ms - left.p50_ms) / left.p50_ms * 100 if left.p50_ms else 0
+        p95_delta = (right.p95_ms - left.p95_ms) / left.p95_ms * 100 if left.p95_ms else 0
         print(
             f"{name}: Traffik={left.mean_rps:.1f} req/s, SlowAPI={right.mean_rps:.1f} req/s "
             f"(RPS {rps_delta:+.1f}%, P50 {p50_delta:+.1f}%, P95 {p95_delta:+.1f}%)"
         )
 
 
-async def _run_and_print(
+def print_json_comparison(
+    traffik_results: list[AggregatedResult],
+    slowapi_results: list[AggregatedResult],
     config: BenchmarkConfig,
-    scenario_keys: list[str],
     warmup_iterations: int,
 ) -> None:
-    traffik_results, slowapi_results = await run_comparison(
-        config, scenario_keys, warmup_iterations
+    """Emit both implementations' results in machine-readable form."""
+    print_json(
+        traffik_results + slowapi_results,
+        {
+            "benchmark": "traffik_vs_slowapi",
+            "traffik_backend": config.backend_kind,
+            "traffik_strategy": config.strategy_kind,
+            "workers": config.workers,
+            "iterations": config.iterations,
+            "warmup_iterations": warmup_iterations,
+        },
     )
-
-    if config.output_format == "json":
-        print_json(
-            traffik_results + slowapi_results,
-            {
-                "benchmark": "traffik_vs_slowapi",
-                "traffik_backend": config.backend_kind,
-                "traffik_strategy": config.strategy_kind,
-                "slowapi": True,
-                "workers": config.workers,
-                "iterations": config.iterations,
-                "warmup_iterations": warmup_iterations,
-            },
-        )
-        return
-
-    print_comparison(traffik_results, slowapi_results)
-
-
-def run_from_cli(
-    *,
-    backend: str,
-    strategy: str,
-    iterations: int,
-    warmup: int,
-    concurrency: int,
-    workers: int,
-    output: str,
-    scenarios: str,
-) -> None:
-    """Synchronous entry point used by the Click command."""
-    config = BenchmarkConfig(
-        backend_kind=backend,
-        strategy_kind=strategy,
-        iterations=iterations,
-        warmup_iterations=warmup,
-        concurrency=concurrency,
-        output_format=output,
-        workers=workers,
-    )
-    os.environ["BENCH_SLOWAPI"] = "1"
-    asyncio.run(_run_and_print(config, _scenario_keys(scenarios), warmup))

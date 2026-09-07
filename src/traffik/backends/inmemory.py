@@ -1,12 +1,13 @@
 """
-In-memory implementation of a throttle backend using an `OrderedDict` for storage.
+In-memory implementation of a throttle backend using sharded `dict` storage.
 
 Note! This is not suitable for multi-process or distributed setups.
 """
 
 import asyncio
+import functools
+import random
 import typing
-from collections import OrderedDict
 from time import monotonic
 from types import TracebackType
 
@@ -16,6 +17,7 @@ from traffik._locks import (
     _NamedLockHandle,
     _NamedLockPool,
 )
+from traffik._utils import adaptive_expire_sample
 from traffik.backends.base import ThrottleBackend
 from traffik.exceptions import BackendConnectionError, LockAcquisitionError
 from traffik.typing import (
@@ -127,6 +129,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     Uses shards (and hence lock striping) to improve concurrent access.
 
+    Expired keys are lazily removed on access, and if `cleanup_frequency`
+    is set, they are also reclaimed by a background task that checks a bounded
+    random sample of keys per shard per pass (see `cleanup_sample_size`),
+    resampling more aggressively when a shard has a lot of expired entries.
+
     Warning: Only use for development or single-worker applications.
     This will not work across multiple threads, processes, or servers.
     """
@@ -150,6 +157,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         lock_blocking_timeout: typing.Optional[float] = None,
         number_of_shards: int = 3,
         cleanup_frequency: typing.Optional[float] = None,
+        cleanup_sample_size: int = 20,
         lock_kind: typing.Literal["fair", "unfair"] = "unfair",
         lock_pool_size: int = 128,
         lock_pool_headroom: int = 4,
@@ -179,6 +187,9 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             If None, uses the global default from `traffik.config.get_lock_blocking_timeout()`.
         :param number_of_shards: Number of shards to split the in-memory shard into for concurrency.
         :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys. If None, no automatic cleanup is performed.
+        :param cleanup_sample_size: Number of keys sampled per shard, per round, when reclaiming
+            expired keys. Higher values reclaim expired keys faster at the cost of a longer
+            (but still bounded) pause per cleanup pass; independent of the number of live keys.
         :param lock_kind: The type of lock to use for shard locks. "fair" uses a fair lock implementation which
             guarantees FIFO order for waiting tasks, while "unfair" may have better performance but does not guarantee order.
         :param lock_pool_size: Maximum number of idle named locks to keep in the pool for reuse.
@@ -211,8 +222,12 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._number_of_shards = number_of_shards
         self._shard_locks: list[asyncio.Lock] = []
         """Locks for each shard to allow concurrent access."""
-        self._shards: list[OrderedDict[str, typing.Any]] = []
+        self._shards: list[dict[str, typing.Any]] = []
         """In-memory storage shards."""
+        self._shard_key_lists: list[list[str]] = []
+        """Per-shard flat key list, enabling O(1) random-index sampling for cleanup."""
+        self._shard_key_positions: list[dict[str, int]] = []
+        """Per-shard key -> position-in-`_shard_key_lists` map, for O(1) swap-removal."""
 
         self._lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
         self._lock_pool_size = lock_pool_size
@@ -227,6 +242,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         self._cleanup_task: typing.Optional[asyncio.Task] = None
         self._cleanup_frequency = cleanup_frequency
+        self._cleanup_sample_size = cleanup_sample_size
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -237,7 +253,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         if not self._shard_locks:
             self._shard_locks = [asyncio.Lock() for _ in range(self._number_of_shards)]
         if not self._shards:
-            self._shards = [OrderedDict() for _ in range(self._number_of_shards)]
+            self._shards = [{} for _ in range(self._number_of_shards)]
+        if not self._shard_key_lists:
+            self._shard_key_lists = [[] for _ in range(self._number_of_shards)]
+        if not self._shard_key_positions:
+            self._shard_key_positions = [{} for _ in range(self._number_of_shards)]
 
         if self._reentrant_lock_pool is None or self._reentrant_lock_pool.closed:
             self._reentrant_lock_pool = _NamedLockPool(
@@ -280,10 +300,38 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 "Connection error! Ensure backend is initialized."
             )
 
-    def _get_shard(self, key: str) -> tuple[int, asyncio.Lock, OrderedDict]:
+    def _get_shard(self, key: str) -> tuple[int, asyncio.Lock, dict]:
         """Get shard index, lock, and shard for a key."""
         shard_idx = hash(key) % self._number_of_shards
         return shard_idx, self._shard_locks[shard_idx], self._shards[shard_idx]
+
+    def _index_insert(self, shard_idx: int, key: str) -> None:
+        """
+        Record a newly-created `key` in the shard's sampling index.
+
+        Call only when `key` was just added to the shard (i.e. it wasn't
+        already present). Must be called with the shard lock held.
+        """
+        key_list = self._shard_key_lists[shard_idx]
+        self._shard_key_positions[shard_idx][key] = len(key_list)
+        key_list.append(key)
+
+    def _index_remove(self, shard_idx: int, key: str) -> None:
+        """
+        Remove `key` from the shard's sampling index via swap-pop.
+
+        No-op if `key` isn't indexed. Must be called with the shard lock held.
+        """
+        positions = self._shard_key_positions[shard_idx]
+        position = positions.pop(key, None)
+        if position is None:
+            return
+
+        key_list = self._shard_key_lists[shard_idx]
+        last_key = key_list.pop()
+        if position < len(key_list):
+            key_list[position] = last_key
+            positions[last_key] = position
 
     async def keys(self) -> list[str]:
         """Get all keys in the backend."""
@@ -296,20 +344,65 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 all_keys.extend(list(shard.keys()))
         return all_keys
 
-    async def _cleanup(self) -> None:
-        """Remove expired keys from all shards."""
-        now = monotonic()
+    def _sample_and_reap_shard(
+        self, shard_idx: int, sample_size: int
+    ) -> tuple[int, int]:
+        """
+        Check up to `sample_size` random keys in one shard and remove any
+        that are expired.
 
-        # Clean each shard independently
-        for lock, shard in zip(self._shard_locks, self._shards):
+        Must be called with the shard's lock held.
+
+        :return: `(checked, freed)` counts for this round.
+        """
+        key_list = self._shard_key_lists[shard_idx]
+        if not key_list:
+            return 0, 0
+
+        shard = self._shards[shard_idx]
+        now = monotonic()
+        sample_size = min(sample_size, len(key_list))
+        # Resolve positions to keys up front. A removal below swap-mutates
+        # key_list (moves its last element into the removed slot), which
+        # would invalidate any later position in this batch still waiting
+        # to be checked but the keys themselves aren't affected.
+        sampled_keys = [
+            key_list[position]
+            for position in random.sample(range(len(key_list)), sample_size)  # nosec
+        ]
+
+        freed = 0
+        for key in sampled_keys:
+            entry = shard.get(key)
+            if entry is None:
+                continue
+
+            _, expires_at = entry
+            if expires_at is not None and expires_at <= now:
+                del shard[key]
+                self._index_remove(shard_idx, key)
+                freed += 1
+
+        return len(sampled_keys), freed
+
+    async def _cleanup(self) -> None:
+        """
+        Reclaim expired keys via bounded random sampling (active expiration),
+        instead of a full shard scan.
+
+        Cost per shard per cleanup pass is bounded by `cleanup_sample_size`
+        (and a small number of resampling rounds when a shard has a lot of
+        expired entries), independent of how many live keys the shard holds.
+        """
+        for shard_idx, lock in enumerate(self._shard_locks):
             async with lock:
-                expired = [
-                    key
-                    for key, (_, expires_at) in shard.items()
-                    if expires_at is not None and expires_at <= now
-                ]
-                for key in expired:
-                    del shard[key]
+                adaptive_expire_sample(
+                    functools.partial(
+                        self._sample_and_reap_shard,
+                        shard_idx,
+                        self._cleanup_sample_size,
+                    )
+                )
 
     async def _cleanup_loop(self) -> None:
         """Periodically reclaim expired entries. Runs as a background `asyncio.Task`."""
@@ -376,7 +469,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """Get value by key."""
         self._assert_ready()
 
-        _, lock, shard = self._get_shard(key)
+        shard_idx, lock, shard = self._get_shard(key)
         entry = shard.get(key)
         if entry is None:
             return None
@@ -385,9 +478,13 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         # Check if expired
         if expires_at is not None and expires_at <= monotonic():
             async with lock:
-                del shard[key]
+                shard.pop(key, None)
+                self._index_remove(shard_idx, key)
             return None
-        return value
+        # `increment`/`increment_with_ttl` store counters as raw `int` internally
+        # to skip redundant str<->int conversions; stringify here so `get()`'s
+        # contract (always `Optional[str]`) is the same for every key.
+        return value if isinstance(value, str) else str(value)
 
     async def set(
         self, key: str, value: str, expire: typing.Optional[float] = None
@@ -395,22 +492,26 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """Set value by key."""
         self._assert_ready()
 
-        _, lock, shard = self._get_shard(key)
+        shard_idx, lock, shard = self._get_shard(key)
         expires_at = None
         if expire is not None:
             expires_at = monotonic() + expire
 
         async with lock:
+            is_new = key not in shard
             shard[key] = (value, expires_at)
+            if is_new:
+                self._index_insert(shard_idx, key)
 
     async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
         """Delete key if exists."""
         self._assert_ready()
 
-        _, lock, shard = self._get_shard(key)
+        shard_idx, lock, shard = self._get_shard(key)
         async with lock:
             if key in shard:
                 del shard[key]
+                self._index_remove(shard_idx, key)
                 return True
             return False
 
@@ -424,19 +525,20 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         self._assert_ready()
 
-        _, lock, shard = self._get_shard(key)
+        shard_idx, lock, shard = self._get_shard(key)
         async with lock:
             entry = shard.get(key)
             if entry is None:
                 # Key doesn't exist, initialize
-                shard[key] = (str(amount), None)
+                shard[key] = (amount, None)
+                self._index_insert(shard_idx, key)
                 return amount
 
             value, expires_at = entry
             # Check if expired
             if expires_at is not None and expires_at <= monotonic():
                 # Expired, reinitialize
-                shard[key] = (str(amount), None)
+                shard[key] = (amount, None)
                 return amount
 
             # Increment existing value
@@ -444,11 +546,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 current = int(value)
             except (ValueError, TypeError):
                 # Invalid value, reset
-                shard[key] = (str(amount), expires_at)
+                shard[key] = (amount, expires_at)
                 return amount
 
             new_value = current + amount
-            shard[key] = (str(new_value), expires_at)
+            shard[key] = (new_value, expires_at)
             return new_value
 
     async def expire(self, key: str, seconds: int) -> bool:
@@ -483,14 +585,15 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         self._assert_ready()
 
-        _, lock, shard = self._get_shard(key)
+        shard_idx, lock, shard = self._get_shard(key)
         now = monotonic()
         async with lock:
             entry = shard.get(key)
             if entry is None:
                 # New key, initialize with TTL
                 expires_at = now + ttl
-                shard[key] = (str(amount), expires_at)
+                shard[key] = (amount, expires_at)
+                self._index_insert(shard_idx, key)
                 return amount
 
             value, expires_at = entry  # type: ignore[assignment]
@@ -498,7 +601,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             if expires_at is not None and expires_at <= now:
                 # Expired, reinitialize with new TTL
                 expires_at = now + ttl
-                shard[key] = (str(amount), expires_at)
+                shard[key] = (amount, expires_at)
                 return amount
 
             # Increment existing value
@@ -507,7 +610,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             except (ValueError, TypeError):
                 # Invalid value, reset with TTL
                 expires_at = now + ttl
-                shard[key] = (str(amount), expires_at)
+                shard[key] = (amount, expires_at)
                 return amount
 
             new_value = current + amount
@@ -516,7 +619,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             if expires_at is None:
                 expires_at = now + ttl
 
-            shard[key] = (str(new_value), expires_at)
+            shard[key] = (new_value, expires_at)
             return new_value
 
     async def multi_get(self, *keys: str) -> list[typing.Optional[str]]:
@@ -558,9 +661,11 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
                     value, expires_at = entry
                     if expires_at is None or expires_at > now:
-                        results[key] = value
+                        # See get(): counters may be stored as raw `int`.
+                        results[key] = value if isinstance(value, str) else str(value)
                     else:
                         del shard[key]
+                        self._index_remove(shard_idx, key)
                         results[key] = None
 
         # Return results in original key order
@@ -601,18 +706,23 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
             async with lock:
                 for key, value in shard_items[shard_idx]:
+                    is_new = key not in shard
                     shard[key] = (value, expires_at)
+                    if is_new:
+                        self._index_insert(shard_idx, key)
 
     async def clear(self) -> None:
         """Clear all keys in the namespace."""
         self._assert_ready()
 
         # Acquire all shard locks in order
-        for lock, shard in zip(self._shard_locks, self._shards):
+        for shard_idx, (lock, shard) in enumerate(zip(self._shard_locks, self._shards)):
             async with lock:
                 # All keys in the backends shard should be in the backend's
                 # namespace already so just clear the whole shard
                 shard.clear()
+                self._shard_key_lists[shard_idx].clear()
+                self._shard_key_positions[shard_idx].clear()
 
     async def reset(self) -> None:
         """Reset the backend by clearing all data."""

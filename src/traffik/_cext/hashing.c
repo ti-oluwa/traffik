@@ -1,7 +1,7 @@
 /*
  * hashing.c
  *
- * FNV-1a 32-bit and 64-bit hashing for traffik. Unlike _ext.c, this module
+ * FNV-1a 32-bit and 64-bit hashing for traffik. Unlike _atomic.c, this module
  * uses no compiler-specific intrinsics, so it builds on MSVC/Windows the
  * same as it does on GCC/Clang.
  */

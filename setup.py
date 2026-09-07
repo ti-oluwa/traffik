@@ -5,8 +5,6 @@ from setuptools import Extension, setup
 ON_WINDOWS = platform.system() == "Windows"
 
 ext_modules = [
-    # Portable - no compiler-specific intrinsics - builds everywhere,
-    # Windows included.
     Extension(
         "traffik._hashing",
         ["src/traffik/_cext/hashing.c"],
@@ -18,8 +16,8 @@ if not ON_WINDOWS:
     # Needs GCC/Clang atomic builtins; not available on MSVC.
     ext_modules.append(
         Extension(
-            "traffik._ext",
-            ["src/traffik/_cext/_ext.c"],
+            "traffik._atomic",
+            ["src/traffik/_cext/_atomic.c"],
             extra_compile_args=["-O2"],
         )
     )
@@ -90,6 +88,6 @@ setup(
         "Changelog": "https://github.com/ti-oluwa/traffik/blob/main/CHANGELOG.md",
     },
     package_dir={"": "src"},
-    package_data={"traffik": ["py.typed", "_hashing.pyi", "_ext.pyi"]},
+    package_data={"traffik": ["py.typed", "_hashing.pyi", "_atomic.pyi"]},
     ext_modules=ext_modules,
 )

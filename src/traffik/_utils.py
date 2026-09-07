@@ -310,6 +310,39 @@ def time() -> float:
     return pytime.time()
 
 
+def adaptive_expire_sample(
+    sample_round: typing.Callable[[], tuple[int, int]],
+    threshold: float = 0.25,
+    max_rounds: int = 5,
+) -> int:
+    """
+    Repeatedly reclaim expired entries in bounded rounds, like Redis's active
+    expiration cycle.
+
+    Calls `sample_round()`, which should check a small batch of candidates
+    and remove the expired ones, and repeats while the freed fraction of the
+    checked batch stays at or above `threshold`, so a shard with a lot of
+    expired entries gets reclaimed faster, without ever scanning every live
+    entry. Cost per call is bounded by `max_rounds` times whatever sample
+    size `sample_round` checks per call, regardless of how many live entries
+    exist.
+
+    :param sample_round: Callable that checks a batch of candidates and
+        removes the expired ones, returning `(checked, freed)`.
+    :param threshold: Minimum freed/checked ratio required to trigger
+        another round.
+    :param max_rounds: Upper bound on the number of rounds per call.
+    :return: Total number of entries freed across all rounds.
+    """
+    total_freed = 0
+    for _ in range(max_rounds):
+        checked, freed = sample_round()
+        total_freed += freed
+        if checked == 0 or freed / checked < threshold:
+            break
+    return total_freed
+
+
 class _TaskTimer:
     """
     Timer and asynchronous context manager that cancels the current task if the

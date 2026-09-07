@@ -1,4 +1,4 @@
-"""C extensions for traffik."""
+"""Atomic byte-lock primitives for traffik's multiprocess backend."""
 
 def test_and_set_byte(buffer: memoryview, offset: int, /) -> int:
     """

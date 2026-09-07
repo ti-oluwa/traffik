@@ -60,11 +60,13 @@ recreated rather than reused.
 """
 
 import asyncio
+import functools
 import logging
 import math
 import multiprocessing
 import os
 import platform
+import random
 import re
 import struct
 import threading
@@ -77,12 +79,13 @@ from types import TracebackType
 
 from traffik._hashing import fnv_32bit_hash
 from traffik._locks import _NamedLockHandle, _NamedLockPool
+from traffik._utils import adaptive_expire_sample
 
 ON_WINDOWS = platform.system() == "Windows"
 
 logger = logging.getLogger(__name__)
 if not ON_WINDOWS:
-    from traffik import _ext as cext  # type: ignore[import]
+    from traffik import _atomic as cext  # type: ignore[import]
 else:
     cext: typing.Any = object()  # type: ignore
 
@@ -610,22 +613,26 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     backend = MultiProcessInMemoryBackend(
         ...
         cleanup_frequency=60.0,   # reclaim expired slots every 60 s
+        cleanup_sample_size=20,   # buckets sampled per shard, per round
     )
     ```
 
     The cleaner runs as an `asyncio` background task in the creating
-    process only. It acquires each shard's `slot_map_semaphore` briefly
-    while purging confirmed-expired entries; this introduces a small,
-    bounded pause on whichever requests happen to touch the same shard at
-    the same instant. The pause is proportional to the number of expired
-    entries found, not to `max_keys`, so a frequent cleaner (smaller
-    interval) processes fewer entries per pass and causes shorter pauses
-    than an infrequent one.
+    process only, offloaded to a thread pool executor. Each pass samples up
+    to `cleanup_sample_size` random hash-table buckets per shard (instead of
+    scanning every occupied bucket), resampling in bounded rounds if a
+    sample comes back mostly expired, so a shard with a lot of expired
+    entries is reclaimed faster, without ever costing more than a handful
+    of bounded rounds regardless of `max_keys`. It acquires each shard's
+    `slot_map_semaphore` briefly only for buckets confirmed expired,
+    introducing a small, bounded pause on whichever requests happen to
+    touch the same shard at the same instant.
 
     Guideline: set `cleanup_frequency` to no more than half the shortest
     window duration used by any active strategy. For a 60-second fixed
     window, `cleanup_frequency=30.0` ensures expired entries are reclaimed
-    within one extra window period at most.
+    within one extra window period at most. Raise `cleanup_sample_size` if
+    a shard's key cardinality is high relative to its expiration rate.
 
     **Shard count and contention**
 
@@ -682,6 +689,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         number_of_shards: int = 64,
         max_value_size: int = 512,
         cleanup_frequency: typing.Optional[float] = None,
+        cleanup_sample_size: int = 20,
         shared_memory_name: typing.Optional[str] = None,
         max_aba_retries: int = 3,
         executor_max_workers: typing.Optional[int] = None,
@@ -723,6 +731,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             value. Counter (int64) slots ignore this limit.
         :param cleanup_frequency: Seconds between background expired-slot
             reclamation passes. `None` disables the background task.
+        :param cleanup_sample_size: Number of hash-table buckets sampled per
+            shard, per round, when reclaiming expired slots. Higher values
+            reclaim expired slots faster at the cost of a longer (but still
+            bounded) pause per cleanup pass; independent of `max_keys`.
         :param shared_memory_name: Explicit POSIX shared memory segment name.
             Must match `[A-Za-z0-9_-]`, max 30 characters. Derived from
             *namespace* automatically when `None`.
@@ -815,6 +827,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._number_of_shards = number_of_shards
         self._max_value_size = max_value_size
         self._cleanup_frequency = cleanup_frequency
+        self._cleanup_sample_size = cleanup_sample_size
         self._max_keys_per_shard = math.ceil(max_keys / number_of_shards)
         self._max_aba_retries = max_aba_retries
 
@@ -1391,6 +1404,49 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         )
         return slot_idx
 
+    def _hash_table_read_bucket(
+        self, buffer: memoryview, shard_base: int, bucket_idx: int
+    ) -> typing.Optional[tuple[str, int]]:
+        """
+        Read the occupied `(key_str, slot_idx)` at a specific hash-table
+        bucket index, without probing.
+
+        Unlike `_hash_table_get_slot`, this addresses a bucket directly by
+        its position rather than by hashing a key. Each bucket is a
+        fixed-size struct, so any `bucket_idx` in `[0, shard_hash_table_capacity)`
+        is reachable in O(1).
+
+        The caller is responsible for holding the shard's
+        `slot_map_semaphore` if mutations must not interleave.
+
+        :param buffer: The shared memory buffer view.
+        :param shard_base: Byte offset of the shard's start in `buffer`.
+        :param bucket_idx: Bucket index within `[0, shard_hash_table_capacity)`.
+        :return: `(key_str, slot_idx)` if the bucket is occupied, else `None`.
+        """
+        hash_table_base = shard_base + self._shard_hash_table_base_offset
+        entry_offset = hash_table_base + bucket_idx * _HASH_TABLE_ENTRY_SIZE
+        state = _UINT8_STRUCT.unpack_from(
+            buffer, entry_offset + _HASH_TABLE_STATE_OFFSET
+        )[0]
+        if state != _HASH_TABLE_OCCUPIED_STATE:
+            return None
+
+        key_length = _UINT8_STRUCT.unpack_from(
+            buffer, entry_offset + _HASH_TABLE_KEY_LENGTH_OFFSET
+        )[0]
+        key_str = bytes(
+            buffer[
+                entry_offset + _HASH_TABLE_KEY_OFFSET : entry_offset
+                + _HASH_TABLE_KEY_OFFSET
+                + key_length
+            ]
+        ).decode("utf-8")
+        slot_idx = _UINT32_STRUCT.unpack_from(
+            buffer, entry_offset + _HASH_TABLE_SLOT_IDX_OFFSET
+        )[0]
+        return key_str, slot_idx
+
     def _hash_table_iter_occupied(
         self, buffer: memoryview, shard_base: int
     ) -> typing.Iterator[tuple[str, int]]:
@@ -1404,29 +1460,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param shard_base: Byte offset of the shard's start in `buffer`.
         :return: Iterator of `(key_str, slot_idx)` pairs.
         """
-        hash_table_base = shard_base + self._shard_hash_table_base_offset
         for i in range(self._shard_hash_table_capacity):
-            entry_offset = hash_table_base + i * _HASH_TABLE_ENTRY_SIZE
-            state = _UINT8_STRUCT.unpack_from(
-                buffer, entry_offset + _HASH_TABLE_STATE_OFFSET
-            )[0]
-            if state != _HASH_TABLE_OCCUPIED_STATE:
-                continue
-
-            key_length = _UINT8_STRUCT.unpack_from(
-                buffer, entry_offset + _HASH_TABLE_KEY_LENGTH_OFFSET
-            )[0]
-            key_str = bytes(
-                buffer[
-                    entry_offset + _HASH_TABLE_KEY_OFFSET : entry_offset
-                    + _HASH_TABLE_KEY_OFFSET
-                    + key_length
-                ]
-            ).decode("utf-8")
-            slot_idx = _UINT32_STRUCT.unpack_from(
-                buffer, entry_offset + _HASH_TABLE_SLOT_IDX_OFFSET
-            )[0]
-            yield key_str, slot_idx
+            entry = self._hash_table_read_bucket(buffer, shard_base, i)
+            if entry is not None:
+                yield entry
 
     def _free_stack_pop(self, buffer: memoryview, shard_base: int) -> int:
         """
@@ -2301,67 +2338,97 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             finally:
                 self._shard_semaphores[shard_idx].release()  # type: ignore[index]
 
-    def _cleanup(self) -> int:
+    def _sample_and_reap_shard(
+        self, shard_idx: int, sample_size: int
+    ) -> tuple[int, int]:
         """
-        Reclaim expired slots across all shards.
+        Check up to `sample_size` random hash-table buckets in one shard
+        and reclaim any that are expired. This happens in two passes.
 
-        Pass 1 (no lock): unsynchronised snapshot of occupied entries and
-        their expiry times; used only as a candidate hint.
+        Pass 1 (no lock): We take ans unsynchronised snapshot of a random
+        sample of occupied buckets and their expiry times; used only as a
+        candidate hint.
 
-        Pass 2 (`slot_map_semaphores[shard_idx]` only, per shard): re-verify each
-        candidate. The shard semaphore is intentionally **not** held here to
-        avoid violating the lock-ordering rule. The float64 expiry write is
-        not guaranteed atomic on all architectures; the worst outcome is a
-        spurious skip (missed cleanup cycle), never a spurious free.
+        Pass 2 (`slot_map_semaphores[shard_idx]` only): We re-verify each
+        candidate. The shard semaphore is intentionally not held here
+        to avoid violating the lock-ordering rule. The float64 expiry write
+        is not guaranteed atomic on all architectures, so the worst outcome is
+        a spurious skip (missed cleanup cycle), never a spurious free.
 
-        :return: The total number of slots freed across all shards.
+        :return: `(checked, freed)` counts for this round.
         """
         buffer = self._buffer
         if buffer is None:
+            return 0, 0
+
+        shard_base = self._shard_base(shard_idx)
+        capacity = self._shard_hash_table_capacity
+        sample_size = min(sample_size, capacity)
+        now = monotonic()
+
+        candidates: list[tuple[bytes, int]] = []
+        checked = 0
+        for bucket_idx in random.sample(range(capacity), sample_size):  # nosec
+            entry = self._hash_table_read_bucket(buffer, shard_base, bucket_idx)
+            if entry is None:
+                continue
+            key_str, slot_idx = entry
+            checked += 1
+            _, _, expires_at, occupied = self._read_slot(buffer, shard_base, slot_idx)
+            if occupied and expires_at != 0.0 and expires_at <= now:
+                candidates.append((key_str.encode("utf-8"), slot_idx))
+
+        if not candidates:
+            return checked, 0
+
+        freed = 0
+        self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+        try:
+            for key_bytes, expected_slot_idx in candidates:
+                current_slot_idx = self._hash_table_get_slot(
+                    buffer, shard_base, key_bytes
+                )
+                if current_slot_idx is None or current_slot_idx != expected_slot_idx:
+                    continue
+
+                _, _, expires_at, occupied = self._read_slot(
+                    buffer, shard_base, current_slot_idx
+                )
+                if not occupied or expires_at == 0.0 or expires_at > now:
+                    continue
+
+                self._hash_table_delete(buffer, shard_base, key_bytes)
+                self._free_stack_push(buffer, shard_base, current_slot_idx)
+                self._clear_slot(buffer, shard_base, current_slot_idx)
+                freed += 1
+        finally:
+            self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+
+        return checked, freed
+
+    def _cleanup(self) -> int:
+        """
+        Reclaim expired slots across all shards via bounded random sampling
+        of hash-table buckets (active expiration), instead of a full scan of
+        every occupied entry.
+
+        Cost per shard per cleanup pass is bounded by `cleanup_sample_size`
+        (and a small number of resampling rounds when a shard has a lot of
+        expired entries), independent of how many occupied buckets the
+        shard's hash table has.
+
+        :return: The total number of slots freed across all shards.
+        """
+        if self._buffer is None:
             return 0
 
-        now = monotonic()
         total_freed = 0
-
         for shard_idx in range(self._number_of_shards):
-            shard_base = self._shard_base(shard_idx)
-
-            candidates: list[tuple[bytes, int]] = []
-            for key_str, slot_idx in self._hash_table_iter_occupied(buffer, shard_base):
-                _, _, expires_at, occupied = self._read_slot(
-                    buffer, shard_base, slot_idx
+            total_freed += adaptive_expire_sample(
+                functools.partial(
+                    self._sample_and_reap_shard, shard_idx, self._cleanup_sample_size
                 )
-                if occupied and expires_at != 0.0 and expires_at <= now:
-                    candidates.append((key_str.encode("utf-8"), slot_idx))
-
-            if not candidates:
-                continue
-
-            self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
-            try:
-                for key_bytes, expected_slot_idx in candidates:
-                    current_slot_idx = self._hash_table_get_slot(
-                        buffer, shard_base, key_bytes
-                    )
-                    if (
-                        current_slot_idx is None
-                        or current_slot_idx != expected_slot_idx
-                    ):
-                        continue
-
-                    _, _, expires_at, occupied = self._read_slot(
-                        buffer, shard_base, current_slot_idx
-                    )
-                    if not occupied or expires_at == 0.0 or expires_at > now:
-                        continue
-
-                    self._hash_table_delete(buffer, shard_base, key_bytes)
-                    self._free_stack_push(buffer, shard_base, current_slot_idx)
-                    self._clear_slot(buffer, shard_base, current_slot_idx)
-                    total_freed += 1
-            finally:
-                self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
-
+            )
         return total_freed
 
     async def get(

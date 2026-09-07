@@ -1,7 +1,7 @@
 /*
- * _ext.c
+ * _atomic.c
  *
- * C extension module providing performance-critical operations for traffik:
+ * Atomic byte-lock primitives for traffik's multiprocess backend.
  */
 
 #define PY_SSIZE_T_CLEAN
@@ -106,7 +106,7 @@ clear_byte(PyObject *self, PyObject *args)
 }
 
 
-static PyMethodDef ExtMethods[] = {
+static PyMethodDef AtomicMethods[] = {
     {
         "test_and_set_byte",
         test_and_set_byte,
@@ -131,16 +131,16 @@ static PyMethodDef ExtMethods[] = {
     {NULL, NULL, 0, NULL}
 };
 
-static struct PyModuleDef ExtModule = {
+static struct PyModuleDef AtomicModule = {
     PyModuleDef_HEAD_INIT,
-    "_ext",
-    "C extensions for traffik.",
+    "_atomic",
+    "Atomic byte-lock primitives for traffik's multiprocess backend.",
     -1,
-    ExtMethods
+    AtomicMethods
 };
 
 PyMODINIT_FUNC
-PyInit__ext(void)
+PyInit__atomic(void)
 {
-    return PyModule_Create(&ExtModule);
+    return PyModule_Create(&AtomicModule);
 }

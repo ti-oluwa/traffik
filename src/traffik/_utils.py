@@ -264,8 +264,8 @@ def _add_parameter_to_signature(
     # function's signature will respect the new parameters.
     ```
     """
-    sig = inspect.signature(func)
-    params = list(sig.parameters.values())
+    signature = inspect.signature(func)
+    params = list(signature.parameters.values())
 
     # Check if the index is valid
     if index < 0:
@@ -277,8 +277,8 @@ def _add_parameter_to_signature(
         )
 
     params.insert(index, parameter)
-    new_sig = sig.replace(parameters=params)
-    func.__signature__ = new_sig  # type: ignore
+    new_signature = signature.replace(parameters=params)
+    func.__signature__ = new_signature  # type: ignore
     return func
 
 

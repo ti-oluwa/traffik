@@ -102,3 +102,15 @@
 - **Bug Fixes**:
   - Fixed `QuotaContext.apply()` leaving itself registered in its parent's internal children tracking when called directly on a nested context, which inflated the parent's `queued_cost` and held a stale reference indefinitely. `apply()` now always detaches and clears its own queue after consuming, regardless of nesting.
   - Fixed `ThrottleRegistry.disable_all()`/`enable_all()` skipping garbage-collected throttles without de-registering them; they now de-register stale UIDs as they go, same as `get_throttle(...)`.
+
+## Version 1.3.0 (Unreleased)
+
+- **Enhancements**:
+  - Split the C extension in two: `traffik._hashing` (FNV-1a 32-bit and a new 64-bit variant) and `traffik._ext` (the atomic byte-lock primitives used by `MultiProcessInMemoryBackend`). `_hashing` uses no compiler-specific intrinsics, so it now builds on every platform, Windows included; `_ext` keeps the existing GCC/Clang-only restriction. Both extensions moved from `traffik.backends._cext`/`traffik.backends._ext` to the top-level `traffik._cext`/`traffik._ext`, since hashing is no longer backend-specific.
+  - `cibuildwheel` no longer skips Windows or musllinux wheel builds. Windows previously had no compiled extension at all; it now gets `traffik._hashing` (`traffik._ext` and `MultiProcessInMemoryBackend` remain POSIX-only).
+  - `build_key()` (used internally by `ThrottleBackend.get_key(...)` when args/kwargs are passed) now hashes with FNV-1a 64-bit instead of MD5, producing a shorter 16-character digest. Falls back to MD5, not a pure-Python hash, if the compiled extension isn't available, so an uncompiled install doesn't pay a heavy hashing cost.
+
+- **Packaging**:
+  - The `.pyi` stub files for the C extensions are now actually included in built wheels (`package_data` previously only covered `py.typed` under the top-level `traffik` package, so `_ext.pyi` under `traffik.backends` was silently never shipped).
+
+**Note:** because `build_key()`'s hash algorithm changed, any already-persisted throttle state keyed via args/kwargs (e.g. `persistent=True` backends with long-lived counters) will appear as new keys after upgrading - existing counters effectively reset once for those keys. Ephemeral/expiring rate-limit state is unaffected in practice.

@@ -62,8 +62,8 @@ logger = logging.getLogger(__name__)
 class SimpleThrottleStrategy(typing.Protocol[HTTPConnectionT]):
     """
     Protocol for a simple throttling strategy.
-    
-    Note: Every operation that mutates the state belonging to logical key X must 
+
+    Note: Every operation that mutates the state belonging to logical key X must
     synchronize through lock X or an atomic backend primitive.
     """
 
@@ -90,8 +90,8 @@ class SimpleThrottleStrategy(typing.Protocol[HTTPConnectionT]):
 class FullThrottleStrategy(typing.Protocol[HTTPConnectionT]):
     """
     Protocol for a complete throttling strategy.
-    
-    Note: Every operation that mutates the state belonging to logical key X must 
+
+    Note: Every operation that mutates the state belonging to logical key X must
     synchronize through lock X or an atomic backend primitive.
     """
 

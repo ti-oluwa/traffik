@@ -75,13 +75,14 @@ from multiprocessing.synchronize import Semaphore
 from time import monotonic
 from types import TracebackType
 
+from traffik._hashing import fnv_32bit_hash
 from traffik._locks import _NamedLockHandle, _NamedLockPool
 
-_ON_WINDOWS = platform.system() == "Windows"
+ON_WINDOWS = platform.system() == "Windows"
 
 logger = logging.getLogger(__name__)
-if not _ON_WINDOWS:
-    from traffik.backends import _ext as cext  # type: ignore[import]
+if not ON_WINDOWS:
+    from traffik import _ext as cext  # type: ignore[import]
 else:
     cext: typing.Any = object()  # type: ignore
 
@@ -156,7 +157,7 @@ def _derive_shared_memory_name(namespace: str) -> str:
     :return: A valid POSIX shared memory segment name.
     """
     sanitized = re.sub(r"[^A-Za-z0-9_-]", "_", namespace)
-    hex_suffix = format(cext.fnv_32bit_hash(namespace.encode("utf-8")), "08x")
+    hex_suffix = format(fnv_32bit_hash(namespace.encode("utf-8")), "08x")
     middle_max = (
         _SHARED_MEMORY_NAME_MAX_LENGTH
         - len(_SHARED_MEMORY_NAME_PREFIX)
@@ -754,7 +755,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         are inherited normally as POSIX `fork()` duplicates those correctly;
         only threads and event-loop-bound objects are the exception.
         """
-        if _ON_WINDOWS:
+        if ON_WINDOWS:
             raise RuntimeError(
                 f"`{self.__class__.__name__}` is not supported on Windows. "
                 "It requires the 'fork' multiprocessing start method, which "
@@ -1187,7 +1188,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param key: The throttle key string.
         :return: Shard index in `[0, number_of_shards)`.
         """
-        return cext.fnv_32bit_hash(key.encode("utf-8")) % self._number_of_shards
+        return fnv_32bit_hash(key.encode("utf-8")) % self._number_of_shards
 
     def _shard_base(self, shard_idx: int) -> int:
         """
@@ -1222,7 +1223,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         hash_table_base = shard_base + self._shard_hash_table_base_offset
         capacity = self._shard_hash_table_capacity
         mask = self._shard_hash_table_mask
-        start = cext.fnv_32bit_hash(key_bytes) & mask
+        start = fnv_32bit_hash(key_bytes) & mask
         first_tombstone = -1
 
         for i in range(capacity):

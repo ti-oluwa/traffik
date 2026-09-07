@@ -90,6 +90,21 @@ _backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVar(
 """Throttle backend contextvar. Private variable !!!Do not use directly!!!"""
 
 
+try:
+    from traffik._hashing import fnv_64bit_hash
+
+    def fnv_hex(data: bytes) -> str:
+        """Return the hex digest of `data` using FNV-1a 64-bit."""
+        return format(fnv_64bit_hash(data), "016x")
+
+except ImportError:  # pragma: no cover
+    # This is only hit without the compiled extension
+
+    def fnv_hex(data: bytes) -> str:
+        """Return the hex digest of `data` using MD5, when the C extension is unavailable."""
+        return hashlib.md5(data).hexdigest()  # nosec
+
+
 def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
     """Builds a key using the provided parameters."""
     key_parts = [str(arg) for arg in args]
@@ -97,7 +112,7 @@ def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
     if not key_parts:
         return "*"
     key_parts.sort()  # Sort to ensure consistent ordering
-    return hashlib.md5(":".join(key_parts).encode()).hexdigest()  # nosec
+    return fnv_hex(":".join(key_parts).encode())
 
 
 def _reraise_as_backend_error(

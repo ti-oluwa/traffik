@@ -10,6 +10,12 @@ import platform
 import sys
 
 import traffik  # noqa: F401
+
+# `_hashing` has no platform-specific build restriction and is expected to
+# be present everywhere, Windows included. Check known FNV-1a test vectors
+# rather than just importing, so a bad build (e.g. a struct-width mismatch
+# on an unusual platform) is caught here instead of downstream.
+from traffik._hashing import fnv_32bit_hash, fnv_64bit_hash
 from traffik.backends.inmemory import InMemoryBackend  # noqa: F401
 from traffik.throttles import HTTPThrottle  # noqa: F401
 
@@ -18,8 +24,16 @@ print(
     f"({sys.platform}, py{sys.version_info.major}.{sys.version_info.minor})"
 )
 
+
+assert fnv_32bit_hash(b"") == 0x811C9DC5
+assert fnv_32bit_hash(b"a") == 0xE40C292C
+assert fnv_64bit_hash(b"") == 0xCBF29CE484222325
+assert fnv_64bit_hash(b"a") == 0xAF63DC4C8601EC8C
+print("[cibw-smoke] `traffik._hashing` OK - known FNV-1a vectors match")
+
 if platform.system() != "Windows":
-    # The C extension isn't built on Windows at all (see setup.py), so
+    # `_ext` (atomic byte-lock primitives) needs GCC/Clang atomic builtins
+    # and isn't built on Windows (see setup.py), so
     # `MultiProcessInMemoryBackend` isn't expected to be usable there.
     from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 

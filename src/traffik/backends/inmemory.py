@@ -458,7 +458,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         )
 
     # Note: Shard locks are not essentially needed in the `get`, `set`, `delete`,
-    # `increment`, etc. methods (except in `multi_set` and `multi_get`). This because shard ops
+    # `increment`, etc. methods (except in `multi_set` and `multi_get`). This is because shard ops
     # are essentially atomic since we have no `await` statements in the code blocks
     # We just add them for semantic clarity (to show that said block is meant to be atomic)
     # and future proofing. The lock overhead should not be significant.
@@ -482,7 +482,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 self._index_remove(shard_idx, key)
             return None
         # `increment`/`increment_with_ttl` store counters as raw `int` internally
-        # to skip redundant str<->int conversions; stringify here so `get()`'s
+        # to skip redundant str to int conversions; stringify here so `get()`'s
         # contract (always `Optional[str]`) is the same for every key.
         return value if isinstance(value, str) else str(value)
 
@@ -615,7 +615,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
             new_value = current + amount
             # Only set TTL if key was created without expiration
-            # (e.g., via increment() call, not increment_with_ttl)
+            # (e.g., via `increment()` call, not `increment_with_ttl`)
             if expires_at is None:
                 expires_at = now + ttl
 
@@ -661,7 +661,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
                     value, expires_at = entry
                     if expires_at is None or expires_at > now:
-                        # See get(): counters may be stored as raw `int`.
+                        # Counters may be stored as raw `int`.
                         results[key] = value if isinstance(value, str) else str(value)
                     else:
                         del shard[key]

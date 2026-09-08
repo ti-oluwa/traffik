@@ -7,17 +7,17 @@ ON_WINDOWS = platform.system() == "Windows"
 ext_modules = [
     Extension(
         "traffik._hashing",
-        ["src/traffik/_cext/hashing.c"],
+        ["src/traffik/_extensions/hashing.c"],
         extra_compile_args=["/O2"] if ON_WINDOWS else ["-O2"],
     ),
 ]
 
 if not ON_WINDOWS:
-    # Needs GCC/Clang atomic builtins; not available on MSVC.
+    # Needs GCC/Clang atomic builtins. Not available on MSVC.
     ext_modules.append(
         Extension(
             "traffik._atomic",
-            ["src/traffik/_cext/_atomic.c"],
+            ["src/traffik/_extensions/atomic.c"],
             extra_compile_args=["-O2"],
         )
     )

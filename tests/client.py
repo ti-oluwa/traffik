@@ -25,9 +25,7 @@ from typing_extensions import Self
 logger = logging.getLogger(__name__)
 
 
-def _ensure_bytes(
-    val: typing.Union[str, bytes], /, *, encoding: str = "utf-8"
-) -> bytes:
+def ensure_bytes(val: typing.Union[str, bytes], /, *, encoding: str = "utf-8") -> bytes:
     return val if isinstance(val, bytes) else str(val).encode(encoding=encoding)
 
 
@@ -198,12 +196,10 @@ class AsyncWebSocketTestSession:
         if mode == "text":
             return await self.send({"type": "websocket.receive", "text": text})
 
-        return await self.send(
-            {
-                "type": "websocket.receive",
-                "bytes": text.encode("utf-8"),
-            }
-        )
+        return await self.send({
+            "type": "websocket.receive",
+            "bytes": text.encode("utf-8"),
+        })
 
     async def receive_text(self) -> str:
         """
@@ -393,16 +389,14 @@ class AsyncTestClient:
         header_pairs.append((b"sec-websocket-key", b"testserver=="))
         header_pairs.append((b"sec-websocket-version", b"13"))
         if subprotocols:
-            header_pairs.append(
-                (
-                    b"sec-websocket-protocol",
-                    ", ".join(subprotocols).encode(),
-                )
-            )
+            header_pairs.append((
+                b"sec-websocket-protocol",
+                ", ".join(subprotocols).encode(),
+            ))
         header_pairs += [
             (
                 key.lower().encode(encoding="utf-8"),
-                _ensure_bytes(value, encoding="utf-8"),
+                ensure_bytes(value, encoding="utf-8"),
             )
             for key, value in request_headers.items()
             if key.lower() != "host"

@@ -7,8 +7,10 @@ import pytest
 from traffik.config import (
     DEFAULT_BLOCKING_SETTING_ENV_VAR,
     DEFAULT_BLOCKING_TIMEOUT_ENV_VAR,
+    get_legacy_md5_keys,
     get_lock_blocking,
     get_lock_blocking_timeout,
+    set_legacy_md5_keys,
     set_lock_blocking,
     set_lock_blocking_timeout,
 )
@@ -146,6 +148,52 @@ class TestBlockingTimeout:
             set_lock_blocking_timeout(timeout)
             result = get_lock_blocking_timeout()
             assert result == timeout, f"Roundtrip failed for {timeout}"
+
+
+class TestLegacyMd5KeysConfiguration:
+    """Tests for the legacy MD5 keys configuration utility."""
+
+    def test_get_legacy_md5_keys_default(self):
+        """Test get_legacy_md5_keys returns False by default."""
+        if "TRAFFIK_LEGACY_MD5_KEYS" in os.environ:
+            del os.environ["TRAFFIK_LEGACY_MD5_KEYS"]
+
+        assert get_legacy_md5_keys() is False
+
+    def test_get_legacy_md5_keys_truthy_values(self):
+        """Test get_legacy_md5_keys recognizes truthy string values."""
+        truthy_values = ["1", "true", "True", "TRUE", "yes", "on"]
+
+        for value in truthy_values:
+            os.environ["TRAFFIK_LEGACY_MD5_KEYS"] = value
+            assert get_legacy_md5_keys() is True, f"'{value}' should be recognized as True"
+
+    def test_get_legacy_md5_keys_falsy_values(self):
+        """Test get_legacy_md5_keys recognizes falsy string values."""
+        falsy_values = ["0", "false", "False", "no", "off", ""]
+
+        for value in falsy_values:
+            os.environ["TRAFFIK_LEGACY_MD5_KEYS"] = value
+            assert get_legacy_md5_keys() is False, f"'{value}' should be recognized as False"
+
+    def test_set_legacy_md5_keys_true(self):
+        """Test set_legacy_md5_keys correctly sets True."""
+        set_legacy_md5_keys(True)
+        assert os.environ["TRAFFIK_LEGACY_MD5_KEYS"] == "1"
+        assert get_legacy_md5_keys() is True
+
+    def test_set_legacy_md5_keys_false(self):
+        """Test set_legacy_md5_keys correctly sets False."""
+        set_legacy_md5_keys(False)
+        assert os.environ["TRAFFIK_LEGACY_MD5_KEYS"] == "0"
+        assert get_legacy_md5_keys() is False
+
+    def test_legacy_md5_keys_cleanup(self):
+        """Clean up environment variable after tests."""
+        if "TRAFFIK_LEGACY_MD5_KEYS" in os.environ:
+            del os.environ["TRAFFIK_LEGACY_MD5_KEYS"]
+
+        assert get_legacy_md5_keys() is False  # Back to default
 
 
 class TestConfigurationIntegration:

@@ -3,9 +3,11 @@ import typing
 
 __all__ = [
     "ANONYMOUS_IDENTIFIER",
+    "get_legacy_md5_keys",
     "get_lock_blocking",
     "get_lock_blocking_timeout",
     "get_lock_ttl",
+    "set_legacy_md5_keys",
     "set_lock_blocking",
     "set_lock_blocking_timeout",
     "set_lock_ttl",
@@ -33,6 +35,47 @@ THROTTLE_DEFAULT_SCOPE = "default"
 DEFAULT_BLOCKING_SETTING_ENV_VAR = "TRAFFIK_DEFAULT_BLOCKING"
 DEFAULT_BLOCKING_TIMEOUT_ENV_VAR = "TRAFFIK_DEFAULT_BLOCKING_TIMEOUT"
 DEFAULT_LOCK_TTL_ENV_VAR = "TRAFFIK_DEFAULT_LOCK_TTL"
+
+
+###################
+# Hashing Configs #
+###################
+LEGACY_MD5_KEYS_ENV_VAR = "TRAFFIK_LEGACY_MD5_KEYS"
+
+
+def get_legacy_md5_keys() -> bool:
+    """
+    Get whether to use MD5 instead of FNV-1a 64-bit for building composite
+    backend cache keys, from the environment variable `TRAFFIK_LEGACY_MD5_KEYS`.
+
+    An escape hatch. Allows forcing the same hashing `build_key()` used pre
+    `v1.3.0`, in case FNV-1a misbehaves on a given platform, or to avoid the
+    one-time key reset that switching hash algorithms causes for
+    `persistent=True` backends carrying over state from before the upgrade.
+
+    Resolved once, at import time. Set this before `traffik.backends.base` is first
+    imported. Calling `set_legacy_md5_keys()` after that point has no effect on 
+    the current process.
+
+    :return: True if MD5 should be used. Defaults to False (use FNV-1a 64-bit).
+    """
+    value = os.getenv(LEGACY_MD5_KEYS_ENV_VAR)
+    if value is not None:
+        return value.lower() in ("1", "true", "yes", "on")
+    return False
+
+
+def set_legacy_md5_keys(enabled: bool) -> None:
+    """
+    Set whether to use MD5 instead of FNV-1a 64-bit for building composite
+    backend cache keys, in the environment variable `TRAFFIK_LEGACY_MD5_KEYS`.
+
+    Must be called before `traffik.backends.base` is first imported to have
+    any effect.
+
+    :param enabled: True to use MD5, False to use FNV-1a 64-bit.
+    """
+    os.environ[LEGACY_MD5_KEYS_ENV_VAR] = "1" if enabled else "0"
 
 
 def get_lock_ttl() -> typing.Optional[float]:

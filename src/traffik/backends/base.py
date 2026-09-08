@@ -21,6 +21,7 @@ from traffik.config import (
     ANONYMOUS_IDENTIFIER,
     APP_CONTEXT_ATTR,
     BACKEND_APP_CONTEXT_KEY,
+    get_legacy_md5_keys,
     get_lock_blocking,
     get_lock_blocking_timeout,
     get_lock_ttl,
@@ -90,19 +91,20 @@ _backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVar(
 """Throttle backend contextvar. Private variable !!!Do not use directly!!!"""
 
 
-try:
-    from traffik._hashing import fnv_64bit_hash
+def get_md5_hex(data: bytes) -> str:
+    """Hex digest of `data` using MD5."""
+    return hashlib.md5(data).hexdigest()  # nosec
 
-    def fnv_hex(data: bytes) -> str:
-        """Return the hex digest of `data` using FNV-1a 64-bit."""
-        return format(fnv_64bit_hash(data), "016x")
 
-except ImportError:  # pragma: no cover
-    # This is only hit without the compiled extension
-
-    def fnv_hex(data: bytes) -> str:
-        """Return the hex digest of `data` using MD5, when the C extension is unavailable."""
-        return hashlib.md5(data).hexdigest()  # nosec
+get_hex: typing.Callable[[bytes], str]
+if get_legacy_md5_keys():
+    get_hex = get_md5_hex
+else:
+    try:
+        from traffik._hashing import fnv_64bit_hash_hex as get_hex
+    except ImportError:  # pragma: no cover
+        # This is only hit without the compiled extension
+        get_hex = get_md5_hex
 
 
 def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
@@ -112,7 +114,7 @@ def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
     if not key_parts:
         return "*"
     key_parts.sort()  # Sort to ensure consistent ordering
-    return fnv_hex(":".join(key_parts).encode())
+    return get_hex(":".join(key_parts).encode())
 
 
 def _reraise_as_backend_error(

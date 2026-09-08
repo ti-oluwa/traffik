@@ -1,4 +1,4 @@
-"""Portable FNV-1a hashing extension for traffik."""
+"""C-based FNV-1a hashing extension for traffik."""
 
 def fnv_32bit_hash(data: bytes, /) -> int:
     """
@@ -20,4 +20,14 @@ def fnv_64bit_hash(data: bytes, /) -> int:
 
     :param data: The bytes to hash.
     :return: The 64-bit hash value as an unsigned integer (0 to 2^64 - 1).
+    """
+
+def fnv_64bit_hash_hex(data: bytes, /) -> str:
+    """
+    Compute FNV-1a 64-bit hash of the given bytes, as a 16-character hex string.
+
+    Same hash as `fnv_64bit_hash`, written directly as hex in C.
+
+    :param data: The bytes to hash.
+    :return: The 16-character lowercase hex digest.
     """

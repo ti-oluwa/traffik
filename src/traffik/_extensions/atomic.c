@@ -1,5 +1,5 @@
 /*
- * _atomic.c
+ * atomic.c
  *
  * Atomic byte-lock primitives for traffik's multiprocess backend.
  */
@@ -25,8 +25,7 @@
  * accesses inside the critical section are correctly ordered relative
  * to this operation on every architecture.
  *
- * Provides two atomic operations on a single byte within a writable
- * buffer (e.g. multiprocessing.SharedMemory):
+ * Provides two atomic operations on a single byte within a writable buffer:
  *
  * Thread / process safety
  * -----------------------

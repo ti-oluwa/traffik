@@ -93,7 +93,7 @@ _backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVar(
 
 def get_md5_hex(data: bytes) -> str:
     """Hex digest of `data` using MD5."""
-    return hashlib.md5(data).hexdigest()  # nosec
+    return hashlib.md5(data, usedforsecurity=False).hexdigest()  # nosec
 
 
 get_hex: typing.Callable[[bytes], str]

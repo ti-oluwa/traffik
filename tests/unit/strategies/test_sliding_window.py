@@ -1,6 +1,7 @@
 """Tests for Sliding Window strategies."""
 
 import asyncio
+import time
 
 import pytest
 
@@ -91,9 +92,9 @@ class TestSlidingWindowLogStrategy:
         key = "user:concurrent"
 
         # Make 20 concurrent requests
-        results = await asyncio.gather(
-            *[strategy(key, rate, backend) for _ in range(20)]
-        )
+        results = await asyncio.gather(*[
+            strategy(key, rate, backend) for _ in range(20)
+        ])
 
         # All 20 should succeed
         allowed = sum(1 for wait in results if wait == 0.0)
@@ -210,6 +211,69 @@ class TestSlidingWindowCounterStrategy:
         # Should allow fewer than 5 (better than fixed window's full reset)
         assert allowed_count < 5, "Should prevent full boundary burst"
 
+    async def test_rejected_requests_dont_inflate_counter(
+        self, backend: InMemoryBackend
+    ):
+        """
+        Throttled requests must not count toward the window's stored
+        counter - that counter becomes `previous_count` for the next
+        window, so letting rejected attempts inflate it would make the
+        *next* window far more aggressive than the configured rate, in
+        proportion to how much it was overloaded rather than to `limit`.
+        """
+        strategy = SlidingWindowCounterStrategy()
+        rate = Rate.parse("50/10s")
+        key = "user:overload"
+
+        results = await asyncio.gather(*[
+            strategy(key, rate, backend) for _ in range(500)
+        ])
+        allowed = sum(1 for wait in results if wait == 0.0)
+        assert allowed == 50, f"Exactly the limit should be allowed, got {allowed}"
+
+        full_key = backend.get_key(key)
+        now = time.time() * 1000
+        current_window_id = int(now // rate.expire)
+        current_window_key = f"{full_key}:slidingcounter:{current_window_id}"
+        raw_counter = await backend.get(current_window_key)
+        assert raw_counter is not None
+        assert int(raw_counter) == 50, (
+            f"Stored counter should match allowed count ({50}), not total "
+            f"attempts (500); got {raw_counter}"
+        )
+
+    async def test_sustained_overload_tracks_nominal_rate(
+        self, backend: InMemoryBackend
+    ):
+        """
+        Under sustained overload spanning several windows, total allowed
+        requests should track close to `limit * num_windows`, not collapse
+        to a fraction of it after the first window (the failure mode caused
+        by rejected attempts inflating the carried-over counter).
+        """
+        strategy = SlidingWindowCounterStrategy()
+        rate = Rate.parse("50/300ms")
+        key = "user:sustained"
+
+        start = asyncio.get_running_loop().time()
+        allowed = 0
+        while asyncio.get_running_loop().time() - start < 1.2:
+            results = await asyncio.gather(*[
+                strategy(key, rate, backend) for _ in range(20)
+            ])
+            allowed += sum(1 for wait in results if wait == 0.0)
+            await asyncio.sleep(0.01)
+
+        elapsed = asyncio.get_running_loop().time() - start
+        nominal_max = 50 * (elapsed / 0.3)
+        # Allow generous slack (sliding window counter is an approximation,
+        # and real wall-clock timing varies), but it must not collapse to
+        # a small fraction of the nominal rate the way the bug caused.
+        assert allowed > nominal_max * 0.5, (
+            f"Allowed ({allowed}) collapsed well below the nominal rate "
+            f"(~{nominal_max:.0f}) under sustained overload"
+        )
+
     async def test_concurrent_requests(self, backend: InMemoryBackend):
         """Test strategy under concurrent load."""
 
@@ -217,9 +281,9 @@ class TestSlidingWindowCounterStrategy:
         rate = Rate.parse("15/s")
         key = "user:concurrent"
 
-        results = await asyncio.gather(
-            *[strategy(key, rate, backend) for _ in range(15)]
-        )
+        results = await asyncio.gather(*[
+            strategy(key, rate, backend) for _ in range(15)
+        ])
 
         allowed = sum(1 for wait in results if wait == 0.0)
         assert allowed == 15, f"All 15 requests should be allowed, got {allowed}"

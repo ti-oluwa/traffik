@@ -12,7 +12,7 @@ from traffik.typing import HTTPConnectionT, Matchable, Predicate
 __all__ = ["Bypass", "Rule", "ThrottleRegistry", "bypass_if", "throttle_if"]
 
 
-def _glob_to_regex(pattern: str) -> str:
+def glob_to_regex(pattern: str) -> str:
     """
     Helper to convert a simple glob wildcards in a path pattern to regex equivalents.
 
@@ -95,7 +95,7 @@ class Rule(typing.Generic[HTTPConnectionT]):
         if path is None or isinstance(path, re.Pattern):
             self.path = path
         else:
-            self.path = re.compile(_glob_to_regex(str(path)))
+            self.path = re.compile(glob_to_regex(str(path)))
 
         if methods is None:
             self.methods = None

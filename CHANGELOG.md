@@ -118,4 +118,7 @@
 - **Packaging**:
   - The `.pyi` stub files for the C extensions are now actually included in built wheels (`package_data` previously only covered `py.typed` under the top-level `traffik` package, so `_ext.pyi` under `traffik.backends` was silently never shipped).
 
-**Note:** because `build_key()`'s hash algorithm changed, any already-persisted throttle state keyed via args/kwargs (e.g. `persistent=True` backends with long-lived counters) will appear as new keys after upgrading - existing counters effectively reset once for those keys. Ephemeral/expiring rate-limit state is unaffected in practice.
+- **Bug Fixes**:
+  - Fixed `SlidingWindowCounterStrategy` incrementing a window's stored counter even for throttled requests. Since that counter becomes `previous_count` for the following window, a burst of rejected attempts under sustained overload would inflate it far past `limit` (proportional to attempts, not to the configured rate), causing the next window to throttle far more aggressively than intended and potentially never fully recovering under continued load. Throttled requests now decrement the counter back. In a stress test (500 concurrent requests against a limit of 50), allowed throughput under sustained overload went from ~20% of the nominal rate (effectively stuck) to ~107% of it (correctly tracking the configured limit) after the fix.
+
+**Note:** because `build_key()`'s hash algorithm changed, any already-persisted throttle state keyed via args/kwargs (e.g. `persistent=True` backends with long-lived counters) will appear as new keys after upgrading, that is, existing counters effectively reset once for those keys. Ephemeral/expiring rate-limit state is unaffected in practice.

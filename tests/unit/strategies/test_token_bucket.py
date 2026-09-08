@@ -127,9 +127,9 @@ class TestTokenBucketStrategy:
         rate = Rate.parse("20/s")
         key = "user:concurrent"
 
-        results = await asyncio.gather(
-            *[strategy(key, rate, backend) for _ in range(20)]
-        )
+        results = await asyncio.gather(*[
+            strategy(key, rate, backend) for _ in range(20)
+        ])
 
         allowed = sum(1 for wait in results if wait == 0.0)
         assert allowed == 20, f"All 20 requests should be allowed, got {allowed}"
@@ -298,9 +298,9 @@ class TestTokenBucketWithDebtStrategy:
         rate = Rate.parse("15/s")
         key = "user:concurrent"
 
-        results = await asyncio.gather(
-            *[strategy(key, rate, backend) for _ in range(15)]
-        )
+        results = await asyncio.gather(*[
+            strategy(key, rate, backend) for _ in range(15)
+        ])
 
         allowed = sum(1 for wait in results if wait == 0.0)
         assert allowed == 15, f"All 15 requests should be allowed, got {allowed}"

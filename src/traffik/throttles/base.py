@@ -63,8 +63,8 @@ class SimpleThrottleStrategy(typing.Protocol[HTTPConnectionT]):
     """
     Protocol for a simple throttling strategy.
 
-    Note: Every operation that mutates the state belonging to logical key X must
-    synchronize through lock X or an atomic backend primitive.
+    Note: Every operation that mutates the state belonging to logical key `X` must
+    synchronize through lock `X` or an atomic backend primitive.
     """
 
     async def __call__(
@@ -91,8 +91,8 @@ class FullThrottleStrategy(typing.Protocol[HTTPConnectionT]):
     """
     Protocol for a complete throttling strategy.
 
-    Note: Every operation that mutates the state belonging to logical key X must
-    synchronize through lock X or an atomic backend primitive.
+    Note: Every operation that mutates the state belonging to logical key `X` must
+    synchronize through lock `X` or an atomic backend primitive.
     """
 
     async def __call__(

@@ -189,7 +189,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param cleanup_frequency: Frequency (in seconds) to cleanup expired keys. If None, no automatic cleanup is performed.
         :param cleanup_sample_size: Number of keys sampled per shard, per round, when reclaiming
             expired keys. Higher values reclaim expired keys faster at the cost of a longer
-            (but still bounded) pause per cleanup pass; independent of the number of live keys.
+            (but still bounded) pause per cleanup pass, but independent of the number of live keys.
         :param lock_kind: The type of lock to use for shard locks. "fair" uses a fair lock implementation which
             guarantees FIFO order for waiting tasks, while "unfair" may have better performance but does not guarantee order.
         :param lock_pool_size: Maximum number of idle named locks to keep in the pool for reuse.
@@ -307,7 +307,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     def _index_insert(self, shard_idx: int, key: str) -> None:
         """
-        Record a newly-created `key` in the shard's sampling index.
+        Record a newly created `key` in the shard's sampling index.
 
         Call only when `key` was just added to the shard (i.e. it wasn't
         already present). Must be called with the shard lock held.
@@ -368,7 +368,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         # to be checked but the keys themselves aren't affected.
         sampled_keys = [
             key_list[position]
-            for position in random.sample(range(len(key_list)), sample_size)  # nosec
+            for position in random.sample(range(len(key_list)), k=sample_size)  # nosec
         ]
 
         freed = 0

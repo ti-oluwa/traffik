@@ -17,7 +17,7 @@ The hot `increment_with_ttl` path reads and writes the int64 field directly,
 avoiding all string encoding and parsing overhead.
 
 Locking uses `multiprocessing.Semaphore` objects that must be created
-**before** fork and inherited by all worker processes through the normal Unix
+before fork and inherited by all worker processes through the normal Unix
 fork mechanism.
 
 **Platform requirement**
@@ -46,16 +46,12 @@ backend.start()  # sync - no event loop needed
 app = FastAPI(lifespan=backend.lifespan)
 ```
 
-Each forked worker inherits a fully-initialized instance automatically -
-shared memory, semaphores, and all. Workers don't call anything to "join" it;
-`lifespan=backend.lifespan` calling `await backend.initialize()` in each
-worker's own event loop is enough (see `start()`/`initialize()` below for why
-that split exists, and why it's still needed even though `start()` already
-ran in the parent).
+Each forked worker inherits a fully initialized instance automatically -
+shared memory, semaphores, and all.
 
 If a segment with the target name already exists when `start()` runs, it can
-only be a stale leftover from a previous run not an actively-used peer,
-since nothing else can safely attach to it anyway. So it's unlinked and
+only be a stale leftover from a previous run not an actively used peer.
+Since nothing else can safely attach to it anyway, it's unlinked and
 recreated rather than reused.
 """
 
@@ -85,9 +81,9 @@ ON_WINDOWS = platform.system() == "Windows"
 
 logger = logging.getLogger(__name__)
 if not ON_WINDOWS:
-    from traffik import _atomic as cext  # type: ignore[import]
+    from traffik import _atomic  # type: ignore[import]
 else:
-    cext: typing.Any = object()  # type: ignore
+    _atomic: typing.Any = object()  # type: ignore
 
 from traffik.backends.base import ThrottleBackend  # noqa
 from traffik.exceptions import (  # noqa
@@ -147,7 +143,7 @@ _FLOAT64_STRUCT = struct.Struct("=d")
 _BOOL_STRUCT = struct.Struct("=?")
 
 
-def _derive_shared_memory_name(namespace: str) -> str:
+def derive_shared_memory_name(namespace: str) -> str:
     """
     Derive a valid shared memory segment name from *namespace*.
 
@@ -172,7 +168,7 @@ def _derive_shared_memory_name(namespace: str) -> str:
     return f"{_SHARED_MEMORY_NAME_PREFIX}{sanitized}_{hex_suffix}"
 
 
-def _validate_shared_memory_name(name: str) -> None:
+def validate_shared_memory_name(name: str) -> None:
     """
     Raise `ValueError` if *name* is not a legal shared memory segment name.
 
@@ -213,7 +209,7 @@ class _SharedMemoryLockBytePool:
 
     The pool is backed by a simple integer free-stack protected by a
     `threading.Lock`. It lives entirely in the parent process's Python
-    heap; worker processes inherit a private copy after fork and therefore
+    heap, so worker processes inherit a private copy after fork and therefore
     each have their own independent allocator state because each worker independently
     creates its own `_AsyncSharedMemoryLock` instances via `_NamedLockPool`.
     """
@@ -289,7 +285,7 @@ class _AsyncSharedMemoryLock:
 
     1. If the current task already owns the lock and reentrancy is enabled,
        increment the counter and return immediately.
-    2. Call `cext.test_and_set_byte` (atomic XCHG).
+    2. Call `_atomic.test_and_set_byte` (atomic XCHG).
     3. If old value was 0, we acquired the lock; record task ownership and return `True`.
     4. Otherwise yield to the event loop via `asyncio.sleep(...)`
        (first `max_spins_before_backoff` attempts) or with an
@@ -298,8 +294,8 @@ class _AsyncSharedMemoryLock:
 
     The yield in step 4 is a pure cooperative handoff.
     The lock holder (running in the same or a different process)
-    will complete its critical section and call `cext.clear_byte`, making
-    the byte 0 again so a subsequent `cext.test_and_set_byte` by a waiter succeeds.
+    will complete its critical section and call `_atomic.clear_byte`, making
+    the byte 0 again so a subsequent `_atomic.test_and_set_byte` by a waiter succeeds.
     """
 
     __slots__ = (
@@ -394,7 +390,7 @@ class _AsyncSharedMemoryLock:
         spin_max_delay = self._spin_max_delay_seconds
         has_blocking_timeout = blocking_timeout is not None
         while True:
-            if cext.test_and_set_byte(self._buffer, self._byte_index) == 0:
+            if _atomic.test_and_set_byte(self._buffer, self._byte_index) == 0:
                 # Old value was 0. We already atomically set it to 1 and own the lock
                 self._owner = current_task
                 self._reentry_count = 1
@@ -440,10 +436,10 @@ class _AsyncSharedMemoryLock:
 
         # Outermost release. Clear the shared memory byte and ownership together
         try:
-            cext.clear_byte(self._buffer, self._byte_index)
+            _atomic.clear_byte(self._buffer, self._byte_index)
         finally:
-            # Clear ownership regardless of whether cext.clear_byte succeeded.
-            # `cext.clear_byte` is a C extension writing a single byte, so failure here
+            # Clear ownership regardless of whether atomic.clear_byte succeeded.
+            # `atomic.clear_byte` is a C extension writing a single byte, so failure here
             # would indicate a severe memory error, but we still clean up state.
             self._owner = None
             self._reentry_count = 0
@@ -460,7 +456,7 @@ class _AsyncSharedMemoryLock:
             # For safety, clear the byte so we don't permanently poison
             # the shared memory flag for future lock instances that
             # receive the same byte index.
-            cext.clear_byte(self._buffer, self._byte_index)
+            _atomic.clear_byte(self._buffer, self._byte_index)
             self._owner = None
             self._reentry_count = 0
         self._byte_pool.release_index(self._byte_index)
@@ -734,7 +730,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :param cleanup_sample_size: Number of hash-table buckets sampled per
             shard, per round, when reclaiming expired slots. Higher values
             reclaim expired slots faster at the cost of a longer (but still
-            bounded) pause per cleanup pass; independent of `max_keys`.
+            bounded) pause per cleanup pass, independent of `max_keys`.
         :param shared_memory_name: Explicit POSIX shared memory segment name.
             Must match `[A-Za-z0-9_-]`, max 30 characters. Derived from
             *namespace* automatically when `None`.
@@ -786,9 +782,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             )
 
         if shared_memory_name is None:
-            shared_memory_name = _derive_shared_memory_name(namespace)
+            shared_memory_name = derive_shared_memory_name(namespace)
 
-        _validate_shared_memory_name(shared_memory_name)
+        validate_shared_memory_name(shared_memory_name)
         self._shared_memory_name: str = shared_memory_name
 
         # Captured once here so we can tell "the process that actually
@@ -906,7 +902,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             thread_name_prefix=self._executor_thread_name_prefix,
         )
         # The executor's worker threads don't exist in a forked child, so it must
-        # be rebuilt there, not inherited as-is. (See the "Fork safety" note in this method's docstring)
+        # be rebuilt there, not inherited as-is. (See the "Fork safety" note in 
+        # this method's docstring)
         os.register_at_fork(after_in_child=self._reinit_after_fork)
 
         self._lock_pool_size = lock_pool_size
@@ -996,12 +993,12 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         (and shouldn't) call `start()` themselves.
 
         **Note**:
-            This does not start the background cleanup task as `asyncio.create_task`
-            requires a running loop.
-            `initialize()` handles that part, and does need to be called
-            in every process/event loop that uses this backend, workers included.
-            See its docstring for why that's still necessary even though
-            `start()` already ran in the parent.
+        This does not start the background cleanup task as `asyncio.create_task`
+        requires a running loop.
+        `initialize()` handles that part, and does need to be called
+        in every process/event loop that uses this backend, workers included.
+        See its docstring for why that's still necessary even though
+        `start()` already ran in the parent.
 
         If a shared memory segment with this name already exists, it's
         unlinked and recreated rather than reused. Since nothing can safely
@@ -2345,7 +2342,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         Check up to `sample_size` random hash-table buckets in one shard
         and reclaim any that are expired. This happens in two passes.
 
-        Pass 1 (no lock): We take ans unsynchronised snapshot of a random
+        Pass 1 (no lock): We take an unsynchronised snapshot of a random
         sample of occupied buckets and their expiry times; used only as a
         candidate hint.
 

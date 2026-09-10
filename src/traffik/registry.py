@@ -118,16 +118,14 @@ class Rule(typing.Generic[HTTPConnectionT]):
             self._predicate_takes_context = False
 
         if _compute_hash:
-            self._hash = hash(
-                (
-                    type(
-                        self
-                    ).__rank__,  # Add to differentiate beteween regular and bypass rule
-                    self.path.pattern if self.path is not None else None,
-                    self.methods,
-                    id(predicate) if predicate is not None else None,
-                )
-            )
+            self._hash = hash((
+                type(
+                    self
+                ).__rank__,  # Add to differentiate beteween regular and bypass rule
+                self.path.pattern if self.path is not None else None,
+                self.methods,
+                id(predicate) if predicate is not None else None,
+            ))
 
     async def check(
         self,
@@ -213,16 +211,14 @@ class Bypass(Rule[HTTPConnectionT]):
             _compute_hash=False,
         )
         # Compute hash now
-        self._hash = hash(
-            (
-                type(
-                    self
-                ).__rank__,  # Add to differentiate beteween regular and bypass rule
-                self.path.pattern if self.path is not None else None,
-                self.methods,
-                id(predicate) if predicate is not None else None,
-            )
-        )
+        self._hash = hash((
+            type(
+                self
+            ).__rank__,  # Add to differentiate beteween regular and bypass rule
+            self.path.pattern if self.path is not None else None,
+            self.methods,
+            id(predicate) if predicate is not None else None,
+        ))
 
     async def check(
         self,
@@ -322,7 +318,7 @@ def bypass_if(
     return Bypass(path=path, methods=methods, predicate=predicate)
 
 
-def _prep_rules(
+def prep_rules(
     rules: typing.Iterable[Rule[typing.Any]],
 ) -> tuple[Rule[typing.Any], ...]:
     """

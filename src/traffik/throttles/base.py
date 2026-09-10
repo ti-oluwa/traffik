@@ -25,7 +25,7 @@ from traffik.registry import (
     GLOBAL_REGISTRY,
     Rule,
     ThrottleRegistry,
-    _prep_rules,
+    prep_rules,
 )
 from traffik.strategies import DEFAULT_STRATEGY
 from traffik.typing import (
@@ -365,7 +365,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         registry.register(uid, self)
         self.registry = registry
         self._rules: tuple[Rule[HTTPConnectionT], ...] = (
-            _prep_rules(set(rules)) if rules else ()
+            prep_rules(set(rules)) if rules else ()
         )
         self._rules_resolved = False
         self._rules_count = 0
@@ -421,7 +421,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         elif isinstance(on_error_, str) and on_error_ in {"allow", "throttle", "raise"}:
             self.on_error = on_error_  # type: ignore[assignment]
         elif on_error_ is None and not self.use_fixed_backend:
-            # We'll handle this in `_handle_error(...)` since backend is dynamic
+            # We'll handle this in `handle_error(...)` since backend is dynamic
             self.on_error = None
         else:
             raise ValueError(
@@ -775,7 +775,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         namespaced_key = f"{self.uid}:{connection_id!s}:{scoped_key}"
         return namespaced_key
 
-    async def _handle_error(
+    async def handle_error(
         self,
         connection: HTTPConnectionT,
         exc: BaseException,
@@ -836,6 +836,8 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         # `on_error` is "raise"
         raise exc
+
+    _handle_error = handle_error  # For backwards compatibility. TODO: Make a function that logs a deprecation warning
 
     async def hit(
         self,
@@ -898,7 +900,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                 if total != self._rules_count:
                     seen = set(rules)
                     merged = rules + tuple(r for r in registry_rules if r not in seen)
-                    self._rules = rules = _prep_rules(merged)
+                    self._rules = rules = prep_rules(merged)
                     self._rules_count = len(rules)
             self._rules_resolved = True
 
@@ -950,7 +952,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
                     type(exc).__name__,
                     exc_info=True,
                 )
-            wait_ms = await self._handle_error(
+            wait_ms = await self.handle_error(
                 connection,
                 exc=exc,
                 key=key,
@@ -1286,7 +1288,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :param rules: One or more `Rule` instances to add.
         :raises `ConfigurationError`: If `target_uid` is not registered.
 
-        Example Usage - Bypassing the global throttle for GET requests:
+        Example Usage: Bypassing the global throttle for GET requests:
 
         ```python
         from traffik.throttles import HTTPThrottle
@@ -1568,7 +1570,7 @@ def throttled(
     if not issubclass(connection_type, HTTPConnection):
         raise TypeError("Throttles must be designed for HTTP connections.")
 
-    def _decorator(
+    def decorator(
         route: typing.Callable[P, typing.Union[R, typing.Awaitable[R]]],
     ) -> typing.Callable[P, typing.Union[R, typing.Awaitable[R]]]:
         if inspect.iscoroutinefunction(route):
@@ -1624,8 +1626,8 @@ def throttled(
         return wrapper
 
     if route is not None:
-        return _decorator(route)
-    return _decorator
+        return decorator(route)
+    return decorator
 
 
 async def _resolve_headers(

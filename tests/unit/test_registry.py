@@ -9,7 +9,7 @@ from starlette.requests import HTTPConnection
 from tests.utils import ThrottleT, make_connection, requires_throttle_type
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.exceptions import ConfigurationError
-from traffik.registry import Bypass, Rule, ThrottleRegistry, _prep_rules
+from traffik.registry import Bypass, Rule, ThrottleRegistry, prep_rules
 from traffik.throttles import Throttle
 
 RULE_TYPES = [Rule, Bypass]
@@ -344,14 +344,14 @@ class TestBypassThrottleRuleCheck:
 
 class TestPrepRules:
     def test_empty_returns_empty_tuple(self) -> None:
-        assert _prep_rules(()) == ()
-        assert _prep_rules([]) == ()
-        assert _prep_rules(set()) == ()
+        assert prep_rules(()) == ()
+        assert prep_rules([]) == ()
+        assert prep_rules(set()) == ()
 
     def test_bypass_before_regular(self) -> None:
         regular = Rule(path="/a/")
         bypass = Bypass(path="/b/")
-        result = _prep_rules([regular, bypass])
+        result = prep_rules([regular, bypass])
         assert result == (bypass, regular)
 
     def test_no_predicateicate_before_predicate(self) -> None:
@@ -360,7 +360,7 @@ class TestPrepRules:
 
         with_pred = Rule(path="/a/", predicate=predicate)
         without_pred = Rule(path="/b/")
-        result = _prep_rules([with_pred, without_pred])
+        result = prep_rules([with_pred, without_pred])
         assert result == (without_pred, with_pred)
 
     def test_full_sort_order(self) -> None:
@@ -375,14 +375,12 @@ class TestPrepRules:
         bypass_with_predicate = Bypass(path="/bp/", predicate=predicate)
 
         # Deliberately shuffled
-        result = _prep_rules(
-            [
-                regular_with_predicate,
-                bypass_with_predicate,
-                regular_no_predicate,
-                bypass_no_predicate,
-            ]
-        )
+        result = prep_rules([
+            regular_with_predicate,
+            bypass_with_predicate,
+            regular_no_predicate,
+            bypass_no_predicate,
+        ])
         assert result == (
             bypass_no_predicate,
             regular_no_predicate,
@@ -391,17 +389,17 @@ class TestPrepRules:
         )
 
     def test_returns_tuple(self) -> None:
-        result = _prep_rules([Rule()])
+        result = prep_rules([Rule()])
         assert isinstance(result, tuple)
 
     def test_accepts_set(self) -> None:
         r = Rule(path="/a/")
-        result = _prep_rules({r})
+        result = prep_rules({r})
         assert result == (r,)
 
     def test_single_rule_unchanged(self) -> None:
         rule = Rule(path="/x/")
-        result = _prep_rules([rule])
+        result = prep_rules([rule])
         assert result == (rule,)
 
 

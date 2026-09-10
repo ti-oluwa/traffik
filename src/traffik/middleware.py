@@ -297,7 +297,7 @@ def _cheap_last(
     return -throttle.cost if not throttle._uses_cost_func else -float("inf")  # type: ignore
 
 
-def _prep_throttles(
+def prep_throttles(
     middleware_throttles: typing.Sequence[
         typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]
     ],
@@ -368,7 +368,7 @@ def _prep_throttles(
 
 class ThrottleMiddleware:
     """
-    Traffik ASGI middleware._predicate_takes_context
+    Traffik ASGI middleware.
 
     This middleware processes incoming HTTP connections and applies throttles based on
     the provided `MiddlewareThrottle` instances. It integrates with throttle backends
@@ -470,7 +470,7 @@ class ThrottleMiddleware:
             Defaults to `False`.
         """
         self.app = app
-        self.middleware_throttles = _prep_throttles(middleware_throttles, sort=sort)
+        self.middleware_throttles = prep_throttles(middleware_throttles, sort=sort)
         self.backend = backend if backend is not None else get_throttle_backend(app)
         # We set to True once we've successfully checked that the backend is ready once.
         # Also actively tracks backend health

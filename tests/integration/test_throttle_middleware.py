@@ -1,5 +1,5 @@
 """
-Tests for `traffik.middleware` (`MiddlewareThrottle`, `ThrottleMiddleware`, `_prep_throttles`).
+Tests for `traffik.middleware` (`MiddlewareThrottle`, `ThrottleMiddleware`, `prep_throttles`).
 """
 
 import asyncio
@@ -16,7 +16,7 @@ from tests.conftest import BackendGen
 from tests.frameworks import ASGIFramework, HTTPRoute, WSRoute
 from tests.utils import default_client_identifier, make_client
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware, _prep_throttles
+from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware, prep_throttles
 from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle, get_wait, is_throttled
@@ -86,20 +86,16 @@ class TestMiddlewareThrottleBasic:
             )
             middleware_throttle = MiddlewareThrottle(throttle=throttle, path="/api/")
 
-            api_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/api/users",
-                }
-            )
-            public_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/public/info",
-                }
-            )
+            api_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/api/users",
+            })
+            public_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/public/info",
+            })
 
             assert await middleware_throttle(api_request) is api_request
             assert await middleware_throttle(public_request) is public_request
@@ -140,22 +136,18 @@ class TestMiddlewareThrottleBasic:
                 throttle=throttle, predicate=is_premium_user
             )
 
-            premium_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/test",
-                    "headers": {"x-user-tier": "premium"},
-                }
-            )
-            free_request = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/test",
-                    "headers": {"x-user-tier": "free"},
-                }
-            )
+            premium_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/test",
+                "headers": {"x-user-tier": "premium"},
+            })
+            free_request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/test",
+                "headers": {"x-user-tier": "free"},
+            })
 
             assert await middleware_throttle(premium_request) is premium_request
             assert await middleware_throttle(free_request) is free_request
@@ -189,14 +181,12 @@ class TestMiddlewareThrottleBasic:
             ]
             for method, path, has_auth in test_cases:
                 headers = [(b"authorization", b"Bearer token")] if has_auth else []
-                request = Request(
-                    {
-                        "type": "http",
-                        "method": method,
-                        "path": path,
-                        "headers": headers,
-                    }
-                )
+                request = Request({
+                    "type": "http",
+                    "method": method,
+                    "path": path,
+                    "headers": headers,
+                })
                 assert await middleware_throttle(request) is request
 
     async def test_skip_handler_marks_throttled_without_invoking_handler(
@@ -279,13 +269,11 @@ class TestMiddlewareThrottleRegexMatching:
             assert middleware_throttle.rule.path.pattern == "/api/"
 
             matching = Request({"type": "http", "method": "GET", "path": "/api/users"})
-            non_matching = Request(
-                {
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/public/data",
-                }
-            )
+            non_matching = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/public/data",
+            })
             assert await middleware_throttle(matching) is matching
             assert await middleware_throttle(non_matching) is non_matching
 
@@ -304,22 +292,18 @@ class TestMiddlewareThrottleRegexMatching:
             )
 
             for _ in range(2):
-                request = Request(
-                    {
-                        "type": "http",
-                        "method": "GET",
-                        "path": "/api/search",
-                    }
-                )
-                assert await middleware_throttle(request) is request
-
-            request = Request(
-                {
+                request = Request({
                     "type": "http",
                     "method": "GET",
-                    "path": "/api/search/results",
-                }
-            )
+                    "path": "/api/search",
+                })
+                assert await middleware_throttle(request) is request
+
+            request = Request({
+                "type": "http",
+                "method": "GET",
+                "path": "/api/search/results",
+            })
             assert await middleware_throttle(request) is request
 
     async def test_case_sensitive_regex(
@@ -1208,13 +1192,13 @@ def make_ws_throttle(uid: str, cost: typing.Optional[int] = None) -> MiddlewareT
 @pytest.mark.middleware
 @pytest.mark.anyio
 class TestPrepThrottles:
-    """`_prep_throttles` - pure function, no app, no framework."""
+    """`prep_throttles` - pure function, no app, no framework."""
 
     async def test_cheap_first(self) -> None:
         cheap_throttle = make_http_throttle("cheap", cost=1)
         mid_throttle = make_http_throttle("mid", cost=5)
         expensive_throttle = make_http_throttle("expensive", cost=10)
-        result = _prep_throttles(
+        result = prep_throttles(
             [expensive_throttle, cheap_throttle, mid_throttle], sort="cheap_first"
         )
         assert result["http"] == [cheap_throttle, mid_throttle, expensive_throttle]
@@ -1223,7 +1207,7 @@ class TestPrepThrottles:
         cheap_throttle = make_http_throttle("cheap", cost=1)
         mid_throttle = make_http_throttle("mid", cost=5)
         expensive_throttle = make_http_throttle("expensive", cost=10)
-        result = _prep_throttles(
+        result = prep_throttles(
             [cheap_throttle, mid_throttle, expensive_throttle], sort="cheap_last"
         )
         assert result["http"] == [expensive_throttle, mid_throttle, cheap_throttle]
@@ -1233,14 +1217,14 @@ class TestPrepThrottles:
         t2 = make_http_throttle("second", cost=1)
         t3 = make_http_throttle("third", cost=5)
         for sort_val in (False, None):
-            result = _prep_throttles([t1, t2, t3], sort=sort_val)
+            result = prep_throttles([t1, t2, t3], sort=sort_val)
             assert result["http"] == [t1, t2, t3]
 
     async def test_custom_callable(self) -> None:
         t1 = make_http_throttle("alpha", cost=5)
         t2 = make_http_throttle("beta", cost=1)
         t3 = make_http_throttle("gamma", cost=10)
-        result = _prep_throttles([t3, t1, t2], sort=lambda t: t.throttle.uid)  # type: ignore
+        result = prep_throttles([t3, t1, t2], sort=lambda t: t.throttle.uid)  # type: ignore
         assert result["http"] == [t1, t2, t3]
 
     async def test_none_cost_sorted_last(self) -> None:
@@ -1253,7 +1237,7 @@ class TestPrepThrottles:
         cheap_throttle = make_http_throttle("cheap", cost=1)
         t_no_cost = make_http_throttle("no-cost", cost=None)
         expensive_throttle = make_http_throttle("expensive", cost=100)
-        result = _prep_throttles(
+        result = prep_throttles(
             [t_no_cost, expensive_throttle, cheap_throttle], sort="cheap_first"
         )
         assert result["http"] == [t_no_cost, cheap_throttle, expensive_throttle]
@@ -1262,7 +1246,7 @@ class TestPrepThrottles:
         cheap_throttle = make_http_throttle("cheap", cost=1)
         t_no_cost = make_http_throttle("no-cost", cost=None)
         expensive_throttle = make_http_throttle("expensive", cost=100)
-        result = _prep_throttles(
+        result = prep_throttles(
             [cheap_throttle, expensive_throttle, t_no_cost], sort="cheap_last"
         )
         assert result["http"] == [expensive_throttle, cheap_throttle, t_no_cost]
@@ -1270,14 +1254,14 @@ class TestPrepThrottles:
     async def test_invalid_sort(self) -> None:
         t = make_http_throttle("test", cost=1)
         with pytest.raises(ValueError, match="Invalid value for `sort`"):
-            _prep_throttles([t], sort="invalid")  # type: ignore[arg-type]
+            prep_throttles([t], sort="invalid")  # type: ignore[arg-type]
 
     async def test_categorization(self) -> None:
         t_http1 = make_http_throttle("http1", cost=1)
         t_http2 = make_http_throttle("http2", cost=2)
         t_ws1 = make_ws_throttle("ws1", cost=1)
         t_ws2 = make_ws_throttle("ws2", cost=2)
-        result = _prep_throttles([t_ws2, t_http2, t_ws1, t_http1], sort="cheap_first")
+        result = prep_throttles([t_ws2, t_http2, t_ws1, t_http1], sort="cheap_first")
         assert result["http"] == [t_http1, t_http2]
         assert result["websocket"] == [t_ws1, t_ws2]
 

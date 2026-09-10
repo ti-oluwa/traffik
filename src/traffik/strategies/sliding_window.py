@@ -418,11 +418,11 @@ class SlidingWindowCounterStrategy:
             # If weighted count exceeds limit, reject request
             if weighted_count > limit:
                 requests_excess = weighted_count - limit
-                # Undo this request's increment because rejected requests should not 
-                # consume rate-limit capacity. Otherwise, rejected attempts would remain 
-                # in `current_count` and contribute to the weighted count for the rest of 
-                # this window. The count would also become `previous_count` in the next 
-                # window, causing rejected traffic from this window to continue affecting 
+                # Undo this request's increment because rejected requests should not
+                # consume rate-limit capacity. Otherwise, rejected attempts would remain
+                # in `current_count` and contribute to the weighted count for the rest of
+                # this window. The count would also become `previous_count` in the next
+                # window, causing rejected traffic from this window to continue affecting
                 # subsequent rate-limit decisions.
                 await backend.decrement(current_window_key, amount=cost)
                 if previous_count > 0:

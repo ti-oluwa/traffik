@@ -453,6 +453,20 @@ throttle = HTTPThrottle("api:v1", rate="100/min", identifier=get_remote_address)
 
 ---
 
+### `CircuitBreaker` / `CircuitState`
+
+Process-local circuit breaker (`CLOSED`/`OPEN`/`HALF_OPEN` states) used by the built-in [`failover`](error-handling.md) error handler to stop hammering a backend that's already failing. Construct your own instance to control its thresholds, or pass a shared one across multiple throttles.
+
+```python
+from traffik import CircuitBreaker
+
+breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=30.0, success_threshold=2)
+```
+
+See [Error Handling](error-handling.md) for a full example with `failover`.
+
+---
+
 ## Configuration
 
 Global lock defaults, settable via environment variables or these functions. Throttle-level `lock_blocking`, `lock_ttl`, and `lock_blocking_timeout` parameters override these globals.

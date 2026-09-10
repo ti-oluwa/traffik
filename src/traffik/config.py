@@ -54,7 +54,7 @@ def get_legacy_md5_keys() -> bool:
     `persistent=True` backends carrying over state from before the upgrade.
 
     Resolved once, at import time. Set this before `traffik.backends.base` is first
-    imported. Calling `set_legacy_md5_keys()` after that point has no effect on 
+    imported. Calling `set_legacy_md5_keys()` after that point has no effect on
     the current process.
 
     :return: True if MD5 should be used. Defaults to False (use FNV-1a 64-bit).

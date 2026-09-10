@@ -21,6 +21,15 @@ from traffik.exceptions import (
 )
 from traffik.typing import AsyncLock
 
+__all__ = [
+    "AsyncLockAdapter",
+    "AsyncLockT",
+    "AsyncRLock",
+    "FairAsyncRLock",
+    "NamedLockHandle",
+    "NamedLockPool",
+]
+
 __PREFIX = secrets.token_hex(8)
 __PID = f"{os.getpid():08x}"
 __COUNTER = itertools.count()
@@ -35,7 +44,7 @@ AsyncLockT = typing.TypeVar("AsyncLockT", bound=AsyncLock)
 
 
 @typing.final
-class _NamedLockPool(typing.Generic[AsyncLockT]):
+class NamedLockPool(typing.Generic[AsyncLockT]):
     """
     Refcounted reusable named async lock pool.
 
@@ -120,7 +129,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         """Mapping of in-use names to (lock, reference_count)"""
         self._closed = False
 
-    def get(self, name: str, /) -> "_NamedLockHandle[AsyncLockT]":
+    def get(self, name: str, /) -> "NamedLockHandle[AsyncLockT]":
         """
         Retrieve a named lock handle.if self._closed:
                 raise LockPoolError("Cannot get lock handle from closed pool.")
@@ -132,7 +141,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
 
         :param name: Logical lock name for the handle. This is used for reference counting
             and lock reuse, but is not exposed to the underlying lock instance.
-        :return: `_NamedLockHandle` instance.
+        :return: `NamedLockHandle` instance.
         :raises RuntimeError: If the pool allocation limit is exceeded.
         """
         if self._closed:
@@ -143,7 +152,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
             if entry is not None:
                 lock, refcount = entry
                 self._in_use[name] = (lock, refcount + 1)
-                return _NamedLockHandle(pool=self, name=name, lock=lock)
+                return NamedLockHandle(pool=self, name=name, lock=lock)
 
             if self._idle:
                 lock = self._idle.pop()
@@ -155,12 +164,12 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
                 self._allocated += 1
 
             self._in_use[name] = (lock, 1)
-            return _NamedLockHandle(pool=self, name=name, lock=lock)
+            return NamedLockHandle(pool=self, name=name, lock=lock)
 
     @asynccontextmanager
     async def lock(
         self, name: str
-    ) -> typing.AsyncGenerator["_NamedLockHandle[AsyncLockT]", None]:
+    ) -> typing.AsyncGenerator["NamedLockHandle[AsyncLockT]", None]:
         """
         Async context manager for getting and releasing a named lock handle.
 
@@ -170,7 +179,7 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
         and use its context manager directly.
 
         :param name: Logical lock name.
-        :return: `_NamedLockHandle` instance.
+        :return: `NamedLockHandle` instance.
         """
         handle = self.get(name)
         try:
@@ -326,9 +335,9 @@ class _NamedLockPool(typing.Generic[AsyncLockT]):
 
 
 @typing.final
-class _NamedLockHandle(typing.Generic[AsyncLockT]):
+class NamedLockHandle(typing.Generic[AsyncLockT]):
     """
-    Single-use, non-reentrant managed handle returned by `_NamedLockPool.get`.
+    Single-use, non-reentrant managed handle returned by `NamedLockPool.get`.
 
     The handle wraps a pooled underlying async lock and ensures pool
     reference accounting is updated correctly during release.
@@ -339,7 +348,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
     ```python
     from contextlib import closing
 
-    pool = _NamedLockPool(factory=lambda: MyLock())
+    pool = NamedLockPool(factory=lambda: MyLock())
     with closing(pool): # Auto-closes pool
         # Get an handle for 'key'
         async with pool.get('key'):
@@ -367,14 +376,14 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
 
     def __init__(
         self,
-        pool: _NamedLockPool[AsyncLockT],
+        pool: NamedLockPool[AsyncLockT],
         name: str,
         lock: AsyncLockT,
     ) -> None:
         """
         Initialize the lock handle.
 
-        :param pool: The `_NamedLockPool` instance that created this handle.
+        :param pool: The `NamedLockPool` instance that created this handle.
         :param name: Logical lock name.
         :param lock: Underlying pooled lock instance.
         """
@@ -476,7 +485,7 @@ class _NamedLockHandle(typing.Generic[AsyncLockT]):
         return f"{self.__class__.__name__}(name={self._name!r}, lock={self._lock!r}, acquired={self._acquired}, released={self._released})"
 
 
-class _AsyncFairRLock:
+class FairAsyncRLock:
     """
     A fair `asyncio.Task` reentrant lock for async programming.
 
@@ -509,9 +518,9 @@ class _AsyncFairRLock:
         and `release` especially in Python3.11+.
 
         `asyncio.wait_for` wraps `acquire in a new `asyncio.Task`.
-        So calling `asyncio.current_task()` in `acquire` give the new /wrapper task,
-        and give the caller (intended) task in `release`, cause a mismatch
-        when ownership is check later on
+        So calling `asyncio.current_task()` in `acquire` gives the new wrapper task,
+        and gives the caller (intended) task in `release`, causing a mismatch
+        when ownership is checked later on
         """
         current_task = asyncio.current_task()
 
@@ -587,7 +596,7 @@ class _AsyncFairRLock:
         self.release()
 
 
-class _AsyncRLock:
+class AsyncRLock:
     """
     Unfair reentrant asyncio lock.
 
@@ -616,9 +625,9 @@ class _AsyncRLock:
         and `release` especially in Python3.11+.
 
         `asyncio.wait_for` wraps `acquire in a new `asyncio.Task`.
-        So calling `asyncio.current_task()` in `acquire` give the new /wrapper task,
-        and give the caller (intended) task in `release`, cause a mismatch
-        when ownership is check later on.
+        So calling `asyncio.current_task()` in `acquire` gives the new wrapper task,
+        and gives the caller (intended) task in `release`, causing a mismatch
+        when ownership is checked later on.
         """
         current_task = asyncio.current_task()
         if current_task is None:
@@ -670,7 +679,7 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
     Async context manager for `AsyncLock` with optional TTL and blocking controls.
 
     This wrapper is (intentionally) non-reentrant per instance. Each `backend.lock(name)`
-    call creates a fresh context instance. The underlying lock (e.g. `_AsyncFairRLock`)
+    call creates a fresh context instance. The underlying lock (e.g. `FairAsyncRLock`)
     may itself be reentrant, but this wrapper only tracks one acquire/release cycle and
     raises a `LockAcquisitionError` if entered twice.
 
@@ -1452,3 +1461,98 @@ class _GatedNamedLock(typing.Generic[AsyncLockT]):
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name={self._name!r}, lock={self._lock!r})"
+
+
+class _SimpleAsyncLock(typing.Protocol):
+    """Protocol for the simple lock `AsyncLockAdapter` wraps."""
+
+    async def acquire(self) -> bool: ...
+    def release(self) -> None: ...
+    def is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool: ...
+    def locked(self) -> bool: ...
+
+
+class AsyncLockAdapter:
+    """
+    Adapts a simple lock (`AsyncRLock` or `FairAsyncRLock`) to the full
+    `AsyncLock` protocol expected. Adding `blocking`/`blocking_timeout`
+    semantics to `acquire()`, and optional non-reentrant enforcement.
+
+    Non-reentrant by default but optionally reentrant per task.
+
+    Reentrancy is delegated to the underlying lock implementation.
+    When `reentrant=False`, re-acquisition attempts by the owning task
+    are rejected at this wrapper level before reaching the underlying lock.
+    """
+
+    __slots__ = ("_lock", "_reentrant")
+
+    def __init__(self, lock: _SimpleAsyncLock, reentrant: bool = False) -> None:
+        """
+        Initialize the lock.
+
+        :param lock: The underlying async lock instance to wrap.
+        :param reentrant: Whether to allow the same task to acquire the lock
+            multiple times. When False, re-acquisition by the owning task
+            raises `LockAcquisitionError`. Defaults to False.
+        """
+        self._lock = lock
+        self._reentrant = reentrant
+
+    def locked(self) -> bool:
+        """Return True if the lock is held by any task"""
+        return self._lock.locked()
+
+    def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
+        """Return True if the specified task (or current task if None) owns the lock."""
+        return self._lock.is_owner(task=task)
+
+    async def acquire(
+        self,
+        blocking: bool = True,
+        blocking_timeout: typing.Optional[float] = None,
+    ) -> bool:
+        """
+        Acquire the lock.
+
+        :param blocking: If False, return immediately if the lock is held by another task.
+            Only applicable to the initial acquire attempt, not reentrant attempts.
+        :param blocking_timeout: Maximum time (seconds) to wait if blocking is True
+            (Not supported as ops are in-memory and very fast).
+            Only applicable to the initial acquire attempt, not reentrant attempts.
+        :return: True if the lock was acquired, False otherwise.
+        """
+        current_task = asyncio.current_task()
+        reentrant = self._lock.is_owner(task=current_task)
+        if reentrant and not self._reentrant:
+            raise LockAcquisitionError(
+                "Lock is already acquired by the current task and was not configured as reentrant."
+            )
+
+        if not blocking:
+            # If non-blocking and lock is held by another task, return False immediately
+            if not reentrant and self._lock.locked():
+                return False
+            # Else, acquire the lock (reentrant or not held).
+            # Delegate to underlying lock which handles the reentrancy too
+            return await self._lock.acquire()
+
+        # Delegate to underlying lock which handles the reentrancy too
+        return await self._lock.acquire()
+
+    async def release(self) -> None:
+        """Release the lock."""
+        self._lock.release()
+
+    async def __aenter__(self) -> typing.Self:
+        if not await self.acquire():
+            raise LockAcquisitionError("Could not acquire lock.")
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: typing.Optional[type[BaseException]],
+        exc_value: typing.Optional[BaseException],
+        traceback: typing.Optional[TracebackType],
+    ) -> None:
+        await self.release()

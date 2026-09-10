@@ -30,9 +30,9 @@ from traffik.typing import (
 )
 
 logger = logging.getLogger(__name__)
-_AnyRedis = typing.Union[aioredis.Redis, aioredis.RedisCluster]
+AnyRedis = typing.Union[aioredis.Redis, aioredis.RedisCluster]
 
-_INCREMENT_WITH_TTL_SCRIPT = """
+INCREMENT_WITH_TTL_SCRIPT = """
 local key = KEYS[1]
 local amount = tonumber(ARGV[1])
 local ttl = tonumber(ARGV[2])
@@ -54,7 +54,7 @@ end
 """
 
 # Uses SCAN instead of KEYS to avoid blocking on large datasets
-_CLEAR_SCRIPT = """
+CLEAR_SCRIPT = """
 local pattern = ARGV[1]
 local cursor = "0"
 local deleted = 0
@@ -73,14 +73,14 @@ return deleted
 """
 
 
-_RELEASE_SCRIPT = """
+RELEASE_SCRIPT = """
 if redis.call("get", KEYS[1]) == ARGV[1] then
     return redis.call("del", KEYS[1])
 end
 return 0
 """
 
-_ACQUIRE_SCRIPT = """
+ACQUIRE_SCRIPT = """
 -- KEYS[1] = lock key
 -- KEYS[2] = fence key
 -- ARGV[1] = ttl (seconds, or 0 for no expiry)
@@ -145,9 +145,9 @@ class _AsyncRedisLock:
     Keep critical sections short or set a generous TTL.
     """
 
-    RELEASE_SCRIPT = _RELEASE_SCRIPT
+    RELEASE_SCRIPT = RELEASE_SCRIPT
     """Lua script for safe release"""
-    ACQUIRE_SCRIPT = _ACQUIRE_SCRIPT
+    ACQUIRE_SCRIPT = ACQUIRE_SCRIPT
     """Lua script for safe acquire with optional TTL"""
 
     __slots__ = (
@@ -166,7 +166,7 @@ class _AsyncRedisLock:
     def __init__(
         self,
         name: str,
-        client: _AnyRedis,
+        client: AnyRedis,
         script_shas: _LockScriptSHAs,
         ttl: typing.Optional[float] = None,
         max_spins_before_backoff: int = 4,
@@ -198,12 +198,12 @@ class _AsyncRedisLock:
         self._ttl = str(ttl * 1000 if ttl else 0)
 
     @classmethod
-    async def _register_acquire_script(cls, client: _AnyRedis) -> str:
+    async def _register_acquire_script(cls, client: AnyRedis) -> str:
         """Register and return the acquire script SHA."""
         return await client.script_load(cls.ACQUIRE_SCRIPT)
 
     @classmethod
-    async def _register_release_script(cls, client: _AnyRedis) -> str:
+    async def _register_release_script(cls, client: AnyRedis) -> str:
         """Register and return the release script SHA."""
         return await client.script_load(cls.RELEASE_SCRIPT)
 
@@ -531,7 +531,7 @@ class _AsyncRedLock:
 # - Redis Stack
 
 
-class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
+class RedisBackend(ThrottleBackend[AnyRedis, HTTPConnectionT]):
     """
     Redis throttle backend.
 
@@ -540,19 +540,19 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
     wrap_methods = ("clear",)
 
-    INCREMENT_WITH_TTL_SCRIPT = _INCREMENT_WITH_TTL_SCRIPT
+    INCREMENT_WITH_TTL_SCRIPT = INCREMENT_WITH_TTL_SCRIPT
     """Lua script for atomic increment with conditional TTL (set TTL only on key creation)"""
-    CLEAR_SCRIPT = _CLEAR_SCRIPT
+    CLEAR_SCRIPT = CLEAR_SCRIPT
     """Lua script for atomic clear of keys matching a pattern"""
 
     def __init__(
         self,
         connection: typing.Union[
             str,
-            _AnyRedis,
+            AnyRedis,
             aioredis.Sentinel,
             typing.Sequence[typing.Union[tuple[str, int], dict[str, typing.Any]]],
-            typing.Callable[[], typing.Awaitable[_AnyRedis]],
+            typing.Callable[[], typing.Awaitable[AnyRedis]],
         ],
         *,
         sentinel_service_name: typing.Optional[str] = None,
@@ -645,7 +645,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
         """Registry for named gates used by `_GatedNamedLock` wrappers around non-reentrant locks."""
 
-    async def _build_client(self) -> _AnyRedis:
+    async def _build_client(self) -> AnyRedis:
         raw = self._raw_connection
 
         if callable(raw) and not isinstance(

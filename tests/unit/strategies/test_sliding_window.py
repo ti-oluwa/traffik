@@ -92,9 +92,9 @@ class TestSlidingWindowLogStrategy:
         key = "user:concurrent"
 
         # Make 20 concurrent requests
-        results = await asyncio.gather(*[
-            strategy(key, rate, backend) for _ in range(20)
-        ])
+        results = await asyncio.gather(
+            *[strategy(key, rate, backend) for _ in range(20)]
+        )
 
         # All 20 should succeed
         allowed = sum(1 for wait in results if wait == 0.0)
@@ -225,9 +225,9 @@ class TestSlidingWindowCounterStrategy:
         rate = Rate.parse("50/10s")
         key = "user:overload"
 
-        results = await asyncio.gather(*[
-            strategy(key, rate, backend) for _ in range(500)
-        ])
+        results = await asyncio.gather(
+            *[strategy(key, rate, backend) for _ in range(500)]
+        )
         allowed = sum(1 for wait in results if wait == 0.0)
         assert allowed == 50, f"Exactly the limit should be allowed, got {allowed}"
 
@@ -258,9 +258,9 @@ class TestSlidingWindowCounterStrategy:
         start = asyncio.get_running_loop().time()
         allowed = 0
         while asyncio.get_running_loop().time() - start < 1.2:
-            results = await asyncio.gather(*[
-                strategy(key, rate, backend) for _ in range(20)
-            ])
+            results = await asyncio.gather(
+                *[strategy(key, rate, backend) for _ in range(20)]
+            )
             allowed += sum(1 for wait in results if wait == 0.0)
             await asyncio.sleep(0.01)
 
@@ -281,9 +281,9 @@ class TestSlidingWindowCounterStrategy:
         rate = Rate.parse("15/s")
         key = "user:concurrent"
 
-        results = await asyncio.gather(*[
-            strategy(key, rate, backend) for _ in range(15)
-        ])
+        results = await asyncio.gather(
+            *[strategy(key, rate, backend) for _ in range(15)]
+        )
 
         allowed = sum(1 for wait in results if wait == 0.0)
         assert allowed == 15, f"All 15 requests should be allowed, got {allowed}"

@@ -28,7 +28,6 @@ __all__ = [
     "CircuitBreaker",
     "CircuitState",
     "ProxyHeaders",
-    "_TaskTimer",
     "get_remote_address",
     "time",
 ]
@@ -321,7 +320,7 @@ def adaptive_expire_sample(
 
     Calls `sample_round()`, which should check a small batch of candidates
     and remove the expired ones, and repeats while the freed fraction of the
-    checked batch stays at or above `threshold`, so a shard with a lot of
+    checked batch stays at or above `threshold` - so a shard with a lot of
     expired entries gets reclaimed faster, without ever scanning every live
     entry. Cost per call is bounded by `max_rounds` times whatever sample
     size `sample_round` checks per call, regardless of how many live entries

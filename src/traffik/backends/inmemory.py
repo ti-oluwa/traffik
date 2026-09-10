@@ -9,118 +9,23 @@ import functools
 import random
 import typing
 from time import monotonic
-from types import TracebackType
 
 from traffik._locks import (
-    _AsyncFairRLock,
-    _AsyncRLock,
-    _NamedLockHandle,
-    _NamedLockPool,
+    AsyncLockAdapter,
+    AsyncRLock,
+    FairAsyncRLock,
+    NamedLockHandle,
+    NamedLockPool,
 )
 from traffik._utils import adaptive_expire_sample
 from traffik.backends.base import ThrottleBackend
-from traffik.exceptions import BackendConnectionError, LockAcquisitionError
+from traffik.exceptions import BackendConnectionError
 from traffik.typing import (
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
     ThrottleErrorHandler,
 )
-
-
-class _AsyncLock(typing.Protocol):
-    """Protocol for an underlying async lock used in the in-memory backend."""
-
-    async def acquire(self) -> bool: ...
-    def release(self) -> None: ...
-    def is_owner(self, task: typing.Optional[asyncio.Task] = None) -> bool: ...
-    def locked(self) -> bool: ...
-
-
-class _AsyncInMemoryLock:
-    """
-    Async in-memory lock implementing the `AsyncLock` protocol.
-
-    Non-reentrant by default but optionally reentrant per task.
-
-    Reentrancy is delegated to the underlying lock implementation
-    (`_AsyncFairRLock` or `_AsyncRLock`), both of which are inherently
-    reentrant per task. When `reentrant=False`, re-acquisition attempts
-    by the owning task are rejected at this wrapper level before reaching
-    the underlying lock.
-    """
-
-    __slots__ = ("_lock", "_reentrant")
-
-    def __init__(self, lock: _AsyncLock, reentrant: bool = False) -> None:
-        """
-        Initialize the lock.
-
-        :param lock: The underlying async lock instance to wrap.
-        :param reentrant: Whether to allow the same task to acquire the lock
-            multiple times. When False, re-acquisition by the owning task
-            raises `RuntimeError`. Defaults to False.
-        """
-        self._lock = lock
-        self._reentrant = reentrant
-
-    def locked(self) -> bool:
-        """Return True if the lock is held by any task"""
-        return self._lock.locked()
-
-    def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
-        """Return True if the specified task (or current task if None) owns the lock."""
-        return self._lock.is_owner(task=task)
-
-    async def acquire(
-        self,
-        blocking: bool = True,
-        blocking_timeout: typing.Optional[float] = None,
-    ) -> bool:
-        """
-        Acquire the lock.
-
-        :param blocking: If False, return immediately if the lock is held by another task.
-            Only applicable to the initial acquire attempt, not reentrant attempts.
-        :param blocking_timeout: Maximum time (seconds) to wait if blocking is True
-            (Not supported as ops are in-memory and very fast).
-            Only applicable to the initial acquire attempt, not reentrant attempts.
-        :return: True if the lock was acquired, False otherwise.
-        """
-        current_task = asyncio.current_task()
-        reentrant = self._lock.is_owner(task=current_task)
-        if reentrant and not self._reentrant:
-            raise LockAcquisitionError(
-                "Lock is already acquired by the current task and was not configured as reentrant."
-            )
-
-        if not blocking:
-            # If non-blocking and lock is held by another task, return False immediately
-            if not reentrant and self._lock.locked():
-                return False
-            # Else, acquire the lock (reentrant or not held).
-            # Delegate to underlying lock which handles the reentrancy too
-            return await self._lock.acquire()
-
-        # Delegate to underlying lock which handles the reentrancy too
-        return await self._lock.acquire()
-
-    async def release(self) -> None:
-        """Release the lock."""
-        self._lock.release()
-
-    async def __aenter__(self):
-        if not await self.acquire():
-            raise LockAcquisitionError("Could not acquire inmemory lock.")
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: typing.Optional[type[BaseException]],
-        exc_value: typing.Optional[BaseException],
-        traceback: typing.Optional[TracebackType],
-    ):
-        await self.release()
 
 
 class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
@@ -229,14 +134,14 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._shard_key_positions: list[dict[str, int]] = []
         """Per-shard key -> position-in-`_shard_key_lists` map, for O(1) swap-removal."""
 
-        self._lock_cls = _AsyncFairRLock if lock_kind == "fair" else _AsyncRLock
+        self._lock_cls = FairAsyncRLock if lock_kind == "fair" else AsyncRLock
         self._lock_pool_size = lock_pool_size
         self._lock_pool_headroom = lock_pool_headroom
-        self._reentrant_lock_pool: typing.Optional[
-            _NamedLockPool[_AsyncInMemoryLock]
-        ] = None
+        self._reentrant_lock_pool: typing.Optional[NamedLockPool[AsyncLockAdapter]] = (
+            None
+        )
         self._non_reentrant_lock_pool: typing.Optional[
-            _NamedLockPool[_AsyncInMemoryLock]
+            NamedLockPool[AsyncLockAdapter]
         ] = None
         self._prepopulate_lock_pool = prepopulate_lock_pool
 
@@ -260,10 +165,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             self._shard_key_positions = [{} for _ in range(self._number_of_shards)]
 
         if self._reentrant_lock_pool is None or self._reentrant_lock_pool.closed:
-            self._reentrant_lock_pool = _NamedLockPool(
-                factory=lambda: _AsyncInMemoryLock(
-                    lock=self._lock_cls(), reentrant=True
-                ),
+            self._reentrant_lock_pool = NamedLockPool(
+                factory=lambda: AsyncLockAdapter(lock=self._lock_cls(), reentrant=True),
                 max_size=self._lock_pool_size,
                 headroom=self._lock_pool_headroom,
             )
@@ -272,8 +175,8 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             self._non_reentrant_lock_pool is None
             or self._non_reentrant_lock_pool.closed
         ):
-            self._non_reentrant_lock_pool = _NamedLockPool(
-                factory=lambda: _AsyncInMemoryLock(
+            self._non_reentrant_lock_pool = NamedLockPool(
+                factory=lambda: AsyncLockAdapter(
                     lock=self._lock_cls(), reentrant=False
                 ),
                 max_size=self._lock_pool_size,
@@ -413,7 +316,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
-    ) -> _NamedLockHandle[_AsyncInMemoryLock]:
+    ) -> NamedLockHandle[AsyncLockAdapter]:
         """
         Return a lock for the given name.
 
@@ -427,7 +330,7 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             If True, the same task can acquire the lock multiple times without causing a deadlock.
             If False, re-acquisition by the owning task will raise a `LockAcquisitionError`.
             Defaults to False.
-        :return: A `_NamedLockHandle` for the requested lock.
+        :return: A `NamedLockHandle` for the requested lock.
         """
         self._assert_ready()
         return (

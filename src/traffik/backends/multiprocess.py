@@ -74,7 +74,7 @@ from time import monotonic
 from types import TracebackType
 
 from traffik._hashing import fnv_32bit_hash
-from traffik._locks import _NamedLockHandle, _NamedLockPool
+from traffik._locks import NamedLockHandle, NamedLockPool
 from traffik._utils import adaptive_expire_sample
 
 ON_WINDOWS = platform.system() == "Windows"
@@ -211,7 +211,7 @@ class _SharedMemoryLockBytePool:
     `threading.Lock`. It lives entirely in the parent process's Python
     heap, so worker processes inherit a private copy after fork and therefore
     each have their own independent allocator state because each worker independently
-    creates its own `_AsyncSharedMemoryLock` instances via `_NamedLockPool`.
+    creates its own `_AsyncSharedMemoryLock` instances via `NamedLockPool`.
     """
 
     __slots__ = ("_base", "_free", "_lock", "_size")
@@ -448,7 +448,7 @@ class _AsyncSharedMemoryLock:
         """
         Return the byte index to `_SharedMemoryLockBytePool`.
 
-        Called by `_NamedLockPool` when an over-limit lock instance is
+        Called by `NamedLockPool` when an over-limit lock instance is
         discarded rather than returned to the free list. Must not be
         called while the lock is held.
         """
@@ -902,7 +902,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             thread_name_prefix=self._executor_thread_name_prefix,
         )
         # The executor's worker threads don't exist in a forked child, so it must
-        # be rebuilt there, not inherited as-is. (See the "Fork safety" note in 
+        # be rebuilt there, not inherited as-is. (See the "Fork safety" note in
         # this method's docstring)
         os.register_at_fork(after_in_child=self._reinit_after_fork)
 
@@ -920,10 +920,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         # created in initialize() once we know the shared memory layout
         self._lock_byte_pool: typing.Optional[_SharedMemoryLockBytePool] = None
         self._reentrant_lock_pool: typing.Optional[
-            _NamedLockPool[_AsyncSharedMemoryLock]
+            NamedLockPool[_AsyncSharedMemoryLock]
         ] = None
         self._non_reentrant_lock_pool: typing.Optional[
-            _NamedLockPool[_AsyncSharedMemoryLock]
+            NamedLockPool[_AsyncSharedMemoryLock]
         ] = None
         self._prepopulate_lock_pool = prepopulate_lock_pool
 
@@ -1107,7 +1107,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     reentrant=True,
                 )
 
-            self._reentrant_lock_pool = _NamedLockPool(
+            self._reentrant_lock_pool = NamedLockPool(
                 factory=_make_reentrant_lock,
                 max_size=self._lock_pool_size,
                 headroom=self._lock_pool_headroom,
@@ -1128,7 +1128,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     reentrant=False,
                 )
 
-            self._non_reentrant_lock_pool = _NamedLockPool(
+            self._non_reentrant_lock_pool = NamedLockPool(
                 factory=_make_non_reentrant_lock,
                 max_size=self._lock_pool_size,
                 headroom=self._lock_pool_headroom,
@@ -2566,10 +2566,12 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         shard_to_items: dict[int, list[tuple[str, str]]] = {}
         for key, val in items.items():
-            shard_to_items.setdefault(self._shard_idx_for_key(key), []).append((
-                key,
-                val,
-            ))
+            shard_to_items.setdefault(self._shard_idx_for_key(key), []).append(
+                (
+                    key,
+                    val,
+                )
+            )
 
         await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
             self._executor, self._multi_set, shard_to_items, expire
@@ -2577,7 +2579,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     def get_lock(
         self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
-    ) -> _NamedLockHandle[_AsyncSharedMemoryLock]:
+    ) -> NamedLockHandle[_AsyncSharedMemoryLock]:
         """
         Return a named cross-process lock backed by a byte in the
         shared memory segment.
@@ -2589,7 +2591,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         :param name: The logical lock name (should be a namespaced key).
         :param ttl:
-        :return: A `_NamedLockHandle`.
+        :return: A `NamedLockHandle`.
         """
         self._assert_ready()
         return (

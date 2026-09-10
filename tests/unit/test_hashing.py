@@ -84,7 +84,11 @@ class TestLegacyMd5KeysImportTimeResolution:
 
     def test_default_uses_fnv(self):
         output = subprocess.run(
-            [sys.executable, "-c", "from traffik.backends.base import build_key; print(build_key('a'))"],
+            [
+                sys.executable,
+                "-c",
+                "from traffik.backends.base import build_key; print(build_key('a'))",
+            ],
             capture_output=True,
             text=True,
             check=True,
@@ -97,7 +101,11 @@ class TestLegacyMd5KeysImportTimeResolution:
 
         env = {**os.environ, "TRAFFIK_LEGACY_MD5_KEYS": "1"}
         output = subprocess.run(
-            [sys.executable, "-c", "from traffik.backends.base import build_key; print(build_key('a'))"],
+            [
+                sys.executable,
+                "-c",
+                "from traffik.backends.base import build_key; print(build_key('a'))",
+            ],
             capture_output=True,
             text=True,
             env=env,

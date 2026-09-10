@@ -39,6 +39,22 @@ async def get_data():
 
 ---
 
+### [Throttle Rules & Wildcards](rules.md)
+
+A throttle applies globally by default - every request that hits the router it's attached to. Rules let it ask "do I even apply to this connection?" first, before touching the backend or computing an identifier, so one throttle can target a specific path, method, or condition instead of everything.
+
+```python
+from traffik.registry import Rule
+
+# Only throttle GET requests to /api/users
+rule = Rule(path="/api/users", methods={"GET"})
+throttle = HTTPThrottle("api:users", rate="500/min", rules={rule})
+```
+
+[Learn about rules &rarr;](rules.md)
+
+---
+
 ### [Exemptions](exemptions.md)
 
 Some clients should never be throttled, such as your internal services, premium users, admin tokens, and whitelisted IPs. The `EXEMPTED` sentinel lets you carve out those exceptions cleanly, with zero overhead.
@@ -73,14 +89,118 @@ throttle = HTTPThrottle(
 
 ---
 
+### [Response Headers](headers.md)
+
+A `429` with no explanation leaves clients flying blind - no idea how many requests they have left, when the window resets, or when it's safe to retry. Traffik computes standard rate-limit header values (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `Retry-After`) for you to attach to a response however you see fit; it doesn't inject them automatically.
+
+```python
+from traffik import DEFAULT_HEADERS_ALWAYS, DEFAULT_HEADERS_THROTTLED
+
+throttle = HTTPThrottle("api:data", rate="100/min", headers=DEFAULT_HEADERS_ALWAYS)
+```
+
+[Learn about response headers &rarr;](headers.md)
+
+---
+
+### [Custom Throttled Handlers](throttled-handlers.md)
+
+The default 429-or-JSON-message behavior is fine for most apps, but not all. Maybe you want an exact `Retry-After` timestamp, a specific WebSocket message shape, or a response body that matches the rest of your API's error format. A throttled handler replaces the default entirely.
+
+```python
+async def handler(connection, wait_ms, throttle, context):
+    return JSONResponse({"error": "slow down", "retry_in_ms": wait_ms}, status_code=429)
+
+throttle = HTTPThrottle("api:data", rate="100/min", handle_throttled=handler)
+```
+
+[Learn about custom throttled handlers &rarr;](throttled-handlers.md)
+
+---
+
+### [Skip Handler](skip-handler.md)
+
+Normally, a throttled request never reaches your route - the handler takes over and that's the end of it. `skip_handler=True` turns that off: state still updates and `wait_ms` still gets computed exactly as normal, but your own code decides what response to send, instead of the handler.
+
+```python
+throttle = HTTPThrottle("api:reports", rate="10/min", skip_handler=True)
+
+@app.get("/reports")
+async def get_reports(request: Request):
+    await throttle(request)
+    if is_throttled(request):
+        return cached_report()  # degrade instead of failing outright
+    return generate_report()
+```
+
+[Learn about skip_handler &rarr;](skip-handler.md)
+
+---
+
+### [Strategy Statistics](statistics.md)
+
+Sometimes you want to look at a rate limit counter without touching it - for a `X-RateLimit-Remaining` header, a `/usage` endpoint, or feeding a metrics system. `throttle.stat(...)` reads the current state from the backend and never consumes quota.
+
+```python
+stat = await throttle.stat(request, context={...})
+```
+
+[Learn about statistics &rarr;](statistics.md)
+
+---
+
+### [Quota Context (Deferred Throttling)](quota-context.md)
+
+Standard throttling is optimistic: quota is consumed first, work happens after. That's wrong when the work might fail (don't want to charge quota for nothing) or when several throttles need to agree before anything is consumed at all. `QuotaContext` defers consumption until you explicitly commit it.
+
+```python
+from fastapi import FastAPI, Request, Depends
+from traffik import HTTPThrottle
+
+throttle = HTTPThrottle("api:reports", rate="50/hour")
+
+@app.post("/reports/generate")
+async def generate_report(request: Request):
+    async with throttle.quota(request) as ctx:
+        report = await do_expensive_work()  # only consume quota if this succeeds
+        await ctx.apply()
+    return report
+```
+
+[Learn about quota context &rarr;](quota-context.md)
+
+---
+
+### [Throttle Registry](registry.md)
+
+Every throttle belongs to a `ThrottleRegistry` - the coordination layer that tracks which throttles are active, holds the rules that gate them, and lets you disable or re-enable throttles at runtime (a maintenance mode switch, a feature flag) without touching route code.
+
+```python
+from traffik.registry import ThrottleRegistry
+
+registry = ThrottleRegistry()
+registry.disable_all()  # e.g. during a maintenance window
+```
+
+[Learn about the registry &rarr;](registry.md)
+
+---
+
 ## When Do You Need These?
 
 | You want to... | Feature to use |
 |---|---|
 | Charge more quota for expensive operations | [Request Costs](request-costs.md) |
 | Enforce burst + sustained limits together | [Multiple Rate Limits](multiple-limits.md) |
+| Target a throttle at specific paths, methods, or conditions | [Rules](rules.md) |
 | Let admins or premium users bypass throttling | [Exemptions](exemptions.md) |
 | Give each tenant isolated rate limit counters | [Context-Aware Backends](context-backends.md) |
+| Tell clients how many requests they have left | [Response Headers](headers.md) |
+| Customize what happens when a client is throttled | [Custom Throttled Handlers](throttled-handlers.md) |
+| Let your own code decide the response, not the default handler | [Skip Handler](skip-handler.md) |
+| Read rate limit state without consuming quota | [Statistics](statistics.md) |
+| Only consume quota if the work actually succeeds | [Quota Context](quota-context.md) |
+| Disable or re-enable throttles at runtime | [Throttle Registry](registry.md) |
 
 !!! tip "You can combine all of these"
     These features compose neatly. A dynamic-backend throttle can have per-request

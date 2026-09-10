@@ -28,6 +28,15 @@ backend = InMemoryBackend(namespace="test", persistent=False)
 
 Here's the standard setup with `pytest`, `anyio`, and `httpx2.AsyncClient`:
 
+!!! warning "`ASGITransport` doesn't run lifespan events"
+    `httpx2.ASGITransport` sends HTTP requests directly to your app without going through a real ASGI server, so it never sends the `lifespan.startup`/`lifespan.shutdown` messages a server normally would. That means `FastAPI(lifespan=backend.lifespan)` alone won't actually initialize the backend when used with `AsyncClient(transport=ASGITransport(app=app))` - the throttle will fail with a "backend not ready" error, not silently pass.
+
+    Three ways to fix it:
+
+    1. **Enter the backend's context manually** around the client usage - shown below. `backend(app)` is the same context manager `lifespan()` uses internally, so this initializes the backend exactly as a real server's lifespan would, without depending on ASGI lifespan events at all.
+    2. **Pass the backend directly to the throttle** (`HTTPThrottle(..., backend=backend)`) instead of letting it look the backend up from app context - then call `await backend.initialize()` (or still enter `async with backend():`, just without an `app` argument) once before making requests.
+    3. **Use `TestClient`** instead of `AsyncClient` + `ASGITransport`. Starlette's `TestClient` does run the ASGI lifespan protocol correctly, so `FastAPI(lifespan=backend.lifespan)` works as originally written with no other changes - see the [WebSocket Test Pattern](#websocket-test-pattern) below for a working example.
+
 ```python
 # tests/test_my_endpoints.py
 
@@ -59,23 +68,27 @@ def app(backend):
 
 
 @pytest.mark.anyio
-async def test_allows_requests_under_limit(app):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        for _ in range(3):
-            response = await client.get("/items")
-            assert response.status_code == 200
+async def test_allows_requests_under_limit(app, backend):
+    # Enter the backend's context manually since ASGITransport won't run
+    # the app's lifespan for us - see the warning above.
+    async with backend(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            for _ in range(3):
+                response = await client.get("/items")
+                assert response.status_code == 200
 
 
 @pytest.mark.anyio
-async def test_rejects_requests_over_limit(app):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # Use up all 3 allowed requests
-        for _ in range(3):
-            await client.get("/items")
+async def test_rejects_requests_over_limit(app, backend):
+    async with backend(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            # Use up all 3 allowed requests
+            for _ in range(3):
+                await client.get("/items")
 
-        # The 4th should be rejected
-        response = await client.get("/items")
-        assert response.status_code == 429
+            # The 4th should be rejected
+            response = await client.get("/items")
+            assert response.status_code == 429
 ```
 
 Add `asyncio_mode = "auto"` to your `pytest.ini` or `pyproject.toml`:
@@ -124,20 +137,24 @@ async def test_rate_limit_with_strategy(strategy):
     async def get_data(request: Request = Depends(throttle)):
         return {"ok": True}
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        assert (await client.get("/data")).status_code == 200
-        assert (await client.get("/data")).status_code == 200
-        assert (await client.get("/data")).status_code == 429
+    # See the ASGITransport/lifespan warning above - entering the backend's
+    # context manually here since ASGITransport won't run app lifespan.
+    async with backend(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            assert (await client.get("/data")).status_code == 200
+            assert (await client.get("/data")).status_code == 200
+            assert (await client.get("/data")).status_code == 429
 ```
 
 ---
 
 ## Error Handler Test
 
-Test that your `on_error` fallback behaves correctly when the backend fails:
+Test that your `on_error` fallback behaves correctly when the backend fails. As above, `ASGITransport` won't run `FastAPI(lifespan=...)`, so enter each backend's context manually - here there are two backends (primary and fallback), so `AsyncExitStack` keeps it tidy:
 
 ```python
 import pytest
+from contextlib import AsyncExitStack
 from unittest.mock import AsyncMock, patch
 from traffik.exceptions import BackendError
 
@@ -154,7 +171,7 @@ async def test_error_handler_fallback():
         "test:fallback",
         rate="10/min",
         backend=primary,
-        on_error=fallback(backend=fallback_backend, fallback_on=(BackendError,)),
+        on_error=fallback(backend=fallback_backend, on=(BackendError,)),
     )
 
     app = FastAPI(lifespan=primary.lifespan)
@@ -163,12 +180,16 @@ async def test_error_handler_fallback():
     async def api_endpoint(request: Request = Depends(throttle)):
         return {"ok": True}
 
-    # Patch primary backend to raise BackendError
-    with patch.object(primary, "increment_with_ttl", side_effect=BackendError("Redis down")):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            # Should succeed via fallback backend
-            response = await client.get("/api")
-            assert response.status_code == 200
+    async with AsyncExitStack() as stack:
+        await stack.enter_async_context(primary(app))
+        await stack.enter_async_context(fallback_backend())
+
+        # Patch primary backend to raise BackendError
+        with patch.object(primary, "increment_with_ttl", side_effect=BackendError("Redis down")):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                # Should succeed via fallback backend
+                response = await client.get("/api")
+                assert response.status_code == 200
 
 
 @pytest.mark.anyio
@@ -183,10 +204,11 @@ async def test_on_error_allow():
     async def api_endpoint(request: Request = Depends(throttle)):
         return {"ok": True}
 
-    with patch.object(backend, "increment_with_ttl", side_effect=Exception("DB error")):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get("/api")
-            assert response.status_code == 200  # Allowed through despite error
+    async with backend(app):
+        with patch.object(backend, "increment_with_ttl", side_effect=Exception("DB error")):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                response = await client.get("/api")
+                assert response.status_code == 200  # Allowed through despite error
 ```
 
 ---

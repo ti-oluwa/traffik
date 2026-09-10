@@ -176,13 +176,13 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     - delete(key): Remove key (Must not implement implicit locking).
     - get_lock(key, ttl, reentrant): Acquire a distributed lock for the given key with optional TTL and reentrancy.
     - increment(key, amount): Atomically increment counter
-    - decrement(key, amount): Atomically decrement counter
     - expire(key, seconds): Set expiration on existing key
     - close(): Close backend connection and cleanup resources
     - reset(): Clear all throttling data
 
     Optionally, backends can also override the following methods for better performance:
 
+    - decrement(key, amount): Atomically decrement counter. Default implementation calls `increment(key, -amount)`.
     - increment_with_ttl(key, amount, ttl): Atomically increment and set TTL if key is new
     - multi_get(*keys): Atomically get multiple keys in one operation
     - multi_set(items, expire): Atomically set multiple keys in one operation

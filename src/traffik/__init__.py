@@ -8,6 +8,7 @@ from .throttles import *  # noqa
 from .typing import *  # noqa
 from .config import *  # noqa
 from ._utils import *  # noqa
+from ._locks import *  # noqa
 from .headers import *  # noqa
 from .registry import *  # noqa
 

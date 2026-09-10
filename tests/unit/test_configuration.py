@@ -166,7 +166,9 @@ class TestLegacyMd5KeysConfiguration:
 
         for value in truthy_values:
             os.environ["TRAFFIK_LEGACY_MD5_KEYS"] = value
-            assert get_legacy_md5_keys() is True, f"'{value}' should be recognized as True"
+            assert get_legacy_md5_keys() is True, (
+                f"'{value}' should be recognized as True"
+            )
 
     def test_get_legacy_md5_keys_falsy_values(self):
         """Test get_legacy_md5_keys recognizes falsy string values."""
@@ -174,7 +176,9 @@ class TestLegacyMd5KeysConfiguration:
 
         for value in falsy_values:
             os.environ["TRAFFIK_LEGACY_MD5_KEYS"] = value
-            assert get_legacy_md5_keys() is False, f"'{value}' should be recognized as False"
+            assert get_legacy_md5_keys() is False, (
+                f"'{value}' should be recognized as False"
+            )
 
     def test_set_legacy_md5_keys_true(self):
         """Test set_legacy_md5_keys correctly sets True."""

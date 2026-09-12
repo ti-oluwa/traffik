@@ -112,7 +112,21 @@ show_missing = true
 [tool.ruff]
 line-length = 88
 target-version = "py39"
-lint.extend-select = ["I", "TID", "F", "UP"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "RUF", # flake8-rst-docstrings
+    "TID", # flake8-tidy-imports
+]
+ignore = ["E501", "F403", "RUF001", "RUF002", "RUF003", "RUF052"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["traffik"]
 
 [tool.ruff.format]
 docstring-code-format = true

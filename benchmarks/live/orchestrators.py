@@ -121,7 +121,7 @@ async def run_http_scenarios(
                             scenario, config, http_client, iteration=0
                         )
                         await server.reset(http_client)
-                    except Exception as exc:  # noqa
+                    except Exception as exc:
                         print(
                             f"WARN: Warmup failed for {scenario_key}: {exc}",
                             file=sys.stderr,
@@ -138,7 +138,7 @@ async def run_http_scenarios(
                         )
                         scenario_results.append(result)
                         await server.reset(http_client)
-                    except Exception as exc:  # noqa
+                    except Exception as exc:
                         print(
                             f"WARN: Iteration {i} failed for {scenario_key}: {exc}",
                             file=sys.stderr,
@@ -216,7 +216,7 @@ async def run_websocket_scenarios(
                             iteration=0,
                         )
                         await server.reset(http_client)
-                    except Exception as exc:  # noqa
+                    except Exception as exc:
                         print(
                             f"WARN: Warmup failed for {scenario_key}: {exc}",
                             file=sys.stderr,
@@ -236,7 +236,7 @@ async def run_websocket_scenarios(
                         )
                         scenario_results.append(result)
                         await server.reset(http_client)
-                    except Exception as exc:  # noqa
+                    except Exception as exc:
                         print(
                             f"WARN: Iteration {i} failed for {scenario_key}: {exc}",
                             file=sys.stderr,

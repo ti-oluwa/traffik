@@ -43,7 +43,7 @@ async def make_request(
         response = await client.get(path, headers=headers)
         end = time.perf_counter()
         return end - start, response.status_code
-    except Exception:  # noqa
+    except Exception:
         return 0.0, 0
 
 
@@ -194,7 +194,7 @@ async def ws_send_messages(
                     throttled += 1
                 else:
                     successful += 1
-            except Exception:  # noqa
+            except Exception:
                 pass
 
     return latencies, successful, throttled
@@ -232,7 +232,7 @@ async def ws_send_waves(
                         total_throttled += 1
                     else:
                         total_successful += 1
-                except Exception:  # noqa
+                except Exception:
                     pass
 
             if sleep_after and i < len(waves) - 1:
@@ -263,7 +263,7 @@ async def ws_concurrent_connections(
             return await ws_send_messages(
                 uri, messages_per_connection, connect_timeout=connect_timeout
             )
-        except Exception:  # noqa
+        except Exception:
             return [], 0, 0
 
     results = await asyncio.gather(*[connection() for _ in range(connections)])

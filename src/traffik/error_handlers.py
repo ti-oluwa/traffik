@@ -183,7 +183,7 @@ def retry(
                 return await throttle.strategy(key, rate, backend, cost)
             except _EXEMPT_EXCEPTIONS:
                 raise
-            except BaseException as retry_exc:  # noqa
+            except BaseException as retry_exc:
                 last_exc = retry_exc
                 continue
 
@@ -268,7 +268,7 @@ def failover(
                 return wait_ms
             except _EXEMPT_EXCEPTIONS:
                 raise
-            except BaseException:  # noqa
+            except BaseException:
                 if attempt < max_retries - 1:
                     delay = backoff(attempt + 1, retry_delay)
                     await asyncio.sleep(delay)

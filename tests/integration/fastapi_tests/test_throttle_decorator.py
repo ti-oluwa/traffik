@@ -195,7 +195,7 @@ class TestThrottleDecorator:
         base_url = "http://0.0.0.0"
         async with make_client(app, base_url=base_url) as client:
             # First 2 requests pass
-            for i in range(2):
+            for _i in range(2):
                 response = await client.get("/short-circuit")
                 assert response.status_code == 200
 

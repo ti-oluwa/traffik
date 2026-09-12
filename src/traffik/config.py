@@ -88,10 +88,10 @@ def get_lock_ttl() -> typing.Optional[float]:
     if ttl_str is not None:
         try:
             ttl = float(ttl_str)
-        except ValueError:
+        except ValueError as exc:
             raise ValueError(
                 f"Invalid value for {DEFAULT_LOCK_TTL_ENV_VAR}. Must be a non-negative float."
-            )
+            ) from exc
 
         if ttl < 0:
             raise ValueError("Lock TTL must be a non-negative float.")
@@ -124,10 +124,10 @@ def get_lock_blocking_timeout() -> typing.Optional[float]:
             if timeout < 0:
                 raise ValueError
             return timeout
-        except ValueError:
+        except ValueError as exc:
             raise ValueError(
                 f"Invalid value for {DEFAULT_BLOCKING_TIMEOUT_ENV_VAR}. Must be a non-negative float."
-            )
+            ) from exc
     return None
 
 

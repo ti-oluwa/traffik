@@ -174,7 +174,7 @@ class TestSlidingWindowCounterStrategy:
         # The exact number allowed depends on timing, but it should be
         # less than the full limit of 10 due to weighted calculation.
         allowed = 0
-        for i in range(15):  # Try more than the limit
+        for _i in range(15):  # Try more than the limit
             wait = await strategy(key, rate, backend)
             if wait == 0.0:
                 allowed += 1

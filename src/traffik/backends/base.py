@@ -753,6 +753,7 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
                 warnings.warn(
                     "Context non-persistence (`persistent=False`) cannot be enforced on exit. "
                     "Backend was closed before exit.",
+                    stacklevel=2,
                     source=RuntimeWarning,
                 )
             return

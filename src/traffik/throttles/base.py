@@ -175,6 +175,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         "_rules_count",
         "_rules_resolved",
         "_uses_cost_func",
+        "_uses_identifier_context",
         "_uses_rate_func",
         "backend",
         "cache_ids",
@@ -411,6 +412,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             self.handle_throttled = handle_throttled
             on_error_ = on_error  # type: ignore[assignment]
 
+        self._uses_identifier_context = self.identifier is not None and (
+            len(inspect.signature(self.identifier).parameters) > 1
+        )
+
         self._error_callback: typing.Optional[
             ThrottleErrorHandler[HTTPConnectionT, ThrottleExceptionInfo]
         ] = None
@@ -589,6 +594,9 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """
         async with self._guard:
             self.identifier = identifier  # type: ignore[assignment]
+            self._uses_identifier_context = identifier is not None and (
+                len(inspect.signature(identifier).parameters) > 1
+            )
 
     async def update_error_handler(
         self, handler: ThrottleErrorHandler[HTTPConnectionT, ThrottleExceptionInfo]
@@ -710,7 +718,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         """
         if not self.cache_ids:
             identifier = self.identifier or backend.identifier
-            connection_id = await identifier(connection)
+            if self._uses_identifier_context:
+                connection_id = await identifier(connection, context)  # type: ignore[call-arg, arg-type]
+            else:
+                connection_id = await identifier(connection)  # type: ignore[call-arg]
             return connection_id
 
         # Check the connection state cache first
@@ -723,7 +734,10 @@ class Throttle(typing.Generic[HTTPConnectionT]):
 
         # If not cached, compute and cache it
         identifier = self.identifier or backend.identifier
-        connection_id = await identifier(connection)
+        if self._uses_identifier_context:
+            connection_id = await identifier(connection, context)  # type: ignore[call-arg, arg-type]
+        else:
+            connection_id = await identifier(connection)  # type: ignore[call-arg]
         setattr(
             connection.state,
             CONNECTION_IDS_CONTEXT_KEY,
@@ -799,7 +813,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         :return: The wait period in milliseconds.
         """
         if self._error_callback is not None:
-            exc_info = dict(  # noqa
+            exc_info = dict(
                 exception=exc,
                 connection=connection,
                 key=key,
@@ -817,7 +831,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         elif not self.use_fixed_backend and self.on_error is None:
             # For dynamic backend throttles, check backend's on_error
             if backend._error_callback is not None:
-                exc_info = dict(  # noqa
+                exc_info = dict(
                     exception=exc,
                     connection=connection,
                     key=key,
@@ -1016,15 +1030,20 @@ class Throttle(typing.Generic[HTTPConnectionT]):
             return None
 
         backend = self.get_backend(connection)
-        identifier = self.identifier or backend.identifier
-        if (connection_id := await identifier(connection)) is EXEMPTED:
-            return None
-
         if context:
             merged_context = self._default_context.copy()
             merged_context.update(context)
         else:
             merged_context = self._default_context
+
+        identifier = self.identifier or backend.identifier
+        if self._uses_identifier_context:
+            connection_id = await identifier(connection, merged_context)  # type: ignore[call-arg, arg-type]
+        else:
+            connection_id = await identifier(connection)  # type: ignore[call-arg]
+        if connection_id is EXEMPTED:
+            return None
+
         key = self.get_namespaced_key(connection, connection_id, merged_context)
         stat = await strategy.get_stat(key, self.rate, backend)  # type: ignore[attr-defined, arg-type]
         return typing.cast(

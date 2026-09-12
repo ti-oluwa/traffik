@@ -4,6 +4,7 @@ Tests for core `HTTPThrottle`/`WebSocketThrottle` behavior: initialization, enab
 """
 
 import asyncio
+import typing
 from itertools import repeat
 
 import anyio
@@ -278,6 +279,245 @@ class TestThrottleBasic:
         new_backend = InMemoryBackend(persistent=False)
         await throttle.update_backend(new_backend)
         assert throttle.backend is new_backend
+
+
+@pytest.mark.throttle
+@pytest.mark.anyio
+class TestConnectionIdentifierContext:
+    """
+    Tests for `ConnectionIdentifier` supporting both the legacy `(connection)`
+    form and the new context-aware `(connection, context: dict[str, typing.Any] | None)` form.
+    """
+
+    async def test_legacy_one_arg_identifier_still_works(
+        self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
+    ) -> None:
+        seen_ids = []
+
+        async def legacy_identifier(connection: HTTPConnection) -> str:
+            return "legacy-id"
+
+        throttle = HTTPThrottle(
+            uid="ident-legacy",
+            rate="10/min",
+            identifier=legacy_identifier,
+            cache_ids=False,
+            registry=ThrottleRegistry(),
+        )
+        assert throttle._uses_identifier_context is False
+
+        async def endpoint(request: Request) -> JSONResponse:
+            assert throttle.backend is not None
+            connection_id = await throttle.get_connection_id(request, throttle.backend)  # type: ignore[arg-type]
+            seen_ids.append(connection_id)
+            return JSONResponse({"ok": True})
+
+        app = web_framework.build_app(
+            http_routes=[HTTPRoute("/legacy", endpoint)],
+            lifespan=inmemory_backend.lifespan,
+        )
+        async with make_client(app, base_url="http://0.0.0.0") as client:
+            response = await client.get("/legacy")
+            assert response.status_code == 200
+
+        assert seen_ids == ["legacy-id"]
+
+    async def test_context_aware_identifier_receives_effective_context(
+        self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
+    ) -> None:
+        received_contexts = []
+
+        async def context_identifier(
+            connection: HTTPConnection, context: dict[str, typing.Any] | None
+        ) -> str:
+            received_contexts.append(dict(context) if context else context)
+            tenant = context.get("tenant") if context else None
+            return f"tenant:{tenant}"
+
+        throttle = HTTPThrottle(
+            uid="ident-context",
+            rate="10/min",
+            identifier=context_identifier,
+            cache_ids=False,
+            context={"scope": "api"},
+            registry=ThrottleRegistry(),
+        )
+        assert throttle._uses_identifier_context is True
+
+        async def endpoint(request: Request) -> JSONResponse:
+            await throttle(request, context={"tenant": "acme"})
+            return JSONResponse({"ok": True})
+
+        app = web_framework.build_app(
+            http_routes=[HTTPRoute("/ctx", endpoint)],
+            lifespan=inmemory_backend.lifespan,
+        )
+        async with make_client(app, base_url="http://0.0.0.0") as client:
+            response = await client.get("/ctx")
+            assert response.status_code == 200
+
+        # Effective context should be the throttle's default context merged
+        # with the per-call context - same semantics as rate/cost callbacks.
+        assert received_contexts == [{"scope": "api", "tenant": "acme"}]
+
+    async def test_default_identifier_unchanged(
+        self, inmemory_backend: InMemoryBackend
+    ) -> None:
+        """The backend's default identifier keeps using the legacy one-arg path."""
+        throttle = HTTPThrottle(
+            uid="ident-default",
+            rate="10/min",
+            backend=inmemory_backend,
+            registry=ThrottleRegistry(),
+        )
+        assert throttle._uses_identifier_context is False
+        assert throttle.identifier is inmemory_backend.identifier
+
+    async def test_context_merging_matches_rate_cost_semantics(
+        self, inmemory_backend: InMemoryBackend
+    ) -> None:
+        """
+        Per-call context should override matching default-context keys and
+        leave the rest intact, exactly like the merged context passed to
+        rate/cost callbacks.
+        """
+        seen: dict = {}
+
+        async def context_identifier(
+            connection: HTTPConnection, context: dict[str, typing.Any] | None
+        ) -> str:
+            seen.update(context or {})
+            return "x"
+
+        async def rate_func(
+            connection: HTTPConnection, context: dict[str, typing.Any] | None
+        ) -> Rate:
+            seen["rate_saw_scope"] = context.get("scope") if context else None
+            return Rate.parse("10/min")
+
+        throttle = HTTPThrottle(
+            uid="ident-merge",
+            rate=rate_func,
+            backend=inmemory_backend,
+            identifier=context_identifier,
+            context={"scope": "default-scope", "region": "us"},
+            cache_ids=False,
+            registry=ThrottleRegistry(),
+        )
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/merge",
+            "client": ("1.2.3.4", 1234),
+            "headers": [],
+        }
+        request = Request(scope)
+        async with inmemory_backend(persistent=False, close_on_exit=True):
+            await throttle(request, context={"scope": "override-scope"})
+
+        assert seen["scope"] == "override-scope"
+        assert seen["region"] == "us"
+        assert seen["rate_saw_scope"] == "override-scope"
+
+    async def test_identifier_dispatch_selects_correct_signature(
+        self, inmemory_backend: InMemoryBackend
+    ) -> None:
+        """The init-time flag correctly gates which call shape is used."""
+        one_arg_calls = []
+        two_arg_calls = []
+
+        async def one_arg(connection: HTTPConnection) -> str:
+            one_arg_calls.append(connection)
+            return "one"
+
+        async def two_arg(
+            connection: HTTPConnection, context: dict[str, typing.Any] | None
+        ) -> str:
+            two_arg_calls.append((connection, context))
+            return "two"
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/dispatch",
+            "client": ("1.2.3.4", 1234),
+            "headers": [],
+        }
+        request = Request(scope)
+
+        t1 = HTTPThrottle(
+            uid="dispatch-one",
+            rate="10/min",
+            backend=inmemory_backend,
+            identifier=one_arg,
+            cache_ids=False,
+            registry=ThrottleRegistry(),
+        )
+        await t1.get_connection_id(request, inmemory_backend, {"x": 1})
+        assert len(one_arg_calls) == 1
+        assert len(two_arg_calls) == 0
+
+        t2 = HTTPThrottle(
+            uid="dispatch-two",
+            rate="10/min",
+            backend=inmemory_backend,
+            identifier=two_arg,
+            cache_ids=False,
+            registry=ThrottleRegistry(),
+        )
+        await t2.get_connection_id(request, inmemory_backend, {"x": 1})
+        assert len(two_arg_calls) == 1
+
+    async def test_signature_detection_happens_at_init_not_per_request(
+        self, inmemory_backend: InMemoryBackend, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        `inspect.signature` must not be called on the request/throttle hot
+        path - only once, during `Throttle.__init__` (and `update_identifier`).
+        """
+        import inspect
+
+        async def context_identifier(
+            connection: HTTPConnection, context: dict[str, typing.Any] | None
+        ) -> str:
+            return "x"
+
+        call_count = 0
+        real_signature = inspect.signature
+
+        def counting_signature(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return real_signature(*args, **kwargs)
+
+        monkeypatch.setattr(inspect, "signature", counting_signature)
+
+        throttle = HTTPThrottle(
+            uid="ident-init-detect",
+            rate="10/min",
+            backend=inmemory_backend,
+            identifier=context_identifier,
+            cache_ids=False,
+            registry=ThrottleRegistry(),
+        )
+        calls_after_init = call_count
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/detect",
+            "client": ("1.2.3.4", 1234),
+            "headers": [],
+        }
+        request = Request(scope)
+        for _ in range(25):
+            await throttle.get_connection_id(request, inmemory_backend, {"x": 1})
+
+        assert call_count == calls_after_init, (
+            "inspect.signature was called on the hot path - "
+            "identifier signature detection must happen only at init time"
+        )
 
 
 @pytest.mark.throttle

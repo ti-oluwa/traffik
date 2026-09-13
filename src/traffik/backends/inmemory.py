@@ -27,6 +27,8 @@ from traffik.typing import (
     ThrottleErrorHandler,
 )
 
+__all__ = ["InMemoryBackend"]
+
 
 class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     """

@@ -307,8 +307,8 @@ class TestConnectionIdentifierContext:
         assert throttle._uses_identifier_context is False
 
         async def endpoint(request: Request) -> JSONResponse:
-            assert throttle.backend is not None
-            connection_id = await throttle.get_connection_id(request, throttle.backend)  # type: ignore[arg-type]
+            backend = throttle.get_backend(request)
+            connection_id = await throttle.get_connection_id(request, backend)  # type: ignore[arg-type]
             seen_ids.append(connection_id)
             return JSONResponse({"ok": True})
 

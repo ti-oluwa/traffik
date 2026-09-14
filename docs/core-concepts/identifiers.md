@@ -235,11 +235,10 @@ backend = RedisBackend(
 
 ## Context-aware identifiers
 
-An identifier can optionally also accept the throttle's effective context - the
-same merged context passed to `rate`/`cost` callables - as a second argument:
+An identifier can optionally also accept the throttle's effective context as a second argument. This is the same merged context passed to `rate`/`cost` callables:
 
 ```python
-async def tenant_aware_identifier(connection: HTTPConnection, context) -> str:
+async def tenant_aware_identifier(connection: HTTPConnection, context: dict[str, typing.Any] | None) -> str:
     tenant = (context or {}).get("tenant", "unknown")
     return f"{tenant}:{connection.client.host}"
 
@@ -252,10 +251,7 @@ throttle = HTTPThrottle(
 )
 ```
 
-Traffik detects which form your identifier uses once, when the throttle is
-constructed - not on every request - so there's no per-request overhead either
-way. Existing one-argument identifiers keep working unchanged; you only need
-the second parameter if you actually want the context.
+Traffik detects which form your identifier uses once, when the throttle is constructed so there's no per-request overhead either way. Existing one-argument identifiers keep working unchanged; you only need the second parameter if you actually want the context.
 
 ---
 

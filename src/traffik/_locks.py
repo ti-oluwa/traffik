@@ -78,7 +78,7 @@ class NamedLockPool(typing.Generic[AsyncLockT]):
         internal `threading.RLock`, so a single pool instance can safely be
         shared across multiple OS threads (each running its own event loop),
         not just within one event loop. The underlying locks it hands out still
-        need to be safe for that usage themselves -- this only protects the
+        need to be safe for that usage themselves. The lock only protects the
         pool's own bookkeeping.
     """
 

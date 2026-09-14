@@ -29,13 +29,13 @@ backend = InMemoryBackend(namespace="test", persistent=False)
 Here's the standard setup with `pytest`, `anyio`, and `httpx2.AsyncClient`:
 
 !!! warning "`ASGITransport` doesn't run lifespan events"
-    `httpx2.ASGITransport` sends HTTP requests directly to your app without going through a real ASGI server, so it never sends the `lifespan.startup`/`lifespan.shutdown` messages a server normally would. That means `FastAPI(lifespan=backend.lifespan)` alone won't actually initialize the backend when used with `AsyncClient(transport=ASGITransport(app=app))` - the throttle will fail with a "backend not ready" error, not silently pass.
+    `httpx2.ASGITransport` sends HTTP requests directly to your app without going through a real ASGI server, so it never sends the `lifespan.startup`/`lifespan.shutdown` messages a server normally would. That means `FastAPI(lifespan=backend.lifespan)` alone won't actually initialize the backend when used with `AsyncClient(transport=ASGITransport(app=app))` so the throttle will fail with a "backend not ready" error, not silently pass.
 
     Three ways to fix it:
 
-    1. **Enter the backend's context manually** around the client usage - shown below. `backend(app)` is the same context manager `lifespan()` uses internally, so this initializes the backend exactly as a real server's lifespan would, without depending on ASGI lifespan events at all.
-    2. **Pass the backend directly to the throttle** (`HTTPThrottle(..., backend=backend)`) instead of letting it look the backend up from app context - then call `await backend.initialize()` (or still enter `async with backend():`, just without an `app` argument) once before making requests.
-    3. **Use `TestClient`** instead of `AsyncClient` + `ASGITransport`. Starlette's `TestClient` does run the ASGI lifespan protocol correctly, so `FastAPI(lifespan=backend.lifespan)` works as originally written with no other changes - see the [WebSocket Test Pattern](#websocket-test-pattern) below for a working example.
+    1. **Enter the backend's context manually** around the client usage as shown below. `backend(app)` is the same context manager `lifespan()` uses internally, so this initializes the backend exactly as a real server's lifespan would, without depending on ASGI lifespan events at all.
+    2. **Pass the backend directly to the throttle** (`HTTPThrottle(..., backend=backend)`) instead of letting it look the backend up from app context, and then call `await backend.initialize()` (or still enter `async with backend():`, just without an `app` argument) once before making requests.
+    3. **Use `TestClient`** instead of `AsyncClient` + `ASGITransport`. Starlette's `TestClient` does run the ASGI lifespan protocol correctly, so `FastAPI(lifespan=backend.lifespan)` works as originally written with no other changes. See the [WebSocket Test Pattern](#websocket-test-pattern) below for a working example.
 
 ```python
 # tests/test_my_endpoints.py

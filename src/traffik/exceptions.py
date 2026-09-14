@@ -179,5 +179,5 @@ def _build_exception_handler_getter(
     return handler_getter
 
 
-_EXEMPT_EXCEPTIONS = (asyncio.CancelledError, SystemExit, KeyboardInterrupt)
+EXEMPT_EXCEPTIONS = (asyncio.CancelledError, SystemExit, KeyboardInterrupt)
 """Exceptions that should almost never be caught as they affect program control flow or termination."""

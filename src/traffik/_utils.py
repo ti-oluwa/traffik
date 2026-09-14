@@ -29,6 +29,7 @@ __all__ = [
     "CircuitState",
     "ProxyHeaders",
     "get_remote_address",
+    "is_ip",
     "time",
 ]
 
@@ -94,7 +95,7 @@ def _is_trusted_proxy(
     return any(ip in network for network in networks)
 
 
-def _is_ip(value: str) -> bool:
+def is_ip(value: str) -> bool:
     """
     Returns whether *value* is a valid IPv4 or IPv6 address.
 
@@ -172,7 +173,7 @@ def get_remote_address(
                     elif value.count(":") == 1 and "." in value:
                         value = value.rsplit(":", 1)[0]
 
-                    if _is_ip(value):
+                    if is_ip(value):
                         return value
 
     # X-Forwarded-For
@@ -182,7 +183,7 @@ def get_remote_address(
             # Walk from the proxy nearest to us backwards, removing trusted proxies.
             for candidate in reversed(x_forwarded_for.split(",")):
                 candidate = candidate.strip()
-                if not _is_ip(candidate):
+                if not is_ip(candidate):
                     continue
                 if not _is_trusted_proxy(candidate, exact, networks):
                     return candidate
@@ -196,7 +197,7 @@ def get_remote_address(
         if flag not in proxy_headers:
             continue
         value = headers.get(header)  # type: ignore[assignment]
-        if value and _is_ip(value):
+        if value and is_ip(value):
             return value
     return peer
 
@@ -320,7 +321,7 @@ def adaptive_expire_sample(
 
     Calls `sample_round()`, which should check a small batch of candidates
     and remove the expired ones, and repeats while the freed fraction of the
-    checked batch stays at or above `threshold` - so a shard with a lot of
+    checked batch stays at or above `threshold`. So a shard with a lot of
     expired entries gets reclaimed faster, without ever scanning every live
     entry. Cost per call is bounded by `max_rounds` times whatever sample
     size `sample_round` checks per call, regardless of how many live entries

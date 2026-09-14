@@ -11,7 +11,7 @@ from starlette.requests import HTTPConnection
 from traffik._utils import CircuitBreaker
 from traffik.backends.base import ThrottleBackend
 from traffik.backoff import DEFAULT_BACKOFF
-from traffik.exceptions import _EXEMPT_EXCEPTIONS, BackendError
+from traffik.exceptions import EXEMPT_EXCEPTIONS, BackendError
 from traffik.rates import Rate
 from traffik.throttles import Throttle, ThrottleExceptionInfo
 from traffik.typing import BackoffStrategy, HTTPConnectionT, WaitPeriod
@@ -181,7 +181,7 @@ def retry(
                     delay *= backoff_multiplier  # type: ignore
             try:
                 return await throttle.strategy(key, rate, backend, cost)
-            except _EXEMPT_EXCEPTIONS:
+            except EXEMPT_EXCEPTIONS:
                 raise
             except BaseException as retry_exc:
                 last_exc = retry_exc
@@ -266,7 +266,7 @@ def failover(
                 wait_ms = await throttle.strategy(key, rate, primary, cost)
                 await cb.record_success()
                 return wait_ms
-            except _EXEMPT_EXCEPTIONS:
+            except EXEMPT_EXCEPTIONS:
                 raise
             except BaseException:
                 if attempt < max_retries - 1:

@@ -641,7 +641,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         Create a throttle context for the backend.
 
-        **Warning!!!**: Avoid nesting a non-persistent context inside a persistent context from the
+        **Warning!**: Avoid nesting a non-persistent context inside a persistent context from the
         same backend. This could lead to unexpected behaviour and data loss due to nested non-persistence.
 
         :param app: The ASGI application to assign the backend to.

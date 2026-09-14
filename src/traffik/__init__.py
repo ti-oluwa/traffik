@@ -1,5 +1,7 @@
 """
-**Traffik** - Distributed Rate Limiting for Starlette Applications.
+**Traffik** - Rate Limiting for Starlette Applications.
+
+@author: Daniel T. Afolayan (github.com/ti-oluwa)
 """
 
 from ._locks import (
@@ -15,6 +17,7 @@ from ._utils import (
     CircuitState,
     ProxyHeaders,
     get_remote_address,
+    is_ip,
     time,
 )
 from .backends import (
@@ -42,7 +45,7 @@ from .headers import (
     Header,
     Headers,
 )
-from .rates import Rate
+from .rates import Rate, parse_rate
 from .registry import (
     Bypass,
     Rule,
@@ -133,7 +136,9 @@ __all__ = [
     "get_remote_address",
     "get_throttle_backend",
     "get_wait",
+    "is_ip",
     "is_throttled",
+    "parse_rate",
     "set_legacy_md5_keys",
     "set_lock_blocking",
     "set_lock_blocking_timeout",

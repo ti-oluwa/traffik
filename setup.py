@@ -25,7 +25,7 @@ if not ON_WINDOWS:
 setup(
     name="traffik",
     version="1.3.0",
-    description="Rate limiting for Starlette and FastAPI applications.",
+    description="Rate limiting for Starlette applications.",
     readme="README.md",
     authors=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],
     maintainers=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],

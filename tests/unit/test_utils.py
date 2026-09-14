@@ -14,7 +14,7 @@ from traffik._utils import (
     ProxyHeaders,
     _add_parameter_to_signature,
     _as_cache_key,
-    _is_ip,
+    is_ip,
     _is_trusted_proxy,
     _split_trusted_proxies,
     _TaskTimer,
@@ -398,14 +398,14 @@ class TestGetRemoteAddress:
 
 
 class TestIsIp:
-    """Tests for the `_is_ip` format validator."""
+    """Tests for the `is_ip` format validator."""
 
     @pytest.mark.parametrize(
         "value",
         ["0.0.0.0", "127.0.0.1", "255.255.255.255", "203.0.113.42"],
     )
     def test_valid_ipv4(self, value):
-        assert _is_ip(value) is True
+        assert is_ip(value) is True
 
     @pytest.mark.parametrize(
         "value",
@@ -418,7 +418,7 @@ class TestIsIp:
         ],
     )
     def test_valid_ipv6(self, value):
-        assert _is_ip(value) is True
+        assert is_ip(value) is True
 
     @pytest.mark.parametrize(
         "value",
@@ -434,7 +434,7 @@ class TestIsIp:
         ],
     )
     def test_invalid(self, value):
-        assert _is_ip(value) is False
+        assert is_ip(value) is False
 
 
 class TestSplitTrustedProxies:

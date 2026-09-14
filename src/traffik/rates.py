@@ -5,6 +5,8 @@ from typing import Annotated
 
 from annotated_types import Ge
 
+__all__ = ["Rate", "parse_rate"]
+
 
 @typing.final
 class Rate:
@@ -133,7 +135,7 @@ class Rate:
         if not rate:
             raise ValueError("Rate string cannot be empty")
         # Use `.lower()` for better cache performance
-        return parse_rate_string(rate.lower())
+        return parse_rate(rate.lower())
 
 
 PERIOD_RE = re.compile(r"^(\d+)?\s*([a-z]+)$")
@@ -161,7 +163,13 @@ UNIT_TO_MILLISECONDS = {
 
 
 @functools.lru_cache(maxsize=512)
-def parse_rate_string(rate: str) -> Rate:
+def parse_rate(rate: str) -> Rate:
+    """
+    Parse a rate limit string into a `Rate` object.
+
+    :param rate: The rate limit string to parse.
+    :return: A `Rate` object representing the parsed rate limit.
+    """
     parts = SPLIT_RE.split(rate)
     if len(parts) != 2:
         raise ValueError(

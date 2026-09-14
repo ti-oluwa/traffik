@@ -155,7 +155,7 @@ class TestMultiProcessInMemoryBackendExpiration:
             assert buffer is not None
             occupied = 0
             for shard_idx in range(2):
-                shard_base = backend._shard_base(shard_idx)
+                shard_base = backend._get_shard_base(shard_idx)
                 occupied += sum(
                     1 for _ in backend._hash_table_iter_occupied(buffer, shard_base)
                 )

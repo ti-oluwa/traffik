@@ -1,4 +1,4 @@
-"""C-based FNV-1a hashing extension for traffik."""
+"""C-based hashing extension for traffik."""
 
 def fnv_32bit_hash(data: bytes, /) -> int:
     """

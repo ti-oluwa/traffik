@@ -18,7 +18,7 @@ from traffik.config import (
     THROTTLE_DEFAULT_SCOPE,
     THROTTLED_STATE_KEY,
 )
-from traffik.exceptions import _EXEMPT_EXCEPTIONS, ConfigurationError
+from traffik.exceptions import EXEMPT_EXCEPTIONS, ConfigurationError
 from traffik.headers import Header, Headers
 from traffik.rates import Rate
 from traffik.registry import (
@@ -956,7 +956,7 @@ class Throttle(typing.Generic[HTTPConnectionT]):
         key = self.get_namespaced_key(connection, connection_id, merged_context)
         try:
             wait_ms = await self.strategy(key, rate, backend, actual_cost)  # type: ignore[arg-type]
-        except _EXEMPT_EXCEPTIONS:
+        except EXEMPT_EXCEPTIONS:
             raise
         except BaseException as exc:
             if logger.isEnabledFor(logging.WARNING):

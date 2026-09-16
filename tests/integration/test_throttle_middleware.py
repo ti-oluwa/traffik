@@ -86,16 +86,20 @@ class TestMiddlewareThrottleBasic:
             )
             middleware_throttle = MiddlewareThrottle(throttle=throttle, path="/api/")
 
-            api_request = Request({
-                "type": "http",
-                "method": "GET",
-                "path": "/api/users",
-            })
-            public_request = Request({
-                "type": "http",
-                "method": "GET",
-                "path": "/public/info",
-            })
+            api_request = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/api/users",
+                }
+            )
+            public_request = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/public/info",
+                }
+            )
 
             assert await middleware_throttle(api_request) is api_request
             assert await middleware_throttle(public_request) is public_request
@@ -136,18 +140,22 @@ class TestMiddlewareThrottleBasic:
                 throttle=throttle, predicate=is_premium_user
             )
 
-            premium_request = Request({
-                "type": "http",
-                "method": "GET",
-                "path": "/test",
-                "headers": {"x-user-tier": "premium"},
-            })
-            free_request = Request({
-                "type": "http",
-                "method": "GET",
-                "path": "/test",
-                "headers": {"x-user-tier": "free"},
-            })
+            premium_request = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/test",
+                    "headers": {"x-user-tier": "premium"},
+                }
+            )
+            free_request = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/test",
+                    "headers": {"x-user-tier": "free"},
+                }
+            )
 
             assert await middleware_throttle(premium_request) is premium_request
             assert await middleware_throttle(free_request) is free_request
@@ -181,12 +189,14 @@ class TestMiddlewareThrottleBasic:
             ]
             for method, path, has_auth in test_cases:
                 headers = [(b"authorization", b"Bearer token")] if has_auth else []
-                request = Request({
-                    "type": "http",
-                    "method": method,
-                    "path": path,
-                    "headers": headers,
-                })
+                request = Request(
+                    {
+                        "type": "http",
+                        "method": method,
+                        "path": path,
+                        "headers": headers,
+                    }
+                )
                 assert await middleware_throttle(request) is request
 
     async def test_skip_handler_marks_throttled_without_invoking_handler(
@@ -269,11 +279,13 @@ class TestMiddlewareThrottleRegexMatching:
             assert middleware_throttle.rule.path.pattern == "/api/"
 
             matching = Request({"type": "http", "method": "GET", "path": "/api/users"})
-            non_matching = Request({
-                "type": "http",
-                "method": "GET",
-                "path": "/public/data",
-            })
+            non_matching = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/public/data",
+                }
+            )
             assert await middleware_throttle(matching) is matching
             assert await middleware_throttle(non_matching) is non_matching
 
@@ -292,18 +304,22 @@ class TestMiddlewareThrottleRegexMatching:
             )
 
             for _ in range(2):
-                request = Request({
-                    "type": "http",
-                    "method": "GET",
-                    "path": "/api/search",
-                })
+                request = Request(
+                    {
+                        "type": "http",
+                        "method": "GET",
+                        "path": "/api/search",
+                    }
+                )
                 assert await middleware_throttle(request) is request
 
-            request = Request({
-                "type": "http",
-                "method": "GET",
-                "path": "/api/search/results",
-            })
+            request = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/api/search/results",
+                }
+            )
             assert await middleware_throttle(request) is request
 
     async def test_case_sensitive_regex(

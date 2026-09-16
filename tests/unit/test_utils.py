@@ -14,12 +14,12 @@ from traffik._utils import (
     ProxyHeaders,
     _add_parameter_to_signature,
     _as_cache_key,
-    is_ip,
     _is_trusted_proxy,
     _split_trusted_proxies,
     _TaskTimer,
     get_remote_address,
     is_async_callable,
+    is_ip,
     time,
 )
 

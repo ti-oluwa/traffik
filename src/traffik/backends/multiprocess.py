@@ -523,10 +523,18 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     **ABA mitigation**
 
     Each slot carries a `uint32 generation` counter incremented every time
-    the slot is allocated. Operations that release `slot_map_semaphores[shard_idx]`
+    the slot is allocated and every time it is freed (see `_free_stack_pop`
+    and `_free_stack_push`). Operations that release `slot_map_semaphores[shard_idx]`
     before acquiring `shard_semaphores[shard_idx]` capture the generation at lookup
     time and verify it under `shard_semaphores[shard_idx]` before reading or writing.
-    A mismatch triggers a retry up to `self._max_aba_retries` times.
+    A mismatch triggers a retry up to `self._max_aba_retries` times (for
+    read-only operations that don't retry, a mismatch is treated as "key not
+    found", which is correct since the slot was reassigned or freed out from
+    under them). Bumping on free as well as on allocation matters because
+    freeing a slot (`_hash_table_delete` + `_free_stack_push`, used by
+    `_delete`, `_clear`, and the background cleaner) does not by itself
+    invalidate a `(slot_idx, generation)` pair some other operation already
+    captured for the key that used to live there; only the generation bump does.
 
     **Memory and Sizing Guide**
 
@@ -1467,7 +1475,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         The generation increment is the core of the ABA-problem mitigation. Every
         re-allocation changes the slot's `shard_idx` generation, making stale references
-        detectable.
+        detectable. `_free_stack_push` also bumps it on the deallocation side.
+        See that method's docstring for why both sides need to.
 
         Must be called with the shard's `slot_map_semaphore` held.
 
@@ -1500,8 +1509,24 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         Return `slot_idx` to the shard's free pool.
 
-        The generation is not bumped here; that happens on the next pop
-        (allocation), which is the moment a new owner takes the slot.
+        Also bumps the slot's generation counter. This helps close an ABA window
+        that a pop-only bump leaves open because an operation that captures a slot's
+        `(slot_idx, generation)` under `slot_map_semaphore` and then releases
+        it before doing its `shard_semaphore`-guarded read/write (`_get`,
+        `_set`, `_increment`, `_increment_with_ttl`, `_expire`, `_multi_get`,
+        `_multi_set`) has no lock held in between. If some other operation
+        deletes that same key and pushes its slot back to the free pool
+        during that window and it is done without this bump, the generation would still
+        match what was captured, since nothing had popped (reallocated) the
+        slot yet. A writer would then pass its generation check and write
+        into a slot the hash table no longer references. So the write is
+        silently lost (nothing points at it) and the slot leaks as
+        "occupied" until it happens to be reused. Bumping here as well means
+        that in-flight operation always observes a mismatch and correctly
+        retries via the ABA loop (or, for the non-retrying reads, correctly
+        treats the key as gone) instead of resurrecting stale state.
+        `_delete`, `_clear`, and the background cleaner (`_sample_and_reap_shard`)
+        all free slots through this method and all rely on this.
 
         Must be called with the shard's `slot_map_semaphore` held.
 
@@ -1520,6 +1545,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         _UINT32_STRUCT.pack_into(
             buffer, shard_base + _HEADER_FREE_COUNT_OFFSET, count + 1
         )
+        self._bump_slot_generation(buffer, shard_base, slot_idx)
 
     def _get_slot_offset(self, shard_base: int, slot_idx: int) -> int:
         """
@@ -1558,7 +1584,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         (32 bit integer maximum).
 
         Must be called with the shard's `slot_map_semaphore` held. Called
-        exclusively from `_free_stack_pop`.
+        from both `_free_stack_pop` (allocation) and `_free_stack_push`
+        (deallocation).
 
         :param buffer: The shared memory buffer view.
         :param shard_base: Byte offset of the shard's start in `buffer`.
@@ -1867,6 +1894,16 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         No ABA retry needed as both locks are held simultaneously for the entire
         mutation.
+
+        This does not, by itself, protect against a different operation
+        that already captured this slot's `(slot_idx, generation)` before
+        this call started and only reaches its `shard_semaphore`-guarded
+        write after this call has released both locks. What makes that safe
+        is `_free_stack_push` bumping the slot's generation as part of the
+        free operations so that writer's stale generation check then correctly
+        mismatches and it retries (or, for non-retrying reads, correctly
+        reports the key as gone) instead of writing into a slot this delete
+        already unlinked from the hash table.
 
         :param key: The throttle key to delete.
         :return: `True` if the key existed and was deleted, `False` otherwise.
@@ -2289,10 +2326,27 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         Remove all keys whose name starts with this backend's `shard_idx` namespace prefix.
 
         For each shard, a `slot_map_semaphores[shard_idx]` acquisition scans the
-        hash table, deletes matching entries, and pushes their slots back to
-        the free pool. A subsequent `shard_semaphores[shard_idx]` acquisition clears
-        the occupied flags. Shards are processed independently, in ascending
-        index order.
+        hash table, deletes matching entries, pushes their slots back to the
+        free pool, and records each slot's post-push generation. A subsequent
+        `shard_semaphores[shard_idx]` acquisition re-checks that generation
+        before clearing the occupied flag. Shards are processed independently,
+        in ascending index order.
+
+        The generation re-check matters because of the gap between the two
+        semaphore acquisitions. Once a slot is pushed back to the free pool
+        in the first phase, it is immediately eligible for a concurrent
+        `_set`/`_increment`/`_increment_with_ttl`/`_multi_set` call (for a
+        different key) to pop it, insert its own hash-table entry, and
+        write fresh data into it, all before this method gets to its second
+        phase. `_free_stack_push` bumps the slot's generation for exactly
+        this reason (see its docstring), so a slot that was reclaimed this
+        way now carries a generation that no longer matches what was recorded
+        right after this method pushed it. Without checking that, the second
+        phase would blindly clear the occupied flag on every candidate slot,
+        silently discarding the concurrent writer's brand-new value even
+        though the hash table correctly still points at it. So we skip
+        clearing whenever the generation has moved on leaves that slot alone
+        as it now belongs to someone else now.
 
         Holding both semaphores for the same shard simultaneously is avoided
         to respect the lock-ordering rule; `_delete` holds them in the
@@ -2306,7 +2360,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         for shard_idx in range(self._number_of_shards):
             shard_base = self._get_shard_base(shard_idx)
-            candidates: list[int] = []
+            # (slot_idx, generation-immediately-after-push) pairs, so phase 2
+            # can detect a slot a concurrent writer already reclaimed for a
+            # different key and leave it alone instead of clearing it.
+            candidates: list[tuple[int, int]] = []
 
             self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
             try:
@@ -2318,7 +2375,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
                     self._hash_table_delete(buffer, shard_base, key_str.encode("utf-8"))
                     self._free_stack_push(buffer, shard_base, slot_idx)
-                    candidates.append(slot_idx)
+                    generation = self._read_slot_generation(
+                        buffer, shard_base, slot_idx
+                    )
+                    candidates.append((slot_idx, generation))
             finally:
                 self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
 
@@ -2327,7 +2387,15 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
             self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
             try:
-                for slot_idx in candidates:
+                for slot_idx, generation in candidates:
+                    if (
+                        self._read_slot_generation(buffer, shard_base, slot_idx)
+                        != generation
+                    ):
+                        # A concurrent writer already popped this slot for a
+                        # different key and the hash table points at it now;
+                        # its data is not ours to touch.
+                        continue
                     self._clear_slot(buffer, shard_base, slot_idx)
             finally:
                 self._shard_semaphores[shard_idx].release()  # type: ignore[index]

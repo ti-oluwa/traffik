@@ -49,7 +49,9 @@ async def mp_backend():
 
 
 class TestClearSlotReuseRace:
-    async def test_clear_does_not_wipe_slot_reclaimed_mid_flight(self, mp_backend):
+    async def test_clear_does_not_wipe_slot_reclaimed_mid_flight(
+        self, mp_backend, monkeypatch: pytest.MonkeyPatch
+    ):
         backend = mp_backend
         key1 = backend.get_key("key1")
         key2 = backend.get_key("key2")
@@ -59,18 +61,21 @@ class TestClearSlotReuseRace:
         shard_idx = backend._get_shard_idx_for_key(key1)
         assert shard_idx == backend._get_shard_idx_for_key(key2)
 
-        real_acquire = backend._shard_semaphores[shard_idx].acquire  # type: ignore[index]
+        shard_semaphore = backend._shard_semaphores[shard_idx]  # type: ignore[index]
+        real_acquire = shard_semaphore.acquire
 
         def racing_acquire(*args, **kwargs):
             # Fires once, right as `_clear()`'s second phase is about to
             # acquire `shard_semaphore`, simulating a concurrent `_set()`
             # for a different key that reclaims the slot `_clear()` just
             # freed, in the window between its two semaphore acquisitions.
-            backend._shard_semaphores[shard_idx].acquire = real_acquire  # type: ignore[index]
+            # Restore the real `acquire` first so `_set()`'s own acquire of
+            # this same semaphore doesn't recurse back into this hook.
+            monkeypatch.setattr(shard_semaphore, "acquire", real_acquire)
             backend._set(key2, "v2", None)
             return real_acquire(*args, **kwargs)
 
-        backend._shard_semaphores[shard_idx].acquire = racing_acquire  # type: ignore[index]
+        monkeypatch.setattr(shard_semaphore, "acquire", racing_acquire)
 
         await backend.clear()
 

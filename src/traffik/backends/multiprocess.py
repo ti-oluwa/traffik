@@ -519,6 +519,16 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     - `slot_map_semaphores[shard_idx]` before `shard_semaphores[shard_idx]`
     - Never hold two different shards' semaphores simultaneously
+    - With an exception. `_delete` and `_sample_and_reap_shard` hold both locks for a
+      shard simultaneously, nested in the opposite order (`shard_semaphore`
+      outer, `slot_map_semaphore` inner). This is deadlock-safe because both
+      use that same reversed order as two lock holders can only deadlock by
+      acquiring a shared pair of locks in opposite orders from each other,
+      and nothing else in this class ever holds both locks for a shard at
+      once (every other method releases one before acquiring the other, so
+      there is no opposite-order holder for these two to cycle against).
+      `_clear` is a two-phase example of avoiding the reversal rather than
+      using it. it never holds both locks for a shard at the same time.
 
     **ABA mitigation**
 
@@ -2036,10 +2046,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         Lock order is `shard_semaphores[shard_idx]` first, then `slot_map_semaphores[shard_idx]`.
 
-        This is the exception to the normal ordering rule and is safe here
-        because `_delete` never calls `_free_stack_pop`. Holding the shard semaphore
-        while clearing the slot prevents a concurrent reader from seeing the slot as
-        occupied after it has been returned to the free pool.
+        This uses reversed-order lock ordering and is safe here because `_delete` never
+        calls `_free_stack_pop` while holding both locks. Holding the shard semaphore
+        while clearing the slot prevents a concurrent reader from seeing the slot as occupied
+        after it has been returned to the free pool.
 
         No ABA retry needed as both locks are held simultaneously for the entire
         mutation.
@@ -2493,15 +2503,17 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         right after this method pushed it. Without checking that, the second
         phase would blindly clear the occupied flag on every candidate slot,
         silently discarding the concurrent writer's brand-new value even
-        though the hash table correctly still points at it. So we skip
-        clearing whenever the generation has moved on leaves that slot alone
-        as it now belongs to someone else now.
+        though the hash table correctly still points at it. Skipping the
+        clear whenever the generation has moved on leaves that slot alone as
+        it belongs to someone else now.
 
         Holding both semaphores for the same shard simultaneously is avoided
-        to respect the lock-ordering rule; `_delete` holds them in the
-        opposite order (shard first, then slot-map), which is safe only
-        because `_delete` never calls `_free_stack_pop`. Here we separate
-        the phases instead.
+        here to respect the normal lock-ordering rule; `_delete` and
+        `_sample_and_reap_shard` hold them in the opposite order (shard
+        first, then slot-map) instead, per the documented exception in lock ordering.
+        This method could be rewritten to use that same per-key nested pattern too,
+        but the two-phase design here is already correct (see the generation check
+        above) and changing it isn't needed to fix anything, so it is left as is.
         """
         buffer = self._buffer
         assert buffer is not None
@@ -2558,13 +2570,40 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         Pass 1 (no lock): We take an unsynchronised snapshot of a random
         sample of occupied buckets and their expiry times; used only as a
-        candidate hint.
+        candidate hint. The float64 expiry read is not guaranteed atomic on
+        all architectures, so a torn read here can only produce a spurious
+        skip or a spurious candidate. Pass 2 below re-verifies properly,
+        under lock, before ever mutating anything.
 
-        Pass 2 (`slot_map_semaphores[shard_idx]` only): We re-verify each
-        candidate. The shard semaphore is intentionally not held here
-        to avoid violating the lock-ordering rule. The float64 expiry write
-        is not guaranteed atomic on all architectures, so the worst outcome is
-        a spurious skip (missed cleanup cycle), never a spurious free.
+        Pass 2 (per candidate: `shard_semaphores[shard_idx]` then
+        `slot_map_semaphores[shard_idx]`, nested. The same order and
+        justification as `_delete`) to re-verify the candidate is still at
+        its expected slot and still genuinely expired, and if so, reap it.
+
+        Holding `shard_semaphore` for the re-check is what makes this
+        safe. This method used to mutate a slot's occupied flag under only
+        `slot_map_semaphore`, without ever acquiring `shard_semaphore`.
+        That let a concurrent `_get`/`_set`/`_increment`/`_increment_with_ttl`
+        call, one that had already passed its own `shard_semaphore`-guarded
+        generation check for this exact slot and was reading or writing it
+        at that very moment, have its result silently clobbered once this
+        method's unsynchronized `_clear_slot` call ran, since the two
+        mutations were never mutually exclusive. `_free_stack_push`'s
+        generation bump does not help there as that mechanism guards a
+        future generation check against a concurrent free, not a write
+        already in flight under a generation that was, and still is, valid.
+        Acquiring `shard_semaphore` first closes that gap as a writer already
+        holding it blocks this method until it finishes (and this
+        method's re-check then correctly sees whatever it left behind,
+        including a refreshed expiry), and a writer that hasn't started
+        yet blocks behind this method instead (and, if this method reaps
+        the slot, correctly retries via its own ABA loop once it sees the
+        generation `_free_stack_push` bumped).
+
+        Locking is done per candidate rather than once for the whole
+        sample, as Pass 1 collects it. This keeps the window any other
+        operation on this shard can be blocked for as short as a single
+        `_delete` call, rather than stretching it across the whole batch.
 
         :return: `(checked, freed)` counts for this round.
         """
@@ -2593,27 +2632,34 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             return checked, 0
 
         freed = 0
-        self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
-        try:
-            for key_bytes, expected_slot_idx in candidates:
-                current_slot_idx = self._hash_table_get_slot(
-                    buffer, shard_base, key_bytes
-                )
-                if current_slot_idx is None or current_slot_idx != expected_slot_idx:
-                    continue
+        for key_bytes, expected_slot_idx in candidates:
+            self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+            try:
+                self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+                try:
+                    current_slot_idx = self._hash_table_get_slot(
+                        buffer, shard_base, key_bytes
+                    )
+                    if (
+                        current_slot_idx is None
+                        or current_slot_idx != expected_slot_idx
+                    ):
+                        continue
 
-                _, _, expires_at, occupied = self._read_slot(
-                    buffer, shard_base, current_slot_idx
-                )
-                if not occupied or expires_at == 0 or expires_at > now:
-                    continue
+                    _, _, expires_at, occupied = self._read_slot(
+                        buffer, shard_base, current_slot_idx
+                    )
+                    if not occupied or expires_at == 0 or expires_at > now:
+                        continue
 
-                self._hash_table_delete(buffer, shard_base, key_bytes)
-                self._free_stack_push(buffer, shard_base, current_slot_idx)
-                self._clear_slot(buffer, shard_base, current_slot_idx)
-                freed += 1
-        finally:
-            self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+                    self._hash_table_delete(buffer, shard_base, key_bytes)
+                    self._clear_slot(buffer, shard_base, current_slot_idx)
+                    self._free_stack_push(buffer, shard_base, current_slot_idx)
+                    freed += 1
+                finally:
+                    self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+            finally:
+                self._shard_semaphores[shard_idx].release()  # type: ignore[index]
 
         return checked, freed
 
@@ -2777,10 +2823,12 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         shard_to_items: dict[int, list[tuple[str, str]]] = {}
         for key, val in items.items():
-            shard_to_items.setdefault(self._get_shard_idx_for_key(key), []).append((
-                key,
-                val,
-            ))
+            shard_to_items.setdefault(self._get_shard_idx_for_key(key), []).append(
+                (
+                    key,
+                    val,
+                )
+            )
 
         await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
             self._executor, self._multi_set, shard_to_items, expire

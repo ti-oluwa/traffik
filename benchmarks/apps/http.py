@@ -39,6 +39,11 @@ async def test_endpoint(request: Request = Depends(throttle)):
     return {"status": "ok"}
 
 
+@app.get("/test-sync")
+def test_endpoint_sync(request: Request = Depends(throttle)):
+    return {"status": "ok"}
+
+
 @app.get("/__bench__/health")
 async def health():
     return {"status": "ok"}

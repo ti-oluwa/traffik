@@ -176,4 +176,6 @@ benchmark = [
     "websockets>=13.0",
     "uvloop>=0.22.1",
     "httptools>=0.8.0",
+    "psutil>=5.9.5",
+    "slowapi>=0.1.9",
 ]

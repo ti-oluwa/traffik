@@ -4,7 +4,7 @@ import platform
 import sys
 import typing
 
-from benchmarks.types import AggregatedResult
+from benchmarks.types import AggregatedResult, CompareResult, ScaleResult
 
 
 def result_to_dict(result: AggregatedResult) -> dict:
@@ -32,6 +32,66 @@ def result_to_dict(result: AggregatedResult) -> dict:
     }
 
 
+def compare_result_to_dict(result: CompareResult) -> dict:
+    """
+    Serialize a CompareResult to a plain dict suitable for JSON output.
+
+    :param result: The paired traffik/SlowAPI result to serialize.
+    :return: A dict with both sides' full aggregated results plus the
+        computed req/s delta.
+    """
+    slowapi_rps = result.slowapi.mean_rps
+    traffik_rps = result.traffik.mean_rps
+    rps_delta_pct = (
+        ((traffik_rps - slowapi_rps) / slowapi_rps * 100) if slowapi_rps > 0 else None
+    )
+    return {
+        "scenario_key": result.scenario_key,
+        "scenario_name": result.scenario_name,
+        "traffik": result_to_dict(result.traffik),
+        "slowapi": result_to_dict(result.slowapi),
+        "rps_delta_pct": rps_delta_pct,
+    }
+
+
+def scale_result_to_dict(result: ScaleResult) -> dict:
+    """
+    Serialize a ScaleResult to a plain dict suitable for JSON output.
+
+    :param result: The scale run result to serialize.
+    :return: A dict with backend/strategy/worker metadata and every checkpoint.
+    """
+    return {
+        "backend_kind": result.backend_kind,
+        "strategy_kind": result.strategy_kind,
+        "workers": result.workers,
+        "checkpoints": [
+            {
+                "cumulative_keys": checkpoint.cumulative_keys,
+                "new_keys_this_checkpoint": checkpoint.new_keys_this_checkpoint,
+                "rss_mb": checkpoint.rss_mb,
+                "rss_delta_mb": checkpoint.rss_delta_mb,
+                "bytes_per_key": checkpoint.bytes_per_key,
+                "backend_used_memory_mb": checkpoint.backend_used_memory_mb,
+                "mean_rps": checkpoint.mean_rps,
+                "p50_ms": checkpoint.p50_ms,
+                "p99_ms": checkpoint.p99_ms,
+                "successful": checkpoint.successful,
+                "errors": checkpoint.errors,
+            }
+            for checkpoint in result.checkpoints
+        ],
+    }
+
+
+def default_meta() -> dict[str, typing.Any]:
+    return {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "platform": sys.platform,
+        "python_version": platform.python_version(),
+    }
+
+
 def print_json(
     results: list[AggregatedResult],
     meta: typing.Optional[dict[str, typing.Any]] = None,
@@ -42,18 +102,45 @@ def print_json(
     :param results: List of aggregated results to serialize.
     :param meta: Optional metadata dict to include (e.g. backend version, run timestamp).
     """
-    if meta is None:
-        meta = {}
-
-    # Add default metadata
-    meta.setdefault(
-        "timestamp", datetime.datetime.now(datetime.timezone.utc).isoformat()
-    )
-    meta.setdefault("platform", sys.platform)
-    meta.setdefault("python_version", platform.python_version())
-
+    meta = {**default_meta(), **(meta or {})}
     output = {
         "meta": meta,
         "results": [result_to_dict(r) for r in results],
+    }
+    print(json.dumps(output, indent=2))
+
+
+def print_compare_json(
+    results: list[CompareResult],
+    meta: typing.Optional[dict[str, typing.Any]] = None,
+) -> None:
+    """
+    Print `compare` results as a JSON object to stdout.
+
+    :param results: List of paired traffik/SlowAPI results to serialize.
+    :param meta: Optional metadata dict to include.
+    """
+    meta = {**default_meta(), **(meta or {})}
+    output = {
+        "meta": meta,
+        "results": [compare_result_to_dict(r) for r in results],
+    }
+    print(json.dumps(output, indent=2))
+
+
+def print_scale_json(
+    result: ScaleResult,
+    meta: typing.Optional[dict[str, typing.Any]] = None,
+) -> None:
+    """
+    Print a `scale` result as a JSON object to stdout.
+
+    :param result: The scale run result to serialize.
+    :param meta: Optional metadata dict to include.
+    """
+    meta = {**default_meta(), **(meta or {})}
+    output = {
+        "meta": meta,
+        "result": scale_result_to_dict(result),
     }
     print(json.dumps(output, indent=2))

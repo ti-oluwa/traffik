@@ -10,17 +10,23 @@ from typing_extensions import ParamSpec, TypeVar
 
 from benchmarks.bench.http import run_scenarios as run_http_scenarios
 from benchmarks.bench.middleware import run_scenarios as run_middleware_scenarios
+from benchmarks.live.compare_orchestrator import run_compare_scenarios
+from benchmarks.live.scale_orchestrator import run_scale
 from benchmarks.types import BackendKind, BenchmarkConfig, StrategyKind
 
 if IS_WINDOWS := (platform.system() == "Windows"):
+    run_multiprocess_scenarios = None
+else:
     from benchmarks.bench.multiprocess import (
         run_scenarios as run_multiprocess_scenarios,
     )
-else:
-    run_multiprocess_scenarios = None
 from benchmarks.bench.websocket import run_scenarios as run_websocket_scenarios
-from benchmarks.output._json import print_json
-from benchmarks.output.table import print_results_table
+from benchmarks.output._json import print_compare_json, print_json, print_scale_json
+from benchmarks.output.table import (
+    print_compare_table,
+    print_results_table,
+    print_scale_table,
+)
 from benchmarks.scenarios import (
     HTTP_SCENARIOS,
     MIDDLEWARE_SCENARIOS,
@@ -130,7 +136,7 @@ def options(
 def check_workers_platform(workers: int) -> None:
     if workers > 1 and platform.system() == "Windows":
         click.echo(
-            "ERROR: --workers > 1 requires a POSIX system (gunicorn'scenario "
+            "ERROR: --workers > 1 requires a POSIX system (gunicorn's scenario "
             "worker model relies on the 'fork' start method, which "
             "Windows does not support).",
             err=True,
@@ -376,6 +382,250 @@ def multiprocess_command(
         print_json(results, meta)
     else:
         print_results_table(results, title="MultiProcess Benchmark Results")
+
+
+@cli.command("compare")
+@click.option(
+    "--backend",
+    "-b",
+    type=click.Choice([c for c in BackendKind.choices() if c != "multiprocess"]),
+    default="inmemory",
+    help="Backend to benchmark. `multiprocess` isn't offered here - see notes below.",
+)
+@click.option(
+    "--iterations",
+    "-n",
+    type=int,
+    default=3,
+    help="Timed iterations per scenario, per side.",
+)
+@click.option(
+    "--warmup",
+    "-w",
+    type=int,
+    default=1,
+    help="Warmup iterations to discard, per side.",
+)
+@click.option(
+    "--concurrency", "-c", type=int, default=50, help="Concurrent requests per batch."
+)
+@click.option(
+    "--workers",
+    "-W",
+    type=int,
+    default=1,
+    help="Real worker processes for both apps (same count on both sides).",
+)
+@click.option("--output", "-o", type=click.Choice(["table", "json"]), default="table")
+@click.option(
+    "--redis-url", default="redis://localhost:6379/0", help="Same Redis for both sides."
+)
+@click.option("--memcached-host", default="localhost")
+@click.option("--memcached-port", type=int, default=11211)
+@click.option(
+    "--scenarios", default="all", help="Comma-separated scenario names or 'all'."
+)
+@click.option(
+    "--endpoint",
+    type=click.Choice(["async", "sync"]),
+    default="async",
+    help="Hit /test (async def) or /test-sync (def) on both apps.",
+)
+def compare_command(
+    backend,
+    iterations,
+    warmup,
+    concurrency,
+    workers,
+    output,
+    redis_url,
+    memcached_host,
+    memcached_port,
+    scenarios,
+    endpoint,
+) -> None:
+    """
+    Compare traffik against SlowAPI under matched conditions.
+
+    For each selected scenario, it runs the exact same traffic pattern
+    against a traffik app and a SlowAPI app in turn. Same rate, same backend,
+    same worker count, same identity rule, same endpoint variant.
+    The algorithm is always fixed_window on both sides as it is the only one
+    they can run identically regardless of what strategy traffik defaults to elsewhere.
+
+    This controls for what the two apps have been told to do; it does
+    not control for everything a rigorous comparison might want (e.g.
+    both processes still compete for the same CPU cores across the two
+    sequential runs). Read docs/benchmarks.md before drawing conclusions
+    from the numbers, and treat a single run as a data point, not a verdict.
+
+    Not offered: `--backend multiprocess`. SlowAPI's `memory://` storage
+    has no fork-safe equivalent to `MultiProcessInMemoryBackend`, so there
+    is no fair, identical-backend comparison to run - use `aioredis` (both
+    sides on the same Redis) if you want a multi-worker-safe comparison.
+
+    Available scenarios: same as `http`.
+    """
+    check_workers_platform(workers)
+    config = BenchmarkConfig(
+        backend_kind=backend,
+        strategy_kind="fixed_window",
+        iterations=iterations,
+        warmup_iterations=warmup,
+        concurrency=concurrency,
+        output_format=output,
+        redis_url=redis_url,
+        memcached_host=memcached_host,
+        memcached_port=memcached_port,
+        workers=workers,
+    )
+
+    if scenarios == "all":
+        scenario_keys = list(HTTP_SCENARIOS.keys())
+    else:
+        scenario_keys = [scenario.strip() for scenario in scenarios.split(",")]
+
+    try:
+        results = asyncio.run(
+            run_compare_scenarios(
+                config, scenario_keys, warmup, endpoint_variant=endpoint
+            )
+        )
+    except ValueError as exc:
+        click.echo(f"ERROR: {exc}", err=True)
+        sys.exit(1)
+        return
+
+    if not results:
+        click.echo("No scenarios produced results.", err=True)
+        sys.exit(1)
+        return
+
+    if output == "json":
+        meta = {
+            "backend": backend,
+            "strategy": "fixed_window",
+            "iterations": iterations,
+            "warmup_iterations": warmup,
+            "workers": workers,
+            "endpoint_variant": endpoint,
+        }
+        print_compare_json(results, meta)
+    else:
+        print_compare_table(
+            results, title=f"traffik vs SlowAPI ({backend}, {endpoint} endpoint)"
+        )
+
+
+@cli.command("scale")
+@click.option(
+    "--backend", "-b", type=click.Choice(BackendKind.choices()), default="inmemory"
+)
+@click.option(
+    "--strategy",
+    "-s",
+    type=click.Choice(StrategyKind.choices()),
+    default="fixed_window",
+)
+@click.option(
+    "--checkpoints",
+    default="1000,10000,100000,1000000",
+    help=(
+        "Comma-separated cumulative distinct-key counts to measure at. "
+        "The default's top end (1,000,000) can take a while; start with "
+        "something like 1000,10000 to get a feel for it first."
+    ),
+)
+@click.option(
+    "--concurrency",
+    "-c",
+    type=int,
+    default=100,
+    help="In-flight requests per checkpoint's batch.",
+)
+@click.option("--workers", "-W", type=int, default=1)
+@click.option("--output", "-o", type=click.Choice(["table", "json"]), default="table")
+@click.option("--redis-url", default="redis://localhost:6379/0")
+@click.option("--memcached-host", default="localhost")
+@click.option("--memcached-port", type=int, default=11211)
+@click.option(
+    "--shards", type=int, default=32, help="Shards, for --backend multiprocess."
+)
+@click.option(
+    "--mp-max-keys",
+    type=int,
+    default=None,
+    help=(
+        "Max keys per MultiProcessInMemoryBackend's fixed-size shared-memory "
+        "table. Defaults to the highest --checkpoints value if not given, "
+        "since that backend cannot grow past what it was sized for."
+    ),
+)
+def scale_command(
+    backend,
+    strategy,
+    checkpoints,
+    concurrency,
+    workers,
+    output,
+    redis_url,
+    memcached_host,
+    memcached_port,
+    shards,
+    mp_max_keys,
+) -> None:
+    """
+    Measure memory pressure and scalability as key cardinality grows.
+
+    Starts one server and keeps it running for the whole command, growing
+    the backend to each `--checkpoints` value with genuinely concurrent
+    traffic (every request a brand new identity), sampling the target
+    process's RSS and that batch's latency/throughput after each one.
+    This is the only command that measures memory, and the only one
+    that doesn't restart the server between measurements, since the point is
+    watching one backend instance's memory and latency shift as it fills up,
+    which per-iteration fresh processes would hide.
+
+    For `aioredis`/`coredis`, also best-effort queries the Redis server's
+    own `INFO memory` `used_memory`, since the app process's RSS mostly
+    reflects connection overhead for those backends, not the key data.
+
+    Real concurrency, not just key count, is the other half of the point:
+    watch the P50/P99 columns for latency drift as the backend fills up,
+    not just the memory columns.
+    """
+    check_workers_platform(workers)
+    checkpoint_list = [int(c.strip()) for c in checkpoints.split(",") if c.strip()]
+    if not checkpoint_list:
+        click.echo("ERROR: --checkpoints must contain at least one value.", err=True)
+        sys.exit(1)
+        return
+
+    config = BenchmarkConfig(
+        backend_kind=backend,
+        strategy_kind=strategy,
+        concurrency=concurrency,
+        output_format=output,
+        redis_url=redis_url,
+        memcached_host=memcached_host,
+        memcached_port=memcached_port,
+        shards=shards,
+        multiprocess_max_keys=mp_max_keys or max(checkpoint_list),
+        workers=workers,
+    )
+
+    try:
+        result = asyncio.run(run_scale(config, checkpoint_list, concurrency))
+    except (RuntimeError, ValueError) as exc:
+        click.echo(f"ERROR: {exc}", err=True)
+        sys.exit(1)
+        return
+
+    if output == "json":
+        meta = {"backend": backend, "strategy": strategy, "workers": workers}
+        print_scale_json(result, meta)
+    else:
+        print_scale_table(result)
 
 
 if not IS_WINDOWS:

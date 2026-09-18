@@ -68,7 +68,7 @@ Each command accepts `--help` for the full option reference.
 
 ### Common Options
 
-These options are shared across `http`, `middleware`, `websocket`, and `multiprocess`. `compare` and `scale` overlap heavily but not exactly - see their own sections below for what differs (`compare` drops `--strategy` and adds `--endpoint`; `scale` drops `--iterations`/`--warmup`/`--scenarios` and adds `--checkpoints`/`--mp-max-keys`).
+These options are shared across `http`, `middleware`, `websocket`, and `multiprocess`. `compare` and `scale` overlap heavily but not exactly - see their own sections below (`compare` adds `--mode` and `--endpoint`; `scale` drops `--iterations`/`--warmup`/`--scenarios` and adds `--checkpoints`/`--mp-max-keys`).
 
 | Option | Short | Default | Description |
 | --- | --- | --- | --- |
@@ -144,23 +144,26 @@ Benchmarks `MultiProcessInMemoryBackend` across real, forked `gunicorn` workers 
 
 ### `compare` - traffik vs SlowAPI, Under Matched Conditions
 
-Runs each selected `http` scenario against both a traffik app and a [SlowAPI](https://github.com/laurentS/slowapi) app, one after the other, and reports both side by side.
+Runs each selected scenario against both a traffik app and a [SlowAPI](https://github.com/laurentS/slowapi) app, one after the other, and reports both side by side.
 
 What's held identical between the two apps for a given run:
 
 | Requirement | How `compare` handles it |
 | --- | --- |
-| Identical algorithm | Both sides are forced to `fixed_window` regardless of `--strategy` - the only algorithm both libraries can run the same way. `limits` (SlowAPI's rate-limiting engine) offers a moving-window strategy too, but it isn't the same algorithm as traffik's `sliding_window_log`, so it isn't offered as an alternative here rather than mislabeled as equivalent. |
+| Identical algorithm | `--strategy` accepts `fixed_window` or `sliding_window_counter` - the only two algorithms traffik and `limits` (SlowAPI's engine) implement the same way. `sliding_window_counter` exercises more of traffik's locking (it reads the current *and* previous window, combines them, then increments, all under `backend.lock(...)`) than `fixed_window`'s simpler path, so it's the better one for seeing lock overhead specifically. |
 | Identical backend | Same `--backend` value maps to the matching storage on both sides (`inmemory` → `memory://`, `aioredis`/`coredis` → the same `--redis-url`, `aiomcache`/`emcache` → the same `--memcached-host`/`--memcached-port`). `--backend multiprocess` is not offered: SlowAPI/`limits`' `memory://` storage is a plain in-process dict with no fork-safety story, so there is no fair, identical-backend comparison to run against `MultiProcessInMemoryBackend`. Use `aioredis` if you want a multi-worker-safe comparison instead. |
 | Identical worker count | `--workers` is passed to both apps unchanged. |
-| Identical key cardinality, hot-key and many-key traffic, under-limit and over-limit traffic | Reused directly from `HTTP_SCENARIOS` (`--scenarios`) - both sides run the literal same scenario definition, not separately-tuned equivalents. |
+| Both integration patterns | `--mode http` (default) compares per-route `Depends(throttle)` against `@limiter.limit(...)`; `--mode middleware` compares `ThrottleMiddleware` against a small ASGI middleware calling `limits` directly (SlowAPI has no global-middleware mode of its own). Both modes apply the throttle to `/test` only, leaving `/unthrottled` exempt. |
+| Identical key cardinality, hot-key and many-key traffic, under-limit and over-limit traffic | Reused directly from `HTTP_SCENARIOS`/`MIDDLEWARE_SCENARIOS` (`--scenarios`) - both sides run the literal same scenario definition, not separately-tuned equivalents. |
 | Identical rate | SlowAPI's rate string is derived from the same `Rate` object traffik parses (`benchmarks/rates.py`), not a hand-maintained second copy that could quietly drift from traffik's. |
 | p50/p95/p99 latency | Reported for both sides, plus a computed req/s delta. |
-| Sync and async endpoint variants | `--endpoint async` (default) hits `/test` (`async def`) on both apps; `--endpoint sync` hits `/test-sync` (plain `def`) on both. |
+| Sync and async endpoint variants | `--endpoint async` (default) hits `/test` (`async def`) on both apps; `--endpoint sync` hits `/test-sync` (plain `def`) on both. Only applies to `--mode http`; middleware mode has no sync variant to compare. |
 | Redis local vs. remote latency | Not special-cased in code - just re-run with `--redis-url` pointed at a local vs. a remote Redis to see the difference; both apps read the same `--redis-url`. |
 
 ```bash
 python -m benchmarks compare --backend inmemory --scenarios below_limit,hot_key,many_keys
+python -m benchmarks compare --backend inmemory --strategy sliding_window_counter
+python -m benchmarks compare --backend inmemory --mode middleware
 python -m benchmarks compare --backend aioredis --redis-url redis://localhost:6379/0 --endpoint sync
 ```
 

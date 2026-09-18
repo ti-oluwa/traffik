@@ -5,7 +5,7 @@ from rich.text import Text
 from benchmarks.types import AggregatedResult, CompareResult, ScaleResult
 
 
-def print_results_table(
+def print_aggregate_table(
     results: list[AggregatedResult],
     title: str = "Benchmark Results",
 ) -> None:
@@ -127,8 +127,7 @@ def print_compare_table(
     console.print(table)
     console.print(
         "\n[dim]req/s (Δ%): positive = traffik faster, negative = SlowAPI "
-        "faster, in this run. See docs/benchmarks.md for what this "
-        "comparison does and does not control for.[/dim]"
+        "faster, in this run.[/dim]"
     )
 
 

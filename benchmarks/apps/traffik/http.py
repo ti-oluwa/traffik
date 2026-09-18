@@ -1,20 +1,17 @@
 """
-HTTP dependency-mode benchmark target: a single throttled `GET /test`,
-via `Depends(throttle)`.
+HTTP dependency-mode benchmark target: `GET /test` (async) and
+`GET /test-sync` (sync def), both via `Depends(throttle)`.
 
-Run directly for manual poking:
+    BENCH_RATE=100/60s uvicorn benchmarks.apps.traffik.http:app --port 8000
 
-    BENCH_RATE=100/60s uvicorn benchmarks.apps.http:app --port 8000
-
-Also reused, with `BENCH_BACKEND=multiprocess`, as the target for the
-`multiprocess` benchmark command. Its scenarios exercise the same
-`Depends`-based `/test` endpoint, just under gunicorn with multiple
-forked workers sharing one backend instance.
+Also reused, with `BENCH_BACKEND=multiprocess`, by the `multiprocess`
+command: same `/test` endpoint, under gunicorn with forked workers
+sharing one backend instance.
 """
 
 from fastapi import Depends, FastAPI, Request
 
-from benchmarks.apps.config import backend_from_env, get_env, strategy_from_env
+from benchmarks.apps.traffik.config import backend_from_env, get_env, strategy_from_env
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
@@ -39,6 +36,9 @@ async def test_endpoint(request: Request = Depends(throttle)):
     return {"status": "ok"}
 
 
+# Sync def: FastAPI runs this in a threadpool instead of inline on the
+# event loop. Exists so `compare --endpoint sync` can measure whether that
+# dispatch changes the throttle's overhead, on both traffik and SlowAPI.
 @app.get("/test-sync")
 def test_endpoint_sync(request: Request = Depends(throttle)):
     return {"status": "ok"}

@@ -1,11 +1,11 @@
 """
-The loop every `benchmarks.bench.*` module runs: for each selected
-scenario, spawn one real server process configured for that scenario,
+Funcions every `benchmarks.bench.*` module runs for each selected
+scenario. They spawn one real server process configured for that scenario,
 run warmup iterations (discarded) and timed iterations (kept) against it,
-resetting throttle state between every single iteration, then tear the
+resetting throttle state between every single iteration, and then tear the
 process down before moving to the next scenario.
 
-One server process is reused across all iterations of the *same*
+One server process is reused across all iterations of the same
 scenario, but a fresh process per scenario since each scenario
 configures its own rate/uid/on_error via environment variables the app
 module reads once, at import time.

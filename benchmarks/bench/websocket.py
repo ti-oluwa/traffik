@@ -2,7 +2,7 @@ from benchmarks.live.orchestrators import run_websocket_scenarios
 from benchmarks.scenarios import WEBSOCKET_SCENARIOS
 from benchmarks.types import AggregatedResult, BenchmarkConfig
 
-app_path = "benchmarks.apps.websocket:app"
+app_path = "benchmarks.apps.traffik.websocket:app"
 
 
 async def run_scenarios(

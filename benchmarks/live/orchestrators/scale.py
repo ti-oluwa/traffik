@@ -1,23 +1,21 @@
 """
-Runs the `scale` command: starts one traffik app server and keeps it
+Runs the `scale` command. Starts one traffik app server and keeps it
 running for the whole benchmark, growing the backend's distinct-key count
 in checkpoints, sampling the target process's memory and the batch's
 latency/throughput after each one.
 
-Unlike every other command in this suite, this deliberately does NOT
-restart the server between measurements - the whole point is to watch
-memory accumulate and latency shift as the *same* backend instance holds
-more and more live keys, which a fresh-process-per-iteration design would
+Unlike every other command in this suite, this deliberately does not
+restart the server between measurements as the whole point is to watch
+memory accumulate and latency shift as the same backend instance holds
+more and more live keys, which a fresh process per iteration design would
 hide entirely.
 
-Each checkpoint's batch is sent as genuinely concurrent traffic (real
-sockets, via `httpx2`, gathered concurrently - see
-`benchmarks.live.client.send_concurrent_unique_keys`), every request
-carrying a brand new identity, so both the memory-growth curve and the
+Each checkpoint's batch is sent as concurrent traffic (real
+sockets, via `httpx2`, gathered concurrently), every request
+carries a brand new identity, so both the memory-growth curve and the
 latency-at-scale numbers reflect real concurrent access to a backend
 that's already holding however many keys the previous checkpoints put
-there - not a sequential loop that never exercises the backend's locking
-under load.
+there.
 """
 
 import sys
@@ -25,7 +23,7 @@ import time
 import typing
 
 from benchmarks.live import client as live_client
-from benchmarks.live.orchestrators import (
+from benchmarks.live.orchestrators.core import (
     build_environment_variables,
     warn_unshared_state,
 )
@@ -34,13 +32,13 @@ from benchmarks.types import BenchmarkConfig, ScaleCheckpoint, ScaleResult
 
 try:
     import psutil
-except ImportError:  # pragma: no cover - benchmark extra, not a hard runtime dep
+except ImportError:  # pragma: no cover
     psutil = None  # type: ignore[assignment]
 
-TRAFFIK_APP_PATH = "benchmarks.apps.http:app"
+TRAFFIK_APP_PATH = "benchmarks.apps.traffik.http:app"
 
 # Generous enough that a single request against a brand-new key is never
-# throttled - this command measures memory/latency vs. key count, not
+# throttled as this command measures memory/latency against key count, not
 # throttling behaviour, and every checkpoint's requests each touch a key
 # that has never been seen before.
 GENEROUS_RATE = "1000000000/3600s"
@@ -53,7 +51,7 @@ def bytes_to_mb(n: float) -> float:
 async def get_redis_used_memory(config: BenchmarkConfig) -> typing.Optional[float]:
     """
     Best-effort `INFO memory` query against the configured Redis, for
-    backends where the *server's* own reported memory is more meaningful
+    backends where the server's own reported memory is more meaningful
     than the app process's RSS (the app process mostly just holds
     connections for these backends, not the actual key data).
 
@@ -119,9 +117,9 @@ async def run_scale(
     results: list[ScaleCheckpoint] = []
     try:
         process = psutil.Process(server.process.pid)
-        # A couple of no-op samples first: the very first sample after
-        # process start can be an undershoot before the interpreter and
-        # its imports have fully settled.
+        # Do a couple of no-op samples first as the very first sample after
+        # process start can undershoot before the interpreter and its imports
+        # have fully settled.
         process.memory_info()
         baseline_rss_mb = bytes_to_mb(process.memory_info().rss)
         baseline_backend_mb = await get_redis_used_memory(config)

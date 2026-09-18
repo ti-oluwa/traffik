@@ -10,8 +10,7 @@ from typing_extensions import ParamSpec, TypeVar
 
 from benchmarks.bench.http import run_scenarios as run_http_scenarios
 from benchmarks.bench.middleware import run_scenarios as run_middleware_scenarios
-from benchmarks.live.compare_orchestrator import run_compare_scenarios
-from benchmarks.live.scale_orchestrator import run_scale
+from benchmarks.live.orchestrators import run_compare_scenarios, run_scale
 from benchmarks.types import BackendKind, BenchmarkConfig, StrategyKind
 
 if IS_WINDOWS := (platform.system() == "Windows"):
@@ -21,10 +20,14 @@ else:
         run_scenarios as run_multiprocess_scenarios,
     )
 from benchmarks.bench.websocket import run_scenarios as run_websocket_scenarios
-from benchmarks.output._json import print_compare_json, print_json, print_scale_json
+from benchmarks.output._json import (
+    print_compare_json,
+    print_aggregate_json,
+    print_scale_json,
+)
 from benchmarks.output.table import (
     print_compare_table,
-    print_results_table,
+    print_aggregate_table,
     print_scale_table,
 )
 from benchmarks.scenarios import (
@@ -80,7 +83,7 @@ def options(
         )
         @click.option(
             "--concurrency",
-            "-c",
+            "-choice",
             type=int,
             default=50,
             help="Concurrent requests per batch in concurrent scenarios.",
@@ -206,9 +209,9 @@ def http_command(
             "warmup_iterations": warmup,
             "workers": workers,
         }
-        print_json(results, meta)
+        print_aggregate_json(results, meta)
     else:
-        print_results_table(results, title="HTTP Benchmark Results")
+        print_aggregate_table(results, title="HTTP Benchmark Results")
 
 
 @cli.command("middleware")
@@ -260,9 +263,9 @@ def middleware_command(
             "warmup_iterations": warmup,
             "workers": workers,
         }
-        print_json(results, meta)
+        print_aggregate_json(results, meta)
     else:
-        print_results_table(results, title="Middleware Benchmark Results")
+        print_aggregate_table(results, title="Middleware Benchmark Results")
 
 
 @cli.command("websocket")
@@ -313,9 +316,9 @@ def websocket_command(
             "warmup_iterations": warmup,
             "workers": workers,
         }
-        print_json(results, meta)
+        print_aggregate_json(results, meta)
     else:
-        print_results_table(results, title="WebSocket Benchmark Results")
+        print_aggregate_table(results, title="WebSocket Benchmark Results")
 
 
 @cli.command("multiprocess")
@@ -334,8 +337,7 @@ def multiprocess_command(
     scenarios,
 ) -> None:
     """
-    Benchmark `MultiProcessInMemoryBackend` across real forked gunicorn
-    workers (POSIX only).
+    Benchmark `MultiProcessInMemoryBackend` across real forked gunicorn workers (POSIX only).
 
     Available scenarios: `below_limit`, `at_limit`, `over_limit`, `concurrent`,
     `hot_key`, `many_keys`, `window_boundary`, `sustained`, `error_recovery`,
@@ -379,18 +381,33 @@ def multiprocess_command(
             "warmup_iterations": warmup,
             "workers": workers,
         }
-        print_json(results, meta)
+        print_aggregate_json(results, meta)
     else:
-        print_results_table(results, title="MultiProcess Benchmark Results")
+        print_aggregate_table(results, title="MultiProcess Benchmark Results")
 
 
 @cli.command("compare")
 @click.option(
     "--backend",
     "-b",
-    type=click.Choice([c for c in BackendKind.choices() if c != "multiprocess"]),
+    type=click.Choice([
+        choice for choice in BackendKind.choices() if choice != "multiprocess"
+    ]),
     default="inmemory",
-    help="Backend to benchmark. `multiprocess` isn't offered here - see notes below.",
+    help="Backend to benchmark. `multiprocess` isn't offered here.",
+)
+@click.option(
+    "--strategy",
+    "-s",
+    type=click.Choice(["fixed_window", "sliding_window_counter"]),
+    default="fixed_window",
+    help="Only strategies both `traffik` and `limits` implement the same way.",
+)
+@click.option(
+    "--mode",
+    type=click.Choice(["http", "middleware"]),
+    default="http",
+    help="Per-route (Depends/@limiter.limit) or global middleware.",
 )
 @click.option(
     "--iterations",
@@ -407,7 +424,11 @@ def multiprocess_command(
     help="Warmup iterations to discard, per side.",
 )
 @click.option(
-    "--concurrency", "-c", type=int, default=50, help="Concurrent requests per batch."
+    "--concurrency",
+    "-choice",
+    type=int,
+    default=50,
+    help="Concurrent requests per batch.",
 )
 @click.option(
     "--workers",
@@ -429,10 +450,12 @@ def multiprocess_command(
     "--endpoint",
     type=click.Choice(["async", "sync"]),
     default="async",
-    help="Hit /test (async def) or /test-sync (def) on both apps.",
+    help="Hit /test (async def), or /test-sync (def) on both apps. Ignored for --mode middleware.",
 )
 def compare_command(
     backend,
+    strategy,
+    mode,
     iterations,
     warmup,
     concurrency,
@@ -447,29 +470,18 @@ def compare_command(
     """
     Compare traffik against SlowAPI under matched conditions.
 
-    For each selected scenario, it runs the exact same traffic pattern
-    against a traffik app and a SlowAPI app in turn. Same rate, same backend,
-    same worker count, same identity rule, same endpoint variant.
-    The algorithm is always fixed_window on both sides as it is the only one
-    they can run identically regardless of what strategy traffik defaults to elsewhere.
+    Runs the same scenario against a traffik app and a SlowAPI app in
+    turn with the same rate, backend, worker count, identity rule, strategy, and
+    traffic pattern.
 
-    This controls for what the two apps have been told to do; it does
-    not control for everything a rigorous comparison might want (e.g.
-    both processes still compete for the same CPU cores across the two
-    sequential runs). Read docs/benchmarks.md before drawing conclusions
-    from the numbers, and treat a single run as a data point, not a verdict.
-
-    Not offered: `--backend multiprocess`. SlowAPI's `memory://` storage
-    has no fork-safe equivalent to `MultiProcessInMemoryBackend`, so there
-    is no fair, identical-backend comparison to run - use `aioredis` (both
-    sides on the same Redis) if you want a multi-worker-safe comparison.
-
-    Available scenarios: same as `http`.
+    This controls for what the two apps are told to do; it does not control for
+    everything (both still run on the same machine, one after the other, not
+    simultaneously). Treat one run as a data point, not a verdict.
     """
     check_workers_platform(workers)
     config = BenchmarkConfig(
         backend_kind=backend,
-        strategy_kind="fixed_window",
+        strategy_kind=strategy,
         iterations=iterations,
         warmup_iterations=warmup,
         concurrency=concurrency,
@@ -480,15 +492,16 @@ def compare_command(
         workers=workers,
     )
 
+    scenario_source = HTTP_SCENARIOS if mode == "http" else MIDDLEWARE_SCENARIOS
     if scenarios == "all":
-        scenario_keys = list(HTTP_SCENARIOS.keys())
+        scenario_keys = list(scenario_source.keys())
     else:
         scenario_keys = [scenario.strip() for scenario in scenarios.split(",")]
 
     try:
         results = asyncio.run(
             run_compare_scenarios(
-                config, scenario_keys, warmup, endpoint_variant=endpoint
+                config, scenario_keys, warmup, endpoint_variant=endpoint, mode=mode
             )
         )
     except ValueError as exc:
@@ -504,7 +517,8 @@ def compare_command(
     if output == "json":
         meta = {
             "backend": backend,
-            "strategy": "fixed_window",
+            "strategy": strategy,
+            "mode": mode,
             "iterations": iterations,
             "warmup_iterations": warmup,
             "workers": workers,
@@ -513,7 +527,7 @@ def compare_command(
         print_compare_json(results, meta)
     else:
         print_compare_table(
-            results, title=f"traffik vs SlowAPI ({backend}, {endpoint} endpoint)"
+            results, title=f"traffik vs SlowAPI ({backend}, {strategy}, {mode})"
         )
 
 
@@ -529,16 +543,16 @@ def compare_command(
 )
 @click.option(
     "--checkpoints",
-    default="1000,10000,100000,1000000",
+    default="1000,10000,100000,200000",
     help=(
         "Comma-separated cumulative distinct-key counts to measure at. "
-        "The default's top end (1,000,000) can take a while; start with "
+        "The default's top end (200,000) can take a while; start with "
         "something like 1000,10000 to get a feel for it first."
     ),
 )
 @click.option(
     "--concurrency",
-    "-c",
+    "-choice",
     type=int,
     default=100,
     help="In-flight requests per checkpoint's batch.",
@@ -556,7 +570,7 @@ def compare_command(
     type=int,
     default=None,
     help=(
-        "Max keys per MultiProcessInMemoryBackend's fixed-size shared-memory "
+        "Max keys per `MultiProcessInMemoryBackend`'s fixed-size shared-memory "
         "table. Defaults to the highest --checkpoints value if not given, "
         "since that backend cannot grow past what it was sized for."
     ),
@@ -578,24 +592,26 @@ def scale_command(
     Measure memory pressure and scalability as key cardinality grows.
 
     Starts one server and keeps it running for the whole command, growing
-    the backend to each `--checkpoints` value with genuinely concurrent
+    the backend to each `--checkpoints` value with concurrent
     traffic (every request a brand new identity), sampling the target
     process's RSS and that batch's latency/throughput after each one.
+
     This is the only command that measures memory, and the only one
     that doesn't restart the server between measurements, since the point is
     watching one backend instance's memory and latency shift as it fills up,
     which per-iteration fresh processes would hide.
 
-    For `aioredis`/`coredis`, also best-effort queries the Redis server's
+    For `aioredis`/`coredis`, it best-effort queries the Redis server's
     own `INFO memory` `used_memory`, since the app process's RSS mostly
     reflects connection overhead for those backends, not the key data.
 
-    Real concurrency, not just key count, is the other half of the point:
-    watch the P50/P99 columns for latency drift as the backend fills up,
+    Watch the P50/P99 columns for latency drift as the backend fills up,
     not just the memory columns.
     """
     check_workers_platform(workers)
-    checkpoint_list = [int(c.strip()) for c in checkpoints.split(",") if c.strip()]
+    checkpoint_list = [
+        int(choice.strip()) for choice in checkpoints.split(",") if choice.strip()
+    ]
     if not checkpoint_list:
         click.echo("ERROR: --checkpoints must contain at least one value.", err=True)
         sys.exit(1)

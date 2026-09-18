@@ -92,12 +92,12 @@ def default_meta() -> dict[str, typing.Any]:
     }
 
 
-def print_json(
+def print_aggregate_json(
     results: list[AggregatedResult],
     meta: typing.Optional[dict[str, typing.Any]] = None,
 ) -> None:
     """
-    Print results as a JSON object to stdout.
+    Print aggregated results as a JSON object to stdout.
 
     :param results: List of aggregated results to serialize.
     :param meta: Optional metadata dict to include (e.g. backend version, run timestamp).

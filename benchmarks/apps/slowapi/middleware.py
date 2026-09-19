@@ -4,13 +4,13 @@ Middleware-mode SlowAPI-equivalent, for `compare --mode middleware`.
     BENCH_RATE=100/60s uvicorn benchmarks.apps.slowapi.middleware:app --port 8001
 """
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from limits import parse
-from limits.storage import storage_from_string
-from limits.strategies import STRATEGIES
+from fastapi import FastAPI
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from benchmarks.apps.slowapi.config import (
+    NAMESPACE,
     get_identifier,
     reset_storage,
     storage_uri_from_env,
@@ -19,20 +19,21 @@ from benchmarks.apps.slowapi.config import (
 from benchmarks.env import get_env
 from benchmarks.rates import traffik_rate_to_limits_string
 
-storage = storage_from_string(storage_uri_from_env())
-limiter = STRATEGIES[strategy_from_env()](storage)
-rate_item = parse(traffik_rate_to_limits_string(get_env("BENCH_RATE", "100/60s")))
+RATE = traffik_rate_to_limits_string(get_env("BENCH_RATE", "100/60s"))
+
+limiter = Limiter(
+    key_func=get_identifier,
+    storage_uri=storage_uri_from_env(),
+    strategy=strategy_from_env(),
+    key_prefix=NAMESPACE,
+    default_limits=[RATE],
+    swallow_errors=(get_env("BENCH_ON_ERROR", "raise").lower() == "allow"),
+)
 
 app = FastAPI()
-
-
-@app.middleware("http")
-async def throttle_middleware(request: Request, call_next):
-    if request.url.path != "/test":
-        return await call_next(request)
-    if not limiter.hit(rate_item, get_identifier(request)):
-        return JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
-    return await call_next(request)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+app.add_middleware(SlowAPIMiddleware)
 
 
 @app.get("/test")
@@ -41,6 +42,7 @@ async def test_endpoint():
 
 
 @app.get("/unthrottled")
+@limiter.exempt
 async def unthrottled_endpoint():
     return {"status": "ok"}
 
@@ -52,5 +54,5 @@ async def health():
 
 @app.post("/__bench__/reset")
 async def reset():
-    reset_storage(storage)  # type: ignore[arg-type]
+    reset_storage(limiter._storage)  # type: ignore[arg-type]
     return {"status": "reset"}

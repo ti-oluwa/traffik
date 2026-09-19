@@ -1,7 +1,5 @@
 """
-**EXPERIMENTAL!**
-
-Multi-process in-memory throttle backend using shared memory.
+**EXPERIMENTAL!** Multi-process in-memory throttle backend using shared memory.
 
 Designed for multi-worker single-machine deployments (e.g. gunicorn/uvicorn
 with multiple workers) where Redis/Memcached is unavailable or undesirable,
@@ -32,7 +30,6 @@ automatically from the namespace. Names must:
 - Contain only `[A-Za-z0-9_-]`
 - Be at most 30 characters (the OS prepends `/`, and macOS caps at 31)
 - Be non-empty
-
 
 ```
 # In the parent process, before forking (e.g. gunicorn's `preload_app`):
@@ -144,7 +141,7 @@ _BOOL_STRUCT = struct.Struct("=?")
 
 def derive_shared_memory_name(namespace: str) -> str:
     """
-    Derive a valid shared memory segment name from *namespace*.
+    Derive a valid shared memory segment name from `namespace`.
 
     Replaces characters outside `[A-Za-z0-9_-]` with underscores, appends
     an 8-character FNV-1a hex suffix for collision-resistance, and prefixes
@@ -205,11 +202,11 @@ class _SharedMemoryLockBytePool:
     """
     Allocator that hands out byte offsets within a region of shared memory for use as lock flags.
 
-    The pool is backed by a simple integer free-stack protected by a
-    `threading.Lock`. It lives entirely in the parent process's Python
-    heap, so worker processes inherit a private copy after fork and therefore
-    each have their own independent allocator state because each worker independently
-    creates its own `_AsyncSharedMemoryLock` instances via `NamedLockPool`.
+    The pool is backed by a simple integer free-stack protected by a `threading.Lock`.
+    It lives entirely in the parent process's Python heap, so worker processes
+    inherit a private copy after fork and therefore each have their own independent
+    allocator state because each worker independently creates its own `_AsyncSharedMemoryLock`
+    instances via `NamedLockPool`.
     """
 
     __slots__ = ("_base", "_free", "_lock", "_size")
@@ -243,8 +240,7 @@ class _SharedMemoryLockBytePool:
             to avoid this. See class docstring.
         """
         # Protects the free-list against concurrent access from multiple real OS threads.
-        # Not necessarily needed for asyncio-only access (no await inside these methods means
-        # coroutines can't interleave here), but kept in case any future call path invokes
+        # Not necessarily needed now, but kept in case any future call path invokes
         # this off the event loop thread.
         with self._lock:
             if not self._free:
@@ -283,7 +279,7 @@ class _AsyncSharedMemoryLock:
 
     1. If the current task already owns the lock and reentrancy is enabled,
        increment the counter and return immediately.
-    2. Call `_atomic.test_and_set_byte` (atomic XCHG).
+    2. Call `test_and_set_byte` (atomic XCHG).
     3. If old value was 0, we acquired the lock; record task ownership and return `True`.
     4. Otherwise yield to the event loop via `asyncio.sleep(...)`
        (first `max_spins_before_backoff` attempts) or with an
@@ -292,8 +288,8 @@ class _AsyncSharedMemoryLock:
 
     The yield in step 4 is purely a cooperative handoff.
     The lock holder (running in the same or a different process)
-    will have to complete its critical section and call `_atomic.clear_byte`, making
-    the byte 0 again so a subsequent `_atomic.test_and_set_byte` by a waiter succeeds.
+    will have to complete its critical section and call `clear_byte`, making
+    the byte 0 again so a subsequent `test_and_set_byte` by a waiter succeeds.
     """
 
     __slots__ = (
@@ -475,9 +471,7 @@ class _AsyncSharedMemoryLock:
 
 class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     """
-    **EXPERIMENTAL!**
-
-    Multi-process shared-memory throttle backend.
+    **EXPERIMENTAL!** Multi-process shared-memory throttle backend.
 
     All state (hash tables, slot data, free-slot stacks) lives in a single
     `multiprocessing.shared_memory` segment divided into *N* independent
@@ -517,18 +511,15 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     **Lock ordering** (must always be respected to avoid deadlock within a shard)
 
-    - `slot_map_semaphores[shard_idx]` before `shard_semaphores[shard_idx]`
-    - Never hold two different shards' semaphores simultaneously
-    - With an exception. `_delete` and `_sample_and_reap_shard` hold both locks for a
-      shard simultaneously, nested in the opposite order (`shard_semaphore`
-      outer, `slot_map_semaphore` inner). This is deadlock-safe because both
-      use that same reversed order as two lock holders can only deadlock by
-      acquiring a shared pair of locks in opposite orders from each other,
-      and nothing else in this class ever holds both locks for a shard at
-      once (every other method releases one before acquiring the other, so
-      there is no opposite-order holder for these two to cycle against).
-      `_clear` is a two-phase example of avoiding the reversal rather than
-      using it. it never holds both locks for a shard at the same time.
+    - `slot_map_semaphores[shard_idx]` before `shard_semaphores[shard_idx]`.
+    - Never hold two different shards' semaphores simultaneously.
+    - An important exception: `_delete` and `_sample_and_reap_shard` hold both
+      (slot map and shard) locks for a shard simultaneously, nested in the
+      opposite order (`shard_semaphore` outer, `slot_map_semaphore` inner).
+      This is to prevent deadlock because both use that same reversed order
+      as two lock holders can only deadlock by acquiring a shared pair of locks
+      in opposite orders from each other, and nothing else in this class ever
+      holds both locks for a shard at once.
 
     **ABA mitigation**
 
@@ -538,8 +529,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     before acquiring `shard_semaphores[shard_idx]` capture the generation at lookup
     time and verify it under `shard_semaphores[shard_idx]` before reading or writing.
     A mismatch triggers a retry up to `self._max_aba_retries` times (for
-    read-only operations that don't retry, a mismatch is treated as "key not
-    found", which is correct since the slot was reassigned or freed out from
+    read-only operations that don't retry, a mismatch is treated as the key not
+    being present, which is correct since the slot was reassigned or freed out from
     under them). Bumping on free as well as on allocation matters because
     freeing a slot (`_hash_table_delete` + `_free_stack_push`, used by
     `_delete`, `_clear`, and the background cleaner) does not by itself
@@ -613,15 +604,13 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     **Choosing `max_value_size`**
 
-    Slots that store integer counters (fixed-window, token-bucket, GCRA, …)
-    use the native `int64` field and are unaffected by `max_value_size`.
-    Only strategies that serialise variable-length blobs into the string field
-    are constrained.
+    Slots that store integer counters (fixed-window, token-bucket, GCRA, etc.) use the native `int64`
+    field and are unaffected by `max_value_size`. Only strategies that serialise variable-length
+    blobs into the string field are constrained.
 
-    Sliding-window log is the most demanding. It stores one
-    `[timestamp, cost]` pair per request inside the current window.
-    Each pair serialises to roughly **16 bytes** after serialization
-    encoding. A safe lower bound for `max_value_size` is therefore:
+    Sliding-window log is the most demanding. It stores one `[timestamp, cost]` pair per request inside
+    the current window. Each pair serialises to roughly **16 bytes** after serialization encoding.
+    A safe lower bound for `max_value_size` is therefore:
 
         max_value_size >= ceil(rate_limit * 20)
 
@@ -631,16 +620,13 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     * 50 req / min: `max_value_size >= 1000` - **default is insufficient**.
     * 100 req / min: `max_value_size >= 2000` - **default is insufficient**.
 
-    Exceeding `max_value_size` raises a `BackendError`
-    at request time, not at initialisation, so an undersized value will surface
-    as a runtime error under load rather than a startup failure.
-    Always calculate the required size before deploying `SlidingWindowLogStrategy`
-    with this backend.
+    Exceeding `max_value_size` raises a `BackendError` at request time, not at initialisation,
+    so an undersized value will surface as a runtime error under load rather than a startup failure.
+    Always calculate the required size before deploying this backend.
 
-    Other variable-length strategies (leaky-bucket-with-queue, priority-queue,
-    cost-based token-bucket, …) store state blobs whose size grows with queue
-    depth or history length. Consult the strategy's storage-format docstring
-    and apply a similar calculation.
+    Other variable-length strategies (leaky-bucket-with-queue, priority-queue, cost-based token-bucket, etc.)
+    store state blobs whose size grows with queue depth or history length. Consult the strategy's storage-format
+    docstring and apply a similar calculation.
 
     **Key exhaustion and `cleanup_frequency`**
 
@@ -762,8 +748,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             traffic spikes to still acquire a byte index rather than raising
             `RuntimeError` when the pool is exhausted. Total lock bytes reserved
             is `lock_pool_size * lock_pool_headroom`.
-        :param prepopulate_lock_pool: Whether to pre-populate the named lock pool with idle locks up to `lock_pool_size` on initialization.
-             Pre-populating can reduce latency for the first few lock acquisitions at the cost of using more resources upfront.
+        :param prepopulate_lock_pool: Whether to pre-populate the named lock pool with idle locks up to
+            `lock_pool_size` on initialization. Pre-populating can reduce latency for the first few lock
+            acquisitions at the cost of using more resources upfront.
         :param max_keys: Maximum number of distinct live keys across all shards
             at any one time.
         :param number_of_shards: Number of independent shards. Each shard gets
@@ -779,27 +766,24 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             reclaim expired slots faster at the cost of a longer (but still
             bounded) pause per cleanup pass, independent of `max_keys`.
         :param tombstone_rebuild_threshold: Fraction of a shard's hash table
-            capacity that may be tombstoned (from `_delete`, `_clear`, or
-            expiry reclamation) before that shard's hash table is rebuilt in
-            place to reclaim them, restoring expected O(1) lookups. Must be
-            strictly between `0` and `1 - _HASH_TABLE_LOAD_FACTOR` (`0.35`
-            with the default load factor); see the class docstring's
-            "Tombstone reclamation" section for why. Lower values rebuild
+            capacity that may be tombstoned before that shard's hash table is
+            rebuilt in place to reclaim them, to restore expected O(1) lookups.
+            Must be strictly between `0` and `1 - _HASH_TABLE_LOAD_FACTOR`
+            (`0.35` with the default load factor). Lower values rebuild
             more often (more overhead, tighter bound on worst-case probe
             length); higher values rebuild less often (less overhead, more
             tombstone buildup between rebuilds).
         :param shared_memory_name: Explicit POSIX shared memory segment name.
             Must match `[A-Za-z0-9_-]`, max 30 characters. Derived from
-            *namespace* automatically when `None`.
+            namespace automatically when `None`.
         :param max_aba_retries: Maximum number of ABA-race retries before raising
             `BackendError`.
         :param executor_max_workers: Maximum number of OS threads in the pool used
             to run blocking shared-memory operations off the event loop.
             `None` (default) falls back to `max(number_of_shards, 32)`.
-            Size this based on expected peak *per-worker*
-            concurrency, not on `number_of_shards` - the two control unrelated
-            things (memory/sharding layout vs. how many blocking ops this
-            process can have in flight at once) and don't need to move together.
+            Size this based on expected peak per-worker concurrency, not on `number_of_shards`
+            as the two control unrelated things (memory/sharding layout vs. how many blocking
+            ops this process can have in flight at once) and don't need to move together.
             Raising this only helps if requests are actually queueing on the
             executor rather than on a shard's semaphore; profile before assuming
             which one you're bottlenecked on.
@@ -844,9 +828,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         validate_shared_memory_name(shared_memory_name)
         self._shared_memory_name: str = shared_memory_name
 
-        # Captured once here so we can tell "the process that actually
-        # called `start()`" apart from "a forked worker that inherited this
-        # object via `fork()`". This is especially used in `close()` to make sure only
+        # Captured once here so we can tell the process that actually
+        # called `start()` apart from a forked worker that inherited this
+        # object via `fork()`. This is especially used in `close()` to make sure only
         # the real creator ever unlinks the shared memory segment, not
         # every worker that happens to recycle/shut down.
         self._creator_pid = os.getpid()
@@ -979,9 +963,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             thread_name_prefix=self._executor_thread_name_prefix,
         )
         # The executor's worker threads don't exist in a forked child, so it must
-        # be rebuilt there, not inherited as-is. (See the "Fork safety" note in
-        # this method's docstring)
-        os.register_at_fork(after_in_child=self._reinit_after_fork)
+        # be rebuilt there, not inherited as-is.
+        os.register_at_fork(after_in_child=self._reinitialize_after_fork)
 
         self._lock_pool_size = lock_pool_size
         self._lock_pool_headroom = lock_pool_headroom
@@ -1007,15 +990,15 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._cleanup_task: typing.Optional[asyncio.Task[None]] = None
         self._initialized: bool = False
 
-    def _reinit_after_fork(self) -> None:
+    def _reinitialize_after_fork(self) -> None:
         """
-        Hook to rebuild fork-unsafe resources in a freshly-forked child process.
+        Hook to rebuild fork-unsafe resources in a freshly forked child process.
 
         Registered via `os.register_at_fork(after_in_child=...)` on initialization.
         Runs in the child immediately after `fork()`, before any other
         code in that process executes.
 
-        Two things get discarded here, for the same underlying reason:
+        Two things get discarded here, for the same reason:
 
         - The inherited `ThreadPoolExecutor` is a shell at this point. Its
           worker threads existed only in the parent and do not carry over
@@ -1050,12 +1033,11 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         lock pools.
 
         Safe to call multiple times; subsequent calls are no-ops (including
-        from a forked worker that inherited an already-`start()`'d instance
+        from a forked worker that inherited an already `start()`'d instance
         from its parent as there's nothing left for it to do here).
 
-        This piece of the backend setup is safe to run from a synchronous
-        startup path with no event loop available, e.g. gunicorn's
-        `preload_app=True` phase:
+        This method is safe to run from a synchronous startup path with no event 
+        loop available, e.g. gunicorn's `preload_app=True` phase:
 
         ```
         # Module level, imported once by gunicorn's master before it forks:
@@ -1071,11 +1053,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         **Note**:
         This does not start the background cleanup task as `asyncio.create_task`
-        requires a running loop.
-        `initialize()` handles that part, and does need to be called
+        requires a running loop. `initialize()` handles that, and does need to be called
         in every process/event loop that uses this backend, workers included.
-        See its docstring for why that's still necessary even though
-        `start()` already ran in the parent.
+        See its docstring for why that's still necessary even though `start()` already 
+        ran in the parent.
 
         If a shared memory segment with this name already exists, it's
         unlinked and recreated rather than reused. Since nothing can safely
@@ -1253,7 +1234,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
     def _assert_ready(self) -> None:
         """
-        Raise `BackendConnectionError/BackendError` if the backend has not been initialised.
+        Raise `BackendConnectionError`/`BackendError` if the backend has not been initialised.
         """
         if not self._initialized or self._buffer is None:
             raise BackendConnectionError(
@@ -1268,8 +1249,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         Return the shard index for `key`.
 
-        Uses FNV-1a so the result is deterministic across processes and does
-        not rely on Python's randomised `hash()`.
+        Uses FNV-1a so the result is deterministic across processes.
 
         :param key: The throttle key string.
         :return: Shard index in `[0, number_of_shards)`.
@@ -1290,8 +1270,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self, buffer: memoryview, shard_base: int, key_bytes: bytes
     ) -> int:
         """
-        Return the bucket index within shard `shard_base`'s 'shard_idx' hash table for
-        `key_bytes`.
+        Return the bucket index within shard `shard_base`'s 'shard_idx' hash 
+        table for `key_bytes`.
 
         Returns the index of the occupied bucket containing this key, or
         the index of the first tombstone / empty bucket where it could be
@@ -1557,7 +1537,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         rebuild, not a live count of tombstoned buckets still present (a
         tombstoned bucket can be silently reclaimed by `_hash_table_upsert`
         placing a new key there before the next rebuild). Treating it as a
-        deletion count is a deliberately conservative approximation: it may
+        deletion count is a deliberately conservative approximation. It may
         trigger a rebuild slightly earlier than strictly necessary, but
         never later, which is generally the safe option.
 
@@ -1679,7 +1659,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         match what was captured, since nothing had popped (reallocated) the
         slot yet. A writer would then pass its generation check and write
         into a slot the hash table no longer references. So the write is
-        silently lost (nothing points at it) and the slot leaks as
+        silently lost (since nothing points at it) and the slot leaks as
         "occupied" until it happens to be reused. Bumping here as well means
         that in-flight operation always observes a mismatch and correctly
         retries via the ABA loop (or, for the non-retrying reads, correctly
@@ -2823,12 +2803,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         shard_to_items: dict[int, list[tuple[str, str]]] = {}
         for key, val in items.items():
-            shard_to_items.setdefault(self._get_shard_idx_for_key(key), []).append(
-                (
-                    key,
-                    val,
-                )
-            )
+            shard_to_items.setdefault(self._get_shard_idx_for_key(key), []).append((
+                key,
+                val,
+            ))
 
         await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
             self._executor, self._multi_set, shard_to_items, expire

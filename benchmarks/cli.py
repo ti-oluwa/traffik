@@ -21,13 +21,13 @@ else:
     )
 from benchmarks.bench.websocket import run_scenarios as run_websocket_scenarios
 from benchmarks.output._json import (
-    print_compare_json,
     print_aggregate_json,
+    print_compare_json,
     print_scale_json,
 )
 from benchmarks.output.table import (
-    print_compare_table,
     print_aggregate_table,
+    print_compare_table,
     print_scale_table,
 )
 from benchmarks.scenarios import (

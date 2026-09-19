@@ -6,7 +6,7 @@ format (what SlowAPI's `@limiter.limit(...)` actually parses).
 from traffik.rates import Rate
 
 
-def traffik_rate_to_limits_string(rate: str) -> str:
+def to_limits_rate(rate: str) -> str:
     """
     Convert a traffik rate string (e.g. `"100/60s"`) into a string
     `limits.parse()` accepts (e.g. `"100/60second"`), for use with

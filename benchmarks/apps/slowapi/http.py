@@ -16,7 +16,7 @@ from benchmarks.apps.slowapi.config import (
     strategy_from_env,
 )
 from benchmarks.env import get_env
-from benchmarks.rates import traffik_rate_to_limits_string
+from benchmarks.rates import to_limits_rate
 
 limiter = Limiter(
     key_func=get_identifier,
@@ -26,7 +26,7 @@ limiter = Limiter(
     swallow_errors=(get_env("BENCH_ON_ERROR", "raise").lower() == "allow"),
 )
 
-RATE = traffik_rate_to_limits_string(get_env("BENCH_RATE", "100/60s"))
+RATE = to_limits_rate(get_env("BENCH_RATE", "100/60s"))
 
 app = FastAPI()
 app.state.limiter = limiter

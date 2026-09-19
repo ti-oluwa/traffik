@@ -16,7 +16,7 @@ from traffik.backends.redis.aioredis import RedisBackend as AioredisBackend
 from traffik.backends.redis.coredis import RedisBackend as CoredisBackend
 
 
-async def get_identifier(connection: Request) -> str:  # noqa
+async def get_identifier(connection: Request) -> str:
     """
     Benchmark connection identifier: `X-Client-ID` header, falling back to
     the real peer address (this is a real socket now, so this is a real IP).

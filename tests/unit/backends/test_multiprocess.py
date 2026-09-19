@@ -1,13 +1,15 @@
-"""
-Concurrency-sensitive regression tests for `MultiProcessInMemoryBackend`
-"""
+"""Concurrency-sensitive regression tests for `MultiProcessInMemoryBackend`"""
 
 import asyncio
 import multiprocessing
 import platform
 import threading
+import typing
 
 import pytest
+
+if typing.TYPE_CHECKING:
+    from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 
 SUPPORTS_FORK = (
     platform.system() != "Windows" and "fork" in multiprocessing.get_all_start_methods()
@@ -90,7 +92,7 @@ class TestClearSlotReuseRace:
     """
 
     async def test_clear_does_not_wipe_slot_reclaimed_mid_flight(
-        self, mp_backend, monkeypatch: pytest.MonkeyPatch
+        self, mp_backend: "MultiProcessInMemoryBackend", monkeypatch: pytest.MonkeyPatch
     ):
         backend = mp_backend
         key1 = backend.get_key("key1")
@@ -163,7 +165,7 @@ class TestTombstoneReclamation:
     """
 
     async def test_tombstone_count_resets_once_threshold_is_crossed(
-        self, mp_backend_tombstones
+        self, mp_backend_tombstones: "MultiProcessInMemoryBackend"
     ) -> None:
         """
         Deleting keys past the configured threshold must trigger a rebuild,
@@ -175,6 +177,7 @@ class TestTombstoneReclamation:
         threshold = backend._tombstone_rebuild_threshold_count
 
         counts = []
+        assert backend._buffer is not None
         for i in range(threshold * 5):
             key = backend.get_key(f"churn-{i}")
             await backend.set(key, "v")
@@ -195,7 +198,7 @@ class TestTombstoneReclamation:
         assert resets >= 1, "tombstone counter climbed but never reset"
 
     async def test_heavy_churn_does_not_exhaust_the_shard_without_rebuild(
-        self, mp_backend_tombstones
+        self, mp_backend_tombstones: "MultiProcessInMemoryBackend"
     ) -> None:
         """
         This is the concrete failure mode tombstone reclamation exists to
@@ -220,7 +223,9 @@ class TestTombstoneReclamation:
         # exhausted, all-tombstoned probe sequence.
         assert await backend.get(backend.get_key("never-existed")) is None
 
-    async def test_live_keys_survive_a_rebuild(self, mp_backend_tombstones) -> None:
+    async def test_live_keys_survive_a_rebuild(
+        self, mp_backend_tombstones: "MultiProcessInMemoryBackend"
+    ) -> None:
         """
         A rebuild must preserve every live key's value - only tombstoned
         (deleted) entries should be dropped, never occupied ones.
@@ -240,7 +245,7 @@ class TestTombstoneReclamation:
         assert await backend.get(survivor) == "unchanged"
 
     async def test_deleted_keys_stay_deleted_after_rebuild(
-        self, mp_backend_tombstones
+        self, mp_backend_tombstones: "MultiProcessInMemoryBackend"
     ) -> None:
         """A rebuild must not resurrect a key that was actually deleted."""
         backend = mp_backend_tombstones
@@ -258,7 +263,7 @@ class TestTombstoneReclamation:
         assert await backend.get(gone) is None
 
     async def test_rebuild_does_not_disturb_differently_prefixed_keys(
-        self, mp_backend_tombstones
+        self, mp_backend_tombstones: "MultiProcessInMemoryBackend"
     ) -> None:
         """
         A rebuild reshuffles bucket positions for the whole shard. A key
@@ -300,7 +305,9 @@ class TestCleanerSlotReuseRace:
     """
 
     async def test_cleaner_does_not_wipe_a_write_that_lands_mid_check(
-        self, mp_backend_cleaner, monkeypatch: pytest.MonkeyPatch
+        self,
+        mp_backend_cleaner: "MultiProcessInMemoryBackend",
+        monkeypatch: pytest.MonkeyPatch,
     ):
         backend = mp_backend_cleaner
         key1 = backend.get_key("key1")

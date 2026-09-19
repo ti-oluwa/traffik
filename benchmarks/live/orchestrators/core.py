@@ -1,5 +1,5 @@
 """
-Funcions every `benchmarks.bench.*` module runs for each selected
+Functions every `benchmarks.bench.*` module runs for each selected
 scenario. They spawn one real server process configured for that scenario,
 run warmup iterations (discarded) and timed iterations (kept) against it,
 resetting throttle state between every single iteration, and then tear the

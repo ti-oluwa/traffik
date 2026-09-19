@@ -1,3 +1,5 @@
+import hashlib
+import os
 import subprocess
 import sys
 
@@ -78,7 +80,7 @@ class TestLegacyMd5KeysImportTimeResolution:
     """
     `build_key`'s hash function is resolved once at import time (not
     per-call), so exercising `TRAFFIK_LEGACY_MD5_KEYS` honestly requires a
-    fresh interpreter - reload()-ing the module in-process wouldn't be
+    fresh interpreter so reload()-ing the module in-process wouldn't be
     representative of how the flag is actually meant to be set.
     """
 
@@ -96,9 +98,6 @@ class TestLegacyMd5KeysImportTimeResolution:
         assert output.stdout.strip() == fnv_64bit_hash_hex(b"a")
 
     def test_env_var_set_before_import_forces_md5(self):
-        import hashlib
-        import os
-
         env = {**os.environ, "TRAFFIK_LEGACY_MD5_KEYS": "1"}
         output = subprocess.run(
             [
@@ -115,7 +114,7 @@ class TestLegacyMd5KeysImportTimeResolution:
 
 
 class TestBuildKey:
-    """Tests for build_key, which uses fnv_64bit_hash to combine args/kwargs."""
+    """Tests for build_key, which uses `fnv_64bit_hash` to combine args/kwargs."""
 
     def test_no_args_returns_wildcard(self):
         assert build_key() == "*"

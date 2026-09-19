@@ -1,14 +1,13 @@
 """
 Runs the `compare` command. For each selected scenario, it spawn sthe traffik
 app and the SlowAPI app in turn with same rate, backend, identity rule,
-worker count, strategy, and traffic pattern. It then pairs their
-`AggregatedResult`s into a `CompareResult`.
+worker count, strategy, and traffic pattern. It then pairs their `AggregatedResult`s 
+into a `CompareResult`.
 
 This run them sequentially, not concurrently as running both apps at once would have their
-traffic compete for the same CPU cores and, for external backends, the
-same Redis/Memcached connection and whichever ran second would look
-artificially slower (or faster, depending on what else is happening on
-the machine). So one at a time keeps the two measurements independent.
+traffic compete for the same CPU cores and, for external backends, the same Redis/Memcached 
+connection and whichever ran second would look artificially slower (or faster, depending on 
+what else is happening on the machine). So one at a time keeps the two measurements independent.
 """
 
 import sys

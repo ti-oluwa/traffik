@@ -120,10 +120,18 @@
   - `traffik/throttles.py` split into `traffik/throttles/{base,http,websocket}.py` for maintainability. Existing import paths (`from traffik import HTTPThrottle`, `from traffik.throttles import ...`) continue to work unchanged.
   - `registry._prep_rules`, `middleware._prep_throttles`, and `Throttle._handle_error` renamed to `prep_rules`/`prep_throttles`/`handle_error` (dropping the leading underscore), with `_handle_error` kept as a compatibility alias on `Throttle`.
   - Simplified the rate string parser (`Rate.parse(...)`/`parse_rate`) to map each unit directly to its millisecond value instead of picking which of `Rate.__init__`'s four keyword arguments to fill. No behavior change.
+  - `MultiProcessInMemoryBackend` now periodically reclaims space from deleted keys in its internal hash table, so lookups stay fast under heavy key churn (repeated set/delete cycles, TTL expiry) instead of gradually slowing down over time. This is automatic; a new `tombstone_rebuild_threshold` constructor parameter is available if you want to tune how often it happens.
+  - Added a `compare` benchmark command that runs traffik head-to-head against SlowAPI under matched conditions (same rate, backend, worker count, strategy, and traffic pattern) and reports the difference in throughput and latency.
+  - Added a `scale` benchmark command that measures memory usage and latency as a backend's stored key count grows into the hundreds of thousands or millions.
+  - Reorganized the benchmark suite's internals (target apps, orchestration code) for clarity. No effect on the library itself.
 
 - **Bug Fixes**:
   - Fixed `SlidingWindowCounterStrategy` incrementing a window's stored counter even for throttled requests. Since that counter becomes `previous_count` for the following window, a burst of rejected attempts under sustained overload would inflate it far past `limit` (proportional to attempts, not to the configured rate), causing the next window to throttle far more aggressively than intended and potentially never fully recovering under continued load. Throttled requests now decrement the counter back. In a stress test (500 concurrent requests against a limit of 50), allowed throughput under sustained overload went from ~20% of the nominal rate (effectively stuck) to ~107% of it (correctly tracking the configured limit) after the fix.
   - Fixed `NamedLockHandle.acquire()` succeeding on a lock obtained from an already-closed `NamedLockPool`. `NamedLockPool.close()` discards the locks it holds, so acquiring through a handle obtained beforehand should fail; it now raises `LockPoolError` instead of silently acquiring a discarded lock.
+  - Fixed a rare race in `MultiProcessInMemoryBackend.clear()` that could, under concurrent writes, silently discard a value that had just been written by a different request.
+  - Fixed a similar rare race in the backend's background cleanup task, which could discard a value that was being actively written to at the exact moment it was being expired.
+  - Fixed a bug where, under heavy key churn, `MultiProcessInMemoryBackend` could eventually fail lookups outright instead of correctly reporting a missing key as not found.
+  - Fixed the benchmark suite's `multiprocess` command failing to run on Linux/macOS due to an inverted platform check (it required Windows, when it actually needs a POSIX system).
 
 - **Packaging**:
   - The `.pyi` stub files for the C extensions are now actually included in built wheels (`package_data` previously only covered `py.typed` under the top-level `traffik` package, so the `*.pyi` files under `traffik.backends` was silently never shipped).

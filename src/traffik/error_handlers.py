@@ -254,7 +254,7 @@ def failover(
         primary = exc_info["backend"]
 
         if not await cb.allow_execution():
-            return await _use_fallback(
+            return await use_fallback(
                 throttle=throttle,
                 rate=rate,
                 cost=cost,
@@ -274,7 +274,7 @@ def failover(
                     await asyncio.sleep(delay)
 
         await cb.record_failure()
-        return await _use_fallback(
+        return await use_fallback(
             throttle=throttle,
             rate=rate,
             cost=cost,
@@ -284,7 +284,7 @@ def failover(
     # Helps ensure that initialization is done once across all requests
     _initialized = initialized
 
-    async def _use_fallback(
+    async def use_fallback(
         throttle: Throttle,
         rate: Rate,
         cost: int,

@@ -153,7 +153,7 @@ def throttled(
     """
     Throttles connections to decorated route using the provided throttle(s).
 
-    **Note! This decorator is designed for FastAPI routes as it depends on FastAPI's dependency injection system to enforce the throttle(s).**
+    **This decorator is designed for FastAPI routes as it depends on FastAPI's dependency injection system to enforce the throttle(s).**
 
     :param throttles: A single throttle or a sequence of throttles to apply to the route.
     :param route: The route to be throttled. If not provided, returns a decorator that can be used to apply throttling to routes.

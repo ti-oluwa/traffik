@@ -1487,7 +1487,7 @@ def is_throttled(connection: HTTPConnection) -> bool:
     :param connection: The HTTP connection to check.
     :return: True if the connection has been throttled, False otherwise.
     """
-    return get_wait(connection) != 0.0
+    return get_wait(connection) != 0
 
 
 def get_wait(connection: HTTPConnection) -> WaitPeriod:
@@ -1568,10 +1568,11 @@ def throttled(
         return JSONResponse({"message": "Limited route 1"})
     ```
     """
-    if len(throttles) == 0:
+    count = len(throttles)
+    if count == 0:
         raise ValueError("At least one throttle must be provided.")
 
-    if len(throttles) > 1:
+    if count > 1:
         connection_type = throttles[0].connection_type
         if not all(t.connection_type is connection_type for t in throttles):
             raise ValueError("All throttles must have the same connection type.")
@@ -1680,7 +1681,7 @@ async def _resolve_headers(
         return {}
 
     stat = stat or await throttle.stat(connection, context)
-    _disable = Header.DISABLE
+    disable = Header.DISABLE
     if stat is not None:
         out = {}
         for key, value in headers.items():
@@ -1688,7 +1689,7 @@ async def _resolve_headers(
             # has any header hash may collide and match `Header.DISABLE`
             # If we use `==`. Which defeat the purpose of `Header.DISABLE`
             # as a sentinel
-            if value is _disable:
+            if value is disable:
                 continue
             elif isinstance(value, str):
                 out[key] = value
@@ -1701,6 +1702,4 @@ async def _resolve_headers(
         return out
 
     # If stat is None, we cannot resolve dynamic headers, but we can still return static headers
-    return {
-        k: v for k, v in headers.items() if isinstance(v, str) and v is not _disable
-    }
+    return {k: v for k, v in headers.items() if isinstance(v, str) and v is not disable}

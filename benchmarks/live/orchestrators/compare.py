@@ -1,12 +1,12 @@
 """
 Runs the `compare` command. For each selected scenario, it spawn sthe traffik
 app and the SlowAPI app in turn with same rate, backend, identity rule,
-worker count, strategy, and traffic pattern. It then pairs their `AggregatedResult`s 
+worker count, strategy, and traffic pattern. It then pairs their `AggregatedResult`s
 into a `CompareResult`.
 
 This run them sequentially, not concurrently as running both apps at once would have their
-traffic compete for the same CPU cores and, for external backends, the same Redis/Memcached 
-connection and whichever ran second would look artificially slower (or faster, depending on 
+traffic compete for the same CPU cores and, for external backends, the same Redis/Memcached
+connection and whichever ran second would look artificially slower (or faster, depending on
 what else is happening on the machine). So one at a time keeps the two measurements independent.
 """
 
@@ -133,7 +133,9 @@ async def run_compare_scenarios(
         )
 
     warn_unshared_state(config)
-    path = "/test" if mode == "middleware" or endpoint_variant == "async" else "/test-sync"
+    path = (
+        "/test" if mode == "middleware" or endpoint_variant == "async" else "/test-sync"
+    )
     scenarios = SCENARIOS_BY_MODE[mode]
     results: list[CompareResult] = []
 
@@ -152,12 +154,24 @@ async def run_compare_scenarios(
 
         print(f"Running {scenario_key} against traffik...", file=sys.stderr)
         traffik_results = await run_one_side(
-            TRAFFIK_APP_PATHS[mode], env, scenario, config, path, warmup_iterations, "traffik"
+            TRAFFIK_APP_PATHS[mode],
+            env,
+            scenario,
+            config,
+            path,
+            warmup_iterations,
+            "traffik",
         )
 
         print(f"Running {scenario_key} against SlowAPI...", file=sys.stderr)
         slowapi_results = await run_one_side(
-            SLOWAPI_APP_PATHS[mode], env, scenario, config, path, warmup_iterations, "SlowAPI"
+            SLOWAPI_APP_PATHS[mode],
+            env,
+            scenario,
+            config,
+            path,
+            warmup_iterations,
+            "SlowAPI",
         )
 
         if not traffik_results or not slowapi_results:

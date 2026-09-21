@@ -990,6 +990,72 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._cleanup_task: typing.Optional[asyncio.Task[None]] = None
         self._initialized: bool = False
 
+    @classmethod
+    def estimate_shared_memory_size(
+        cls,
+        max_keys: int = 65536,
+        number_of_shards: int = 64,
+        max_value_size: int = 512,
+        lock_pool_size: int = 128,
+        lock_pool_headroom: int = 4,
+    ) -> int:
+        """
+        Estimate the total shared-memory segment size, in bytes, a backend
+        constructed with these parameters would allocate.
+
+        Use this to size `max_keys`/`number_of_shards`/`max_value_size` before
+        committing to them, e.g. in a startup check against your container's
+        memory limit.
+
+        :param max_keys: Maximum number of keys the backend can store across all shards.
+        :param number_of_shards: Number of hash-table shards used to distribute keys and locks.
+        :param max_value_size: Maximum size, in bytes, of a stored value payload.
+        :param lock_pool_size: Number of named locks reserved for the shared-memory lock pool.
+        :param lock_pool_headroom: Extra lock capacity kept available to avoid exhaustion during contention or rebalancing.
+        :return: Estimated total shared-memory size in bytes for a backend created with these parameters.
+        """
+        max_keys_per_shard = math.ceil(max_keys / number_of_shards)
+
+        min_buckets = int(max_keys_per_shard / _HASH_TABLE_LOAD_FACTOR) + 1
+        shard_hash_table_capacity = 1
+        while shard_hash_table_capacity < min_buckets:
+            shard_hash_table_capacity <<= 1
+
+        raw_slot_size = (
+            cls._GENERATION_SIZE
+            + cls._SLOT_KIND_SIZE
+            + cls._PAD1_SIZE
+            + cls._VALUE_LENGTH_SIZE
+            + max_value_size
+            + cls._INT_VALUE_SIZE
+            + cls._EXPIRY_SIZE
+            + cls._OCCUPIED_FLAG_SIZE
+        )
+        slot_size = (raw_slot_size + 7) & ~7
+
+        shard_header_size = (
+            _HEADER_FREE_COUNT_SIZE
+            + _HEADER_TOMBSTONE_COUNT_SIZE
+            + 4 * max_keys_per_shard
+        )
+        shard_hash_table_size = shard_hash_table_capacity * _HASH_TABLE_ENTRY_SIZE
+        shard_slot_data_size = max_keys_per_shard * slot_size
+        shard_size = shard_header_size + shard_hash_table_size + shard_slot_data_size
+
+        lock_byte_pool_size = lock_pool_size * lock_pool_headroom
+        return shard_size * number_of_shards + lock_byte_pool_size
+
+    @property
+    def shared_memory_size(self) -> int:
+        """
+        Total shared-memory segment size, in bytes, this instance
+        allocates. Computed once at initialization.
+
+        See `estimate_shared_memory_size` to compute this for a different
+        set of parameters.
+        """
+        return self._shared_memory_size
+
     def _reinitialize_after_fork(self) -> None:
         """
         Hook to rebuild fork-unsafe resources in a freshly forked child process.
@@ -1036,7 +1102,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         from a forked worker that inherited an already `start()`'d instance
         from its parent as there's nothing left for it to do here).
 
-        This method is safe to run from a synchronous startup path with no event 
+        This method is safe to run from a synchronous startup path with no event
         loop available, e.g. gunicorn's `preload_app=True` phase:
 
         ```
@@ -1055,7 +1121,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         This does not start the background cleanup task as `asyncio.create_task`
         requires a running loop. `initialize()` handles that, and does need to be called
         in every process/event loop that uses this backend, workers included.
-        See its docstring for why that's still necessary even though `start()` already 
+        See its docstring for why that's still necessary even though `start()` already
         ran in the parent.
 
         If a shared memory segment with this name already exists, it's
@@ -1270,7 +1336,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self, buffer: memoryview, shard_base: int, key_bytes: bytes
     ) -> int:
         """
-        Return the bucket index within shard `shard_base`'s 'shard_idx' hash 
+        Return the bucket index within shard `shard_base`'s 'shard_idx' hash
         table for `key_bytes`.
 
         Returns the index of the occupied bucket containing this key, or
@@ -2803,10 +2869,12 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         shard_to_items: dict[int, list[tuple[str, str]]] = {}
         for key, val in items.items():
-            shard_to_items.setdefault(self._get_shard_idx_for_key(key), []).append((
-                key,
-                val,
-            ))
+            shard_to_items.setdefault(self._get_shard_idx_for_key(key), []).append(
+                (
+                    key,
+                    val,
+                )
+            )
 
         await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
             self._executor, self._multi_set, shard_to_items, expire

@@ -390,9 +390,9 @@ def multiprocess_command(
 @click.option(
     "--backend",
     "-b",
-    type=click.Choice([
-        choice for choice in BackendKind.choices() if choice != "multiprocess"
-    ]),
+    type=click.Choice(
+        [choice for choice in BackendKind.choices() if choice != "multiprocess"]
+    ),
     default="inmemory",
     help="Backend to benchmark. `multiprocess` isn't offered here.",
 )

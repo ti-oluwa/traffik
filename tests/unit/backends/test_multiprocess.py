@@ -356,3 +356,36 @@ class TestCleanerSlotReuseRace:
         # The writer's refresh - which lands a future expiry - must survive
         # regardless of how the cleaner's and writer's steps interleaved.
         assert await backend.get(key1) == "refreshed"
+
+
+class TestEstimateSharedMemorySize:
+    """
+    `estimate_shared_memory_size` re-implements the same formula
+    `__init__` uses to actually size the shared-memory segment. These
+    tests exist to catch the two formulas drifting apart if either is
+    changed without the other - not because the individual numbers are
+    interesting on their own.
+    """
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {},
+            {"max_keys": 16384, "number_of_shards": 32, "max_value_size": 1024},
+            {"max_keys": 65536, "number_of_shards": 64, "max_value_size": 2048},
+            {"max_keys": 1000, "number_of_shards": 4, "max_value_size": 100},
+            {
+                "max_keys": 1_000_000,
+                "number_of_shards": 128,
+                "max_value_size": 64,
+                "lock_pool_size": 256,
+                "lock_pool_headroom": 8,
+            },
+        ],
+    )
+    def test_matches_actual_instance_size(self, kwargs):
+        from traffik.backends.multiprocess import MultiProcessInMemoryBackend
+
+        estimated = MultiProcessInMemoryBackend.estimate_shared_memory_size(**kwargs)
+        backend = MultiProcessInMemoryBackend(**kwargs)
+        assert backend.shared_memory_size == estimated

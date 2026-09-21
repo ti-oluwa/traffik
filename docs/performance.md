@@ -25,11 +25,14 @@ Your backend choice has a larger impact on performance than any other single fac
 |---|---|---|
 | Single-process (dev, small apps) | `InMemoryBackend` | Zero network overhead, fastest possible |
 | Multi-process, single machine | `InMemoryBackend` + replication | State doesn't share between processes |
+| Multi-process, single machine, shared state | `MultiProcessInMemoryBackend` | No network round-trip, but hops through a thread pool and pays a lock cost under contention - see the note below |
 | Distributed (multiple nodes) | `RedisBackend` | Network round-trip, but accurate distributed counting |
 | Already have Memcached | `MemcachedBackend` | Comparable to Redis, no scripting support |
 | Redis + memory efficiency | `RedisBackend` | Scripts cached on server, minimal overhead |
 
 Don't use `RedisBackend` for a single-process application just because "Redis is production-grade." The network round-trip will cost you 1-5ms per request unnecessarily. `InMemoryBackend` is genuinely the right tool for single-process deployments. Well, except you need persistence across restarts.
+
+There's no fixed ranking between `MultiProcessInMemoryBackend` and `RedisBackend`/`MemcachedBackend` for the multi-process case. Which one costs less depends on your workload's key cardinality and contention, not the backend's label. `MultiProcessInMemoryBackend` avoids the network round-trip entirely, but pays for that with a thread-pool hop and, under hot-key/lock-heavy strategies, real lock contention; `RedisBackend` pays a round-trip on every call but that call is often cheaper than it looks, especially for lock-free strategies. Benchmark both against your own traffic shape (the [benchmark suite](benchmarks.md) ships with a `scale` command for exactly this) rather than assuming either one wins.
 
 ```python
 from traffik.backends.inmemory import InMemoryBackend

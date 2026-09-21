@@ -117,7 +117,9 @@ Briefly, since these all have worked examples in the docs:
 
 ## Performance
 
-Two independent choices set your overhead, the **backend** (baseline cost - in-memory is sub-millisecond, Redis/Memcached are dominated by their round trip, the multi-process backend hops through a thread pool) and the **strategy** (whether you pay a locking tax on top - `FixedWindow`/`GCRA` never lock, anything that reads-computes-writes state has to, for correctness). The multi-process backend in particular can cost more than plain Redis under hot-key, lock-heavy loads - worth reading before you pick it over a "real" distributed backend. Full breakdown, including a case where local Redis beats the multi-process backend and why: **[Performance](https://ti-oluwa.github.io/traffik/performance/)**.
+Two independent choices determine your overhead, the **backend** (baseline cost for in-memory is sub-millisecond, Redis/Memcached are dominated by their round trip, the multi-process backend hops through a thread pool) and the **strategy** (whether you pay a locking tax on top. `FixedWindow`/`GCRA` mostly do not lock. But anything that reads-computes-writes state has to, for correctness).
+
+There's no universal ranking between backends. Which one costs less depends on your workload shape (key cardinality, contention, worker count) more than on the backend's label. Full breakdown and how to reason about your own case: **[Performance](https://ti-oluwa.github.io/traffik/performance/)**.
 
 A benchmark suite ships with the repo for testing this against your own traffic shape, and includes a head-to-head comparison against SlowAPI:
 

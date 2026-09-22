@@ -8,7 +8,7 @@ Traffik ships **two versions** of `@throttled`: one for Starlette and one for Fa
 
 ## Two decorator variants
 
-| | `traffik.throttles.throttled` | `traffik.decorators.throttled` |
+| | `traffik.decorators.generic.throttled` | `traffik.decorators.fastapi.throttled` |
 |---|---|---|
 | **Works with** | Starlette and FastAPI | FastAPI only |
 | **Requires `Request` param** | Yes - the route function must declare a `Request` or `WebSocket` parameter | No - FastAPI's DI injects the connection automatically |
@@ -18,15 +18,15 @@ Traffik ships **two versions** of `@throttled`: one for Starlette and one for Fa
 
 ---
 
-## `traffik.decorators.throttled`: FastAPI version
+## `traffik.decorators.fastapi.throttled`: FastAPI version
 
-Import from `traffik.decorators`. Your route function does **not** need to declare a `Request` parameter. FastAPI resolves the connection internally.
+Import from `traffik.decorators.fastapi`. Your route function does **not** need to declare a `Request` parameter. FastAPI resolves the connection internally.
 
 ```python
 from fastapi import FastAPI
 from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.decorators import throttled  # FastAPI-specific
+from traffik.decorators.fastapi import throttled  # FastAPI-specific
 
 backend = InMemoryBackend()
 app = FastAPI(lifespan=backend.lifespan)
@@ -42,13 +42,13 @@ async def list_items():
 The decorator order matters: `@app.get(...)` must be the outermost decorator, `@throttled(...)` the next one in.
 
 !!! tip
-    Because `traffik.decorators.throttled` relies on FastAPI's dependency injection, the throttle check happens before any other dependencies in the function signature are resolved. This means a rejected request never triggers database queries or other expensive dependencies.
+    Because `traffik.decorators.fastapi.throttled` relies on FastAPI's dependency injection, the throttle check happens before any other dependencies in the function signature are resolved. This means a rejected request never triggers database queries or other expensive dependencies.
 
 ---
 
-## `traffik.throttles.throttled`: Starlette version
+## `traffik.decorators.generic.throttled`: Starlette version
 
-Import from `traffik.throttles` (or directly from `traffik`). The route function **must** declare a `Request` or `WebSocket` parameter. The decorator inspects the function arguments at call time to find the connection object.
+Import from `traffik.decorators.generic` (or directly from `traffik`). The route function **must** declare a `Request` or `WebSocket` parameter. The decorator inspects the function arguments at call time to find the connection object.
 
 ```python
 from starlette.applications import Starlette
@@ -57,7 +57,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.throttles import throttled  # Starlette version
+from traffik.decorators.generic import throttled  # Starlette version
 
 backend = InMemoryBackend()
 
@@ -108,7 +108,7 @@ Pass multiple throttles to `@throttled`. They are checked **sequentially**: the 
     from fastapi import FastAPI
     from traffik import HTTPThrottle
     from traffik.backends.inmemory import InMemoryBackend
-    from traffik.decorators import throttled
+    from traffik.decorators.fastapi import throttled
 
     backend = InMemoryBackend()
     app = FastAPI(lifespan=backend.lifespan)
@@ -164,7 +164,7 @@ Pass multiple throttles to `@throttled`. They are checked **sequentially**: the 
     from fastapi import FastAPI, WebSocket
     from traffik.throttles import WebSocketThrottle
     from traffik.backends.inmemory import InMemoryBackend
-    from traffik.decorators import throttled
+    from traffik.decorators.fastapi import throttled
 
     backend = InMemoryBackend()
     app = FastAPI(lifespan=backend.lifespan)
@@ -221,7 +221,7 @@ You can mix them freely. A common pattern is to use a router-level dependency fo
 from fastapi import FastAPI, APIRouter, Depends
 from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.decorators import throttled
+from traffik.decorators.fastapi import throttled
 
 backend = InMemoryBackend()
 app = FastAPI(lifespan=backend.lifespan)

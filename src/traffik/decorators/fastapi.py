@@ -1,4 +1,4 @@
-"""Throttle decorator. For FastAPI only."""
+"""FastAPI-specific throttle decorator."""
 
 import functools
 import inspect
@@ -11,7 +11,7 @@ from starlette.requests import Request as StarletteRequest
 from starlette.websockets import WebSocket as StarletteWebSocket
 
 from traffik._utils import _add_parameter_to_signature
-from traffik.throttles import Throttle
+from traffik.throttles.base import Throttle
 from traffik.typing import Dependency, HTTPConnectionT, P, Q, R, S
 
 ThrottleT = typing.TypeVar("ThrottleT", bound=Throttle)
@@ -165,7 +165,7 @@ def throttled(
     import fastapi
 
     from traffik import HTTPThrottle
-    from traffik.decorators import throttled  # FastAPI-specific throttled decorator
+    from traffik.decorators.fastapi import throttled
 
     sustained_throttle = HTTPThrottle(uid="sustained", rate="100/min")
     burst_throttle = HTTPThrottle(uid="burst", rate="20/sec")

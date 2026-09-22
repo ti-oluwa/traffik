@@ -1,18 +1,8 @@
 """
-Tests for the generic `throttled` decorator (`traffik.throttles.throttled`).
+Tests for the generic `throttled` decorator (`traffik.decorators.generic.throttled`).
 
 Runs against both FastAPI and Starlette via the `web_framework` fixture. This
-decorator just wraps a handler and inspects its args/kwargs for an
-`HTTPConnection`/`WebSocket` -- it doesn't touch FastAPI's dependency system --
-so it behaves identically regardless of which framework the route is
-registered on.
-
-NOTE: this is a different object from `traffik.decorators.throttled`, which is
-explicitly FastAPI-only (it wraps the throttle as a real `fastapi.params.Depends`
-so it participates in FastAPI's DI graph, gets proper OpenAPI docs, etc.). That
-decorator has no Starlette equivalent and is tested on its own in
-`tests/integration/fastapi/test_throttle_decorator.py` -- don't confuse the two
-when reading test names across both files.
+decorator just wraps a handler and inspects its args/kwargs for an `HTTPConnection`/`WebSocket`.
 """
 
 import pytest
@@ -23,8 +13,9 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from tests.frameworks import ASGIFramework, HTTPRoute, WSRoute
 from tests.utils import default_client_identifier, make_client
 from traffik.backends.inmemory import InMemoryBackend
+from traffik.decorators.generic import throttled
 from traffik.registry import ThrottleRegistry
-from traffik.throttles import HTTPThrottle, WebSocketThrottle, throttled
+from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
 
 @pytest.mark.throttle

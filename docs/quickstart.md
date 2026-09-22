@@ -143,7 +143,7 @@ Prefer decorators? For FastAPI routes, `traffik.decorators.throttled` skips the 
 from fastapi import FastAPI
 from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.decorators import throttled  # FastAPI-specific import
+from traffik.decorators.fastapi import throttled  # FastAPI-specific import
 
 backend = InMemoryBackend(namespace="myapp")
 app = FastAPI(lifespan=backend.lifespan)
@@ -160,10 +160,10 @@ async def search():
 !!! warning "There are two `throttled` imports and they're not the same thing"
     | Import | Framework | Route needs `Request`? |
     |---|---|---|
-    | `from traffik.decorators import throttled` | FastAPI only - uses dependency injection under the hood | No |
-    | `from traffik.throttles import throttled` | Starlette + FastAPI - a plain wrapper decorator | Yes |
+    | `from traffik.decorators.fastapi import throttled` | FastAPI only - uses dependency injection under the hood | No |
+    | `from traffik.decorators.generic import throttled` | Starlette + FastAPI - a plain wrapper decorator | Yes |
 
-    For Starlette routes, use `traffik.throttles.throttled` and give your route a `Request` parameter. For FastAPI, prefer `traffik.decorators.throttled` for the cleaner signature, but the plain one works there too if you'd rather have one code path for both frameworks.
+    For Starlette routes, use `traffik.decorators.generic.throttled` and give your route a `Request` parameter. For FastAPI, prefer `traffik.decorators.throttled` for the cleaner signature, but the plain one works there too if you'd rather have one code path for both frameworks.
 
 ---
 

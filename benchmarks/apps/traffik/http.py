@@ -32,7 +32,7 @@ app = FastAPI(lifespan=backend.lifespan)
 
 
 @app.get("/test")
-async def test_endpoint(request: Request = Depends(throttle)):
+async def test_endpoint(request: Request = Depends(throttle)):  # noqa: B008
     return {"status": "ok"}
 
 
@@ -40,7 +40,7 @@ async def test_endpoint(request: Request = Depends(throttle)):
 # event loop. Exists so `compare --endpoint sync` can measure whether that
 # dispatch changes the throttle's overhead, on both traffik and SlowAPI.
 @app.get("/test-sync")
-def test_endpoint_sync(request: Request = Depends(throttle)):
+def test_endpoint_sync(request: Request = Depends(throttle)):  # noqa: B008
     return {"status": "ok"}
 
 

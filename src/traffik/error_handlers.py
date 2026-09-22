@@ -3,10 +3,12 @@ Error handling strategies for rate limiting operations.
 """
 
 import asyncio
+import functools
 import typing
 import warnings
 
 from starlette.requests import HTTPConnection
+from typing_extensions import deprecated
 
 from traffik._utils import CircuitBreaker
 from traffik.backends.base import ThrottleBackend
@@ -101,7 +103,22 @@ def fallback(
     return handler
 
 
-backend_fallback = fallback  # backwards compatibility
+@deprecated("`backend_fallback` is deprecated; use `fallback` instead.")
+@functools.wraps(fallback)
+def backend_fallback(
+    backend: ThrottleBackend[typing.Any, HTTPConnectionT],
+    fallback_on: typing.Optional[tuple[type[BaseException], ...]] = None,
+    on: tuple[type[BaseException], ...] = (BackendError,),
+    initialized: bool = True,
+) -> typing.Callable[
+    [HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]
+]:
+    return fallback(
+        backend=backend,
+        fallback_on=fallback_on,
+        on=on,
+        initialized=initialized,
+    )
 
 
 def retry(

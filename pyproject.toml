@@ -123,7 +123,7 @@ select = [
     "RUF", # flake8-rst-docstrings
     "TID", # flake8-tidy-imports
 ]
-ignore = ["E501", "F403", "RUF001", "RUF002", "RUF003", "RUF052"]
+ignore = ["E501", "F403", "RUF001", "RUF002", "RUF003", "RUF052", "B023", "RUF067"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["traffik"]

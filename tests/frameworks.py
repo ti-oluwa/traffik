@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from starlette.middleware import Middleware
 from starlette.types import ASGIApp, Lifespan
 
-HTTPEndpoint = typing.Callable[..., typing.Awaitable[typing.Any]]
-WebSocketEndpoint = typing.Callable[..., typing.Awaitable[None]]
+HTTPEndpoint = typing.Callable[..., typing.Any | typing.Awaitable[typing.Any]]
+WebSocketEndpoint = typing.Callable[..., typing.Awaitable[None] | None]
 
 
 @dataclass(frozen=True)

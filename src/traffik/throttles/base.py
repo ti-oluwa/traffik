@@ -46,6 +46,7 @@ from traffik.typing import (
 __all__ = [
     "Throttle",
     "ThrottleExceptionInfo",
+    "ThrottleKwargs",
     "ThrottleStrategy",
     "get_wait",
     "is_throttled",

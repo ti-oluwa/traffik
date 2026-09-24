@@ -4,6 +4,7 @@ import typing
 
 from starlette.requests import Request
 from starlette.responses import Response
+from typing_extensions import Self
 
 from traffik.backends.base import ThrottleBackend
 from traffik.config import THROTTLE_DEFAULT_SCOPE
@@ -35,7 +36,7 @@ class HTTPThrottle(Throttle[Request]):
         rate: RateType[Request],
         identifier: typing.Optional[ConnectionIdentifier[Request]] = None,
         handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[Request, "HTTPThrottle"]  # type: ignore[arg-type]
+            ConnectionThrottledHandler[Request, Self]
         ] = None,
         strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, Request]] = None,

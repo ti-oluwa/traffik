@@ -1,6 +1,7 @@
 from .base import (
     Throttle,
     ThrottleExceptionInfo,
+    ThrottleKwargs,
     ThrottleStrategy,
     get_wait,
     is_throttled,
@@ -14,6 +15,7 @@ __all__ = [
     "RequestThrottle",
     "Throttle",
     "ThrottleExceptionInfo",
+    "ThrottleKwargs",
     "ThrottleStrategy",
     "WebSocketThrottle",
     "get_wait",

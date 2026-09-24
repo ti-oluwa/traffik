@@ -5,6 +5,7 @@ import math
 import typing
 
 from starlette.websockets import WebSocket, WebSocketState
+from typing_extensions import Self
 
 from traffik.backends.base import ThrottleBackend, connection_throttled
 from traffik.config import THROTTLE_DEFAULT_SCOPE
@@ -77,7 +78,7 @@ class WebSocketThrottle(Throttle[WebSocket]):
         rate: RateType[WebSocket],
         identifier: typing.Optional[ConnectionIdentifier[WebSocket]] = None,
         handle_throttled: typing.Optional[
-            ConnectionThrottledHandler[WebSocket, "WebSocketThrottle"]
+            ConnectionThrottledHandler[WebSocket, Self]
         ] = None,
         strategy: typing.Optional[ThrottleStrategy] = None,
         backend: typing.Optional[ThrottleBackend[typing.Any, WebSocket]] = None,

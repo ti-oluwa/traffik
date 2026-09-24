@@ -1,5 +1,5 @@
 """
-Throttle shorthand-string parsing/resolution for `traffik.decorators`.
+Throttle shorthand-string/specification parsing/resolution.
 
 Grammar (colon-separated segments, evaluated left to right):
 
@@ -11,17 +11,16 @@ Grammar (colon-separated segments, evaluated left to right):
     "<uid>:<rate>:<strategy>"
     "<uid>:<rate>:<strategy>:<type>"
 
-The first segment is tried as a `Rate` first (`Rate.parse`). If that succeeds,
-there is no uid in the string. If it fails, the first segment is a uid, and
-the second segment (if present) must be a rate. `<type>` is `"http"` or `"ws"`,
-defaulting to `"http"`.
+The first segment is tried as a `Rate` first. If that succeeds, there is no uid 
+in the string. If it fails, the first segment is a uid, and the second segment 
+(if present) must be a rate. `<type>` is `"http"` or `"ws"`, defaulting to `"http"`.
 
 A uid-only string (no colons) does not construct a throttle. It looks
 the uid up in the registry and uses the existing throttle as-is, raising
 if it isn't there.
 
-Anything not expressible this way (a custom strategy, HTTP-only
-`use_method`, etc.) needs a pre-built `Throttle` passed directly instead.
+Anything not expressible this way (a custom strategy, HTTP-only `use_method`, etc.) 
+needs the `Throttle` built directly.
 """
 
 import typing
@@ -44,6 +43,7 @@ from traffik.strategies import (
 from traffik.throttles.base import Throttle, ThrottleKwargs, ThrottleStrategy
 from traffik.throttles.http import HTTPThrottle
 from traffik.throttles.websocket import WebSocketThrottle
+from traffik.typing import ThrottleType
 
 __all__ = ["resolve_specs"]
 
@@ -170,7 +170,6 @@ def parse_spec(spec: str) -> ParsedSpec:
             f"Too many ':'-separated segments in throttle spec {spec!r} "
             "(expected at most 4: uid, rate, strategy, type)."
         )
-
     return ParsedSpec(
         uid=uid,
         rate=rate,
@@ -209,7 +208,7 @@ def resolve_specs(
     specs: typing.Sequence[typing.Union[Throttle[typing.Any], str]],
     *,
     uid: typing.Optional[str] = None,
-    type: typing.Optional[typing.Literal["http", "ws"]] = None,
+    type: typing.Optional[ThrottleType] = None,
     **kwargs: Unpack[ThrottleKwargs],
 ) -> list[Throttle[typing.Any]]:
     """
@@ -293,13 +292,11 @@ def resolve_specs(
             )
         resolved_type = parsed.type if parsed.type_explicit else (type or "http")
 
-        construct_kwargs: dict[str, typing.Any] = dict(kwargs)
+        init_kwargs: dict[str, typing.Any] = dict(kwargs)
         if parsed.strategy is not None:
-            construct_kwargs["strategy"] = parsed.strategy
+            init_kwargs["strategy"] = parsed.strategy
 
         throttle_cls = THROTTLE_TYPES[resolved_type]
         assert parsed.rate is not None
-        resolved.append(
-            throttle_cls(uid=resolved_uid, rate=parsed.rate, **construct_kwargs)
-        )
+        resolved.append(throttle_cls(uid=resolved_uid, rate=parsed.rate, **init_kwargs))
     return resolved

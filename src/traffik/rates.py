@@ -5,6 +5,8 @@ from typing import Annotated
 
 from annotated_types import Ge
 
+from traffik.exceptions import ParseError
+
 __all__ = ["Rate", "parse_rate"]
 
 
@@ -129,11 +131,11 @@ class Rate:
 
         :param rate: The string representation of the rate limit.
         :return: A `Rate` object.
-        :raises ValueError: If the rate string is invalid or cannot be parsed.
+        :raises ParseError: If the rate string is invalid or cannot be parsed.
         """
         rate = str(rate).strip()
         if not rate:
-            raise ValueError("Rate string cannot be empty")
+            raise ParseError("Rate string cannot be empty")
         # Use `.lower()` for better cache performance
         return parse_rate(rate.lower())
 
@@ -172,7 +174,7 @@ def parse_rate(rate: str) -> Rate:
     """
     parts = SPLIT_RE.split(rate)
     if len(parts) != 2:
-        raise ValueError(
+        raise ParseError(
             f"Invalid rate format '{rate}'. Expected format: '<limit>/<period><unit>' or '<limit> per <period><unit>'"
             f"(e.g., '5 per m', '2/5s', '10/30 seconds')"
         )
@@ -181,24 +183,24 @@ def parse_rate(rate: str) -> Rate:
     limit_str = parts[0].strip()
     try:
         limit = int(limit_str)
-    except ValueError as exc:
-        raise ValueError(
+    except ParseError as exc:
+        raise ParseError(
             f"Invalid limit '{limit_str}'. Limit must be a non-negative integer."
         ) from exc
 
     if limit < 0:
-        raise ValueError("Limit must be non-negative")
+        raise ParseError("Limit must be non-negative")
 
     # Parse period (right side)
     period_str = parts[1].strip().lower()
     if not period_str:
-        raise ValueError("Period cannot be empty")
+        raise ParseError("Period cannot be empty")
 
     # Extract number and unit from period string
     # Regex matches: optional number + optional whitespace + unit
     match = PERIOD_RE.match(period_str)
     if not match:
-        raise ValueError(
+        raise ParseError(
             f"Invalid period format '{period_str}'. Expected format: "
             f"'<number><unit>' or '<unit>' (e.g., '5s', 's', '30 seconds')"
         )
@@ -207,11 +209,11 @@ def parse_rate(rate: str) -> Rate:
     period_multiplier = int(period_num_str) if period_num_str else 1
 
     if period_multiplier <= 0:
-        raise ValueError(f"Period multiplier must be positive, got {period_multiplier}")
+        raise ParseError(f"Period multiplier must be positive, got {period_multiplier}")
 
     if unit not in UNIT_TO_MILLISECONDS:
         valid_units = sorted(set(UNIT_TO_MILLISECONDS.keys()))
-        raise ValueError(
+        raise ParseError(
             f"Invalid time unit '{unit}'. Valid units: {', '.join(valid_units)}"
         )
 

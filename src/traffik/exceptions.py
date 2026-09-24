@@ -25,6 +25,15 @@ class ConfigurationError(TraffikException, ValueError):
     pass
 
 
+class ParseError(ConfigurationError):
+    """
+    Exception raised when a rate or throttle shorthand string
+    is malformed and cannot be parsed correctly.
+    """
+
+    pass
+
+
 class BackendError(TraffikException):
     """Exception raised for backend related errors."""
 

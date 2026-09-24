@@ -9,7 +9,7 @@ import weakref
 from starlette.middleware import Middleware
 from starlette.requests import HTTPConnection
 from starlette.responses import Response
-from typing_extensions import Self, TypedDict, deprecated
+from typing_extensions import NotRequired, Self, TypedDict, deprecated
 
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.config import (
@@ -137,18 +137,25 @@ class ThrottleExceptionInfo(TypedDict):
 
     exception: BaseException
     """The type of exception the handler is for."""
+
     connection: HTTPConnection
     """The HTTP connection associated with the exception."""
+
     key: str
     """The throttle key associated with the exception"""
+
     cost: int
     """The cost associated with the throttling operation."""
+
     rate: Rate
     """The rate associated with the throttling operation."""
+
     backend: ThrottleBackend[typing.Any, HTTPConnection]
     """The backend used during the throttling operation."""
+
     context: typing.Optional[typing.Mapping[str, typing.Any]]
     """Additional context for the throttling operation."""
+
     throttle: "Throttle[HTTPConnection]"
     """The throttle instance used during the throttling operation."""
 
@@ -1573,3 +1580,56 @@ def throttled(*args: typing.Any, **kwargs: typing.Any) -> typing.Any:
     from traffik.decorators.generic import throttled
 
     return throttled(*args, **kwargs)
+
+
+class ThrottleKwargs(TypedDict, total=False):
+    """`Throttle`'s initialization keyword arguments common to every throttle type."""
+
+    identifier: NotRequired[ConnectionIdentifier[HTTPConnection]]
+    """Identifier used to resolve the connected client or connection key."""
+
+    handle_throttled: NotRequired[
+        ConnectionThrottledHandler[HTTPConnection, typing.Any]
+    ]
+    """Handler called when a connection is throttled."""
+
+    backend: NotRequired[typing.Any]
+    """Throttle backend used to store and check throttling state."""
+
+    cost: NotRequired[CostType[HTTPConnection]]
+    """Cost/weight applied to each hit for the throttle."""
+
+    dynamic_backend: NotRequired[bool]
+    """Whether the backend should be resolved dynamically per request."""
+
+    min_wait_period: NotRequired[int]
+    """Minimum wait period in milliseconds for throttled connections."""
+
+    headers: NotRequired[typing.Mapping[str, typing.Union[Header[HTTPConnection], str]]]
+    """Optional headers to include in throttling responses."""
+
+    on_error: NotRequired[
+        typing.Union[
+            typing.Literal["allow", "throttle", "raise"],
+            ThrottleErrorHandler[HTTPConnection, ThrottleExceptionInfo],
+        ]
+    ]
+    """Error handling strategy used when a throttling check fails."""
+
+    context: NotRequired[typing.Mapping[str, typing.Any]]
+    """Default context merged into each throttle call."""
+
+    registry: NotRequired[ThrottleRegistry]
+    """Throttle registry the instance should belong to and use."""
+
+    rules: NotRequired[typing.Iterable[typing.Any]]
+    """Rules controlling when the throttle should apply."""
+
+    cache_ids: NotRequired[bool]
+    """Whether resolved connection identifiers are cached on the connection."""
+
+    dynamic_rules: NotRequired[bool]
+    """Whether registry rules are re-fetched on every hit call."""
+
+    skip_handler: NotRequired[bool]
+    """Whether throttled connections skip invoking the throttled handler."""

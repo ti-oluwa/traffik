@@ -11,15 +11,15 @@ Grammar (colon-separated segments, evaluated left to right):
     "<uid>:<rate>:<strategy>"
     "<uid>:<rate>:<strategy>:<type>"
 
-The first segment is tried as a `Rate` first. If that succeeds, there is no uid 
-in the string. If it fails, the first segment is a uid, and the second segment 
+The first segment is tried as a `Rate` first. If that succeeds, there is no uid
+in the string. If it fails, the first segment is a uid, and the second segment
 (if present) must be a rate. `<type>` is `"http"` or `"ws"`, defaulting to `"http"`.
 
 A uid-only string (no colons) does not construct a throttle. It looks
 the uid up in the registry and uses the existing throttle as-is, raising
 if it isn't there.
 
-Anything not expressible this way (a custom strategy, HTTP-only `use_method`, etc.) 
+Anything not expressible this way (a custom strategy, HTTP-only `use_method`, etc.)
 needs the `Throttle` built directly.
 """
 

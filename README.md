@@ -4,16 +4,16 @@
 
 <h1 align="center">Traffik</h1>
 
-<h3 align="center">
+<h4 align="center">
   <strong>Rate limiting for Starlette applications</strong>
-</h3>
+</h4>
 
 [![Test](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml/badge.svg)](https://github.com/ti-oluwa/traffik/actions/workflows/test.yaml)
 [![Python versions](https://img.shields.io/pypi/pyversions/traffik.svg)](https://pypi.org/project/traffik/)
 [![PyPI version](https://badge.fury.io/py/traffik.svg)](https://badge.fury.io/py/traffik)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Traffik is a rate limiting library for Starlette and FastAPI. Write the throttle once, point it at whatever storage you want, and it just works. You can use the in-memory backend while developing, Redis or Memcached once you need to share state across processes (probably in production).
+Traffik is a rate limiting library for Starlette and FastAPI. You write the throttle once, point it at whatever storage you want, and it just works. You can use the in-memory backend while developing, Redis or Memcached once you need to share state across processes (probably in production).
 
 This README covers enough to get productive fast. Everything else is detailed in the **[full documentation](https://ti-oluwa.github.io/traffik/)**.
 
@@ -51,11 +51,11 @@ Run with `uvicorn main:app`, hit `/items` over 100 times in a minute, get a `429
 
 Three replaceable pieces, each configurable on its own:
 
-- **`Throttle`** - This is what you attach to a route. Holds the rate, cost, identifier, error policy, and backend. `HTTPThrottle` for HTTP, `WebSocketThrottle` for WebSocket connections/messages.
-- **Strategy** - THis part decides *how* the limit is enforced (`FixedWindow`, `SlidingWindow`, `TokenBucket`, `GCRA`, and more). Given a key and a rate, it says whether to let the request through and how long to wait if not.
-- **Backend** - Here is where the counters actually live: `InMemoryBackend`, `RedisBackend`, `MemcachedBackend`, or the experimental `MultiProcessInMemoryBackend` for sharing state across workers on one machine without Redis.
+- **`Throttle`**: This is what you attach to a route. Holds the rate, cost, identifier, error policy, and backend. `HTTPThrottle` for HTTP, `WebSocketThrottle` for WebSocket connections/messages.
+- **Strategy**: THis part decides *how* the limit is enforced (`FixedWindow`, `SlidingWindow`, `TokenBucket`, `GCRA`, and more). Given a key and a rate, it says whether to let the request through and how long to wait if not.
+- **Backend**: Here is where the counters actually live: `InMemoryBackend`, `RedisBackend`, `MemcachedBackend`, or the experimental `MultiProcessInMemoryBackend` for sharing state across workers on one machine without Redis.
 
-Backends expose a `.lifespan` you pass to FastAPI (as above) for automatic setup/teardown; you can also manage that manually, or use a backend as a context manager directly. Full breakdown: [Core Concepts](https://ti-oluwa.github.io/traffik/core-concepts/).
+Backends expose a `.lifespan` you pass to FastAPI (as above) for automatic setup/teardown. You can also manage that manually, or use a backend as a context manager directly. Full breakdown: [Core Concepts](https://ti-oluwa.github.io/traffik/core-concepts/).
 
 ## Backends
 
@@ -91,7 +91,7 @@ Traffik defaults to `FixedWindow` which is the cheapest, and is correct for most
 ```python
 "100/min"       # 100 per minute
 "10/30s"        # 10 per 30 seconds
-"200/500ms"     # sub-second windows
+"200 per 500ms"     # sub-second windows
 Rate(limit=50, minutes=1)  # explicit object
 ```
 
@@ -99,21 +99,21 @@ Full grammar: **[Rates](https://ti-oluwa.github.io/traffik/core-concepts/rates/)
 
 ## Integration Patterns
 
-Throttles work as FastAPI dependencies (shown above, also on routers via `APIRouter(dependencies=[...])`), as decorators (`@throttled(...)` - has different import paths for Starlette vs. FastAPI), as blanket middleware rules across routes (`ThrottleMiddleware` + `Throttle`(s)), or called directly (`await throttle.hit(...)`) anywhere in your code, including per-message inside a WebSocket loop. See **[Integration Patterns](https://ti-oluwa.github.io/traffik/integration/)** for a worked example of each.
+Throttles work as FastAPI dependencies (shown above, also on routers via `APIRouter(dependencies=[...])`), as decorators (`@throttled(...)` - has different import paths for Starlette vs. FastAPI, and accepts shorthand strings like `"100/min"` or `"api:items|100/min"` instead of a pre-built `Throttle`), as blanket middleware rules across routes (`ThrottleMiddleware` + `Throttle`(s)), or called directly (`await throttle.hit(...)`) anywhere in your code, including per-message inside a WebSocket loop. See **[Integration Patterns](https://ti-oluwa.github.io/traffik/integration/)** for a worked example of each, and **[Decorators](https://ti-oluwa.github.io/traffik/integration/decorators/)** for the full shorthand-spec grammar.
 
 ## Also Included
 
 Briefly, since these all have worked examples in the docs:
 
-- **[Custom identifiers](https://ti-oluwa.github.io/traffik/core-concepts/identifiers/)** - You can key on API key, user ID, tenant, whatever you want instead of IP; return `EXEMPTED` to let specific connections through unconditionally.
-- **[Cost-based throttling](https://ti-oluwa.github.io/traffik/advanced/request-costs/)** - You can specify that expensive endpoints consume more than 1 hit per request.
-- **[Response headers](https://ti-oluwa.github.io/traffik/advanced/headers/)** - `X-RateLimit-*` / `Retry-After` / any custom header, declarative or resolved manually.
-- **[Rules](https://ti-oluwa.github.io/traffik/advanced/rules/)** - Gate when a throttle applies or is bypassed, based on method, predicate, etc.
-- **[Deferred quota](https://ti-oluwa.github.io/traffik/advanced/quota-context/)** (`QuotaContext`) - Only consumes quota if an operation actually succeeds; batch several throttles into one "transaction".
-- **[Error handling and resilience](https://ti-oluwa.github.io/traffik/error-handling/)** - Fail open/closed, automatic failover to a secondary backend with a circuit breaker, retry policies, etc.
-- **[Dynamic backends](https://ti-oluwa.github.io/traffik/advanced/context-backends/)** - Route different requests/tenants to different backends at runtime.
-- **Runtime updates** - `await throttle.update_rate(...)`, `.disable()` / `.enable()`, or globally via `GLOBAL_REGISTRY`. See **[Registry](https://ti-oluwa.github.io/traffik/advanced/registry/)**.
-- **[Testing state without consuming it](https://ti-oluwa.github.io/traffik/advanced/statistics/)** - `await throttle.stat(request)` / `.check(...)`.
+- **[Custom identifiers](https://ti-oluwa.github.io/traffik/core-concepts/identifiers/)**: You can key on API key, user ID, tenant, whatever you want instead of IP; return `EXEMPTED` to let specific connections through unconditionally.
+- **[Cost-based throttling](https://ti-oluwa.github.io/traffik/advanced/request-costs/)**: You can specify that expensive endpoints consume more than 1 hit per request.
+- **[Response headers](https://ti-oluwa.github.io/traffik/advanced/headers/)**: `X-RateLimit-*` / `Retry-After` / any custom header, declarative or resolved manually.
+- **[Rules](https://ti-oluwa.github.io/traffik/advanced/rules/)**: Gate when a throttle applies or is bypassed, based on method, predicate, etc.
+- **[Deferred quota](https://ti-oluwa.github.io/traffik/advanced/quota-context/)** (`QuotaContext`): Only consumes quota if an operation actually succeeds; batch several throttles into one "transaction".
+- **[Error handling and resilience](https://ti-oluwa.github.io/traffik/error-handling/)**: Fail open/closed, automatic failover to a secondary backend with a circuit breaker, retry policies, etc.
+- **[Dynamic backends](https://ti-oluwa.github.io/traffik/advanced/context-backends/)**: Route different requests/tenants to different backends at runtime.
+- **Runtime updates**: `await throttle.update_rate(...)`, `.disable()` / `.enable()`, or globally via `GLOBAL_REGISTRY`. See **[Registry](https://ti-oluwa.github.io/traffik/advanced/registry/)**.
+- **[Testing state without consuming it](https://ti-oluwa.github.io/traffik/advanced/statistics/)**: `await throttle.stat(request)` / `.check(...)`.
 
 ## Performance
 

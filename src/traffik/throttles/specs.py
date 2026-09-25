@@ -94,7 +94,7 @@ def parse_spec(spec: str) -> ParsedSpec:
     first segment as a rate; if that fails, it treats the first segment as a
     uid and requires a rate in the second segment.
 
-    Supported strategy aliases are resolved from :data:`STRATEGY_ALIASES`, and
+    Supported strategy aliases are resolved from `STRATEGY_ALIASES`, and
     the optional trailing segment selects the throttle type. The default type is
     `"http"` when no explicit type is supplied.
 

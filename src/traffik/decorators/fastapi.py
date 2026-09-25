@@ -168,7 +168,7 @@ def throttled(
     dependency injection system to enforce the throttle(s).**
 
     The `throttles` argument accepts either pre-built `Throttle` instances or
-    shorthand specs such as `"100/min"`, `"my_uid:100/min:token_bucket"`, or
+    shorthand specs such as `"100/min"`, `"my_uid|100/min|token_bucket"`, or
     `"my_uid"` for registry lookup. The same uid/type/keyword handling used by
     the generic decorator is supported here as well.
 
@@ -195,7 +195,7 @@ def throttled(
 
 
     @router.get("/throttled2")
-    @throttled("100/min", "user:20/sec:token_bucket")
+    @throttled("100/min", "user:premium|20/sec|token_bucket")
     async def route():
         return {"message": "Limited route 2"}
     ```

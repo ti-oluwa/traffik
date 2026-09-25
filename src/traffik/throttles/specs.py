@@ -1,21 +1,24 @@
 """
 Throttle shorthand-string/specification parsing/resolution.
 
-Grammar (colon-separated segments, evaluated left to right):
+Grammar (`|`-separated segments, evaluated left to right):
 
     "<rate>"
-    "<rate>:<strategy>"
-    "<rate>:<strategy>:<type>"
+    "<rate>|<strategy>"
+    "<rate>|<strategy>|<type>"
     "<uid>"
-    "<uid>:<rate>"
-    "<uid>:<rate>:<strategy>"
-    "<uid>:<rate>:<strategy>:<type>"
+    "<uid>|<rate>"
+    "<uid>|<rate>|<strategy>"
+    "<uid>|<rate>|<strategy>|<type>"
 
 The first segment is tried as a `Rate` first. If that succeeds, there is no uid
 in the string. If it fails, the first segment is a uid, and the second segment
 (if present) must be a rate. `<type>` is `"http"` or `"ws"`, defaulting to `"http"`.
+Segments are separated by `SPEC_DELIMITER` (`|`) rather than `:`, so a uid may
+freely use `:` for namespacing (e.g. `"api:items"`), a common convention elsewhere
+in this library. A uid must not itself contain `SPEC_DELIMITER`.
 
-A uid-only string (no colons) does not construct a throttle. It looks
+A uid-only string (no `|`) does not construct a throttle. It looks
 the uid up in the registry and uses the existing throttle as-is, raising
 if it isn't there.
 
@@ -45,8 +48,11 @@ from traffik.throttles.http import HTTPThrottle
 from traffik.throttles.websocket import WebSocketThrottle
 from traffik.typing import ThrottleType
 
-__all__ = ["resolve_specs"]
+__all__ = ["SPEC_DELIMITER", "resolve_specs"]
 
+
+SPEC_DELIMITER = "|"
+"""Character separating segments in a shorthand throttle spec string."""
 
 STRATEGY_ALIASES: dict[str, ThrottleStrategy[typing.Any]] = {
     "fixed_window": FixedWindow(),
@@ -89,8 +95,8 @@ def parse_spec(spec: str) -> ParsedSpec:
     Parse a shorthand throttle specification into a structured descriptor.
 
     The shorthand grammar accepts forms such as `"100/min"`,
-    `"user:100/min"`, `"100/min:token_bucket"`, and
-    `"user:100/min:token_bucket:ws"`. The parser attempts to interpret the
+    `"api:items|100/min"`, `"100/min|token_bucket"`, and
+    `"api:items|100/min|token_bucket|ws"`. The parser attempts to interpret the
     first segment as a rate; if that fails, it treats the first segment as a
     uid and requires a rate in the second segment.
 
@@ -102,16 +108,17 @@ def parse_spec(spec: str) -> ParsedSpec:
     :returns: A `ParsedSpec` describing the uid, parsed rate, strategy,
         resolved type, and whether the spec is a uid-only lookup.
     :raises ParseError: If the spec is empty, malformed, contains invalid
-        strategy or type segments, or includes too many colon-separated parts.
+        strategy or type segments, or includes too many `SPEC_DELIMITER`-separated
+        parts.
     """
     if not spec or not spec.strip():
         raise ParseError("Throttle spec must not be empty.")
 
-    parts = spec.split(":")
+    parts = spec.split(SPEC_DELIMITER)
     if any(not part for part in parts):
         raise ParseError(
             f"Throttle spec {spec!r} has an empty segment. Check for a "
-            "stray or doubled ':'."
+            f"stray or doubled {SPEC_DELIMITER!r}."
         )
 
     uid: typing.Optional[str] = None
@@ -167,8 +174,8 @@ def parse_spec(spec: str) -> ParsedSpec:
 
     if rest:
         raise ParseError(
-            f"Too many ':'-separated segments in throttle spec {spec!r} "
-            "(expected at most 4: uid, rate, strategy, type)."
+            f"Too many {SPEC_DELIMITER!r}-separated segments in throttle spec "
+            f"{spec!r} (expected at most 4: uid, rate, strategy, type)."
         )
     return ParsedSpec(
         uid=uid,
@@ -215,7 +222,7 @@ def resolve_specs(
     Resolve shorthand throttle specs and pre-built throttles into concrete instances.
 
     Each item in `specs` may be either a ready-made `Throttle` object or a
-    shorthand string such as `"100/min"` or `"my_uid:100/min:token_bucket"`.
+    shorthand string such as `"100/min"` or `"my_uid|100/min|token_bucket"`.
     Built throttles are returned unchanged. String specs are parsed, validated, and
     converted into an `HTTPThrottle` or `WebSocketThrottle` using the
     provided keyword arguments.
@@ -249,7 +256,7 @@ def resolve_specs(
         raise ParseError(
             "`uid` was given, but more than one throttle spec in this call "
             "would need it. Embed a uid in each string instead (e.g. "
-            '"my_uid:100/min").'
+            '"my_uid|100/min").'
         )
 
     registry = kwargs.get("registry") or GLOBAL_REGISTRY
@@ -261,12 +268,16 @@ def resolve_specs(
             continue
 
         if parsed.lookup_only:
-            if kwargs:
+            # `registry` says *where* to look the uid up, so it's meaningful
+            # here and exempt; every other kwarg only affects construction of
+            # a new throttle, which a lookup-only spec never does.
+            disallowed_kwargs = {k: v for k, v in kwargs.items() if k != "registry"}
+            if disallowed_kwargs:
                 raise ParseError(
                     f"Throttle spec {spec!r} looks up an existing throttle "
                     "by uid rather than constructing one, so keyword "
-                    f"arguments ({sorted(kwargs)}) have no effect here and "
-                    "are rejected rather than silently ignored."
+                    f"arguments ({sorted(disallowed_kwargs)}) have no effect "
+                    "here and are rejected rather than silently ignored."
                 )
             assert parsed.uid is not None
             existing = registry.get_throttle(parsed.uid)

@@ -61,7 +61,7 @@ def throttled(
     not every meesage.
 
     :param throttles: One or more pre-built `Throttle` instances, or shorthand strings
-        (e.g. `"100/min"`, `"100/min:token_bucket:ws"`, `"my_uid"` to look up an
+        (e.g. `"100/min"`, `"100/min|token_bucket|ws"`, `"my_uid"` to look up an
         existing throttle by uid). Can be mixed in the same call.
     :param route: The route to be throttled. If not provided, returns a decorator that
         can be used to apply throttling to routes.
@@ -90,7 +90,7 @@ def throttled(
 
 
     @app.route("/throttled")
-    @throttled(sustained_throttle, "20/sec:token_bucket")
+    @throttled(sustained_throttle, "20/sec|token_bucket")
     async def route(request: Request):
         return JSONResponse({"message": "Limited route 1"})
     ```

@@ -272,7 +272,7 @@ async def start_server(
             **kwargs,
         )
         server = Server(process=process, host=host, port=port, workers=workers)
-        server._stderr_tail = deque([])
+        server._stderr_tail = deque()
         server._stderr_task = asyncio.ensure_future(
             read_stderr(process, server._stderr_tail)
         )

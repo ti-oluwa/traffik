@@ -1,7 +1,7 @@
 /*
- * _ext.c
+ * atomic.c
  *
- * C extension module providing performance-critical operations for traffik:
+ * Atomic byte-lock primitives for traffik's multiprocess backend.
  */
 
 #define PY_SSIZE_T_CLEAN
@@ -25,8 +25,7 @@
  * accesses inside the critical section are correctly ordered relative
  * to this operation on every architecture.
  *
- * Provides two atomic operations on a single byte within a writable
- * buffer (e.g. multiprocessing.SharedMemory):
+ * Provides two atomic operations on a single byte within a writable buffer:
  *
  * Thread / process safety
  * -----------------------
@@ -105,44 +104,8 @@ clear_byte(PyObject *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
-/*
- * fnv_32bit_hash(data: bytes) -> int
- *
- * Computes the FNV-1a 32-bit hash of the given bytes.
- * Fast, simple hash function suitable for distributed rate limiting.
- *
- * FNV-1a algorithm:
- *   hash = FNV_OFFSET_BASIS
- *   for each byte in data:
- *       hash ^= byte
- *       hash *= FNV_PRIME
- */
-#define FNV_32_PRIME 16777619U
-#define FNV_32_OFFSET_BASIS 2166136261U
 
-static PyObject *
-fnv_32bit_hash(PyObject *self, PyObject *args)
-{
-    Py_buffer view;
-
-    if (!PyArg_ParseTuple(args, "y*", &view)) {
-        return NULL;
-    }
-
-    uint32_t hash = FNV_32_OFFSET_BASIS;
-    const uint8_t *data = (const uint8_t *)view.buf;
-
-    for (Py_ssize_t i = 0; i < view.len; i++) {
-        hash ^= data[i];
-        hash *= FNV_32_PRIME;
-    }
-
-    PyBuffer_Release(&view);
-    return PyLong_FromUnsignedLong(hash);
-}
-
-
-static PyMethodDef ExtMethods[] = {
+static PyMethodDef AtomicMethods[] = {
     {
         "test_and_set_byte",
         test_and_set_byte,
@@ -164,28 +127,19 @@ static PyMethodDef ExtMethods[] = {
         "Atomic store of 0 to buffer[offset] with release memory ordering.\n"
         "Use to release a lock previously acquired with test_and_set_byte.\n"
     },
-    {
-        "fnv_32bit_hash",
-        fnv_32bit_hash,
-        METH_VARARGS,
-        "fnv_32bit_hash(data: bytes) -> int\n"
-        "\n"
-        "Compute FNV-1a 32-bit hash of the given bytes.\n"
-        "Fast hash suitable for distributed rate limiting.\n"
-    },
     {NULL, NULL, 0, NULL}
 };
 
-static struct PyModuleDef ExtModule = {
+static struct PyModuleDef AtomicModule = {
     PyModuleDef_HEAD_INIT,
-    "_ext",
-    "C extensions for traffik.",
+    "_atomic",
+    "Atomic byte-lock primitives for traffik's multiprocess backend.",
     -1,
-    ExtMethods
+    AtomicMethods
 };
 
 PyMODINIT_FUNC
-PyInit__ext(void)
+PyInit__atomic(void)
 {
-    return PyModule_Create(&ExtModule);
+    return PyModule_Create(&AtomicModule);
 }

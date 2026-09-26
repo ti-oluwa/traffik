@@ -12,7 +12,7 @@ from starlette.websockets import WebSocket
 from traffik._utils import is_async_callable
 from traffik.backends.base import ThrottleBackend, get_throttle_backend
 from traffik.exceptions import (
-    _EXEMPT_EXCEPTIONS,
+    EXEMPT_EXCEPTIONS,
     BackendConnectionError,
     ConfigurationError,
     _build_exception_handler_getter,
@@ -247,7 +247,7 @@ class MiddlewareThrottle(typing.Generic[HTTPConnectionT]):
         return await self.hit(connection, *args, **kwargs)
 
 
-_SortThrottles = typing.Union[
+SortThrottles = typing.Union[
     None,
     typing.Literal["cheap_first", "cheap_last", False],
     typing.Callable[
@@ -257,7 +257,7 @@ _SortThrottles = typing.Union[
 ]
 
 
-def _cheap_first(
+def sort_cheap_first(
     throttle: typing.Union[
         MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]
     ],
@@ -277,7 +277,7 @@ def _cheap_first(
     return throttle.cost if not throttle._uses_cost_func else float("inf")
 
 
-def _cheap_last(
+def sort_cheap_last(
     throttle: typing.Union[
         MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]
     ],
@@ -297,12 +297,12 @@ def _cheap_last(
     return -throttle.cost if not throttle._uses_cost_func else -float("inf")  # type: ignore
 
 
-def _prep_throttles(
+def prep_throttles(
     middleware_throttles: typing.Sequence[
         typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]
     ],
     *,
-    sort: _SortThrottles = "cheap_first",
+    sort: SortThrottles[HTTPConnectionT] = "cheap_first",
 ) -> typing.Mapping[
     typing.Literal["http", "websocket"],
     list[typing.Union[MiddlewareThrottle[HTTPConnectionT], Throttle[HTTPConnectionT]]],
@@ -328,12 +328,12 @@ def _prep_throttles(
     if sort == "cheap_first":
         sorted_throttles = sorted(
             middleware_throttles,
-            key=_cheap_first,
+            key=sort_cheap_first,
         )
     elif sort == "cheap_last":
         sorted_throttles = sorted(
             middleware_throttles,
-            key=_cheap_last,
+            key=sort_cheap_last,
         )
     elif sort in (False, None):
         sorted_throttles = middleware_throttles
@@ -368,7 +368,7 @@ def _prep_throttles(
 
 class ThrottleMiddleware:
     """
-    Traffik ASGI middleware._predicate_takes_context
+    Traffik ASGI middleware.
 
     This middleware processes incoming HTTP connections and applies throttles based on
     the provided `MiddlewareThrottle` instances. It integrates with throttle backends
@@ -425,7 +425,7 @@ class ThrottleMiddleware:
             ]
         ] = None,
         context: typing.Optional[typing.Mapping[str, typing.Any]] = None,
-        sort: _SortThrottles[HTTPConnection] = "cheap_first",
+        sort: SortThrottles[HTTPConnection] = "cheap_first",
         skip_handler: typing.Optional[bool] = None,
     ) -> None:
         """
@@ -470,7 +470,7 @@ class ThrottleMiddleware:
             Defaults to `False`.
         """
         self.app = app
-        self.middleware_throttles = _prep_throttles(middleware_throttles, sort=sort)
+        self.middleware_throttles = prep_throttles(middleware_throttles, sort=sort)
         self.backend = backend if backend is not None else get_throttle_backend(app)
         # We set to True once we've successfully checked that the backend is ready once.
         # Also actively tracks backend health
@@ -524,7 +524,7 @@ class ThrottleMiddleware:
                         context=context,
                         skip_handler=self.skip_handler,
                     )
-                except _EXEMPT_EXCEPTIONS:
+                except EXEMPT_EXCEPTIONS:
                     raise
                 except Exception as exc:
                     if isinstance(exc, BackendConnectionError):

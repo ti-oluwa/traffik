@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from tests.utils import default_client_identifier, make_client, unlimited_identifier
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.decorators import throttled
+from traffik.decorators.fastapi import throttled
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 

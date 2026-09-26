@@ -1,15 +1,152 @@
 """
-**Traffik** - Distributed Rate Limiting for Starlette Applications.
+**Traffik** - Rate Limiting for Starlette Applications.
+
+@author: Daniel T. Afolayan (github.com/ti-oluwa)
 """
 
-from .backends import *  # noqa
-from .rates import Rate  # noqa
-from .throttles import *  # noqa
-from .typing import *  # noqa
-from .config import *  # noqa
-from ._utils import *  # noqa
-from .headers import *  # noqa
-from .registry import *  # noqa
+from ._locks import (
+    AsyncLockAdapter,
+    AsyncLockT,
+    AsyncRLock,
+    FairAsyncRLock,
+    NamedLockHandle,
+    NamedLockPool,
+)
+from ._utils import (
+    CircuitBreaker,
+    CircuitState,
+    ProxyHeaders,
+    get_remote_address,
+    is_ip,
+    time,
+)
+from .backends import (
+    InMemoryBackend,
+    MultiProcessInMemoryBackend,
+    ThrottleBackend,
+    connection_throttled,
+    default_identifier,
+    get_throttle_backend,
+)
+from .config import (
+    ANONYMOUS_IDENTIFIER,
+    get_legacy_md5_keys,
+    get_lock_blocking,
+    get_lock_blocking_timeout,
+    get_lock_ttl,
+    set_legacy_md5_keys,
+    set_lock_blocking,
+    set_lock_blocking_timeout,
+    set_lock_ttl,
+)
+from .headers import (
+    DEFAULT_HEADERS_ALWAYS,
+    DEFAULT_HEADERS_THROTTLED,
+    Header,
+    Headers,
+)
+from .rates import Rate, parse_rate
+from .registry import (
+    Bypass,
+    Rule,
+    ThrottleRegistry,
+    bypass_if,
+    throttle_if,
+)
+from .throttles import (
+    HTTPThrottle,
+    RequestThrottle,
+    Throttle,
+    ThrottleExceptionInfo,
+    ThrottleStrategy,
+    WebSocketThrottle,
+    get_wait,
+    is_throttled,
+    throttled,
+    websocket_throttled,
+)
+from .typing import (
+    EXEMPTED,
+    AsyncLock,
+    ConnectionIdentifier,
+    ConnectionThrottledHandler,
+    Dependency,
+    ExceptionHandler,
+    HTTPConnectionT,
+    HTTPConnectionTcon,
+    LockConfig,
+    Matchable,
+    Network,
+    Stringable,
+    ThrottleErrorHandler,
+    TrustedProxy,
+    WaitPeriod,
+)
 
+__all__ = [
+    "ANONYMOUS_IDENTIFIER",
+    "DEFAULT_HEADERS_ALWAYS",
+    "DEFAULT_HEADERS_THROTTLED",
+    "EXEMPTED",
+    "AsyncLock",
+    "AsyncLockAdapter",
+    "AsyncLockT",
+    "AsyncRLock",
+    "Bypass",
+    "CircuitBreaker",
+    "CircuitState",
+    "ConnectionIdentifier",
+    "ConnectionThrottledHandler",
+    "Dependency",
+    "ExceptionHandler",
+    "FairAsyncRLock",
+    "HTTPConnectionT",
+    "HTTPConnectionTcon",
+    "HTTPThrottle",
+    "Header",
+    "Headers",
+    "InMemoryBackend",
+    "LockConfig",
+    "Matchable",
+    "MultiProcessInMemoryBackend",
+    "NamedLockHandle",
+    "NamedLockPool",
+    "Network",
+    "ProxyHeaders",
+    "Rate",
+    "RequestThrottle",
+    "Rule",
+    "Stringable",
+    "Throttle",
+    "ThrottleBackend",
+    "ThrottleErrorHandler",
+    "ThrottleExceptionInfo",
+    "ThrottleRegistry",
+    "ThrottleStrategy",
+    "TrustedProxy",
+    "WaitPeriod",
+    "WebSocketThrottle",
+    "bypass_if",
+    "connection_throttled",
+    "default_identifier",
+    "get_legacy_md5_keys",
+    "get_lock_blocking",
+    "get_lock_blocking_timeout",
+    "get_lock_ttl",
+    "get_remote_address",
+    "get_throttle_backend",
+    "get_wait",
+    "is_ip",
+    "is_throttled",
+    "parse_rate",
+    "set_legacy_md5_keys",
+    "set_lock_blocking",
+    "set_lock_blocking_timeout",
+    "set_lock_ttl",
+    "throttle_if",
+    "throttled",
+    "time",
+    "websocket_throttled",
+]
 
-__version__ = "1.2.2"
+__version__ = "1.3.0"

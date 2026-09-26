@@ -8,7 +8,7 @@ Traffik ships **two versions** of `@throttled`: one for Starlette and one for Fa
 
 ## Two decorator variants
 
-| | `traffik.throttles.throttled` | `traffik.decorators.throttled` |
+| | `traffik.decorators.generic.throttled` | `traffik.decorators.fastapi.throttled` |
 |---|---|---|
 | **Works with** | Starlette and FastAPI | FastAPI only |
 | **Requires `Request` param** | Yes - the route function must declare a `Request` or `WebSocket` parameter | No - FastAPI's DI injects the connection automatically |
@@ -18,15 +18,15 @@ Traffik ships **two versions** of `@throttled`: one for Starlette and one for Fa
 
 ---
 
-## `traffik.decorators.throttled`: FastAPI version
+## `traffik.decorators.fastapi.throttled`: FastAPI version
 
-Import from `traffik.decorators`. Your route function does **not** need to declare a `Request` parameter. FastAPI resolves the connection internally.
+Import from `traffik.decorators.fastapi`. Your route function does **not** need to declare a `Request` parameter. FastAPI resolves the connection internally.
 
 ```python
 from fastapi import FastAPI
 from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.decorators import throttled  # FastAPI-specific
+from traffik.decorators.fastapi import throttled  # FastAPI-specific
 
 backend = InMemoryBackend()
 app = FastAPI(lifespan=backend.lifespan)
@@ -42,13 +42,13 @@ async def list_items():
 The decorator order matters: `@app.get(...)` must be the outermost decorator, `@throttled(...)` the next one in.
 
 !!! tip
-    Because `traffik.decorators.throttled` relies on FastAPI's dependency injection, the throttle check happens before any other dependencies in the function signature are resolved. This means a rejected request never triggers database queries or other expensive dependencies.
+    Because `traffik.decorators.fastapi.throttled` relies on FastAPI's dependency injection, the throttle check happens before any other dependencies in the function signature are resolved. This means a rejected request never triggers database queries or other expensive dependencies.
 
 ---
 
-## `traffik.throttles.throttled`: Starlette version
+## `traffik.decorators.generic.throttled`: Starlette version
 
-Import from `traffik.throttles` (or directly from `traffik`). The route function **must** declare a `Request` or `WebSocket` parameter. The decorator inspects the function arguments at call time to find the connection object.
+Import from `traffik.decorators.generic` (or directly from `traffik`). The route function **must** declare a `Request` or `WebSocket` parameter. The decorator inspects the function arguments at call time to find the connection object.
 
 ```python
 from starlette.applications import Starlette
@@ -57,7 +57,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.throttles import throttled  # Starlette version
+from traffik.decorators.generic import throttled  # Starlette version
 
 backend = InMemoryBackend()
 
@@ -108,7 +108,7 @@ Pass multiple throttles to `@throttled`. They are checked **sequentially**: the 
     from fastapi import FastAPI
     from traffik import HTTPThrottle
     from traffik.backends.inmemory import InMemoryBackend
-    from traffik.decorators import throttled
+    from traffik.decorators.fastapi import throttled
 
     backend = InMemoryBackend()
     app = FastAPI(lifespan=backend.lifespan)
@@ -164,7 +164,7 @@ Pass multiple throttles to `@throttled`. They are checked **sequentially**: the 
     from fastapi import FastAPI, WebSocket
     from traffik.throttles import WebSocketThrottle
     from traffik.backends.inmemory import InMemoryBackend
-    from traffik.decorators import throttled
+    from traffik.decorators.fastapi import throttled
 
     backend = InMemoryBackend()
     app = FastAPI(lifespan=backend.lifespan)
@@ -208,6 +208,80 @@ For per-message throttling inside an established WebSocket connection, see [Dire
 
 ---
 
+## Shorthand string specs
+
+Instead of building a `Throttle` up front, `@throttled(...)` also accepts shorthand strings. This is handy for simple, one-off limits where a full `HTTPThrottle(...)` call would just add noise.
+
+```
+"<rate>"
+"<rate>|<strategy>"
+"<rate>|<strategy>|<type>"
+"<uid>"
+"<uid>|<rate>"
+"<uid>|<rate>|<strategy>"
+"<uid>|<rate>|<strategy>|<type>"
+```
+
+Segments are separated by `|`, not `:`, so a uid can freely use `:` for namespacing (e.g. `"api:items"`, the convention used throughout these docs) without conflicting with the spec grammar. `<strategy>` is one of the aliases registered in `traffik.throttles.specs.STRATEGY_ALIASES` (e.g. `"fixed_window"`, `"token_bucket"`, `"sliding_window_log"`), and `<type>` is `"http"` or `"ws"`, defaulting to `"http"`.
+
+=== "FastAPI decorator"
+
+    ```python
+    from fastapi import FastAPI
+    from traffik.backends.inmemory import InMemoryBackend
+    from traffik.decorators.fastapi import throttled
+
+    backend = InMemoryBackend()
+    app = FastAPI(lifespan=backend.lifespan)
+
+    @app.get("/items")
+    @throttled("api:items|100/min|token_bucket")
+    async def list_items():
+        return {"items": []}
+    ```
+
+=== "Starlette decorator"
+
+    ```python
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+    from traffik.backends.inmemory import InMemoryBackend
+    from traffik.decorators.generic import throttled
+
+    backend = InMemoryBackend()
+
+    @throttled("api:items|100/min|token_bucket")
+    async def list_items(request: Request) -> JSONResponse:
+        return JSONResponse({"items": []})
+
+    app = Starlette(
+        routes=[Route("/items", list_items, methods=["GET"])],
+        lifespan=backend.lifespan,
+    )
+    ```
+
+Pre-built throttles and shorthand strings can be mixed freely in the same call, and a bare rate (no strategy or type) defaults to the fixed-window strategy and the `"http"` type:
+
+```python
+@throttled(burst_throttle, "200/min")  # one pre-built, one shorthand
+async def route(...): ...
+```
+
+A string with no rate at all (just `"<uid>"`) doesn't build a throttle, it looks the uid up in the registry and reuses whatever is already registered under it, raising if nothing is there yet:
+
+```python
+HTTPThrottle(uid="api:items", rate="100/min")  # registered once, elsewhere
+
+@throttled("api:items")  # reuses the throttle above
+async def list_items(): ...
+```
+
+`uid=` and `type=` keyword arguments on `@throttled(...)` supply defaults for specs that don't embed their own, and are rejected if they conflict with a value a spec does embed. Anything a shorthand string can't express (a custom strategy, HTTP-only `use_method`, and so on) still needs a `Throttle` built directly.
+
+---
+
 ## Decorators vs. dependencies: when to prefer each
 
 Both approaches produce the same runtime behavior. The choice is largely a matter of style:
@@ -221,7 +295,7 @@ You can mix them freely. A common pattern is to use a router-level dependency fo
 from fastapi import FastAPI, APIRouter, Depends
 from traffik import HTTPThrottle
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.decorators import throttled
+from traffik.decorators.fastapi import throttled
 
 backend = InMemoryBackend()
 app = FastAPI(lifespan=backend.lifespan)

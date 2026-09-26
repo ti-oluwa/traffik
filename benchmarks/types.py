@@ -1,5 +1,6 @@
 import platform
 import statistics
+import typing
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -23,13 +24,13 @@ class BackendKind(Enum):
         """
         choices = [
             "inmemory",
-            "multiprocess",
             "aioredis",
             "coredis",
             "aiomcache",
         ]
         if platform.system() != "Windows":
             choices.append("emcache")
+            choices.append("multiprocess")
         return choices
 
 
@@ -232,7 +233,7 @@ class AggregatedResult:
 
         :return: Sum of requests across all results.
         """
-        return sum(r.total_requests for r in self.results)
+        return sum(result.total_requests for result in self.results)
 
     @property
     def mean_rps(self) -> float:
@@ -243,7 +244,7 @@ class AggregatedResult:
         """
         if not self.results:
             return 0.0
-        return statistics.mean(r.requests_per_second for r in self.results)
+        return statistics.mean(result.requests_per_second for result in self.results)
 
     @property
     def p50_ms(self) -> float:
@@ -253,8 +254,8 @@ class AggregatedResult:
         :return: P50 in ms or 0.0 if no latencies.
         """
         all_latencies = []
-        for r in self.results:
-            all_latencies.extend(r.latencies_seconds)
+        for result in self.results:
+            all_latencies.extend(result.latencies_seconds)
         if not all_latencies:
             return 0.0
         return statistics.median(all_latencies) * 1000
@@ -267,8 +268,8 @@ class AggregatedResult:
         :return: P95 in ms or 0.0 if no latencies.
         """
         all_latencies = []
-        for r in self.results:
-            all_latencies.extend(r.latencies_seconds)
+        for result in self.results:
+            all_latencies.extend(result.latencies_seconds)
         if not all_latencies:
             return 0.0
         sorted_latencies = sorted(all_latencies)
@@ -283,8 +284,8 @@ class AggregatedResult:
         :return: P99 in ms or 0.0 if no latencies.
         """
         all_latencies = []
-        for r in self.results:
-            all_latencies.extend(r.latencies_seconds)
+        for result in self.results:
+            all_latencies.extend(result.latencies_seconds)
         if not all_latencies:
             return 0.0
         sorted_latencies = sorted(all_latencies)
@@ -299,8 +300,8 @@ class AggregatedResult:
         :return: Mean in ms or 0.0 if no latencies.
         """
         all_latencies = []
-        for r in self.results:
-            all_latencies.extend(r.latencies_seconds)
+        for result in self.results:
+            all_latencies.extend(result.latencies_seconds)
         if not all_latencies:
             return 0.0
         return statistics.mean(all_latencies) * 1000
@@ -312,7 +313,7 @@ class AggregatedResult:
 
         :return: Success rate as percentage or 0.0.
         """
-        total_successful = sum(r.successful_requests for r in self.results)
+        total_successful = sum(result.successful_requests for result in self.results)
         total = self.total_requests
         if total == 0:
             return 0.0
@@ -325,7 +326,7 @@ class AggregatedResult:
 
         :return: Throttle rate as percentage or 0.0.
         """
-        total_throttled = sum(r.throttled_requests for r in self.results)
+        total_throttled = sum(result.throttled_requests for result in self.results)
         total = self.total_requests
         if total == 0:
             return 0.0
@@ -338,7 +339,7 @@ class AggregatedResult:
 
         :return: Error rate as percentage or 0.0.
         """
-        total_errors = sum(r.error_requests for r in self.results)
+        total_errors = sum(result.error_requests for result in self.results)
         total = self.total_requests
         if total == 0:
             return 0.0
@@ -353,8 +354,87 @@ class AggregatedResult:
         """
         if len(self.results) < 2:
             return 0.0
-        rps_values = [r.requests_per_second for r in self.results]
+        rps_values = [result.requests_per_second for result in self.results]
         return statistics.stdev(rps_values)
+
+
+@dataclass(slots=True)
+class CompareResult:
+    """
+    Paired traffik/SlowAPI results for the same scenario, run against
+    identical rate, backend, worker count, and traffic pattern.
+
+    :param scenario_key: Short scenario name (matches `HTTP_SCENARIOS` keys).
+    :param scenario_name: Human-readable scenario name.
+    :param traffik: Aggregated result from the traffik-backed app.
+    :param slowapi: Aggregated result from the SlowAPI-backed app, run
+        with the same rate (converted via `benchmarks.rates`), backend,
+        identity rule, worker count, and endpoint variant.
+    """
+
+    scenario_key: str
+    scenario_name: str
+    traffik: AggregatedResult
+    slowapi: AggregatedResult
+
+
+@dataclass(slots=True)
+class ScaleCheckpoint:
+    """
+    One measurement point in a `scale` run. The state of the world after
+    growing the backend to `cumulative_keys` distinct keys.
+
+    :param cumulative_keys: Total distinct keys created by this point.
+    :param new_keys_this_checkpoint: Keys created since the previous checkpoint.
+    :param rss_mb: Target server process RSS, in MiB, sampled right after
+        this checkpoint's traffic finished.
+    :param rss_delta_mb: `rss_mb` minus the very first (baseline, zero-key)
+        sample.
+    :param bytes_per_key: `rss_delta_mb` (in bytes) divided by
+        `cumulative_keys`, i.e. incremental memory cost per stored key so
+        far. `0.0` at the baseline checkpoint (no keys yet).
+    :param backend_used_memory_mb: The backend's own self-reported memory
+        usage in MiB, where available (currently: Redis `used_memory` via
+        `INFO memory`). `None` when not applicable or not reachable.
+    :param mean_rps: Mean requests/sec for the batch of new-key requests
+        that grew the backend to this checkpoint.
+    :param p50_ms: Median latency for that batch, in ms.
+    :param p99_ms: P99 latency for that batch, in ms.
+    :param successful: Successful (200) requests in that batch.
+    :param errors: Non-200, non-429 requests in that batch.
+    """
+
+    cumulative_keys: int
+    new_keys_this_checkpoint: int
+    rss_mb: float
+    rss_delta_mb: float
+    bytes_per_key: float
+    backend_used_memory_mb: typing.Optional[float]
+    mean_rps: float
+    p50_ms: float
+    p99_ms: float
+    successful: int
+    errors: int
+
+
+@dataclass(slots=True)
+class ScaleResult:
+    """
+    Full output of a `scale` run. Contains memory and latency measured as the
+    backend's key count grows, against one continuously-running server.
+
+    :param backend_kind: Which backend was used.
+    :param strategy_kind: Which strategy was used.
+    :param workers: Worker count the target server was run with.
+    :param checkpoints: One entry per configured checkpoint, in ascending
+        order of `cumulative_keys`. The first entry is the zero-key
+        baseline (`cumulative_keys == 0`).
+    """
+
+    backend_kind: str
+    strategy_kind: str
+    workers: int
+    checkpoints: list[ScaleCheckpoint]
 
 
 @dataclass(slots=True)

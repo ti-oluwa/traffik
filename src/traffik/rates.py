@@ -5,6 +5,10 @@ from typing import Annotated
 
 from annotated_types import Ge
 
+from traffik.exceptions import ParseError
+
+__all__ = ["Rate", "parse_rate"]
+
 
 @typing.final
 class Rate:
@@ -127,45 +131,50 @@ class Rate:
 
         :param rate: The string representation of the rate limit.
         :return: A `Rate` object.
-        :raises ValueError: If the rate string is invalid or cannot be parsed.
+        :raises ParseError: If the rate string is invalid or cannot be parsed.
         """
         rate = str(rate).strip()
         if not rate:
-            raise ValueError("Rate string cannot be empty")
+            raise ParseError("Rate string cannot be empty")
         # Use `.lower()` for better cache performance
-        return _parse_rate_string(rate.lower())
+        return parse_rate(rate.lower())
 
 
-_PERIOD_RE = re.compile(r"^(\d+)?\s*([a-z]+)$")
-_SPLIT_RE = re.compile(r"\s*per\s*|\/", re.IGNORECASE)
-# Maps unit to Rate constructor parameters
-_UNIT_MAPPING = {
-    "ms": ("milliseconds", 1),
-    "millisecond": ("milliseconds", 1),
-    "milliseconds": ("milliseconds", 1),
-    "s": ("seconds", 1),
-    "sec": ("seconds", 1),
-    "second": ("seconds", 1),
-    "seconds": ("seconds", 1),
-    "m": ("minutes", 1),
-    "min": ("minutes", 1),
-    "minute": ("minutes", 1),
-    "minutes": ("minutes", 1),
-    "h": ("hours", 1),
-    "hr": ("hours", 1),
-    "hour": ("hours", 1),
-    "hours": ("hours", 1),
-    "d": ("days", 24),  # days are represented as hours
-    "day": ("days", 24),
-    "days": ("days", 24),
+PERIOD_RE = re.compile(r"^(\d+)?\s*([a-z]+)$")
+SPLIT_RE = re.compile(r"\s*per\s*|\/", re.IGNORECASE)
+UNIT_TO_MILLISECONDS = {
+    "ms": 1,
+    "millisecond": 1,
+    "milliseconds": 1,
+    "s": 1_000,
+    "sec": 1_000,
+    "second": 1_000,
+    "seconds": 1_000,
+    "m": 60_000,
+    "min": 60_000,
+    "minute": 60_000,
+    "minutes": 60_000,
+    "h": 3_600_000,
+    "hr": 3_600_000,
+    "hour": 3_600_000,
+    "hours": 3_600_000,
+    "d": 86_400_000,
+    "day": 86_400_000,
+    "days": 86_400_000,
 }
 
 
 @functools.lru_cache(maxsize=512)
-def _parse_rate_string(rate: str) -> Rate:
-    parts = _SPLIT_RE.split(rate)
+def parse_rate(rate: str) -> Rate:
+    """
+    Parse a rate limit string into a `Rate` object.
+
+    :param rate: The rate limit string to parse.
+    :return: A `Rate` object representing the parsed rate limit.
+    """
+    parts = SPLIT_RE.split(rate)
     if len(parts) != 2:
-        raise ValueError(
+        raise ParseError(
             f"Invalid rate format '{rate}'. Expected format: '<limit>/<period><unit>' or '<limit> per <period><unit>'"
             f"(e.g., '5 per m', '2/5s', '10/30 seconds')"
         )
@@ -174,24 +183,24 @@ def _parse_rate_string(rate: str) -> Rate:
     limit_str = parts[0].strip()
     try:
         limit = int(limit_str)
-    except ValueError as exc:
-        raise ValueError(
+    except ParseError as exc:
+        raise ParseError(
             f"Invalid limit '{limit_str}'. Limit must be a non-negative integer."
         ) from exc
 
     if limit < 0:
-        raise ValueError("Limit must be non-negative")
+        raise ParseError("Limit must be non-negative")
 
     # Parse period (right side)
     period_str = parts[1].strip().lower()
     if not period_str:
-        raise ValueError("Period cannot be empty")
+        raise ParseError("Period cannot be empty")
 
     # Extract number and unit from period string
     # Regex matches: optional number + optional whitespace + unit
-    match = _PERIOD_RE.match(period_str)
+    match = PERIOD_RE.match(period_str)
     if not match:
-        raise ValueError(
+        raise ParseError(
             f"Invalid period format '{period_str}'. Expected format: "
             f"'<number><unit>' or '<unit>' (e.g., '5s', 's', '30 seconds')"
         )
@@ -200,16 +209,14 @@ def _parse_rate_string(rate: str) -> Rate:
     period_multiplier = int(period_num_str) if period_num_str else 1
 
     if period_multiplier <= 0:
-        raise ValueError(f"Period multiplier must be positive, got {period_multiplier}")
+        raise ParseError(f"Period multiplier must be positive, got {period_multiplier}")
 
-    if unit not in _UNIT_MAPPING:
-        valid_units = sorted(set(_UNIT_MAPPING.keys()))
-        raise ValueError(
+    if unit not in UNIT_TO_MILLISECONDS:
+        valid_units = sorted(set(UNIT_TO_MILLISECONDS.keys()))
+        raise ParseError(
             f"Invalid time unit '{unit}'. Valid units: {', '.join(valid_units)}"
         )
 
-    param_name, base_multiplier = _UNIT_MAPPING[unit]
-    # For days, we use hours internally
-    if param_name == "days":
-        return Rate(limit=limit, hours=period_multiplier * base_multiplier)
-    return Rate(limit=limit, **{param_name: period_multiplier * base_multiplier})
+    return Rate(
+        limit=limit, milliseconds=period_multiplier * UNIT_TO_MILLISECONDS[unit]
+    )

@@ -2,10 +2,10 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from benchmarks.types import AggregatedResult
+from benchmarks.types import AggregatedResult, CompareResult, ScaleResult
 
 
-def print_results_table(
+def print_aggregate_table(
     results: list[AggregatedResult],
     title: str = "Benchmark Results",
 ) -> None:
@@ -80,6 +80,103 @@ def print_results_table(
     )
 
 
+def print_compare_table(
+    results: list[CompareResult],
+    title: str = "traffik vs SlowAPI",
+) -> None:
+    """
+    Print a side-by-side traffik-vs-SlowAPI table, one row per scenario.
+
+    RPS delta is `(traffik - slowapi) / slowapi * 100`: positive means
+    traffik was faster in this run, negative means SlowAPI was.
+
+    :param results: List of `CompareResult`.
+    :param title: Title string shown above the table.
+    """
+    console = Console()
+    table = Table(title=title)
+
+    table.add_column("Scenario", width=28)
+    table.add_column("SlowAPI req/s", width=13, justify="right")
+    table.add_column("traffik req/s", width=13, justify="right")
+    table.add_column("req/s (Δ%)", width=11, justify="right")
+    table.add_column("SlowAPI P50", width=11, justify="right")
+    table.add_column("traffik P50", width=11, justify="right")
+    table.add_column("SlowAPI P99", width=11, justify="right")
+    table.add_column("traffik P99", width=11, justify="right")
+
+    for result in results:
+        slowapi_rps = result.slowapi.mean_rps
+        traffik_rps = result.traffik.mean_rps
+        delta = (
+            ((traffik_rps - slowapi_rps) / slowapi_rps * 100) if slowapi_rps > 0 else 0
+        )
+        delta_style = "green" if delta > 0 else "red"
+
+        table.add_row(
+            result.scenario_name,
+            f"{slowapi_rps:.1f}",
+            f"{traffik_rps:.1f}",
+            Text(f"{delta:+.1f}%", style=delta_style),
+            f"{result.slowapi.p50_ms:.2f}ms",
+            f"{result.traffik.p50_ms:.2f}ms",
+            f"{result.slowapi.p99_ms:.2f}ms",
+            f"{result.traffik.p99_ms:.2f}ms",
+        )
+
+    console.print(table)
+    console.print(
+        "\n[dim]req/s (Δ%): positive = traffik faster, negative = SlowAPI "
+        "faster, in this run.[/dim]"
+    )
+
+
+def print_scale_table(result: ScaleResult, title: str = "Scale Results") -> None:
+    """
+    Print a `scale` run's checkpoints: memory and latency as key count grows.
+
+    :param result: A `ScaleResult`.
+    :param title: Title string shown above the table.
+    """
+    console = Console()
+    table = Table(title=f"{title} ({result.backend_kind}, {result.strategy_kind})")
+
+    table.add_column("Keys", width=12, justify="right")
+    table.add_column("New keys", width=10, justify="right")
+    table.add_column("RSS (MiB)", width=10, justify="right")
+    table.add_column("Δ RSS (MiB)", width=12, justify="right")
+    table.add_column("Bytes/key", width=10, justify="right")
+    table.add_column("Backend mem", width=12, justify="right")
+    table.add_column("req/s", width=9, justify="right")
+    table.add_column("P50 (ms)", width=9, justify="right")
+    table.add_column("P99 (ms)", width=9, justify="right")
+
+    for cp in result.checkpoints:
+        backend_mem = (
+            f"{cp.backend_used_memory_mb:.1f}"
+            if cp.backend_used_memory_mb is not None
+            else "-"
+        )
+        table.add_row(
+            f"{cp.cumulative_keys:,}",
+            f"{cp.new_keys_this_checkpoint:,}",
+            f"{cp.rss_mb:.1f}",
+            f"{cp.rss_delta_mb:.1f}",
+            f"{cp.bytes_per_key:.1f}" if cp.cumulative_keys else "-",
+            backend_mem,
+            f"{cp.mean_rps:.1f}" if cp.mean_rps else "-",
+            f"{cp.p50_ms:.2f}" if cp.p50_ms else "-",
+            f"{cp.p99_ms:.2f}" if cp.p99_ms else "-",
+        )
+
+    console.print(table)
+    console.print(
+        "\n[dim]RSS is the target server process's resident memory. Bytes/key "
+        "is cumulative Δ RSS divided by cumulative keys which is a rough per-key "
+        "cost estimate, not a precise allocator accounting.[/dim]"
+    )
+
+
 def print_comparison_table(
     baseline: AggregatedResult,
     others: list[AggregatedResult],
@@ -136,5 +233,4 @@ def print_comparison_table(
             p50_str,
             p95_str,
         )
-
     console.print(table)

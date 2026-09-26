@@ -173,7 +173,7 @@ class TestAdaptiveThrottleStrategy:
 
         # Make requests until throttled to find the effective limit
         requests_allowed = 0
-        for i in range(100):
+        for _ in range(100):
             wait = await strategy(key, rate, backend)
             if wait == 0.0:
                 requests_allowed += 1
@@ -289,7 +289,7 @@ class TestQuotaWithRolloverStrategy:
         key = "user:quota:maxrollover"
 
         # Use only 10 requests (90 unused)
-        for i in range(10):
+        for _ in range(10):
             wait = await strategy(key, rate, backend)
             assert wait == 0.0
 

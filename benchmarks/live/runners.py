@@ -17,6 +17,7 @@ async def run_http_like_scenario(
     config: BenchmarkConfig,
     client: httpx2.AsyncClient,
     iteration: int,
+    path: str = "/test",
 ) -> ScenarioResult:
     """
     Execute one iteration of an HTTP/middleware/multiprocess scenario
@@ -26,25 +27,31 @@ async def run_http_like_scenario(
     :param config: The active benchmark run configuration.
     :param client: A real, connected `httpx2.AsyncClient` for the target server.
     :param iteration: 1-based iteration number (0 for warmup).
+    :param path: Endpoint path to hit for every mode except `"mixed_paths"`
+        (which always uses its own declared paths regardless of this
+        argument). Defaults to `"/test"`, matching every existing caller;
+        `compare` passes `"/test-sync"` to hit the sync-endpoint variant
+        instead, on both apps identically.
     :return: The resulting `ScenarioResult`.
     """
     start_time = time.perf_counter()
 
     if scenario.mode == "sequential":
         latencies, successful, throttled, errors = await live_client.send_sequential(
-            client, n=scenario.total_requests, headers=scenario.headers
+            client, n=scenario.total_requests, path=path, headers=scenario.headers
         )
     elif scenario.mode == "concurrent":
         latencies, successful, throttled, errors = await live_client.send_concurrent(
             client,
             n=scenario.total_requests,
             concurrency=config.concurrency,
+            path=path,
             headers=scenario.headers,
         )
     elif scenario.mode == "waves":
         assert scenario.waves is not None
         latencies, successful, throttled, errors = await live_client.send_waves(
-            client, waves=scenario.waves, headers=scenario.headers
+            client, waves=scenario.waves, path=path, headers=scenario.headers
         )
     elif scenario.mode == "unique_keys_batched":
         key_mod = (
@@ -55,6 +62,7 @@ async def run_http_like_scenario(
             client,
             n=scenario.total_requests,
             concurrency=batch_size,
+            path=path,
             headers=scenario.headers,
             key_header=scenario.key_header,
             key_mod=key_mod,
@@ -77,6 +85,7 @@ async def run_http_like_scenario(
                 count=count,
                 key_header=scenario.key_header,
                 key_mod=scenario.key_mod,
+                path=path,
             )
             latencies.extend(batch_latencies)
             successful += batch_ok
@@ -124,6 +133,7 @@ async def send_sequential_with_keys(
     count: int,
     key_header: str,
     key_mod: int,
+    path: str = "/test",
 ) -> tuple[list[float], int, int, int]:
     """Sequential requests indexed from `start_index`, each with a distinct key."""
     latencies: list[float] = []
@@ -132,7 +142,7 @@ async def send_sequential_with_keys(
     for offset in range(count):
         index = start_index + offset
         headers = {key_header: f"user-{index % key_mod}"}
-        latency, status_code = await live_client.make_request(client, "/test", headers)
+        latency, status_code = await live_client.make_request(client, path, headers)
         s, t, e = live_client.tally(latency, status_code, latencies)
         successful += s
         throttled += t

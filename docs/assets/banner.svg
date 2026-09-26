@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff8ed"/>
+      <stop offset="0.55" stop-color="#f9efe2"/>
+      <stop offset="1" stop-color="#f1dfc9"/>
+    </linearGradient>
+
+    <radialGradient id="glow" cx="82%" cy="18%" r="55%">
+      <stop offset="0" stop-color="#ff9800" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#ff9800" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18"
+                    flood-color="#7a3200" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+
+  <!-- Subtle traffic / request-flow motif -->
+  <g opacity="0.065" fill="none" stroke="#d84315" stroke-width="2">
+
+    <!-- Flow curves -->
+    <path d="M0 500
+             C150 430 270 565 425 495
+             S700 430 850 500
+             S1050 555 1200 475"/>
+
+    <path d="M0 535
+             C150 465 275 600 440 530
+             S700 465 855 535
+             S1050 590 1200 510"/>
+
+    <!-- Request grid -->
+    <rect x="720" y="70" width="410" height="270"/>
+
+    <path d="
+      M755 105 H1095
+      M755 140 H1095
+      M755 175 H1095
+      M755 210 H1095
+      M755 245 H1095
+      M755 280 H1095
+      M755 315 H1095"/>
+
+    <path d="
+      M755 105 V315
+      M790 105 V315
+      M825 105 V315
+      M860 105 V315
+      M895 105 V315
+      M930 105 V315
+      M965 105 V315
+      M1000 105 V315
+      M1035 105 V315
+      M1070 105 V315
+      M1095 105 V315"/>
+
+    <!-- Rate-limit threshold -->
+    <path d="M735 230 H1115"
+          stroke="#ff5722"
+          stroke-width="3"/>
+
+    <!-- Small request indicators -->
+    <circle cx="825" cy="175" r="5" fill="#ff9800" stroke="none"/>
+    <circle cx="930" cy="210" r="5" fill="#ff9800" stroke="none"/>
+    <circle cx="1035" cy="140" r="5" fill="#ff9800" stroke="none"/>
+  </g>
+
+  <!-- Brand mark -->
+  <g transform="translate(110 165) scale(2.05)" filter="url(#shadow)">
+
+    <!-- Shield border -->
+    <path d="M50 3 L89 19 L89 53
+             C89 74 71 90 50 97
+             C29 90 11 74 11 53
+             L11 19 Z"
+          fill="#ffc107"/>
+
+    <!-- Shield body -->
+    <path d="M50 9 L83 23 L83 53
+             C83 72 67 86 50 92
+             C33 86 17 72 17 53
+             L17 23 Z"
+          fill="#ff5722"/>
+
+    <!-- Traffic light housing -->
+    <rect x="38" y="22"
+          width="24"
+          height="52"
+          rx="7"
+          fill="#1a1a1a"/>
+
+    <!-- Red light -->
+    <circle cx="50" cy="34"
+            r="7"
+            fill="#b71c1c"
+            opacity="0.6"/>
+
+    <!-- Amber light -->
+    <circle cx="50" cy="50"
+            r="7"
+            fill="#ffc107"/>
+
+    <circle cx="50" cy="50"
+            r="5"
+            fill="#ffe57f"
+            opacity="0.7"/>
+
+    <!-- Green light -->
+    <circle cx="50" cy="66"
+            r="7"
+            fill="#1b5e20"
+            opacity="0.5"/>
+  </g>
+
+  <!-- Text -->
+  <g font-family="Inter, Segoe UI, Arial, sans-serif">
+
+    <!-- Project name -->
+    <text x="390" y="270"
+          font-size="92"
+          font-weight="800"
+          letter-spacing="-3"
+          fill="#32180f">
+      Traffik
+    </text>
+
+    <!-- Accent -->
+    <rect x="394" y="292"
+          width="88"
+          height="5"
+          rx="2.5"
+          fill="#ff5722"/>
+
+    <!-- Main description -->
+    <text x="390" y="355"
+          font-size="31"
+          font-weight="500"
+          fill="#69402f">
+      Ratelimiting for Starlette Applications
+    </text>
+
+    <!-- Secondary tagline -->
+    <text x="390" y="405"
+          font-size="19"
+          font-weight="400"
+          fill="#806b5d">
+      A lightweight, production-ready rate limiting library for Starlette
+    </text>
+  </g>
+
+  <!-- Fine border -->
+  <rect x="24" y="24"
+        width="1152"
+        height="582"
+        rx="22"
+        fill="none"
+        stroke="#e4cdb5"
+        stroke-width="2"/>
+</svg>

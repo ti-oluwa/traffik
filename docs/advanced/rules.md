@@ -257,7 +257,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 
 from traffik import HTTPThrottle, Rate
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.decorators import throttled
+from traffik.decorators.fastapi import throttled
 from traffik.registry import Bypass
 
 app = FastAPI(lifespan=InMemoryBackend().lifespan)

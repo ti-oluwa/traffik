@@ -1,4 +1,4 @@
-"""C extensions for traffik."""
+"""C-based atomic byte-lock primitives for traffik's multiprocess backend."""
 
 def test_and_set_byte(buffer: memoryview, offset: int, /) -> int:
     """
@@ -30,16 +30,4 @@ def clear_byte(buffer: memoryview, offset: int, /) -> None:
     :param offset: The byte offset within the buffer. Must be within the valid
         range [0, len(buf)).
     :raises IndexError: If offset is out of range.
-    """
-
-def fnv_32bit_hash(data: bytes, /) -> int:
-    """
-    Compute FNV-1a 32-bit hash of the given bytes. Deterministic across processes and platforms.
-
-    Use this because Python's built-in `hash()` is randomized per-process
-    since Python 3.3 and is therefore unusable for cross-process hash table
-    probing.
-
-    :param data: The bytes to hash.
-    :return: The 32-bit hash value as an unsigned integer (0 to 2^32 - 1).
     """

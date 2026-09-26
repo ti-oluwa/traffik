@@ -64,7 +64,7 @@ apply multiple throttles as a route decorator. Pass all throttles in a single ca
 
 ```python
 ...
-from traffik.decorators import throttled  # FastAPI-specific decorator
+from traffik.decorators.fastapi import throttled  # FastAPI-specific decorator
 
 @app.get("/api/data")
 @throttled(burst_throttle, sustained_throttle)
@@ -77,10 +77,10 @@ async def get_data():
 
     - `traffik.decorators.throttled`: designed for **FastAPI**, works with its 
         dependency injection system. Routes do not need an explicit connection parameter.
-    - `traffik.throttles.throttled`: the **Starlette** version. The decorated route
+    - `traffik.decorators.generic`: the **Starlette** version. The decorated route
       must have a `Request` or `WebSocket` parameter.
 
-    For FastAPI, always use `from traffik.decorators import throttled`.
+    For FastAPI, always use `from traffik.decorators.fastapi import throttled`.
 
 ---
 

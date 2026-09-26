@@ -2,12 +2,12 @@
 Middleware-mode benchmark target: `ThrottleMiddleware` applied to `/test`,
 with `/unthrottled` left exempt for the selective-throttling scenario.
 
-    BENCH_RATE=100/60s uvicorn benchmarks.apps.middleware:app --port 8000
+    BENCH_RATE=100/60s uvicorn benchmarks.apps.traffik.middleware:app --port 8000
 """
 
 from fastapi import FastAPI
 
-from benchmarks.apps.config import backend_from_env, get_env, strategy_from_env
+from benchmarks.apps.traffik.config import backend_from_env, get_env, strategy_from_env
 from traffik.middleware import MiddlewareThrottle, ThrottleMiddleware
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle

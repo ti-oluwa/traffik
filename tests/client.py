@@ -25,9 +25,7 @@ from typing_extensions import Self
 logger = logging.getLogger(__name__)
 
 
-def _ensure_bytes(
-    val: typing.Union[str, bytes], /, *, encoding: str = "utf-8"
-) -> bytes:
+def ensure_bytes(val: typing.Union[str, bytes], /, *, encoding: str = "utf-8") -> bytes:
     return val if isinstance(val, bytes) else str(val).encode(encoding=encoding)
 
 
@@ -402,7 +400,7 @@ class AsyncTestClient:
         header_pairs += [
             (
                 key.lower().encode(encoding="utf-8"),
-                _ensure_bytes(value, encoding="utf-8"),
+                ensure_bytes(value, encoding="utf-8"),
             )
             for key, value in request_headers.items()
             if key.lower() != "host"

@@ -33,7 +33,7 @@ uv sync --group benchmark --inexact
 pip install "traffik[benchmark]"
 ```
 
-This pulls in `click`, `rich`, `fastapi`, `uvicorn`, `gunicorn` (POSIX only), `websockets`, and the backend client libraries. `gunicorn` isn't available on Windows as anything requiring more than one worker process needs a POSIX system (Linux or macOS).
+This pulls in `click`, `rich`, `fastapi`, `uvicorn`, `gunicorn` (POSIX only), `websockets`, `psutil` (memory sampling, for `scale`), `slowapi` (for `compare`), and the backend client libraries. `gunicorn` isn't available on Windows as anything requiring more than one worker process needs a POSIX system (Linux or macOS).
 
 If you want to benchmark against Redis or Memcached instead of the default in-memory backend, start real instances first:
 
@@ -47,13 +47,15 @@ Any backend other than `inmemory` or `multiprocess` needs a real, reachable serv
 
 ## Running Benchmarks
 
-The suite is a `click`-based CLI with four commands, one per integration pattern:
+The suite is a `click`-based CLI with six commands: four benchmark one integration pattern each, and two (`compare`, `scale`) answer a different kind of question - how traffik stacks up against SlowAPI, and how it behaves as key cardinality grows.
 
 ```bash
 python -m benchmarks http
 python -m benchmarks middleware
 python -m benchmarks websocket
 python -m benchmarks multiprocess
+python -m benchmarks compare
+python -m benchmarks scale
 ```
 
 Or via the Makefile shortcut, which forwards any arguments after `bench`:
@@ -66,7 +68,7 @@ Each command accepts `--help` for the full option reference.
 
 ### Common Options
 
-These options are shared across all four commands:
+These options are shared across `http`, `middleware`, `websocket`, and `multiprocess`. `compare` and `scale` overlap heavily but not exactly - see their own sections below (`compare` adds `--mode` and `--endpoint`; `scale` drops `--iterations`/`--warmup`/`--scenarios` and adds `--checkpoints`/`--mp-max-keys`).
 
 | Option | Short | Default | Description |
 | --- | --- | --- | --- |
@@ -139,6 +141,57 @@ Benchmarks `MultiProcessInMemoryBackend` across real, forked `gunicorn` workers 
 
 !!! warning "`--workers` below 2"
     Running `multiprocess` with `--workers` set below `2` prints a warning: gunicorn won't actually fork multiple workers, so the run won't exercise any cross-process state sharing. Set `--workers` to at least `2` (and realistically, to your CPU core count) to test what this command is for.
+
+### `compare` - traffik vs SlowAPI, Under Matched Conditions
+
+Runs each selected scenario against both a traffik app and a [SlowAPI](https://github.com/laurentS/slowapi) app, one after the other, and reports both side by side.
+
+What's held identical between the two apps for a given run:
+
+| Requirement | How `compare` handles it |
+| --- | --- |
+| Identical algorithm | `--strategy` accepts `fixed_window` or `sliding_window_counter` - the only two algorithms traffik and `limits` (SlowAPI's engine) implement the same way. `sliding_window_counter` exercises more of traffik's locking (it reads the current *and* previous window, combines them, then increments, all under `backend.lock(...)`) than `fixed_window`'s simpler path, so it's the better one for seeing lock overhead specifically. |
+| Identical backend | Same `--backend` value maps to the matching storage on both sides (`inmemory` → `memory://`, `aioredis`/`coredis` → the same `--redis-url`, `aiomcache`/`emcache` → the same `--memcached-host`/`--memcached-port`). `--backend multiprocess` is not offered: SlowAPI/`limits`' `memory://` storage is a plain in-process dict with no fork-safety story, so there is no fair, identical-backend comparison to run against `MultiProcessInMemoryBackend`. Use `aioredis` if you want a multi-worker-safe comparison instead. |
+| Identical worker count | `--workers` is passed to both apps unchanged. |
+| Both integration patterns | `--mode http` (default) compares per-route `Depends(throttle)` against `@limiter.limit(...)`; `--mode middleware` compares `ThrottleMiddleware` against a small ASGI middleware calling `limits` directly (SlowAPI has no global-middleware mode of its own). Both modes apply the throttle to `/test` only, leaving `/unthrottled` exempt. |
+| Identical key cardinality, hot-key and many-key traffic, under-limit and over-limit traffic | Reused directly from `HTTP_SCENARIOS`/`MIDDLEWARE_SCENARIOS` (`--scenarios`) - both sides run the literal same scenario definition, not separately-tuned equivalents. |
+| Identical rate | SlowAPI's rate string is derived from the same `Rate` object traffik parses (`benchmarks/rates.py`), not a hand-maintained second copy that could quietly drift from traffik's. |
+| p50/p95/p99 latency | Reported for both sides, plus a computed req/s delta. |
+| Sync and async endpoint variants | `--endpoint async` (default) hits `/test` (`async def`) on both apps; `--endpoint sync` hits `/test-sync` (plain `def`) on both. Only applies to `--mode http`; middleware mode has no sync variant to compare. |
+| Redis local vs. remote latency | Not special-cased in code - just re-run with `--redis-url` pointed at a local vs. a remote Redis to see the difference; both apps read the same `--redis-url`. |
+
+```bash
+python -m benchmarks compare --backend inmemory --scenarios below_limit,hot_key,many_keys
+python -m benchmarks compare --backend inmemory --strategy sliding_window_counter
+python -m benchmarks compare --backend inmemory --mode middleware
+python -m benchmarks compare --backend aioredis --redis-url redis://localhost:6379/0 --endpoint sync
+```
+
+!!! warning "What this does *not* control for"
+    The two apps run **sequentially**, not side by side - each gets the machine to itself while it's being measured, specifically so neither app's traffic competes with the other's for CPU or (for external backends) the same Redis/Memcached connections during its own measurement window. That said, this is still one run, on one machine, with everything else about your system uncontrolled (other processes, thermal throttling, background load). Treat a single `compare` run as a data point, not a verdict - run it more than once, and read the actual numbers rather than just the sign of the delta.
+
+### `scale` - Memory Pressure and Scalability
+
+Starts **one** traffik app server and keeps it running for the entire command - unlike every other command here, which restarts the server before each iteration. Growing the backend's distinct-key count while it keeps running is the point: a fresh process per measurement would hide exactly the memory accumulation and latency drift this command exists to show.
+
+For each `--checkpoints` value (cumulative, ascending distinct-key counts), it sends that many new requests - each carrying a brand-new identity - concurrently (`--concurrency` in flight at once), then samples:
+
+- The target process's resident memory (RSS), via `psutil`.
+- For `aioredis`/`coredis`, also the Redis server's own `INFO memory` `used_memory` (best-effort; the app process's RSS mostly reflects connection overhead for these backends, not the key data itself).
+- That batch's mean req/s, P50, and P99 latency - watch these for drift as the backend fills up, not just the memory columns. Real concurrent access at scale, not just raw key count, is half of what this command is for.
+
+```bash
+# Get a feel for it first - the default checkpoints go up to 1,000,000 and can take a while.
+python -m benchmarks scale --backend inmemory --checkpoints 1000,10000
+
+# Then something closer to production scale:
+python -m benchmarks scale --backend inmemory --checkpoints 10000,100000,1000000 --concurrency 200
+python -m benchmarks scale --backend multiprocess --checkpoints 10000,100000 --shards 64
+```
+
+`--mp-max-keys` (for `--backend multiprocess`) defaults to the highest `--checkpoints` value: that backend's shared-memory table is fixed-size, sized once at startup, so it can't grow past what it was told to expect. Sizing it to your largest checkpoint means the very first checkpoint's memory jump reflects the *whole table's* allocation up front, not a per-key cost - a real, useful thing to know about that backend's memory profile, not a benchmark artifact worth hiding.
+
+The `Bytes/key` column is `cumulative Δ RSS ÷ cumulative keys` - a rough running average, not a precise per-key allocation figure (it also carries whatever fixed overhead the backend paid once at startup, amortized over however many keys exist by that checkpoint).
 
 ---
 
@@ -246,6 +299,8 @@ A few things are worth understanding before you interpret a run, so you don't mi
 **Connection refused for `aioredis`/`coredis`/`aiomcache`/`emcache`**: start the relevant service first (`docker compose up -d redis memcached`), or point `--redis-url` / `--memcached-host` / `--memcached-port` at a server that's actually running.
 
 **A scenario reports a nonzero error rate**: this means requests failed for a reason other than throttling (connection errors, timeouts, unexpected responses). It shouldn't happen in a healthy run; check the scenario's stderr output and the backend you selected.
+
+**`compare`/`scale` fail on import with a missing `slowapi`/`psutil`**: these two are benchmark-only dependencies (see [Installation](#installation)) not needed by the other four commands; a plain `uv sync --group benchmark` or `pip install psutil slowapi` picks them up.
 
 ---
 

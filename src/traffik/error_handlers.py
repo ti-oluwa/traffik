@@ -3,15 +3,17 @@ Error handling strategies for rate limiting operations.
 """
 
 import asyncio
+import functools
 import typing
 import warnings
 
 from starlette.requests import HTTPConnection
+from typing_extensions import deprecated
 
 from traffik._utils import CircuitBreaker
 from traffik.backends.base import ThrottleBackend
 from traffik.backoff import DEFAULT_BACKOFF
-from traffik.exceptions import _EXEMPT_EXCEPTIONS, BackendError
+from traffik.exceptions import EXEMPT_EXCEPTIONS, BackendError
 from traffik.rates import Rate
 from traffik.throttles import Throttle, ThrottleExceptionInfo
 from traffik.typing import BackoffStrategy, HTTPConnectionT, WaitPeriod
@@ -101,7 +103,22 @@ def fallback(
     return handler
 
 
-backend_fallback = fallback  # backwards compatibility
+@deprecated("`backend_fallback` is deprecated; use `fallback` instead.")
+@functools.wraps(fallback)
+def backend_fallback(
+    backend: ThrottleBackend[typing.Any, HTTPConnectionT],
+    fallback_on: typing.Optional[tuple[type[BaseException], ...]] = None,
+    on: tuple[type[BaseException], ...] = (BackendError,),
+    initialized: bool = True,
+) -> typing.Callable[
+    [HTTPConnectionT, ThrottleExceptionInfo], typing.Awaitable[WaitPeriod]
+]:
+    return fallback(
+        backend=backend,
+        fallback_on=fallback_on,
+        on=on,
+        initialized=initialized,
+    )
 
 
 def retry(
@@ -181,9 +198,9 @@ def retry(
                     delay *= backoff_multiplier  # type: ignore
             try:
                 return await throttle.strategy(key, rate, backend, cost)
-            except _EXEMPT_EXCEPTIONS:
+            except EXEMPT_EXCEPTIONS:
                 raise
-            except BaseException as retry_exc:  # noqa
+            except BaseException as retry_exc:
                 last_exc = retry_exc
                 continue
 
@@ -254,7 +271,7 @@ def failover(
         primary = exc_info["backend"]
 
         if not await cb.allow_execution():
-            return await _use_fallback(
+            return await use_fallback(
                 throttle=throttle,
                 rate=rate,
                 cost=cost,
@@ -266,15 +283,15 @@ def failover(
                 wait_ms = await throttle.strategy(key, rate, primary, cost)
                 await cb.record_success()
                 return wait_ms
-            except _EXEMPT_EXCEPTIONS:
+            except EXEMPT_EXCEPTIONS:
                 raise
-            except BaseException:  # noqa
+            except BaseException:
                 if attempt < max_retries - 1:
                     delay = backoff(attempt + 1, retry_delay)
                     await asyncio.sleep(delay)
 
         await cb.record_failure()
-        return await _use_fallback(
+        return await use_fallback(
             throttle=throttle,
             rate=rate,
             cost=cost,
@@ -284,7 +301,7 @@ def failover(
     # Helps ensure that initialization is done once across all requests
     _initialized = initialized
 
-    async def _use_fallback(
+    async def use_fallback(
         throttle: Throttle,
         rate: Rate,
         cost: int,

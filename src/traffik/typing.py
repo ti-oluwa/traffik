@@ -23,10 +23,11 @@ __all__ = [
     "HTTPConnectionTcon",
     "LockConfig",
     "Matchable",
-    "Stringable",
-    "WaitPeriod",
-    "TrustedProxy",
     "Network",
+    "Stringable",
+    "ThrottleErrorHandler",
+    "TrustedProxy",
+    "WaitPeriod",
 ]
 
 P = ParamSpec("P")
@@ -89,22 +90,45 @@ class LockConfig(TypedDict, total=False):
 
     ttl: typing.Optional[float]
     """Maximum time to wait for the lock to be released in seconds."""
+
     blocking: bool
     """Whether to block when acquiring the lock."""
+
     blocking_timeout: typing.Optional[float]
     """Maximum time to wait for the lock in seconds."""
+
     reentrant: bool
     """Whether the lock should be reentrant (can be acquired multiple times by the same owner)."""
+
     enforce_ttl_locally: bool
     """Whether to enforce the TTL locally by cancelling the task in the lock's context when the TTL expires."""
+
     local_ttl_factor: float
     """Factor to apply to the TTL for local enforcement. Should be between 0 and 1 exclusive."""
 
 
-ConnectionIdentifier = typing.Callable[
+ConnectionIdentifierNoContext = typing.Callable[
     [HTTPConnectionTcon], typing.Awaitable[typing.Union[Stringable, typing.Any]]
 ]
-"""Type definition for connection identifier functions."""
+"""Type definition for a connection identifier function that only takes the connection."""
+
+ConnectionIdentifierWithContext = typing.Callable[
+    [HTTPConnectionTcon, typing.Optional[dict[str, typing.Any]]],
+    typing.Awaitable[typing.Union[Stringable, typing.Any]],
+]
+"""Type definition for a connection identifier function that also receives the throttle context."""
+
+ConnectionIdentifier = typing.Union[
+    ConnectionIdentifierNoContext[HTTPConnectionTcon],
+    ConnectionIdentifierWithContext[HTTPConnectionTcon],
+]
+"""
+Type definition for connection identifier functions.
+
+Either `(connection) -> Awaitable[Stringable | Any]` (the original form) or
+`(connection, context) -> Awaitable[Stringable | Any]`, where `context` is
+the throttle's effective context.
+"""
 
 ConnectionThrottledHandler = typing.Callable[
     [HTTPConnectionTcon, WaitPeriod, T, dict[str, typing.Any]],
@@ -202,6 +226,8 @@ Can be either:
 - A tuple of exception types to apply on
 """
 
+ThrottleType = typing.Literal["http", "ws"]
+
 
 class Dependency(typing.Protocol, typing.Generic[P, Rco]):
     """Protocol for dependencies that can be used in FastAPI routes."""
@@ -222,15 +248,19 @@ class StrategyStat(typing.Generic[MapT]):
 
     key: Stringable
     """The throttling key."""
+
     rate: Rate
     """The rate limit definition."""
+
     hits_remaining: float
     """Number of hits remaining in the current period."""
+
     wait_ms: WaitPeriod
     """
     Time to wait (in milliseconds) before the next allowed request. 
     If next request will go over limit, `wait_ms` shuld be > 0
     """
+
     metadata: typing.Optional[MapT] = None
     """Additional metadata related to the strategy."""
 

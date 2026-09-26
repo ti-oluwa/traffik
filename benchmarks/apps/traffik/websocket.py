@@ -3,12 +3,12 @@ WebSocket benchmark target: a single throttled `/ws` endpoint that echoes
 each received JSON message, or replies `{"type": "rate_limit"}` once
 throttled.
 
-    BENCH_RATE=100/60s uvicorn benchmarks.apps.websocket:app --port 8000
+    BENCH_RATE=100/60s uvicorn benchmarks.apps.traffik.websocket:app --port 8000
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from benchmarks.apps.config import backend_from_env, get_env, strategy_from_env
+from benchmarks.apps.traffik.config import backend_from_env, get_env, strategy_from_env
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import WebSocketThrottle, is_throttled
 

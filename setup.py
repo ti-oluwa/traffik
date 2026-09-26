@@ -2,21 +2,30 @@ import platform
 
 from setuptools import Extension, setup
 
-ext_modules = []
+ON_WINDOWS = platform.system() == "Windows"
 
-if platform.system() != "Windows":
+ext_modules = [
+    Extension(
+        "traffik._hashing",
+        ["src/traffik/_extensions/hashing.c"],
+        extra_compile_args=["/O2"] if ON_WINDOWS else ["-O2"],
+    ),
+]
+
+if not ON_WINDOWS:
+    # Needs GCC/Clang atomic builtins. Not available on MSVC.
     ext_modules.append(
         Extension(
-            "traffik.backends._ext",
-            ["src/traffik/backends/_cext/_ext.c"],
+            "traffik._atomic",
+            ["src/traffik/_extensions/atomic.c"],
             extra_compile_args=["-O2"],
         )
     )
 
 setup(
     name="traffik",
-    version="1.2.2",
-    description="Rate limiting for Starlette and FastAPI applications.",
+    version="1.3.0",
+    description="Rate limiting for Starlette applications.",
     readme="README.md",
     authors=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],
     maintainers=[{"name": "tioluwa", "email": "tioluwa.dev@gmail.com"}],
@@ -79,6 +88,6 @@ setup(
         "Changelog": "https://github.com/ti-oluwa/traffik/blob/main/CHANGELOG.md",
     },
     package_dir={"": "src"},
-    package_data={"traffik": ["py.typed"]},
+    package_data={"traffik": ["py.typed", "_hashing.pyi", "_atomic.pyi"]},
     ext_modules=ext_modules,
 )

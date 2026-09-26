@@ -14,12 +14,12 @@ from traffik._utils import (
     ProxyHeaders,
     _add_parameter_to_signature,
     _as_cache_key,
-    _is_ip,
     _is_trusted_proxy,
     _split_trusted_proxies,
     _TaskTimer,
     get_remote_address,
     is_async_callable,
+    is_ip,
     time,
 )
 
@@ -398,14 +398,14 @@ class TestGetRemoteAddress:
 
 
 class TestIsIp:
-    """Tests for the `_is_ip` format validator."""
+    """Tests for the `is_ip` format validator."""
 
     @pytest.mark.parametrize(
         "value",
         ["0.0.0.0", "127.0.0.1", "255.255.255.255", "203.0.113.42"],
     )
     def test_valid_ipv4(self, value):
-        assert _is_ip(value) is True
+        assert is_ip(value) is True
 
     @pytest.mark.parametrize(
         "value",
@@ -418,7 +418,7 @@ class TestIsIp:
         ],
     )
     def test_valid_ipv6(self, value):
-        assert _is_ip(value) is True
+        assert is_ip(value) is True
 
     @pytest.mark.parametrize(
         "value",
@@ -434,7 +434,7 @@ class TestIsIp:
         ],
     )
     def test_invalid(self, value):
-        assert _is_ip(value) is False
+        assert is_ip(value) is False
 
 
 class TestSplitTrustedProxies:
@@ -640,7 +640,7 @@ class TestTaskTimer:
 
     async def test_task_timer_without_timeout(self):
         """Test TaskTimer with None timeout allows execution."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with _TaskTimer(timeout=None, loop=loop) as timer:
             # Should complete without timing out
             await anyio.sleep(0.01)
@@ -649,7 +649,7 @@ class TestTaskTimer:
 
     async def test_task_timer_allows_fast_execution(self):
         """Test TaskTimer allows execution within timeout."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with _TaskTimer(timeout=0.1, loop=loop) as timer:
             await anyio.sleep(0.01)
         assert timer.done()
@@ -657,14 +657,14 @@ class TestTaskTimer:
 
     async def test_task_timer_times_out(self):
         """Test TaskTimer times out on slow execution."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         with pytest.raises(asyncio.TimeoutError):
             async with _TaskTimer(timeout=0.05, loop=loop):
                 await anyio.sleep(0.2)
 
     async def test_task_timer_sets_timed_out_flag(self):
         """Test TaskTimer sets timed_out flag on timeout."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         timer = None
         try:
             async with _TaskTimer(timeout=0.05, loop=loop) as timer:
@@ -675,7 +675,7 @@ class TestTaskTimer:
 
     async def test_task_timer_cancelled_state(self):
         """Test TaskTimer cancelled() returns True when stopped normally."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with _TaskTimer(timeout=None, loop=loop) as timer:
             pass
         assert timer.done()
@@ -683,7 +683,7 @@ class TestTaskTimer:
 
     async def test_task_timer_custom_error(self):
         """Test TaskTimer with custom error."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         custom_error = RuntimeError("Custom timeout error")
         with pytest.raises(RuntimeError, match="Custom timeout error"):
             async with _TaskTimer(timeout=0.05, loop=loop, error=custom_error):
@@ -691,7 +691,7 @@ class TestTaskTimer:
 
     async def test_task_timer_cannot_restart(self):
         """Test TaskTimer cannot be restarted after completion."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         timer = _TaskTimer(timeout=None, loop=loop)
         timer.start()
         timer.stop()

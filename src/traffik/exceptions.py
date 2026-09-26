@@ -10,7 +10,8 @@ from starlette.middleware.exceptions import ExceptionMiddleware
 from starlette.status import HTTP_429_TOO_MANY_REQUESTS
 from starlette.types import ExceptionHandler as StarletteExceptionHandler
 
-from traffik.typing import ExceptionHandler as TraffikExceptionHandler
+if typing.TYPE_CHECKING:
+    from traffik.typing import ExceptionHandler as TraffikExceptionHandler
 
 
 class TraffikException(Exception):
@@ -21,6 +22,15 @@ class TraffikException(Exception):
 
 class ConfigurationError(TraffikException, ValueError):
     """Exception raised when the throttle configuration is invalid."""
+
+    pass
+
+
+class ParseError(ConfigurationError):
+    """
+    Exception raised when a rate or throttle shorthand string
+    is malformed and cannot be parsed correctly.
+    """
 
     pass
 
@@ -144,7 +154,7 @@ def _lookup_exception_handler(
 
 def _build_exception_handler_getter(
     app: Starlette,
-) -> typing.Callable[[Exception], typing.Optional[TraffikExceptionHandler]]:
+) -> typing.Callable[[Exception], typing.Optional["TraffikExceptionHandler"]]:
     """
     Build an exception handler getter for the given Starlette app.
     """
@@ -157,7 +167,7 @@ def _build_exception_handler_getter(
         debug=app.debug,
     )
 
-    def handler_getter(exc: Exception) -> typing.Optional[TraffikExceptionHandler]:
+    def handler_getter(exc: Exception) -> typing.Optional["TraffikExceptionHandler"]:
         """
         Get the exception handler for the given exception.
 
@@ -174,10 +184,10 @@ def _build_exception_handler_getter(
             handler = _lookup_exception_handler(
                 exception_middleware._exception_handlers, exc
             )
-        return typing.cast(typing.Optional[TraffikExceptionHandler], handler)
+        return typing.cast(typing.Optional["TraffikExceptionHandler"], handler)
 
     return handler_getter
 
 
-_EXEMPT_EXCEPTIONS = (asyncio.CancelledError, SystemExit, KeyboardInterrupt)
+EXEMPT_EXCEPTIONS = (asyncio.CancelledError, SystemExit, KeyboardInterrupt)
 """Exceptions that should almost never be caught as they affect program control flow or termination."""

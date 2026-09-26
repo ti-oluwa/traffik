@@ -687,7 +687,7 @@ class TestThrottleBackend:
                 loop.run_until_complete(work())
             except asyncio.CancelledError:
                 raise
-            except BaseException as exc:  # noqa
+            except BaseException as exc:
                 with results_lock:
                     errors.append((thread_id, str(exc)))
             finally:

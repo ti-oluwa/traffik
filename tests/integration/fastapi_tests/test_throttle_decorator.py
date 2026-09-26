@@ -8,7 +8,7 @@ from starlette.websockets import WebSocketDisconnect
 from tests.utils import default_client_identifier, make_client
 from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
-from traffik.decorators import throttled
+from traffik.decorators.fastapi import throttled
 from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
@@ -156,7 +156,7 @@ class TestThrottleDecorator:
             # on timing and strategy implementation. We just verify that after waiting,
             # at least some requests can succeed.
             success_count = 0
-            for i in range(5):
+            for _ in range(5):
                 response = await client.get("/multi-throttled")
                 if response.status_code == 200:
                     success_count += 1
@@ -195,7 +195,7 @@ class TestThrottleDecorator:
         base_url = "http://0.0.0.0"
         async with make_client(app, base_url=base_url) as client:
             # First 2 requests pass
-            for i in range(2):
+            for _i in range(2):
                 response = await client.get("/short-circuit")
                 assert response.status_code == 200
 

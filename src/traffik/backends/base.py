@@ -21,6 +21,7 @@ from traffik.config import (
     ANONYMOUS_IDENTIFIER,
     APP_CONTEXT_ATTR,
     BACKEND_APP_CONTEXT_KEY,
+    get_legacy_md5_keys,
     get_lock_blocking,
     get_lock_blocking_timeout,
     get_lock_ttl,
@@ -90,6 +91,40 @@ _backend_ctx: ContextVar[typing.Optional["ThrottleBackend"]] = ContextVar(
 """Throttle backend contextvar. Private variable !!!Do not use directly!!!"""
 
 
+def get_md5_hex(data: bytes) -> str:
+    """Hex digest of `data` using MD5."""
+    return hashlib.md5(data, usedforsecurity=False).hexdigest()  # nosec
+
+
+def _resolve_hex_func() -> typing.Callable[[bytes], str]:
+    if get_legacy_md5_keys():
+        return get_md5_hex
+    try:
+        from traffik._hashing import fnv_64bit_hash_hex
+
+        return fnv_64bit_hash_hex
+    except ImportError:  # pragma: no cover
+        # This is only hit without the compiled extension
+        return get_md5_hex
+
+
+_hex_func: typing.Optional[typing.Callable[[bytes], str]] = None
+
+
+def get_hex(data: bytes) -> str:
+    """
+    Returns the hex digest of `data` using FNV-1a 64-bit, or MD5 if
+    `TRAFFIK_LEGACY_MD5_KEYS`/`traffik.config.set_legacy_md5_keys()` forces
+    it, or if the compiled `_hashing` extension isn't available.
+
+    Resolved once, on first call, and cached.
+    """
+    global _hex_func
+    if _hex_func is None:
+        _hex_func = _resolve_hex_func()
+    return _hex_func(data)
+
+
 def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
     """Builds a key using the provided parameters."""
     key_parts = [str(arg) for arg in args]
@@ -97,7 +132,7 @@ def build_key(*args: typing.Any, **kwargs: typing.Any) -> str:
     if not key_parts:
         return "*"
     key_parts.sort()  # Sort to ensure consistent ordering
-    return hashlib.md5(":".join(key_parts).encode()).hexdigest()  # nosec
+    return get_hex(":".join(key_parts).encode())
 
 
 def _reraise_as_backend_error(
@@ -159,13 +194,13 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
     - delete(key): Remove key (Must not implement implicit locking).
     - get_lock(key, ttl, reentrant): Acquire a distributed lock for the given key with optional TTL and reentrancy.
     - increment(key, amount): Atomically increment counter
-    - decrement(key, amount): Atomically decrement counter
     - expire(key, seconds): Set expiration on existing key
     - close(): Close backend connection and cleanup resources
     - reset(): Clear all throttling data
 
     Optionally, backends can also override the following methods for better performance:
 
+    - decrement(key, amount): Atomically decrement counter. Default implementation calls `increment(key, -amount)`.
     - increment_with_ttl(key, amount, ttl): Atomically increment and set TTL if key is new
     - multi_get(*keys): Atomically get multiple keys in one operation
     - multi_set(items, expire): Atomically set multiple keys in one operation
@@ -606,7 +641,7 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         """
         Create a throttle context for the backend.
 
-        **Warning!!!**: Avoid nesting a non-persistent context inside a persistent context from the
+        **Warning!**: Avoid nesting a non-persistent context inside a persistent context from the
         same backend. This could lead to unexpected behaviour and data loss due to nested non-persistence.
 
         :param app: The ASGI application to assign the backend to.
@@ -718,6 +753,7 @@ class _BackendContext(typing.Generic[ThrottleBackendTco]):
                 warnings.warn(
                     "Context non-persistence (`persistent=False`) cannot be enforced on exit. "
                     "Backend was closed before exit.",
+                    stacklevel=2,
                     source=RuntimeWarning,
                 )
             return

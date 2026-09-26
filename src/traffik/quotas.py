@@ -389,7 +389,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
                     await self.apply()
             return
 
-        except BaseException as exc:  # noqa
+        except BaseException as exc:
             # Store exception to raise after lock release
             exit_exc = exc
         finally:
@@ -915,7 +915,7 @@ class QuotaContext(typing.Generic[HTTPConnectionT]):
             return isinstance(exc, entry.retry_on)  # type: ignore[arg-type]
 
         # Retry type is a callable here. Use precomputed `resolved_cost`
-        exc_info = dict(  # noqa
+        exc_info = dict(
             connection=self.connection,
             exception=exc,
             attempt=attempt,

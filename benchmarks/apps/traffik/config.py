@@ -1,31 +1,19 @@
 """
-Reads `BENCH_*` environment variables into the pieces a target app module
-needs: a throttle backend, a strategy, and the throttle's own settings.
+Reads `BENCH_*` environment variables into the pieces the traffik target app modules need.
 """
 
-import os
 import typing
 
 from starlette.requests import Request
 
 from benchmarks.backends import STRATEGIES
+from benchmarks.env import get_env, int_env
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.memcached.aiomcache import MemcachedBackend as AiomcacheBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.backends.redis.aioredis import RedisBackend as AioredisBackend
 from traffik.backends.redis.coredis import RedisBackend as CoredisBackend
-
-
-def get_env(name: str, default: str) -> str:
-    """Read a environment variable, falling back to `default`."""
-    return os.getenv(name, default)
-
-
-def int_env(name: str, default: int) -> int:
-    """Read a environment variable as an int."""
-    raw = os.getenv(name)
-    return int(raw) if raw is not None else default
 
 
 async def get_identifier(connection: Request) -> str:
@@ -43,12 +31,9 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
     """
     Build the throttle backend selected by `BENCH_BACKEND`.
 
-    For `multiprocess`, this also calls `.start()` immediately - safe and
-    required to happen here, at module-import time, so that gunicorn's
-    `--preload` (which imports the app module once in its master before
-    forking) does the shared-memory setup exactly once, before any worker
-    exists, matching `MultiProcessInMemoryBackend`'s documented deployment
-    pattern.
+    For `multiprocess`, also calls `.start()` here at import time, so
+    gunicorn's `--preload` does the shared-memory setup once in the
+    master before forking, not once per worker.
     """
     kind = get_env("BENCH_BACKEND", "inmemory").lower()
     # Unique per server process (the port is unique per run) so repeated

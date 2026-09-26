@@ -2,7 +2,7 @@ from benchmarks.live.orchestrators import run_http_scenarios
 from benchmarks.scenarios import HTTP_SCENARIOS
 from benchmarks.types import AggregatedResult, BenchmarkConfig
 
-app_path = "benchmarks.apps.http:app"
+app_path = "benchmarks.apps.traffik.http:app"
 
 
 async def run_scenarios(

@@ -43,7 +43,7 @@ async def make_request(
         response = await client.get(path, headers=headers)
         end = time.perf_counter()
         return end - start, response.status_code
-    except Exception:  # noqa
+    except Exception:
         return 0.0, 0
 
 
@@ -132,6 +132,58 @@ async def send_concurrent(
     return latencies, successful, throttled, errors
 
 
+async def send_concurrent_unique_keys(
+    client: httpx2.AsyncClient,
+    start_index: int,
+    count: int,
+    concurrency: int,
+    key_header: str,
+    path: str = "/test",
+    headers: Headers = None,
+) -> SendResult:
+    """
+    Send `count` real requests concurrently in batches of up to
+    `concurrency`, each carrying a distinct, never-repeated `key_header`
+    value `f"user-{start_index + i}"`.
+
+    Unlike `send_concurrent`'s `key_mod` cycling (which simulates traffic
+    from a fixed pool of identities), every request here creates a brand
+    new identity. Used by the `scale` command to grow a backend's key
+    count by a precise amount while sending genuinely concurrent traffic,
+    so both the memory-growth measurement and the latency measurement
+    reflect real concurrent access, not a sequential loop.
+
+    :param start_index: First key index to use; keys run
+        `start_index .. start_index + count - 1`.
+    :param count: Number of requests (and therefore new keys) to send.
+    :param key_header: Header identifying the caller (e.g. `"X-Client-ID"`).
+    :return: `(latencies_seconds, successful, throttled, errors)`.
+    """
+    latencies: list[float] = []
+    successful = throttled = errors = 0
+    num_batches = (count + concurrency - 1) // concurrency
+
+    for batch_idx in range(num_batches):
+        batch_size = min(concurrency, count - batch_idx * concurrency)
+        base = start_index + batch_idx * concurrency
+
+        async def request(index: int) -> tuple[float, int]:
+            request_headers = dict(headers or {})
+            request_headers[key_header] = f"user-{index}"
+            return await make_request(client, path=path, headers=request_headers)
+
+        tasks = [request(base + i) for i in range(batch_size)]
+        results = await asyncio.gather(*tasks)
+
+        for latency, status_code in results:
+            s, t, e = tally(latency, status_code, latencies)
+            successful += s
+            throttled += t
+            errors += e
+
+    return latencies, successful, throttled, errors
+
+
 async def send_waves(
     client: httpx2.AsyncClient,
     waves: typing.Sequence[tuple[int, float]],
@@ -194,7 +246,7 @@ async def ws_send_messages(
                     throttled += 1
                 else:
                     successful += 1
-            except Exception:  # noqa
+            except Exception:
                 pass
 
     return latencies, successful, throttled
@@ -232,7 +284,7 @@ async def ws_send_waves(
                         total_throttled += 1
                     else:
                         total_successful += 1
-                except Exception:  # noqa
+                except Exception:
                     pass
 
             if sleep_after and i < len(waves) - 1:
@@ -263,7 +315,7 @@ async def ws_concurrent_connections(
             return await ws_send_messages(
                 uri, messages_per_connection, connect_timeout=connect_timeout
             )
-        except Exception:  # noqa
+        except Exception:
             return [], 0, 0
 
     results = await asyncio.gather(*[connection() for _ in range(connections)])

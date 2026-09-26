@@ -337,8 +337,8 @@ class TestStrategyStat:
 
         # Get stat
         stat = await strategy.get_stat(key, rate, backend)  # type: ignore
-        assert (
-            stat.wait_ms > 0 or stat.wait_ms == 0 and round(stat.hits_remaining) == 0
+        assert stat.wait_ms > 0 or (
+            stat.wait_ms == 0 and round(stat.hits_remaining) == 0
         ), (
             "Stat should show wait time. Or hit remaining should be approximatel zero if wait time is zero "
             "(for refill type strategies e.g TokenBucket)"

@@ -25,7 +25,7 @@ from traffik.strategies.token_bucket import (
     TokenBucketWithDebtStrategy,
 )
 
-HAS_EMCACHE: bool = False
+HAS_EMCACHE = False
 
 if platform.system() != "Windows":
     try:

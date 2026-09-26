@@ -42,40 +42,51 @@ class CustomBackend(ThrottleBackend):
         """Set value for key with optional TTL in seconds."""
         await self.connection.set(key, value, ex=expire)
 
-    async def delete(self, key: str) -> None:
-        """Remove key. Should not raise if key doesn't exist."""
-        await self.connection.delete(key)
+    async def delete(self, key: str) -> bool:
+        """Remove key. Returns True if the key existed, False otherwise. Should not raise if key doesn't exist."""
+        return bool(await self.connection.delete(key))
 
     async def increment(self, key: str, amount: int = 1) -> int:
         """Atomically increment counter. Returns new value."""
         return await self.connection.incrby(key, amount)
 
-    async def decrement(self, key: str, amount: int = 1) -> int:
-        """Atomically decrement counter. Returns new value."""
-        return await self.connection.decrby(key, amount)
+    async def expire(self, key: str, seconds: int) -> bool:
+        """Set TTL on an existing key. Returns True if the key existed, False otherwise."""
+        return bool(await self.connection.expire(key, seconds))
 
-    async def expire(self, key: str, seconds: int) -> None:
-        """Set TTL on an existing key."""
-        await self.connection.expire(key, seconds)
+    def get_lock(
+        self, name: str, ttl: Optional[float] = None, reentrant: bool = False
+    ) -> AsyncLock:
+        """
+        Return a lock object for `name`, implementing the `AsyncLock` protocol:
+          - is_owner(task=None) -> bool
+          - async acquire(blocking, blocking_timeout) -> bool
+          - async release() -> None
 
-    async def get_lock(self, key: str, timeout: Optional[float] = None) -> AsyncLock:
+        This is a plain method, not a coroutine - it constructs/looks up a
+        lock object without acquiring it. `backend.lock(name)` (which callers
+        actually use) wraps whatever this returns in a context manager, so
+        you don't need to implement `__aenter__`/`__aexit__` yourself. See
+        "Tips on Lock Implementation" below for ready-made building blocks.
         """
-        Return a distributed lock object for key.
-        The returned object must implement the AsyncLock protocol:
-          - locked() -> bool
-          - acquire(blocking, blocking_timeout) -> bool
-          - release() -> None
-        """
-        return MyDistributedLock(key, timeout=timeout)
+        return MyDistributedLock(name, ttl=ttl, reentrant=reentrant)
 
     async def reset(self) -> None:
         """Clear all throttling data in this namespace. Used for testing."""
         await self.connection.flushdb()
 
     async def close(self) -> None:
-        """Close connections and release resources."""
+        """
+        Close connections and release resources. Should NOT clear stored
+        data - that's reset()'s job, so a persistent backend survives a
+        reconnect.
+        """
         await self.connection.close()
 ```
+
+`decrement()` also exists but isn't required - the base class already provides a working default (`increment(key, -amount)`). Override it if your storage has a native, more efficient decrement operation.
+
+If your backend has no real connection object (e.g. it's backed by a plain in-process structure), also override `closed()` - the base implementation just checks `self.connection is None`, which would always be `True` for a connectionless backend, causing spurious warnings on every non-persistent context exit. See the full example below.
 
 ---
 
@@ -89,7 +100,7 @@ The most important override. Called on every request for `FixedWindow` and `Slid
 
 ```python
 async def increment_with_ttl(
-    self, key: str, amount: int = 1, ttl: int = 1
+    self, key: str, amount: int = 1, ttl: int = 60
 ) -> int:
     """
     Atomically increment counter AND set TTL if key is new.
@@ -137,57 +148,32 @@ async def multi_set(
 
 ## Full Example: Simple In-Process Dictionary Backend
 
-Here's a complete, minimal custom backend using a plain Python dict (for illustration purposes. Don't use this in production):
+Here's a complete, minimal custom backend using a plain Python dict (for illustration purposes - don't use this in production, `InMemoryBackend` already does this properly with sharding and bounded active expiration):
 
 ```python
-import asyncio
 import time
 import typing
-from contextlib import asynccontextmanager
-from starlette.requests import HTTPConnection
+
 from traffik.backends.base import ThrottleBackend
-from traffik.types import AsyncLock
-
-
-class _SimpleLock:
-    """A minimal AsyncLock implementation using asyncio.Lock."""
-
-    def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-
-    def locked(self) -> bool:
-        return self._lock.locked()
-
-    async def acquire(
-        self,
-        blocking: bool = True,
-        blocking_timeout: typing.Optional[float] = None,
-    ) -> bool:
-        if not blocking:
-            return self._lock.acquire.__func__  # non-blocking attempt
-        if blocking_timeout is not None:
-            try:
-                await asyncio.wait_for(self._lock.acquire(), timeout=blocking_timeout)
-                return True
-            except asyncio.TimeoutError:
-                return False
-        await self._lock.acquire()
-        return True
-
-    async def release(self) -> None:
-        self._lock.release()
+from traffik import AsyncLockAdapter, AsyncRLock, NamedLockPool
+from traffik.typing import AsyncLock
 
 
 class DictBackend(ThrottleBackend[None, HTTPConnection]):
-    """Simple dictionary-based backend for demonstration."""
+    """Simple dictionary-based backend for demonstration. Don't use in production."""
 
     base_exception_type = Exception
 
     def __init__(self, namespace: str = "dict", **kwargs: typing.Any) -> None:
         super().__init__(connection=None, namespace=namespace, **kwargs)
         self._store: typing.Dict[str, typing.Tuple[str, typing.Optional[float]]] = {}
-        # value, expires_at
-        self._locks: typing.Dict[str, _SimpleLock] = {}
+        self._closed = True
+        # AsyncRLock/NamedLockPool are traffik's own building blocks (the
+        # same ones the in-memory backends use) - see "Tips on Lock
+        # Implementation" below.
+        self._lock_pool = NamedLockPool(
+            factory=lambda: AsyncLockAdapter(lock=AsyncRLock(), reentrant=True)
+        )
 
     def _is_expired(self, key: str) -> bool:
         if key not in self._store:
@@ -199,25 +185,27 @@ class DictBackend(ThrottleBackend[None, HTTPConnection]):
         return False
 
     async def initialize(self) -> None:
-        pass  # Nothing to initialize for a dict backend
+        self._closed = False  # Nothing to actually connect to for a dict backend
 
     async def ready(self) -> bool:
-        # No connection to setup so its always ready
-        return True
+        return True  # No connection to check; always ready once initialized
 
-    async def get(self, key: str) -> typing.Optional[str]:
+    def closed(self) -> bool:
+        # Base closed() just checks `self.connection is None` - always true
+        # here, since a dict backend has no real connection object.
+        return self._closed
+
+    async def get(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> typing.Optional[str]:
         if self._is_expired(key):
             return None
         return self._store[key][0]
 
-    async def set(
-        self, key: str, value: str, expire: typing.Optional[int] = None
-    ) -> None:
+    async def set(self, key: str, value: str, expire: typing.Optional[int] = None) -> None:
         expires_at = time.time() + expire if expire else None
         self._store[key] = (str(value), expires_at)
 
-    async def delete(self, key: str) -> None:
-        self._store.pop(key, None)
+    async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
+        return self._store.pop(key, None) is not None
 
     async def increment(self, key: str, amount: int = 1) -> int:
         current = await self.get(key)
@@ -226,52 +214,36 @@ class DictBackend(ThrottleBackend[None, HTTPConnection]):
         self._store[key] = (str(new_val), expires_at)
         return new_val
 
-    async def decrement(self, key: str, amount: int = 1) -> int:
-        return await self.increment(key, -amount)
+    async def expire(self, key: str, seconds: int) -> bool:
+        if key not in self._store:
+            return False
+        value, _ = self._store[key]
+        self._store[key] = (value, time.time() + seconds)
+        return True
 
-    async def expire(self, key: str, seconds: int) -> None:
-        if key in self._store:
-            value, _ = self._store[key]
-            self._store[key] = (value, time.time() + seconds)
-
-    async def increment_with_ttl(
-        self, key: str, amount: int = 1, ttl: int = 1
-    ) -> int:
-        current = await self.get(key)
-        new_val = (int(current) if current else 0) + amount
-        expires_at = time.time() + ttl
-        # Only update expiry if key is new (current is None)
-        if current is None:
-            self._store[key] = (str(new_val), expires_at)
-        else:
-            existing_expiry = self._store[key][1]
-            self._store[key] = (str(new_val), existing_expiry)
-        return new_val
-
-    async def multi_get(self, *keys: str) -> typing.List[typing.Optional[str]]:
-        return [await self.get(k) for k in keys]
-
-    async def multi_set(
-        self,
-        items: typing.Dict[str, str],
-        expire: typing.Optional[int] = None,
-    ) -> None:
-        for key, value in items.items():
-            await self.set(key, value, expire=expire)
-
-    async def get_lock(
-        self, key: str, timeout: typing.Optional[float] = None
-    ) -> _SimpleLock:
-        if key not in self._locks:
-            self._locks[key] = _SimpleLock()
-        return self._locks[key]
+    def get_lock(
+        self, name: str, ttl: typing.Optional[float] = None, reentrant: bool = False
+    ) -> AsyncLock:
+        return self._lock_pool.get(name)
 
     async def reset(self) -> None:
         self._store.clear()
 
     async def close(self) -> None:
-        self._store.clear()
-        self._locks.clear()
+        # Don't clear self._store here - that's reset()'s job, not close()'s.
+        self._closed = True
+        self._lock_pool.close()
+```
+
+Usage - `backend.lock()` and `increment_with_ttl()`/`multi_get()`/`multi_set()` all work out of the box via the base class's defaults, built on top of the required methods above:
+
+```python
+async with DictBackend(namespace="test")(close_on_exit=True) as backend:
+    await backend.set("key", "value", expire=60)
+    await backend.increment_with_ttl("counter", ttl=60)
+    async with backend.lock("my-resource"):
+        ...
+    values = await backend.multi_get("key", "counter")
 ```
 
 ---
@@ -302,12 +274,18 @@ class PooledBackend(ThrottleBackend):
 
 ## Tips on Lock Implementation
 
-Distributed locks are the hardest part of a custom backend. A few things to keep in mind:
+Distributed locks are the hardest part of a custom backend. `traffik` exports its own lock building blocks (the same ones `InMemoryBackend` uses) so you don't have to write one from scratch:
+
+- **`AsyncRLock`/`FairAsyncRLock`** - simple, in-process reentrant locks (`FairAsyncRLock` guarantees FIFO wakeup order; `AsyncRLock` is a bit cheaper without that guarantee). Neither alone satisfies the full `AsyncLock` protocol.
+- **`AsyncLockAdapter`** - wraps one of the above to add `blocking`/`blocking_timeout` semantics and optional reentrancy control, producing something that *does* satisfy `AsyncLock`. This is what `get_lock()` should typically return.
+- **`NamedLockPool`/`NamedLockHandle`** - a refcounted pool keyed by lock name, so concurrent callers locking the same `name` share one underlying lock instance instead of creating a new one per call. `pool.get(name)` returns a handle usable directly as an async context manager.
+
+For a genuinely *distributed* lock (Redis/etcd/similar), you still need to implement the coordination yourself, but the same principles apply:
 
 - **TTL is critical**: Locks must expire automatically. If a worker dies while holding a lock, a TTL prevents permanent deadlock.
-- **Non-blocking mode**: Implement `acquire(blocking=False)` properly - callers use this to avoid waiting for a lock.
+- **Non-blocking mode**: `acquire(blocking=False)` should return `False` immediately rather than waiting - callers use this to avoid waiting for a lock.
 - **Blocking timeout**: `acquire(blocking_timeout=5.0)` should give up after 5 seconds rather than waiting forever.
-- **Context manager support**: The base class wraps `get_lock()` in an `asynccontextmanager` - your lock just needs the `acquire/release` protocol.
+- **You only implement `get_lock()`**: `backend.lock(name)` (what callers actually use) wraps whatever `get_lock()` returns in a context manager - your lock just needs to satisfy the `AsyncLock` protocol, not implement `__aenter__`/`__aexit__` itself.
 
 ---
 

@@ -2,7 +2,7 @@ from benchmarks.live.orchestrators import run_http_scenarios
 from benchmarks.scenarios import MIDDLEWARE_SCENARIOS
 from benchmarks.types import AggregatedResult, BenchmarkConfig
 
-app_path = "benchmarks.apps.middleware:app"
+app_path = "benchmarks.apps.traffik.middleware:app"
 
 
 async def run_scenarios(

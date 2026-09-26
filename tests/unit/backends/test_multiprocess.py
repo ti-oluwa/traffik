@@ -27,7 +27,7 @@ pytestmark = [
 
 
 @pytest.fixture
-async def mp_backend():
+async def backend():
     """
     Small backend for the `_clear()` race test. A single shard with only
     two slots keeps things deterministic. key1 takes the first slot off
@@ -47,7 +47,7 @@ async def mp_backend():
 
 
 @pytest.fixture
-async def mp_backend_tombstones():
+async def tombstones_backend():
     """
     Larger single-shard backend, with an explicit low rebuild threshold,
     for churning many keys through in the tombstone-reclamation tests.
@@ -65,7 +65,7 @@ async def mp_backend_tombstones():
 
 
 @pytest.fixture
-async def mp_backend_cleaner():
+async def cleaner_backend():
     """Single-shard backend for the background-cleaner race test."""
     from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 
@@ -92,9 +92,8 @@ class TestClearSlotReuseRace:
     """
 
     async def test_clear_does_not_wipe_slot_reclaimed_mid_flight(
-        self, mp_backend: "MultiProcessInMemoryBackend", monkeypatch: pytest.MonkeyPatch
+        self, backend: "MultiProcessInMemoryBackend", monkeypatch: pytest.MonkeyPatch
     ):
-        backend = mp_backend
         key1 = backend.get_key("key1")
         key2 = backend.get_key("key2")
 
@@ -165,14 +164,14 @@ class TestTombstoneReclamation:
     """
 
     async def test_tombstone_count_resets_once_threshold_is_crossed(
-        self, mp_backend_tombstones: "MultiProcessInMemoryBackend"
+        self, tombstones_backend: "MultiProcessInMemoryBackend"
     ) -> None:
         """
         Deleting keys past the configured threshold must trigger a rebuild,
         evidenced by the tombstone counter dropping back down instead of
         growing without bound.
         """
-        backend = mp_backend_tombstones
+        backend = tombstones_backend
         shard_base = 0
         threshold = backend._tombstone_rebuild_threshold_count
 
@@ -198,7 +197,7 @@ class TestTombstoneReclamation:
         assert resets >= 1, "tombstone counter climbed but never reset"
 
     async def test_heavy_churn_does_not_exhaust_the_shard_without_rebuild(
-        self, mp_backend_tombstones: "MultiProcessInMemoryBackend"
+        self, tombstones_backend: "MultiProcessInMemoryBackend"
     ) -> None:
         """
         This is the concrete failure mode tombstone reclamation exists to
@@ -211,7 +210,7 @@ class TestTombstoneReclamation:
         `BackendError` instead of cleanly reporting "not found". Churning
         well past the raw table capacity must not trigger that.
         """
-        backend = mp_backend_tombstones
+        backend = tombstones_backend
         capacity = backend._shard_hash_table_capacity
 
         for i in range(capacity * 3):
@@ -224,13 +223,13 @@ class TestTombstoneReclamation:
         assert await backend.get(backend.get_key("never-existed")) is None
 
     async def test_live_keys_survive_a_rebuild(
-        self, mp_backend_tombstones: "MultiProcessInMemoryBackend"
+        self, tombstones_backend: "MultiProcessInMemoryBackend"
     ) -> None:
         """
         A rebuild must preserve every live key's value - only tombstoned
         (deleted) entries should be dropped, never occupied ones.
         """
-        backend = mp_backend_tombstones
+        backend = tombstones_backend
         threshold = backend._tombstone_rebuild_threshold_count
 
         survivor = backend.get_key("survivor")
@@ -245,10 +244,10 @@ class TestTombstoneReclamation:
         assert await backend.get(survivor) == "unchanged"
 
     async def test_deleted_keys_stay_deleted_after_rebuild(
-        self, mp_backend_tombstones: "MultiProcessInMemoryBackend"
+        self, tombstones_backend: "MultiProcessInMemoryBackend"
     ) -> None:
         """A rebuild must not resurrect a key that was actually deleted."""
-        backend = mp_backend_tombstones
+        backend = tombstones_backend
         threshold = backend._tombstone_rebuild_threshold_count
 
         gone = backend.get_key("gone")
@@ -263,7 +262,7 @@ class TestTombstoneReclamation:
         assert await backend.get(gone) is None
 
     async def test_rebuild_does_not_disturb_differently_prefixed_keys(
-        self, mp_backend_tombstones: "MultiProcessInMemoryBackend"
+        self, tombstones_backend: "MultiProcessInMemoryBackend"
     ) -> None:
         """
         A rebuild reshuffles bucket positions for the whole shard. A key
@@ -272,7 +271,7 @@ class TestTombstoneReclamation:
         every occupied entry in the shard, not just ones matching whatever
         triggered it.
         """
-        backend = mp_backend_tombstones
+        backend = tombstones_backend
         threshold = backend._tombstone_rebuild_threshold_count
 
         # Bypass `get_key()` to place a key under an unrelated namespace
@@ -306,10 +305,10 @@ class TestCleanerSlotReuseRace:
 
     async def test_cleaner_does_not_wipe_a_write_that_lands_mid_check(
         self,
-        mp_backend_cleaner: "MultiProcessInMemoryBackend",
+        cleaner_backend: "MultiProcessInMemoryBackend",
         monkeypatch: pytest.MonkeyPatch,
     ):
-        backend = mp_backend_cleaner
+        backend = cleaner_backend
         key1 = backend.get_key("key1")
 
         # Seed key1 and let it genuinely expire.
@@ -321,7 +320,7 @@ class TestCleanerSlotReuseRace:
 
         # A writer thread that gets paused right after it passes its
         # `shard_semaphore`-guarded generation check, but before it
-        # actually writes - simulating "a legitimate write is in flight".
+        # actually writes; simulating "a legitimate write is in flight".
         writer_paused = threading.Event()
         release_writer = threading.Event()
         real_write = backend._write_string_slot
@@ -361,10 +360,10 @@ class TestCleanerSlotReuseRace:
 class TestEstimateSharedMemorySize:
     """
     `estimate_shared_memory_size` re-implements the same formula
-    `__init__` uses to actually size the shared-memory segment. These
-    tests exist to catch the two formulas drifting apart if either is
-    changed without the other - not because the individual numbers are
-    interesting on their own.
+    `__init__` uses to actually size the shared-memory segment.
+
+    These tests exist to catch the two formulas drifting apart if either is
+    changed without the other.
     """
 
     @pytest.mark.parametrize(

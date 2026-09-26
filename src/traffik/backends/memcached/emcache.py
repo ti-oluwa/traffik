@@ -75,7 +75,7 @@ def _parse_memcached_nodes(
     return result
 
 
-_EMCACHE_BASE_EXCEPTIONS = (emcache.CommandError, emcache.ClusterNoAvailableNodes)
+EMCACHE_BASE_EXCEPTIONS = (emcache.CommandError, emcache.ClusterNoAvailableNodes)
 
 
 @typing.final
@@ -138,7 +138,7 @@ class _AsyncMemcachedLock:
         self._client = client
         self._ttl = math.ceil(ttl) if ttl is not None else 0
         self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
-        self._token: typing.Optional[str] = None
+        self._token: typing.Optional[bytes] = None
         self._reentry_count: int = 0
         self._reentrant = reentrant
         self._max_spins_before_backoff = max_spins_before_backoff
@@ -182,7 +182,7 @@ class _AsyncMemcachedLock:
 
         # We generate our own fencing token per acquisition attempt.
         # This helps prevent the "stale lock" problem per-process.
-        token = get_token()
+        token = get_token().encode("utf-8")
         start = monotonic()
         attempts = 0
         max_spins = self._max_spins_before_backoff
@@ -192,7 +192,7 @@ class _AsyncMemcachedLock:
             try:
                 await self._client.add(
                     self._name_bytes,
-                    token.encode("utf-8"),
+                    token,
                     exptime=self._ttl,
                     noreply=False,
                 )
@@ -204,7 +204,7 @@ class _AsyncMemcachedLock:
             except emcache.NotStoredStorageCommandError:
                 # Key already exists; lock is held by someone else.
                 pass
-            except _EMCACHE_BASE_EXCEPTIONS as exc:
+            except EMCACHE_BASE_EXCEPTIONS as exc:
                 # Any other Memcached error during lock acquisition.
                 raise LockAcquisitionError(
                     f"Failed to acquire lock '{self._name}'"
@@ -248,16 +248,31 @@ class _AsyncMemcachedLock:
         name_bytes = self._name_bytes
         token = self._token
         try:
-            # Only delete the key if the stored token still matches ours,
-            # preventing accidental release of a lock acquired by another
-            # instance after ours expired.
-            item = await self._client.get(name_bytes)
-            if item is not None and item.value.decode("utf-8") == token:
-                await self._client.delete(name_bytes, noreply=False)
+            # `gets()`/`cas()` close the race that a plain `get()` then
+            # `delete()` leaves open. If the key expired and someone else
+            # re-acquired it between our read and our delete, a bare delete
+            # would remove their active lock. `cas()` only succeeds if the
+            # key's value has not changed since our `gets()` read (raising
+            # `NotStoredStorageCommandError` otherwise), so a concurrent
+            # re-acquisition is detected. Re-applying our own token via CAS
+            # (rather than deleting directly) also keeps the original TTL as a
+            # safety net if the follow-up delete below fails for some other reason.
+            item = await self._client.gets(name_bytes)
+            if item is not None and item.value == token:
+                try:
+                    assert item.cas is not None
+                    await self._client.cas(
+                        name_bytes, item.value, item.cas, exptime=self._ttl
+                    )
+                except emcache.NotStoredStorageCommandError:
+                    if logger.isEnabledFor(logging.WARNING):
+                        logger.warning("Lock '%s' expired or stolen.\n", self._name)
+                else:
+                    await self._client.delete(name_bytes, noreply=False)
             else:
                 if logger.isEnabledFor(logging.WARNING):
                     logger.warning("Lock '%s' expired or stolen.\n", self._name)
-        except _EMCACHE_BASE_EXCEPTIONS as exc:  # nosec
+        except EMCACHE_BASE_EXCEPTIONS as exc:  # nosec
             # Lock might have expired or been released already.
             raise LockReleaseError(f"Failed to release lock '{self._name}'") from exc
         finally:
@@ -504,7 +519,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
                 if version is None:
                     return False
             return True
-        except _EMCACHE_BASE_EXCEPTIONS:
+        except EMCACHE_BASE_EXCEPTIONS:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "An exception occured when checking readiness", exc_info=True
@@ -580,7 +595,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
                 pass
 
             await self.connection.append(tracking_key.encode(), entry, noreply=False)
-        except _EMCACHE_BASE_EXCEPTIONS:
+        except EMCACHE_BASE_EXCEPTIONS:
             logger.warning("Failed to track key '%s'.\n", key, exc_info=True)
 
     def _assert_ready(self) -> None:

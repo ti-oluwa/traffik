@@ -1,9 +1,7 @@
 """Head-to-head comparison benchmark against SlowAPI."""
 
-import asyncio
-
 from benchmarks.live.orchestrators import run_http_scenarios
-from benchmarks.output._json import print_json
+from benchmarks.output._json import print_aggregate_json
 from benchmarks.scenarios import HTTP_SCENARIOS
 from benchmarks.types import AggregatedResult, BenchmarkConfig
 
@@ -37,7 +35,11 @@ async def run_comparison(
         workers=config.workers,
     )
     slowapi_results = await run_http_scenarios(
-        slowapi_config, selected_scenarios, warmup_iterations, HTTP_SCENARIOS, SLOWAPI_APP_PATH
+        slowapi_config,
+        selected_scenarios,
+        warmup_iterations,
+        HTTP_SCENARIOS,
+        SLOWAPI_APP_PATH,
     )
     return traffik_results, slowapi_results
 
@@ -46,7 +48,9 @@ def _by_scenario(results: list[AggregatedResult]) -> dict[str, AggregatedResult]
     return {result.scenario_name: result for result in results}
 
 
-def print_comparison(traffik_results: list[AggregatedResult], slowapi_results: list[AggregatedResult]) -> None:
+def print_comparison(
+    traffik_results: list[AggregatedResult], slowapi_results: list[AggregatedResult]
+) -> None:
     """Print SlowAPI deltas relative to the corresponding Traffik result."""
     traffik = _by_scenario(traffik_results)
     slowapi = _by_scenario(slowapi_results)
@@ -58,9 +62,17 @@ def print_comparison(traffik_results: list[AggregatedResult], slowapi_results: l
     for name in names:
         left = traffik[name]
         right = slowapi[name]
-        rps_delta = (right.mean_rps - left.mean_rps) / left.mean_rps * 100 if left.mean_rps else 0
-        p50_delta = (right.p50_ms - left.p50_ms) / left.p50_ms * 100 if left.p50_ms else 0
-        p95_delta = (right.p95_ms - left.p95_ms) / left.p95_ms * 100 if left.p95_ms else 0
+        rps_delta = (
+            (right.mean_rps - left.mean_rps) / left.mean_rps * 100
+            if left.mean_rps
+            else 0
+        )
+        p50_delta = (
+            (right.p50_ms - left.p50_ms) / left.p50_ms * 100 if left.p50_ms else 0
+        )
+        p95_delta = (
+            (right.p95_ms - left.p95_ms) / left.p95_ms * 100 if left.p95_ms else 0
+        )
         print(
             f"{name}: Traffik={left.mean_rps:.1f} req/s, SlowAPI={right.mean_rps:.1f} req/s "
             f"(RPS {rps_delta:+.1f}%, P50 {p50_delta:+.1f}%, P95 {p95_delta:+.1f}%)"
@@ -74,7 +86,7 @@ def print_json_comparison(
     warmup_iterations: int,
 ) -> None:
     """Emit both implementations' results in machine-readable form."""
-    print_json(
+    print_aggregate_json(
         traffik_results + slowapi_results,
         {
             "benchmark": "traffik_vs_slowapi",

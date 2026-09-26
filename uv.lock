@@ -2413,8 +2413,6 @@ redis = [
 
 [package.dev-dependencies]
 benchmark = [
-    { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "click", version = "8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "fastapi", version = "0.128.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "fastapi", version = "0.136.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "gunicorn", version = "23.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10' and sys_platform != 'win32'" },
@@ -2492,7 +2490,6 @@ provides-extras = ["all", "redis", "memcached", "aioredis", "coredis", "aiomcach
 
 [package.metadata.requires-dev]
 benchmark = [
-    { name = "click", specifier = ">=8.1.8" },
     { name = "fastapi", specifier = ">=0.68.0" },
     { name = "gunicorn", marker = "sys_platform != 'win32'", specifier = ">=22.0.0" },
     { name = "httptools", specifier = ">=0.8.0" },

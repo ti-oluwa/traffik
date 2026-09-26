@@ -150,7 +150,7 @@ class _AsyncMemcachedLock:
         self._client = client
         self._ttl = math.ceil(ttl) if ttl is not None else 0
         self._owner: typing.Optional[asyncio.Task[typing.Any]] = None
-        self._token: typing.Optional[str] = None
+        self._token: typing.Optional[bytes] = None
         self._reentry_count = 0
         self._reentrant = reentrant
         self._max_spins_before_backoff = max_spins_before_backoff
@@ -196,7 +196,7 @@ class _AsyncMemcachedLock:
         # we generate our own unique token per acquisition attempt.
         # This helps prevent the "stale lock" problem but only
         # per process, not cross-process if clocks are skewed across processes.
-        token = get_token()
+        token = get_token().encode("utf-8")
         start = monotonic()
         attempts = 0
         max_spins = self._max_spins_before_backoff
@@ -208,7 +208,7 @@ class _AsyncMemcachedLock:
             try:
                 added = await self._client.add(
                     self._name_bytes,
-                    token.encode("utf-8"),
+                    token,
                     exptime=self._ttl,
                 )
             except ClientException as exc:
@@ -263,10 +263,25 @@ class _AsyncMemcachedLock:
         name_bytes = self._name_bytes
         token = self._token
         try:
-            # Ensure we only release/delete if we own the lock (token matches)
-            item = await self._client.get(name_bytes)
-            if item is not None and item.decode("utf-8") == token:
-                await self._client.delete(name_bytes)
+            # `gets()`/`cas()` close the race that a plain `get()` then
+            # `delete()` leaves open (TOCTOU). If the key expired and someone else
+            # re-acquired it between our read and our delete, a bare delete
+            # would remove their active lock. `cas()` only succeeds if the
+            # key's value has not changed since our `gets()` read, so a
+            # concurrent re-acquisition is detected.
+            # Re-applying our own token via CAS (rather than deleting
+            # directly) also keeps the original TTL as a safety net if the
+            # follow-up delete below fails for some other reason.
+            value, cas_token = await self._client.gets(name_bytes)
+            if value is not None and value == token:
+                assert cas_token is not None
+                reaffirmed = await self._client.cas(
+                    name_bytes, value, cas_token, exptime=self._ttl
+                )
+                if reaffirmed:
+                    await self._client.delete(name_bytes)
+                elif logger.isEnabledFor(logging.WARNING):
+                    logger.warning("Lock '%s' expired or stolen.\n", self._name)
             else:
                 if logger.isEnabledFor(logging.WARNING):
                     logger.warning("Lock '%s' expired or stolen.\n", self._name)

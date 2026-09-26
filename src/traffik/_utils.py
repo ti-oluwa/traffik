@@ -438,7 +438,7 @@ class _TaskTimer:
         :raises: The configured timeout error.
         """
         if sys.version_info[:2] >= (3, 11) and self._task is not None:
-            # Call uncancel to clear cancellation state from _TaskTimer
+            # Call uncancel to clear cancellation state from `_TaskTimer`
             self._task.uncancel()
         raise self._error from None  # suppress context of cancellation
 

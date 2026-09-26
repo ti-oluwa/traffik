@@ -1,5 +1,6 @@
-"""Tests for `ThrottleBackend.lock(...)`'s TTL enforcement: `local_ttl_factor`
-validation, and `LockTimeoutError` surfacing when the TTL watchdog fires.
+"""
+Tests for `ThrottleBackend.lock(...)`'s TTL enforcement.
+`local_ttl_factor` validation, and `LockTimeoutError` surfacing when the TTL watchdog fires.
 """
 
 import asyncio
@@ -102,14 +103,10 @@ class TestLockTimeoutErrorSurfacing:
         for backend in backends(namespace="lock_timeout_propagate"):
             async with backend(persistent=False, close_on_exit=True):
                 with pytest.raises(LockTimeoutError):
-                    async with backend.lock(
-                        "l", ttl=0.05, enforce_ttl_locally=True
-                    ):
+                    async with backend.lock("l", ttl=0.05, enforce_ttl_locally=True):
                         await asyncio.sleep(2)
 
-    async def test_converted_to_different_exception(
-        self, backends: BackendGen
-    ) -> None:
+    async def test_converted_to_different_exception(self, backends: BackendGen) -> None:
         """A body that catches the cancellation and raises something else
         (e.g. via a broad `except Exception`) must not be able to hide the
         fact that its critical section was forcibly cut short.
@@ -117,9 +114,7 @@ class TestLockTimeoutErrorSurfacing:
         for backend in backends(namespace="lock_timeout_convert"):
             async with backend(persistent=False, close_on_exit=True):
                 with pytest.raises(LockTimeoutError):
-                    async with backend.lock(
-                        "l", ttl=0.05, enforce_ttl_locally=True
-                    ):
+                    async with backend.lock("l", ttl=0.05, enforce_ttl_locally=True):
                         try:
                             await asyncio.sleep(2)
                         except asyncio.CancelledError:
@@ -133,9 +128,7 @@ class TestLockTimeoutErrorSurfacing:
         for backend in backends(namespace="lock_timeout_swallow"):
             async with backend(persistent=False, close_on_exit=True):
                 with pytest.raises(LockTimeoutError):
-                    async with backend.lock(
-                        "l", ttl=0.05, enforce_ttl_locally=True
-                    ):
+                    async with backend.lock("l", ttl=0.05, enforce_ttl_locally=True):
                         try:
                             await asyncio.sleep(2)
                         except asyncio.CancelledError:

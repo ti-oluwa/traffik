@@ -41,17 +41,8 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def options(
-    default_workers: int = 1,
-) -> typing.Callable[[typing.Callable[P, R]], typing.Callable[P, R]]:
-    """
-    Common click options for all benchmark commands.
-
-    :param default_workers: Default for `--workers`. The `multiprocess`
-        command wants this >1 by default (that'scenario the whole point of it);
-        the others default to a single real process.
-    """
-
+def options(default_workers: int = 1) -> typing.Callable[[typing.Callable[P, R]], typing.Callable[P, R]]:
+    """Common Click options for benchmark commands."""
     def decorator(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
         @click.option(
             "--backend",
@@ -130,9 +121,7 @@ def options(
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> R:
             return func(*args, **kwargs)
-
         return wrapper
-
     return decorator
 
 
@@ -149,38 +138,13 @@ def check_workers_platform(workers: int) -> None:
 
 @click.group()
 def cli() -> None:
-    """
-    Traffik benchmark suite.
-
-    Every command spawns the target app as a `uvicorn` (single
-    worker) or `gunicorn` (multiple forked workers, via --workers)
-    process, listening on a loopback socket, and drives it with
-    an async HTTP or WebSocket client.
-    """
-    pass
+    """Traffik benchmark suite."""
 
 
-@cli.command("http")
+@cli.command("compare")
 @options()
-def http_command(
-    backend,
-    strategy,
-    iterations,
-    warmup,
-    concurrency,
-    workers,
-    output,
-    redis_url,
-    memcached_host,
-    memcached_port,
-    scenarios,
-) -> None:
-    """
-    Benchmark HTTP throttles using Depends-based injection.
-
-    Available scenarios: `below_limit`, `at_limit`, `over_limit`, `concurrent`,
-    `hot_key`, `many_keys`, `window_boundary`, `sustained`, `error_recovery`.
-    """
+def compare_command(backend, strategy, iterations, warmup, concurrency, workers, output, redis_url, memcached_host, memcached_port, scenarios) -> None:
+    """Compare Traffik against SlowAPI using identical real HTTP workloads."""
     check_workers_platform(workers)
     config = BenchmarkConfig(
         backend_kind=backend,
@@ -194,13 +158,21 @@ def http_command(
         memcached_port=memcached_port,
         workers=workers,
     )
-
-    if scenarios == "all":
-        scenario_keys = list(HTTP_SCENARIOS.keys())
+    traffik_results, slowapi_results = asyncio.run(run_comparison(config, scenario_keys(scenarios), warmup))
+    if output == "json":
+        print_json_comparison(traffik_results, slowapi_results, config, warmup)
     else:
-        scenario_keys = [scenario.strip() for scenario in scenarios.split(",")]
+        print_comparison(traffik_results, slowapi_results)
 
-    results = asyncio.run(run_http_scenarios(config, scenario_keys, warmup))
+
+@cli.command("http")
+@options()
+def http_command(backend, strategy, iterations, warmup, concurrency, workers, output, redis_url, memcached_host, memcached_port, scenarios) -> None:
+    """Benchmark HTTP throttles using Depends-based injection."""
+    check_workers_platform(workers)
+    config = BenchmarkConfig(backend_kind=backend, strategy_kind=strategy, iterations=iterations, warmup_iterations=warmup, concurrency=concurrency, output_format=output, redis_url=redis_url, memcached_host=memcached_host, memcached_port=memcached_port, workers=workers)
+    scenario_keys_ = list(HTTP_SCENARIOS) if scenarios == "all" else scenario_keys(scenarios)
+    results = asyncio.run(run_http_scenarios(config, scenario_keys_, warmup))
     if output == "json":
         meta = {
             "backend": backend,
@@ -216,45 +188,12 @@ def http_command(
 
 @cli.command("middleware")
 @options()
-def middleware_command(
-    backend,
-    strategy,
-    iterations,
-    warmup,
-    concurrency,
-    workers,
-    output,
-    redis_url,
-    memcached_host,
-    memcached_port,
-    scenarios,
-) -> None:
-    """
-    Benchmark middleware-mounted throttles.
-
-    Available scenarios: `below_limit`, `at_limit`, `over_limit`, `concurrent`,
-    `hot_key`, `many_keys`, `window_boundary`, `sustained`, `error_recovery`, `selective`.
-    """
+def middleware_command(backend, strategy, iterations, warmup, concurrency, workers, output, redis_url, memcached_host, memcached_port, scenarios) -> None:
+    """Benchmark middleware-mounted throttles."""
     check_workers_platform(workers)
-    config = BenchmarkConfig(
-        backend_kind=backend,
-        strategy_kind=strategy,
-        iterations=iterations,
-        warmup_iterations=warmup,
-        concurrency=concurrency,
-        output_format=output,
-        redis_url=redis_url,
-        memcached_host=memcached_host,
-        memcached_port=memcached_port,
-        workers=workers,
-    )
-
-    if scenarios == "all":
-        scenario_keys = list(MIDDLEWARE_SCENARIOS.keys())
-    else:
-        scenario_keys = [scenario.strip() for scenario in scenarios.split(",")]
-
-    results = asyncio.run(run_middleware_scenarios(config, scenario_keys, warmup))
+    config = BenchmarkConfig(backend_kind=backend, strategy_kind=strategy, iterations=iterations, warmup_iterations=warmup, concurrency=concurrency, output_format=output, redis_url=redis_url, memcached_host=memcached_host, memcached_port=memcached_port, workers=workers)
+    scenario_keys_ = list(MIDDLEWARE_SCENARIOS) if scenarios == "all" else scenario_keys(scenarios)
+    results = asyncio.run(run_middleware_scenarios(config, scenario_keys_, warmup))
     if output == "json":
         meta = {
             "backend": backend,
@@ -270,44 +209,12 @@ def middleware_command(
 
 @cli.command("websocket")
 @options()
-def websocket_command(
-    backend,
-    strategy,
-    iterations,
-    warmup,
-    concurrency,
-    workers,
-    output,
-    redis_url,
-    memcached_host,
-    memcached_port,
-    scenarios,
-) -> None:
-    """
-    Benchmark WebSocket throttles.
-
-    Available scenarios: `below_limit`, `over_limit`, `burst`, `concurrent`, `window_boundary`.
-    """
+def websocket_command(backend, strategy, iterations, warmup, concurrency, workers, output, redis_url, memcached_host, memcached_port, scenarios) -> None:
+    """Benchmark WebSocket throttles."""
     check_workers_platform(workers)
-    config = BenchmarkConfig(
-        backend_kind=backend,
-        strategy_kind=strategy,
-        iterations=iterations,
-        warmup_iterations=warmup,
-        concurrency=concurrency,
-        output_format=output,
-        redis_url=redis_url,
-        memcached_host=memcached_host,
-        memcached_port=memcached_port,
-        workers=workers,
-    )
-
-    if scenarios == "all":
-        scenario_keys = list(WEBSOCKET_SCENARIOS.keys())
-    else:
-        scenario_keys = [scenario.strip() for scenario in scenarios.split(",")]
-
-    results = asyncio.run(run_websocket_scenarios(config, scenario_keys, warmup))
+    config = BenchmarkConfig(backend_kind=backend, strategy_kind=strategy, iterations=iterations, warmup_iterations=warmup, concurrency=concurrency, output_format=output, redis_url=redis_url, memcached_host=memcached_host, memcached_port=memcached_port, workers=workers)
+    scenario_keys_ = list(WEBSOCKET_SCENARIOS) if scenarios == "all" else scenario_keys(scenarios)
+    results = asyncio.run(run_websocket_scenarios(config, scenario_keys_, warmup))
     if output == "json":
         meta = {
             "backend": backend,
@@ -346,33 +253,9 @@ def multiprocess_command(
     if IS_WINDOWS or run_multiprocess_scenarios is None:
         click.echo("ERROR: MultiProcess benchmarks require a POSIX system.", err=True)
         sys.exit(1)
-        return
-    if workers < 2:
-        click.echo(
-            "WARN: --workers < 2 means gunicorn won't actually fork multiple "
-            "workers, so this won't exercise cross-process state sharing.",
-            err=True,
-        )
-
-    config = BenchmarkConfig(
-        backend_kind="multiprocess",
-        strategy_kind=strategy,
-        iterations=iterations,
-        warmup_iterations=warmup,
-        concurrency=concurrency,
-        output_format=output,
-        redis_url=redis_url,
-        memcached_host=memcached_host,
-        memcached_port=memcached_port,
-        workers=workers,
-    )
-
-    if scenarios == "all":
-        scenario_keys = list(MULTIPROCESS_SCENARIOS.keys())
-    else:
-        scenario_keys = [scenario.strip() for scenario in scenarios.split(",")]
-
-    results = asyncio.run(run_multiprocess_scenarios(config, scenario_keys, warmup))
+    config = BenchmarkConfig(backend_kind="multiprocess", strategy_kind=strategy, iterations=iterations, warmup_iterations=warmup, concurrency=concurrency, output_format=output, redis_url=redis_url, memcached_host=memcached_host, memcached_port=memcached_port, workers=workers)
+    scenario_keys_ = list(MULTIPROCESS_SCENARIOS) if scenarios == "all" else scenario_keys(scenarios)
+    results = asyncio.run(run_multiprocess_scenarios(config, scenario_keys_, warmup))
     if output == "json":
         meta = {
             "backend": "multiprocess",

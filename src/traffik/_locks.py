@@ -791,9 +791,11 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         self._acquired = True
 
         # Start the lock hold-time watchdog after the lock is confirmed acquired.
-        # `_TaskTimer` schedules task.cancel() via `call_later`. The `CancelledError`
-        # that bubbles up through the body is then converted to `LockTimeoutError`
-        # inside `__aexit__` before the lock is released.
+        # `_TaskTimer` schedules task.cancel() via `call_later`. Once it fires,
+        # `LockTimeoutError` always surfaces from `__aexit__` before the lock is
+        # released, regardless of what the body did with the `CancelledError`
+        # (propagated it untouched, swallowed it, or converted it into another
+        # exception) - see `_TaskTimer.stop()`.
         if self._ttl is not None:
             loop = asyncio.get_running_loop()
             self._timer = _TaskTimer(
@@ -817,14 +819,15 @@ class _AsyncLockContext(typing.Generic[AsyncLockT]):
         # First and most important, we need to exit `_TaskTimer`
         # This must happen before the lock release so that:
         # - A normal exit cancels the `call_later` handle (hence no spurious fire).
-        # - A TTL-fired exit converts `CancelledError` to `LockTimeoutError`.
+        # - A TTL-fired exit always raises `LockTimeoutError`, whatever the body
+        #   did with the cancellation.
         # We then stash any `LockTimeoutError` and re-raise it after releasing.
         timeout_exc: typing.Optional[BaseException] = None
         if self._timer is not None:
             timer = self._timer
             self._timer = None
             try:
-                timer.stop(exc_type)
+                timer.stop()
             except LockTimeoutError as ltexc:
                 # TTL watchdog fired. Stash and release first.
                 timeout_exc = ltexc

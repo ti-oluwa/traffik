@@ -423,36 +423,32 @@ class _TaskTimer:
             self._task = task
             self._timer_handler = self._loop.call_later(self._timeout, self._on_timeout)
 
-    def _handle_timed_out(self, exc_type: type[BaseException]) -> None:
+    def _handle_timed_out(self) -> None:
         """
         Handle the case where the timeout was triggered.
 
-        If the timeout was triggered and the current exception matches the specified type (or any type if None),
-        it will be treated as a timeout cancellation. This method will raise the timeout error and suppress
-        the context of the cancellation.
+        Regardless of what the protected block does with the cancellation
+        (lets it propagate untouched, swallows it entirely, or converts it
+        into a different exception), the timeout error always raises once
+        the watchdog has fired. Silently accepting whatever exception (or
+        lack of one) happens to be in flight when the timer stops would let
+        callers believe their critical section ran to completion, or failed
+        for an unrelated reason, when it was actually forced to stop early.
 
-        :param exc_type: The type of the current exception being handled, or None if not currently handling an exception.
-        :raises: The timeout error if the timeout was triggered and the exception type matches.
+        :raises: The configured timeout error.
         """
         if sys.version_info[:2] >= (3, 11) and self._task is not None:
             # Call uncancel to clear cancellation state from _TaskTimer
             self._task.uncancel()
-        if exc_type is asyncio.CancelledError:
-            # it's not a real cancellation, was a timeout
-            raise self._error from None  # suppress context of cancellation
+        raise self._error from None  # suppress context of cancellation
 
-    def stop(self, exc_type: typing.Optional[type[BaseException]] = None) -> None:
+    def stop(self) -> None:
         """
-        Stop (and cancel) the timer, handling any timeout cancellation and propagation
-        if the timer was triggered.
+        Stop (and cancel) the timer, raising the timeout error if it fired.
 
         Once this method is called, the timer is considered done and cannot be restarted.
 
-        :param exc_type: Optional exception type to check for cancellation.
-            If the timeout was triggered and the current exception matches this type,
-            it will be treated as a timeout cancellation. Defaults to None, which means
-            any exception will be treated as a timeout cancellation if the timeout was triggered.
-        :raises: The timeout error if the timeout was triggered and the exception type matches.
+        :raises: The configured timeout error, if the timer fired before this call.
         """
         if self._done:
             raise RuntimeError(
@@ -460,8 +456,8 @@ class _TaskTimer:
             )
 
         self._done = True
-        if self._timed_out and exc_type is not None:
-            self._handle_timed_out(exc_type)
+        if self._timed_out:
+            self._handle_timed_out()
 
         # Cancel the timer if it's still active
         if self._timer_handler is not None and not self._timer_handler.cancelled():
@@ -479,7 +475,7 @@ class _TaskTimer:
         traceback: typing.Optional[TracebackType],
     ) -> bool:
         if not self._done:
-            self.stop(exc_type)
+            self.stop()
         return False
 
 

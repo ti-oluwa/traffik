@@ -451,10 +451,14 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
             But this add some overhead of scheduling a local timer and cancelling the task, so it is optional to
             allow for use cases that do not require strict local TTL enforcement.
         :param local_ttl_factor: A factor to apply to the TTL for local enforcement when `enforce_ttl_locally` is True.
-            Should be a value between 0 and 1 (boundary exclusive). This is to ensure the local TTL is slightly more conservative
-            than the server TTL to account for clock skew and network latency. For example, if the TTL is 10 seconds and the
-            factor is 0.8, then the local TTL will be 8 seconds. If the body is still running after 8 seconds, it will be cancelled,
-            even if the server lock has not yet expired.
+            Must be greater than 0 and at most 1. Values below 1 make the local TTL slightly more conservative
+            than the server TTL, to account for clock skew and network latency between the client and a distributed
+            lock server (e.g. Redis). For example, if the TTL is 10 seconds and the factor is 0.8, the local TTL
+            will be 8 seconds. If the body is still running after 8 seconds, it will be cancelled, even if the
+            server lock has not yet expired. A factor of 1 (no reduction) is appropriate when local enforcement
+            is the only TTL mechanism, i.e. the backend's lock has no independent server-side expiry of its own
+            to guard against (as with `InMemoryBackend`/`MultiProcessInMemoryBackend`, whose `get_lock(...)`
+            ignores `ttl` entirely).
         :return: An asynchronous context manager that acquires/releases the lock.
         """
         ttl = ttl if ttl is not None else self.lock_ttl
@@ -466,8 +470,10 @@ class ThrottleBackend(typing.Generic[T, HTTPConnectionT]):
         )
         local_ttl = None
         if enforce_ttl_locally and ttl is not None:
-            if not (0.0 < local_ttl_factor < 1.0):
-                raise ValueError("`local_ttl_factor` must be between 0 and 1 exclusive")
+            if not (0.0 < local_ttl_factor <= 1.0):
+                raise ValueError(
+                    "`local_ttl_factor` must be greater than 0 and at most 1"
+                )
             local_ttl = ttl * local_ttl_factor
 
         # Ensure to use a namespaced lock key so reset on backend clears locks too

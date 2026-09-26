@@ -83,7 +83,7 @@ return 0
 ACQUIRE_SCRIPT = """
 -- KEYS[1] = lock key
 -- KEYS[2] = fence key
--- ARGV[1] = ttl (seconds, or 0 for no expiry)
+-- ARGV[1] = ttl in milliseconds (integer string), or "0" for no expiry
 
 -- Try to acquire lock first (most common path when lock is held)
 local token = redis.call("INCR", KEYS[2])
@@ -195,7 +195,7 @@ class _AsyncRedisLock:
         self._max_spins_before_backoff = max_spins_before_backoff
         self._spin_max_delay_seconds = spin_max_delay_seconds
         self._reentrant = reentrant
-        self._ttl = str(ttl * 1000 if ttl else 0)
+        self._ttl = str(max(1, round(ttl * 1000)) if ttl else 0)
 
     @classmethod
     async def _register_acquire_script(cls, client: AnyRedis) -> str:

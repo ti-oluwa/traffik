@@ -1,5 +1,6 @@
 """Tests for error handling strategies."""
 
+import asyncio
 import functools
 
 import pytest
@@ -201,15 +202,15 @@ class TestFailover:
         """Test uses fallback backend when circuit is open."""
         primary = InMemoryBackend(namespace="primary")
         secondary = InMemoryBackend(namespace="fallback")
-        breaker_instance = CircuitBreaker(failure_threshold=1)
+        breaker = CircuitBreaker(failure_threshold=1)
 
         async with secondary(close_on_exit=True):
             # Open the circuit
-            await breaker_instance.record_failure()
+            await breaker.record_failure()
 
             handler = failover(
                 backend=secondary,
-                breaker=breaker_instance,
+                breaker=breaker,
                 max_retries=0,
             )
 
@@ -249,7 +250,7 @@ class TestFailover:
 
         primary = InMemoryBackend(namespace="primary")
         secondary = InMemoryBackend(namespace="fallback")
-        breaker_instance = CircuitBreaker()
+        breaker = CircuitBreaker()
 
         async with primary(close_on_exit=True), secondary(close_on_exit=True):
             throttle = throttle_type(
@@ -261,7 +262,7 @@ class TestFailover:
             )
             handler = failover(
                 backend=secondary,
-                breaker=breaker_instance,
+                breaker=breaker,
                 max_retries=2,
             )
 
@@ -296,7 +297,7 @@ class TestFailover:
 
         primary = InMemoryBackend(namespace="primary")
         secondary = InMemoryBackend(namespace="fallback")
-        breaker_instance = CircuitBreaker(failure_threshold=1)
+        breaker = CircuitBreaker(failure_threshold=1)
 
         async with primary(close_on_exit=True), secondary(close_on_exit=True):
             throttle = throttle_type(
@@ -306,7 +307,7 @@ class TestFailover:
                 strategy=primary_failing_strategy,
             )
             handler = failover(
-                backend=secondary, breaker=breaker_instance, max_retries=1
+                backend=secondary, breaker=breaker, max_retries=1
             )
 
             exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
@@ -322,4 +323,65 @@ class TestFailover:
 
             # First failure - should open circuit (threshold=1)
             await handler(exc_info["connection"], exc_info)
-            assert breaker_instance.is_open
+            assert breaker.is_open
+
+    async def test_cancellation_during_probe_does_not_wedge_breaker(
+        self, throttle_type: type[Throttle[HTTPConnection]]
+    ) -> None:
+        """
+        Regression test: if the HALF_OPEN probe attempt raises
+        `asyncio.CancelledError` (a client disconnect, a request timeout, a
+        server shutdown, all ordinary occurrences), the handler used to
+        re-raise immediately without ever calling `record_success()` or
+        `record_failure()`. That left `_probe_in_progress` `True` forever,
+        permanently preventing the circuit from ever probing again.
+        """
+        primary = InMemoryBackend(namespace="primary-cancel")
+        secondary = InMemoryBackend(namespace="fallback-cancel")
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=0.05)
+
+        async with primary(close_on_exit=True), secondary(close_on_exit=True):
+            throttle = throttle_type(
+                uid="test-failover-cancel",
+                rate="10/s",
+                backend=primary,
+                registry=ThrottleRegistry(),
+            )
+
+            async def cancelling_strategy(key, rate, backend, cost):
+                raise asyncio.CancelledError()
+
+            throttle.strategy = cancelling_strategy  # type: ignore[method-assign]
+            handler = failover(
+                backend=secondary, breaker=breaker, max_retries=1
+            )
+
+            await breaker.record_failure()  # open the circuit
+            assert breaker.is_open
+            await asyncio.sleep(0.06)  # let recovery_timeout elapse
+
+            exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
+                "exception": BackendError("Error"),
+                "connection": new_connection(),
+                "cost": 1,
+                "rate": Rate.parse("10/s"),
+                "backend": primary,
+                "context": None,
+                "throttle": throttle,  # type: ignore[arg-type]
+                "key": "test-key",
+            }
+
+            with pytest.raises(asyncio.CancelledError):
+                await handler(exc_info["connection"], exc_info)
+
+            info = await breaker.info()
+            assert info["probe_in_progress"] is False, (
+                "the probe slot must be released even when the probe attempt "
+                "is cancelled, or the circuit can never recover"
+            )
+
+            # The circuit must be able to attempt another probe once the
+            # recovery timeout elapses again proving it isn't permanently
+            # stuck.
+            await asyncio.sleep(0.06)
+            assert await breaker.allow_execution() is True

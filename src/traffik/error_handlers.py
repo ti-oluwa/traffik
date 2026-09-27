@@ -284,6 +284,16 @@ def failover(
                 await cb.record_success()
                 return wait_ms
             except EXEMPT_EXCEPTIONS:
+                # A cancellation, interpreter exit, etc. mid-attempt tells us
+                # nothing about whether the primary backend itself is
+                # healthy, so we can't call this a success. But we must
+                # still record something here because if this attempt was the
+                # circuit's HALF_OPEN probe, skipping both `record_success()`
+                # and `record_failure()` would leave `_probe_in_progress`
+                # True forever, permanently preventing the circuit from
+                # ever probing again. Hence we treat it as a failure (the safe,
+                # conservative choice) so the probe slot is always released.
+                await cb.record_failure()
                 raise
             except BaseException:
                 if attempt < max_retries - 1:

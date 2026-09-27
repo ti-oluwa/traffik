@@ -911,3 +911,25 @@ class TestCircuitBreaker:
         assert "success_count" in info
         assert "opened_at" in info
         assert info["state"] == CircuitState.CLOSED.value
+
+    async def test_only_one_probe_allowed_under_concurrent_access(self):
+        """
+        Many tasks racing `allow_execution()` right as the circuit
+        transitions from OPEN to HALF_OPEN must result in exactly one
+        probe slot being granted. Everyone else must be turned away,
+        not just most of them.
+        """
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=0.05)
+        await breaker.record_failure()  # opens the circuit
+        assert breaker.is_open
+
+        await asyncio.sleep(0.06)  # let `recovery_timeout` elapse
+
+        results = await asyncio.gather(
+            *(breaker.allow_execution() for _ in range(50))
+        )
+        assert results.count(True) == 1, (
+            "exactly one concurrent caller should be granted the probe slot"
+        )
+        assert results.count(False) == 49
+        assert breaker.is_half_open

@@ -48,6 +48,8 @@ can safely attach to it anyway, it's unlinked and recreated rather than reused.
 """
 
 import asyncio
+import contextlib
+import fcntl
 import functools
 import logging
 import math
@@ -57,6 +59,7 @@ import platform
 import random
 import re
 import struct
+import tempfile
 import threading
 import typing
 from concurrent.futures import ThreadPoolExecutor
@@ -83,6 +86,7 @@ from traffik.exceptions import (  # noqa: E402
     BackendError,
     LockAcquisitionError,
     LockReleaseError,
+    ShardUnavailableError,
 )
 from traffik.typing import (  # noqa: E402
     ConnectionIdentifier,
@@ -98,6 +102,11 @@ _HASH_TABLE_LOAD_FACTOR: float = 0.65
 _HASH_TABLE_EMPTY_STATE: int = 0
 _HASH_TABLE_OCCUPIED_STATE: int = 1
 _HASH_TABLE_TOMBSTONE_STATE: int = 2
+# Transient state a bucket holds only while `_hash_table_upsert` is midway
+# through writing it. Never visible to another process under normal
+# operation (the slot-map semaphore is held for the whole write); it only
+# survives if the writer died mid-write, which is how recovery finds it.
+_HASH_TABLE_WRITING_STATE: int = 3
 _KEY_MAX_BYTES: int = 200
 
 _HASH_TABLE_STATE_SIZE: int = 1
@@ -124,6 +133,26 @@ _HEADER_TOMBSTONE_COUNT_OFFSET: int = (
     _HEADER_FREE_COUNT_OFFSET + _HEADER_FREE_COUNT_SIZE
 )
 
+# Owner records: which process currently holds a shard's semaphore, so a
+# waiter that times out can tell a holder that's merely slow from one that
+# died while holding it (a POSIX semaphore is never released by the OS when
+# its holder is killed). One record per semaphore per shard, in the shard
+# header. A pid of 0 means "not held".
+#
+# Only the pid is stored. Whether a holder is dead is decided by probing that
+# pid, not by how long the semaphore has been held, so a timestamp would cost a
+# clock read and a write on every acquire for nothing.
+_OWNER_PID_SIZE: int = 4
+_OWNER_RECORD_SIZE: int = _OWNER_PID_SIZE
+
+# Bounded wait for a shard/slot-map semaphore. These guard memcpy-scale
+# critical sections, so a healthy holder releases in microseconds; waiting
+# this long means the holder is either dead or wedged.
+_DEFAULT_SEMAPHORE_ACQUIRE_TIMEOUT: float = 2.0
+# After force-releasing a semaphore whose holder died, the retry should
+# succeed immediately; this only bounds a pathological second failure.
+_SEMAPHORE_RECOVERY_RETRY_TIMEOUT: float = 0.5
+
 SHARED_MEMORY_NAME_MAX_LENGTH: int = 30
 SHARED_MEMORY_NAME_PREFIX: str = "traffik_"
 SHARED_MEMORY_NAME_ALLOWED_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -131,12 +160,43 @@ SHARED_MEMORY_NAME_ALLOWED_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _STRING_SLOT_KIND: int = 0
 _INT_SLOT_KIND: int = 1
 
+# Slot occupancy flag values. `_SLOT_WRITING` is transient: set as the first
+# step of a slot write and replaced by `_SLOT_OCCUPIED` as its last, so it
+# survives only if the writer died midway (see `_HASH_TABLE_WRITING_STATE`).
+_SLOT_EMPTY: int = 0
+_SLOT_OCCUPIED: int = 1
+_SLOT_WRITING: int = 2
+
 _UINT8_STRUCT = struct.Struct("=B")
 _UINT16_STRUCT = struct.Struct("=H")
 _UINT32_STRUCT = struct.Struct("=I")
 _INT64_STRUCT = struct.Struct("=q")
 _FLOAT64_STRUCT = struct.Struct("=d")
-_BOOL_STRUCT = struct.Struct("=?")
+
+
+def _check_process_is_alive(pid: int) -> bool:
+    """
+    Best-effort check for whether process `pid` still exists, via
+    `os.kill(pid, 0)` (sends no signal; only checks deliverability).
+
+    Can return `True` for a short window after `pid` has actually died and
+    the OS has already reused the number for an unrelated new process. This
+    is the safe-direction failure for stale-owner recovery: it means
+    recovery waits (or a waiter gets `ShardUnavailableError`) instead of
+    reclaiming a semaphore some other, unrelated process might statistically
+    coincidentally now hold -- vanishingly unlikely, and strictly safer than
+    the alternative of reclaiming too eagerly.
+
+    :param pid: The process ID to check.
+    :return: `False` only if the OS confirms no such process exists.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # Exists, just owned by someone else.
+    return True
 
 
 def derive_shared_memory_name(namespace: str) -> str:
@@ -683,7 +743,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     _VALUE_LENGTH_STRUCT: typing.ClassVar[struct.Struct] = _UINT16_STRUCT
     _INT_VALUE_STRUCT: typing.ClassVar[struct.Struct] = _INT64_STRUCT
     _EXPIRY_STRUCT: typing.ClassVar[struct.Struct] = _FLOAT64_STRUCT
-    _OCCUPIED_FLAG_STRUCT: typing.ClassVar[struct.Struct] = _BOOL_STRUCT
+    _OCCUPIED_FLAG_STRUCT: typing.ClassVar[struct.Struct] = _UINT8_STRUCT
 
     _GENERATION_SIZE: typing.ClassVar[int] = 4
     _SLOT_KIND_SIZE: typing.ClassVar[int] = 1
@@ -722,6 +782,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         shared_memory_name: typing.Optional[str] = None,
         max_aba_retries: int = 3,
         executor_max_workers: typing.Optional[int] = None,
+        semaphore_timeout: float = _DEFAULT_SEMAPHORE_ACQUIRE_TIMEOUT,
         **kwargs: typing.Any,
     ) -> None:
         """
@@ -787,6 +848,18 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             Raising this only helps if requests are actually queueing on the
             executor rather than on a shard's semaphore; profile before assuming
             which one you're bottlenecked on.
+        :param semaphore_timeout: Maximum seconds to wait for a shard's internal
+            semaphores before assuming the holder is dead or wedged. These guard
+            memcpy-scale critical sections, so a healthy holder releases in
+            microseconds and this is only ever reached when something is wrong.
+            On timeout the backend checks whether the recorded holder process is
+            dead (e.g. `SIGKILL`/OOM-killed mid-operation, which a POSIX
+            semaphore never recovers from on its own). If so it force-releases
+            the semaphore, repairs the shard, and retries. If the holder is
+            still alive it raises `ShardUnavailableError` rather than blocking
+            forever. This is also how long a wedged shard stays unavailable
+            before it heals, so lower values heal faster but risk false
+            alarms under extreme CPU starvation.
 
         **Fork safety:** this backend registers an `os.register_at_fork` hook
         that rebuilds its `ThreadPoolExecutor` and clears the background
@@ -834,6 +907,15 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         # the real creator ever unlinks the shared memory segment, not
         # every worker that happens to recycle/shut down.
         self._creator_pid = os.getpid()
+        # Cached for the hot path (`os.getpid()` is a syscall on modern glibc).
+        # Refreshed in `_reinitialize_after_fork`.
+        self._pid = self._creator_pid
+        # Serializes stale-semaphore recovery across processes (see
+        # `_recover_shard`). An advisory `flock` is used because the kernel
+        # drops it if the recovering process itself dies.
+        self._recovery_lock_path = os.path.join(
+            tempfile.gettempdir(), f"{shared_memory_name}.recovery.lock"
+        )
 
         kwargs.pop("persistent", None)
         super().__init__(
@@ -857,6 +939,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             raise ValueError("`max_value_size` must be at least 8 bytes.")
         if max_aba_retries < 1:
             raise ValueError("`max_aba_retries` must be atleast 1.")
+        if semaphore_timeout <= 0:
+            raise ValueError("`semaphore_timeout` must be greater than 0.")
         if executor_max_workers is not None and executor_max_workers < 1:
             raise ValueError("`executor_max_workers` must be at least 1.")
         if not (0 < tombstone_rebuild_threshold < (1 - _HASH_TABLE_LOAD_FACTOR)):
@@ -875,6 +959,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._cleanup_sample_size = cleanup_sample_size
         self._max_keys_per_shard = math.ceil(max_keys / number_of_shards)
         self._max_aba_retries = max_aba_retries
+        self._semaphore_timeout = semaphore_timeout
 
         # Per-shard hash table capacity: next power of two above
         # (max_keys_per_shard / load_factor).
@@ -920,16 +1005,17 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         self._occupied_flag_offset = self._expiry_offset + self._EXPIRY_SIZE
 
         # Per-shard region sizes:
-        #   header: free_count(4) + tombstone_count(4) + free_stack(4 * max_keys_per_shard)
+        #   header: free_count(4) + tombstone_count(4) + shard_owner(4)
+        #           + slot_map_owner(4) + free_stack(4 * max_keys_per_shard)
         #   hash table: shard_hash_table_capacity * ENTRY_SIZE
         #   slot data: max_keys_per_shard * slot_size
-        self._shard_header_size = (
-            _HEADER_FREE_COUNT_SIZE
-            + _HEADER_TOMBSTONE_COUNT_SIZE
-            + 4 * self._max_keys_per_shard
-        )
-        self._shard_free_stack_offset = (
+        self._shard_owner_offset = (
             _HEADER_FREE_COUNT_SIZE + _HEADER_TOMBSTONE_COUNT_SIZE
+        )
+        self._slot_map_owner_offset = self._shard_owner_offset + _OWNER_RECORD_SIZE
+        self._shard_free_stack_offset = self._slot_map_owner_offset + _OWNER_RECORD_SIZE
+        self._shard_header_size = (
+            self._shard_free_stack_offset + 4 * self._max_keys_per_shard
         )
         self._shard_hash_table_size = shard_hash_table_capacity * _HASH_TABLE_ENTRY_SIZE
         self._shard_slot_data_size = self._max_keys_per_shard * self._slot_size
@@ -1036,6 +1122,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         shard_header_size = (
             _HEADER_FREE_COUNT_SIZE
             + _HEADER_TOMBSTONE_COUNT_SIZE
+            + 2 * _OWNER_RECORD_SIZE
             + 4 * max_keys_per_shard
         )
         shard_hash_table_size = shard_hash_table_capacity * _HASH_TABLE_ENTRY_SIZE
@@ -1092,6 +1179,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             thread_name_prefix=self._executor_thread_name_prefix,
         )
         self._cleanup_task = None
+        # Owner records identify holders by pid, which is different in the child.
+        self._pid = os.getpid()
 
     def start(self) -> None:
         """
@@ -1332,6 +1421,241 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         return shard_idx * self._shard_size
 
+    # Guarded semaphore acquire/release, with stale-owner recovery
+    #
+    # `_shard_semaphores`/`_slot_map_semaphores` are plain
+    # `multiprocessing.Semaphore`s which are correct under normal operation,
+    # but a POSIX semaphore is never released by the OS when its holder dies
+    # (via `SIGKILL`, OOM-kill, segfault), so a crash mid-critical-section
+    # leaves it permanently held, and every other process touching that shard
+    # then blocks forever. The methods below bound the wait, and on timeout
+    # check whether the recorded holder is actually still alive before
+    # concluding the shard is genuinely busy vs. wedged.
+
+    def _acquire_shard(self, shard_idx: int) -> None:
+        """
+        Acquire `_shard_semaphores[shard_idx]`, recording ownership for
+        stale-owner recovery.
+
+        :raises ShardUnavailableError: If it can't be acquired within
+            `self._semaphore_timeout`, including after one recovery attempt.
+        """
+        self._acquire_guarded(
+            self._shard_semaphores[shard_idx],  # type: ignore[index]
+            owner_offset=self._get_shard_base(shard_idx) + self._shard_owner_offset,
+            shard_idx=shard_idx,
+            is_shard_semaphore=True,
+        )
+
+    def _release_shard(self, shard_idx: int) -> None:
+        """Release `_shard_semaphores[shard_idx]`, clearing its owner record."""
+        self._release_guarded(
+            self._shard_semaphores[shard_idx],  # type: ignore[index]
+            owner_offset=self._get_shard_base(shard_idx) + self._shard_owner_offset,
+        )
+
+    def _acquire_slot_map(self, shard_idx: int) -> None:
+        """
+        Acquire `_slot_map_semaphores[shard_idx]`, recording ownership for
+        stale-owner recovery.
+
+        :raises ShardUnavailableError: If it can't be acquired within
+            `self._semaphore_timeout`, including after one recovery attempt.
+        """
+        self._acquire_guarded(
+            self._slot_map_semaphores[shard_idx],  # type: ignore[index]
+            owner_offset=self._get_shard_base(shard_idx) + self._slot_map_owner_offset,
+            shard_idx=shard_idx,
+            is_shard_semaphore=False,
+        )
+
+    def _release_slot_map(self, shard_idx: int) -> None:
+        """Release `_slot_map_semaphores[shard_idx]`, clearing its owner record."""
+        self._release_guarded(
+            self._slot_map_semaphores[shard_idx],  # type: ignore[index]
+            owner_offset=self._get_shard_base(shard_idx) + self._slot_map_owner_offset,
+        )
+
+    def _acquire_guarded(
+        self,
+        semaphore: Semaphore,
+        owner_offset: int,
+        shard_idx: int,
+        is_shard_semaphore: bool,
+    ) -> None:
+        """
+        Shared implementation behind `_acquire_shard`/`_acquire_slot_map`.
+
+        :param semaphore: The semaphore to acquire.
+        :param owner_offset: Byte offset of this semaphore's owner record.
+        :param shard_idx: The shard index, for recovery and the error message.
+        :param is_shard_semaphore: Whether `semaphore` is a shard (slot-data)
+            semaphore, as opposed to a slot-map (hash-table) semaphore --
+            selects which recovery repair applies.
+        :raises ShardUnavailableError: See `_acquire_shard`.
+        """
+        assert self._buffer is not None
+        if semaphore.acquire(timeout=self._semaphore_timeout):  # type: ignore[call-arg]
+            _UINT32_STRUCT.pack_into(self._buffer, owner_offset, self._pid)
+            return
+
+        if self._try_recover_stale_owner(
+            semaphore,
+            owner_offset=owner_offset,
+            shard_idx=shard_idx,
+            is_shard_semaphore=is_shard_semaphore,
+        ) and semaphore.acquire(timeout=_SEMAPHORE_RECOVERY_RETRY_TIMEOUT):  # type: ignore[call-arg]
+            _UINT32_STRUCT.pack_into(self._buffer, owner_offset, self._pid)
+            return
+
+        raise ShardUnavailableError(
+            f"Shard {shard_idx} semaphore unavailable after "
+            f"{self._semaphore_timeout}s; its current holder is still alive."
+        )
+
+    def _release_guarded(self, semaphore: Semaphore, owner_offset: int) -> None:
+        """Shared implementation behind `_release_shard`/`_release_slot_map`."""
+        assert self._buffer is not None
+        _UINT32_STRUCT.pack_into(self._buffer, owner_offset, 0)
+        semaphore.release()  # type: ignore[union-attr]
+
+    def _try_recover_stale_owner(
+        self,
+        semaphore: Semaphore,
+        owner_offset: int,
+        shard_idx: int,
+        is_shard_semaphore: bool,
+    ) -> bool:
+        """
+        If `semaphore`'s recorded owner process is confirmed dead,
+        force-release it and repair whatever it may have left mid-write.
+        Returns `False` (without changing anything) if the owner is still
+        alive. It was likely a timeout under real contention, not a wedged semaphore.
+
+        Serialized backend-wide via an advisory file lock (`flock`, not
+        another `multiprocessing.Semaphore`. The kernel drops a `flock`
+        automatically if its holder dies, which is exactly the property a
+        recovery coordination primitive needs) so that when several
+        waiters time out on the same stale semaphore at once, only one of
+        them performs the force-release and repair.
+
+        :return: `True` if recovery ran (the semaphore was force-released).
+            `False` if the owner is still alive, or someone else already
+            recovered it (or its true holder simply released it) while this
+            call waited for the recovery lock.
+        """
+        with self._recovery_file_lock():
+            assert self._buffer is not None
+            buffer = self._buffer
+            pid = _UINT32_STRUCT.unpack_from(buffer, owner_offset)[0]
+            if pid == 0 or pid == self._pid or _check_process_is_alive(pid):
+                # Already free (recovered by someone else, or the true
+                # holder finished normally while we waited for this lock),
+                # somehow our own record (shouldn't happen as our acquire
+                # would have gotten the semaphore, not timed out), or
+                # genuinely still held by a live process.
+                return False
+
+            logger.warning(
+                "Recovering shard %d's %s semaphore: recorded owner pid %d is dead.",
+                shard_idx,
+                "shard" if is_shard_semaphore else "slot-map",
+                pid,
+            )
+            _UINT32_STRUCT.pack_into(buffer, owner_offset, 0)
+            semaphore.release()  # type: ignore[union-attr]
+
+            shard_base = self._get_shard_base(shard_idx)
+            if is_shard_semaphore:
+                self._reclaim_inflight_slot(buffer, shard_base)
+            else:
+                self._reclaim_inflight_hash_entry(buffer, shard_base)
+            return True
+
+    def _reclaim_inflight_slot(self, buffer: memoryview, shard_base: int) -> None:
+        """
+        Find the (at most one) slot a dead process left marked
+        `_SLOT_WRITING` and mark it `_SLOT_EMPTY`.
+
+        Safe to do unconditionally. By the time a slot write reaches
+        `_SLOT_WRITING`, it is already correctly linked from the hash table
+        (that happens earlier, under the slot-map semaphore, in a separate
+        critical section that already completed). Marking it empty just
+        means the key it belongs to currently has no value, whic is indistinguishable
+        from "not found" to readers, and transparently reused the next time
+        that key is written.
+
+        Must be called with `shard_base`'s shard semaphore already known to
+        be free (i.e. from `_try_recover_stale_owner`, immediately after
+        force-releasing it) so no writer can be mid-write concurrently.
+
+        :param buffer: The shared memory buffer view.
+        :param shard_base: Byte offset of the shard's start in `buffer`.
+        """
+        for slot_idx in range(self._max_keys_per_shard):
+            offset = self._get_slot_offset(shard_base, slot_idx)
+            flag_offset = offset + self._occupied_flag_offset
+            if (
+                self._OCCUPIED_FLAG_STRUCT.unpack_from(buffer, flag_offset)[0]
+                == _SLOT_WRITING
+            ):
+                self._OCCUPIED_FLAG_STRUCT.pack_into(buffer, flag_offset, _SLOT_EMPTY)
+                return
+
+    def _reclaim_inflight_hash_entry(self, buffer: memoryview, shard_base: int) -> None:
+        """
+        Find the (at most one) hash-table bucket a dead process left marked
+        `_HASH_TABLE_WRITING_STATE` and mark it `_HASH_TABLE_EMPTY_STATE`.
+
+        Deliberately does not try to recover the slot index this bucket may
+        have been claiming: whether `slot_idx` was written yet at the point
+        of death isn't reliably knowable (unlike the single-byte state flag,
+        a 4-byte field isn't guaranteed atomic against an arbitrary kill),
+        and wrongly trusting a not-yet-written value and pushing it onto the
+        free stack could hand out a slot some *other* key is still using --
+        real corruption, and worse than the bounded, rare slot this leaves
+        permanently unusable. Losing at most one slot per crash-during-insert
+        is the safe direction to fail in.
+
+        Must be called with `shard_base`'s slot-map semaphore already known
+        to be free (i.e. from `_try_recover_stale_owner`, immediately after
+        force-releasing it) so no writer can be mid-write concurrently.
+
+        :param buffer: The shared memory buffer view.
+        :param shard_base: Byte offset of the shard's start in `buffer`.
+        """
+        hash_table_base = shard_base + self._shard_hash_table_base_offset
+        for idx in range(self._shard_hash_table_capacity):
+            entry_offset = hash_table_base + idx * _HASH_TABLE_ENTRY_SIZE
+            state_offset = entry_offset + _HASH_TABLE_STATE_OFFSET
+            if (
+                _UINT8_STRUCT.unpack_from(buffer, state_offset)[0]
+                == _HASH_TABLE_WRITING_STATE
+            ):
+                _UINT8_STRUCT.pack_into(buffer, state_offset, _HASH_TABLE_EMPTY_STATE)
+                return
+
+    @contextlib.contextmanager
+    def _recovery_file_lock(self) -> typing.Iterator[None]:
+        """
+        Hold an exclusive, cross-process `flock` serializing stale-owner
+        recovery attempts for this backend's segment.
+
+        An `flock`, not a `multiprocessing.Semaphore`, specifically because
+        the kernel releases it automatically if the holding process dies.
+        Recovery coordination needs a primitive that is itself immune to the
+        exact failure mode (a dead holder) it exists to recover from.
+        """
+        fd = os.open(self._recovery_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
     def _hash_table_lookup(
         self, buffer: memoryview, shard_base: int, key_bytes: bytes
     ) -> int:
@@ -1368,7 +1692,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             if state == _HASH_TABLE_EMPTY_STATE:
                 return first_tombstone if first_tombstone != -1 else idx
 
-            if state == _HASH_TABLE_TOMBSTONE_STATE:
+            if state != _HASH_TABLE_OCCUPIED_STATE:
+                # A tombstone, or a bucket left mid-write by a writer that
+                # died. Both are safe to probe past and to reuse.
                 if first_tombstone == -1:
                     first_tombstone = idx
                 continue
@@ -1472,10 +1798,14 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         idx = self._hash_table_lookup(buffer, shard_base, key_bytes)
         entry_offset = hash_table_base + idx * _HASH_TABLE_ENTRY_SIZE
         key_length = len(key_bytes)
+        # Not OCCUPIED until every field is in place. If this writer dies
+        # midway the bucket stays `_HASH_TABLE_WRITING_STATE`, which lookups
+        # skip and recovery reclaims (see `_reclaim_hash_entry`), instead of
+        # looking like a valid entry with a half-written key.
         _UINT8_STRUCT.pack_into(
             buffer,
             entry_offset + _HASH_TABLE_STATE_OFFSET,
-            _HASH_TABLE_OCCUPIED_STATE,
+            _HASH_TABLE_WRITING_STATE,
         )
         _UINT8_STRUCT.pack_into(
             buffer, entry_offset + _HASH_TABLE_KEY_LENGTH_OFFSET, key_length
@@ -1487,6 +1817,11 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         ] = key_bytes
         _UINT32_STRUCT.pack_into(
             buffer, entry_offset + _HASH_TABLE_SLOT_IDX_OFFSET, slot_idx
+        )
+        _UINT8_STRUCT.pack_into(
+            buffer,
+            entry_offset + _HASH_TABLE_STATE_OFFSET,
+            _HASH_TABLE_OCCUPIED_STATE,
         )
 
     def _hash_table_delete(
@@ -1828,10 +2163,14 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             `int_value` is set when `slot_kind == _INT_SLOT_KIND`.
         """
         offset = self._get_slot_offset(shard_base, slot_idx)
-        occupied: bool = self._OCCUPIED_FLAG_STRUCT.unpack_from(
-            buffer, offset + self._occupied_flag_offset
-        )[0]
-        if not occupied:
+        # Anything other than `_SLOT_OCCUPIED` means "nothing here", including
+        # `_SLOT_WRITING`, which only exists if a writer died mid-write.
+        if (
+            self._OCCUPIED_FLAG_STRUCT.unpack_from(
+                buffer, offset + self._occupied_flag_offset
+            )[0]
+            != _SLOT_OCCUPIED
+        ):
             return None, None, 0.0, False
 
         expires_at: float = self._EXPIRY_STRUCT.unpack_from(
@@ -1889,6 +2228,11 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             )
 
         offset = self._get_slot_offset(shard_base, slot_idx)
+        flag_offset = offset + self._occupied_flag_offset
+        # Mark the slot as mid-write first and committed last, so a writer
+        # that dies in between leaves a slot readers treat as absent instead
+        # of a mix of old and new fields (see `_SLOT_WRITING`).
+        self._OCCUPIED_FLAG_STRUCT.pack_into(buffer, flag_offset, _SLOT_WRITING)
         _UINT8_STRUCT.pack_into(
             buffer, offset + self._slot_kind_offset, _STRING_SLOT_KIND
         )
@@ -1899,9 +2243,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             offset + self._value_offset : offset + self._value_offset + value_size
         ] = encoded
         self._EXPIRY_STRUCT.pack_into(buffer, offset + self._expiry_offset, expires_at)
-        self._OCCUPIED_FLAG_STRUCT.pack_into(
-            buffer, offset + self._occupied_flag_offset, True
-        )
+        self._OCCUPIED_FLAG_STRUCT.pack_into(buffer, flag_offset, _SLOT_OCCUPIED)
 
     def _write_int_slot(
         self,
@@ -1926,12 +2268,13 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             means no expiry.
         """
         offset = self._get_slot_offset(shard_base, slot_idx)
+        flag_offset = offset + self._occupied_flag_offset
+        # See `_write_string_slot` for why the flag brackets the write.
+        self._OCCUPIED_FLAG_STRUCT.pack_into(buffer, flag_offset, _SLOT_WRITING)
         _UINT8_STRUCT.pack_into(buffer, offset + self._slot_kind_offset, _INT_SLOT_KIND)
         _INT64_STRUCT.pack_into(buffer, offset + self._int_value_offset, int_value)
         self._EXPIRY_STRUCT.pack_into(buffer, offset + self._expiry_offset, expires_at)
-        self._OCCUPIED_FLAG_STRUCT.pack_into(
-            buffer, offset + self._occupied_flag_offset, True
-        )
+        self._OCCUPIED_FLAG_STRUCT.pack_into(buffer, flag_offset, _SLOT_OCCUPIED)
 
     def _write_int_value(
         self, buffer: memoryview, shard_base: int, slot_idx: int, int_value: int
@@ -1944,6 +2287,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         counter value changes.
 
         Must be called with the shard's `shard_semaphore` held.
+
+        Deliberately not bracketed by `_SLOT_WRITING` like the full slot
+        writes: it changes one aligned 8-byte field, so there is no
+        half-updated state to detect, and this is the hottest write path.
 
         :param buffer: The shared memory buffer view.
         :param shard_base: Byte offset of the shard's start in `buffer`.
@@ -1971,7 +2318,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         offset = self._get_slot_offset(shard_base, slot_idx)
         self._OCCUPIED_FLAG_STRUCT.pack_into(
-            buffer, offset + self._occupied_flag_offset, False
+            buffer, offset + self._occupied_flag_offset, _SLOT_EMPTY
         )
 
     def _get(self, key: str) -> typing.Optional[str]:
@@ -1999,20 +2346,20 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         shard_idx = self._get_shard_idx_for_key(key)
         shard_base = self._get_shard_base(shard_idx)
 
-        self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+        self._acquire_slot_map(shard_idx)
         try:
             result = self._hash_table_get_slot_with_generation(
                 buffer, shard_base, key_bytes
             )
         finally:
-            self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+            self._release_slot_map(shard_idx)
 
         if result is None:
             return None
 
         slot_idx, generation = result
 
-        self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+        self._acquire_shard(shard_idx)
         try:
             if self._read_slot_generation(buffer, shard_base, slot_idx) != generation:
                 return None
@@ -2027,7 +2374,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
             return str(int_val) if int_val is not None else str_val
         finally:
-            self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+            self._release_shard(shard_idx)
 
     def _set(self, key: str, value: str, expire: typing.Optional[float]) -> None:
         """
@@ -2053,7 +2400,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         shard_base = self._get_shard_base(shard_idx)
 
         for _ in range(self._max_aba_retries):
-            self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_slot_map(shard_idx)
             try:
                 result = self._hash_table_get_slot_with_generation(
                     buffer, shard_base, key_bytes
@@ -2067,9 +2414,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 else:
                     slot_idx, generation = result
             finally:
-                self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_slot_map(shard_idx)
 
-            self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_shard(shard_idx)
             try:
                 if (
                     self._read_slot_generation(buffer, shard_base, slot_idx)
@@ -2080,7 +2427,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 self._write_string_slot(buffer, shard_base, slot_idx, value, expires_at)
                 return
             finally:
-                self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_shard(shard_idx)
 
         raise BackendError(
             f"ABA race on key {key!r} not resolved after {self._max_aba_retries} retries."
@@ -2119,9 +2466,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         shard_idx = self._get_shard_idx_for_key(key)
         shard_base = self._get_shard_base(shard_idx)
 
-        self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+        self._acquire_shard(shard_idx)
         try:
-            self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_slot_map(shard_idx)
             try:
                 slot_idx = self._hash_table_delete(buffer, shard_base, key_bytes)
                 if slot_idx is None:
@@ -2131,9 +2478,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 self._free_stack_push(buffer, shard_base, slot_idx)
                 return True
             finally:
-                self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_slot_map(shard_idx)
         finally:
-            self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+            self._release_shard(shard_idx)
 
     def _increment(self, key: str, amount: int) -> int:
         """
@@ -2159,7 +2506,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         shard_base = self._get_shard_base(shard_idx)
 
         for _ in range(self._max_aba_retries):
-            self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_slot_map(shard_idx)
             try:
                 result = self._hash_table_get_slot_with_generation(
                     buffer, shard_base, key_bytes
@@ -2173,9 +2520,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 else:
                     slot_idx, generation = result
             finally:
-                self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_slot_map(shard_idx)
 
-            self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_shard(shard_idx)
             try:
                 if (
                     self._read_slot_generation(buffer, shard_base, slot_idx)
@@ -2203,7 +2550,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     self._write_int_value(buffer, shard_base, slot_idx, new_value)
                 return new_value
             finally:
-                self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_shard(shard_idx)
 
         raise BackendError(
             f"ABA race on key {key!r} not resolved after {self._max_aba_retries} retries."
@@ -2229,20 +2576,20 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         shard_idx = self._get_shard_idx_for_key(key)
         shard_base = self._get_shard_base(shard_idx)
 
-        self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+        self._acquire_slot_map(shard_idx)
         try:
             result = self._hash_table_get_slot_with_generation(
                 buffer, shard_base, key_bytes
             )
         finally:
-            self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+            self._release_slot_map(shard_idx)
 
         if result is None:
             return False
 
         slot_idx, generation = result
 
-        self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+        self._acquire_shard(shard_idx)
         try:
             if self._read_slot_generation(buffer, shard_base, slot_idx) != generation:
                 return False
@@ -2258,7 +2605,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             )
             return True
         finally:
-            self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+            self._release_shard(shard_idx)
 
     def _increment_with_ttl(self, key: str, amount: int, ttl: int) -> int:
         """
@@ -2284,7 +2631,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         shard_base = self._get_shard_base(shard_idx)
 
         for _ in range(self._max_aba_retries):
-            self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_slot_map(shard_idx)
             try:
                 result = self._hash_table_get_slot_with_generation(
                     buffer, shard_base, key_bytes
@@ -2298,9 +2645,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 else:
                     slot_idx, generation = result
             finally:
-                self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_slot_map(shard_idx)
 
-            self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_shard(shard_idx)
             try:
                 if (
                     self._read_slot_generation(buffer, shard_base, slot_idx)
@@ -2333,7 +2680,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     )
                 return new_value
             finally:
-                self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_shard(shard_idx)
 
         raise BackendError(
             f"ABA race on key {key!r} not resolved after {self._max_aba_retries} retries."
@@ -2369,7 +2716,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             shard_base = self._get_shard_base(shard_idx)
             shard_keys = shard_to_keys[shard_idx]
 
-            self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_slot_map(shard_idx)
             try:
                 slot_info: dict[str, typing.Optional[tuple[int, int]]] = {
                     key: self._hash_table_get_slot_with_generation(
@@ -2378,9 +2725,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     for key in shard_keys
                 }
             finally:
-                self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_slot_map(shard_idx)
 
-            self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_shard(shard_idx)
             try:
                 for key in shard_keys:
                     info = slot_info[key]
@@ -2406,7 +2753,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     else:
                         results[key] = str_val
             finally:
-                self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_shard(shard_idx)
 
         return results
 
@@ -2445,7 +2792,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             shard_base = self._get_shard_base(shard_idx)
             shard_items = shard_to_items[shard_idx]
 
-            self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_slot_map(shard_idx)
             try:
                 for key, _ in shard_items:
                     key_bytes = key.encode("utf-8")
@@ -2462,7 +2809,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                         slot_idx, generation = result
                     slot_assignments[key] = (slot_idx, generation)
             finally:
-                self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_slot_map(shard_idx)
 
         aba_keys: list[str] = []
         for attempt in range(self._max_aba_retries):
@@ -2470,7 +2817,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
             for shard_idx in sorted(shard_to_items):
                 shard_base = self._get_shard_base(shard_idx)
-                self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+                self._acquire_shard(shard_idx)
                 try:
                     for key, val in shard_to_items[shard_idx]:
                         slot_idx, generation = slot_assignments[key]
@@ -2485,7 +2832,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                             buffer, shard_base, slot_idx, val, expires_at
                         )
                 finally:
-                    self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+                    self._release_shard(shard_idx)
 
             if not aba_keys:
                 return
@@ -2501,7 +2848,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
             for shard_idx in sorted(aba_by_shard):
                 shard_base = self._get_shard_base(shard_idx)
-                self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+                self._acquire_slot_map(shard_idx)
                 try:
                     for key in aba_by_shard[shard_idx]:
                         key_bytes = key.encode("utf-8")
@@ -2520,7 +2867,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                             slot_idx, generation = hash_table_result
                         slot_assignments[key] = (slot_idx, generation)
                 finally:
-                    self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+                    self._release_slot_map(shard_idx)
 
         raise BackendError(
             f"ABA race on keys {aba_keys!r} not resolved after {self._max_aba_retries} retries."
@@ -2572,7 +2919,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             # different key and leave it alone instead of clearing it.
             candidates: list[tuple[int, int]] = []
 
-            self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_slot_map(shard_idx)
             try:
                 for key_str, slot_idx in list(
                     self._hash_table_iter_occupied(buffer, shard_base)
@@ -2587,12 +2934,12 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     )
                     candidates.append((slot_idx, generation))
             finally:
-                self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_slot_map(shard_idx)
 
             if not candidates:
                 continue
 
-            self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_shard(shard_idx)
             try:
                 for slot_idx, generation in candidates:
                     if (
@@ -2605,7 +2952,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                         continue
                     self._clear_slot(buffer, shard_base, slot_idx)
             finally:
-                self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_shard(shard_idx)
 
     def _sample_and_reap_shard(
         self, shard_idx: int, sample_size: int
@@ -2679,9 +3026,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         freed = 0
         for key_bytes, expected_slot_idx in candidates:
-            self._shard_semaphores[shard_idx].acquire()  # type: ignore[index]
+            self._acquire_shard(shard_idx)
             try:
-                self._slot_map_semaphores[shard_idx].acquire()  # type: ignore[index]
+                self._acquire_slot_map(shard_idx)
                 try:
                     current_slot_idx = self._hash_table_get_slot(
                         buffer, shard_base, key_bytes
@@ -2703,9 +3050,9 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                     self._free_stack_push(buffer, shard_base, current_slot_idx)
                     freed += 1
                 finally:
-                    self._slot_map_semaphores[shard_idx].release()  # type: ignore[index]
+                    self._release_slot_map(shard_idx)
             finally:
-                self._shard_semaphores[shard_idx].release()  # type: ignore[index]
+                self._release_shard(shard_idx)
 
         return checked, freed
 
@@ -3016,6 +3363,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
                 # Clear data and discard shared memory only from the actual
                 # process that called `start()`.
                 self._shared_memory.unlink()
+                try:
+                    os.unlink(self._recovery_lock_path)
+                except OSError:
+                    pass  # Never needed (no recovery ran), or already gone.
             self._shared_memory = None
 
         if self._reentrant_lock_pool is not None:

@@ -925,9 +925,7 @@ class TestCircuitBreaker:
 
         await asyncio.sleep(0.06)  # let `recovery_timeout` elapse
 
-        results = await asyncio.gather(
-            *(breaker.allow_execution() for _ in range(50))
-        )
+        results = await asyncio.gather(*(breaker.allow_execution() for _ in range(50)))
         assert results.count(True) == 1, (
             "exactly one concurrent caller should be granted the probe slot"
         )

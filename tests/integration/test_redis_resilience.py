@@ -56,7 +56,10 @@ class TestRedisConnectionFailure:
             connection=UNREACHABLE_REDIS_URL, namespace="unreachable", persistent=False
         )
         throttle = HTTPThrottle(
-            uid="t-unreachable", rate="10/s", backend=backend, registry=ThrottleRegistry()
+            uid="t-unreachable",
+            rate="10/s",
+            backend=backend,
+            registry=ThrottleRegistry(),
         )
         with pytest.raises(BackendConnectionError):
             async with backend(close_on_exit=True):

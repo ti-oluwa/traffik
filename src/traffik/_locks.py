@@ -620,7 +620,7 @@ class AsyncRLock:
         """
         Acquire the lock.
 
-        Never call with `asyncio.wait_for` as that will break task ownership 
+        Never call with `asyncio.wait_for` as that will break task ownership
         tracking between `acquire` and `release` especially in Python3.11+.
 
         `asyncio.wait_for` wraps `acquire in a new `asyncio.Task`.

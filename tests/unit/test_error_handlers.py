@@ -306,9 +306,7 @@ class TestFailover:
                 backend=primary,
                 strategy=primary_failing_strategy,
             )
-            handler = failover(
-                backend=secondary, breaker=breaker, max_retries=1
-            )
+            handler = failover(backend=secondary, breaker=breaker, max_retries=1)
 
             exc_info: ThrottleExceptionInfo = {  # type: ignore[typeddict-item]
                 "exception": BackendError("Error"),
@@ -352,9 +350,7 @@ class TestFailover:
                 raise asyncio.CancelledError()
 
             throttle.strategy = cancelling_strategy  # type: ignore[method-assign]
-            handler = failover(
-                backend=secondary, breaker=breaker, max_retries=1
-            )
+            handler = failover(backend=secondary, breaker=breaker, max_retries=1)
 
             await breaker.record_failure()  # open the circuit
             assert breaker.is_open

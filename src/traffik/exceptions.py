@@ -63,6 +63,19 @@ class BackendConnectionError(BackendError):
     pass
 
 
+class ShardUnavailableError(BackendError):
+    """
+    Raised when a `MultiProcessInMemoryBackend` shard's internal semaphore
+    (protecting its slot data or hash table) can't be acquired within its
+    bounded wait, even after one stale-owner recovery attempt.
+
+    Distinct from `LockAcquisitionError`, which is about the named-lock API;
+    this is about the multiprocess backend's own internal bookkeeping.
+    """
+
+    pass
+
+
 class LockError(BackendError, RuntimeError):
     """Base exception for lock-related errors, such as acquisition or release failures."""
 

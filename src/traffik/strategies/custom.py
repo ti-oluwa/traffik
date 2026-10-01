@@ -1346,7 +1346,9 @@ class CostBasedTokenBucketStrategy:
                 effective_refill_rate = base_refill_rate
 
             # Refill tokens
-            time_elapsed = now - last_refill
+            # Clock can jump backward (NTP correction, manual change);
+            # never treat that as negative elapsed time.
+            time_elapsed = max(0.0, now - last_refill)
             tokens_to_add = effective_refill_rate * time_elapsed
             tokens = min(tokens + tokens_to_add, float(capacity))
 
@@ -1438,7 +1440,9 @@ class CostBasedTokenBucketStrategy:
             effective_refill_rate = base_refill_rate
 
         # Refill tokens
-        time_elapsed = now - last_refill
+        # Clock can jump backward (NTP correction, manual change);
+        # never treat that as negative elapsed time.
+        time_elapsed = max(0.0, now - last_refill)
         tokens_to_add = effective_refill_rate * time_elapsed
         tokens = min(tokens + tokens_to_add, float(capacity))
 

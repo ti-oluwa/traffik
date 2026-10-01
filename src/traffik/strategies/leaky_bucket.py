@@ -193,7 +193,9 @@ class LeakyBucketStrategy:
                     return 0.0
 
             # Calculate how much has leaked since last check
-            time_passed = now - last_leak_time
+            # Clock can jump backward (NTP correction, manual change);
+            # never treat that as negative elapsed time.
+            time_passed = max(0.0, now - last_leak_time)
             leaked_amount = time_passed * leak_rate
             level = max(0.0, level - leaked_amount)
 
@@ -264,7 +266,9 @@ class LeakyBucketStrategy:
                 )
 
         # Calculate current level after leakage
-        time_passed = now - last_leak_time
+        # Clock can jump backward (NTP correction, manual change);
+        # never treat that as negative elapsed time.
+        time_passed = max(0.0, now - last_leak_time)
         leaked_amount = time_passed * leak_rate
         level = max(0.0, level - leaked_amount)
 
@@ -398,7 +402,9 @@ class LeakyBucketWithQueueStrategy:
                 return 0.0
 
             # Calculate how much cost should have leaked based on time elapsed
-            time_passed = now - last_leak_time
+            # Clock can jump backward (NTP correction, manual change);
+            # never treat that as negative elapsed time.
+            time_passed = max(0.0, now - last_leak_time)
             cost_to_leak = time_passed * leak_rate
 
             # Remove entries from queue head until we've leaked enough cost
@@ -489,7 +495,9 @@ class LeakyBucketWithQueueStrategy:
             )
 
         # Calculate how much cost should have leaked
-        time_passed = now - last_leak_time
+        # Clock can jump backward (NTP correction, manual change);
+        # never treat that as negative elapsed time.
+        time_passed = max(0.0, now - last_leak_time)
         cost_to_leak = time_passed * leak_rate
 
         # Simulate leaking without modifying queue

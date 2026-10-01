@@ -28,7 +28,7 @@ class TestRateEdgeCases:
 
         # First request succeeds
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "First request should succeed"
+        assert wait == 0, "First request should succeed"
 
         # Second request throttled
         wait = await strategy(key, rate, backend)
@@ -44,7 +44,7 @@ class TestRateEdgeCases:
         # Should handle large limits
         for i in range(100):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should succeed with large limit"
+            assert wait == 0, f"Request {i + 1} should succeed with large limit"
 
     async def test_very_short_time_window(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
@@ -56,7 +56,7 @@ class TestRateEdgeCases:
         # Should handle short windows
         for i in range(5):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should succeed"
+            assert wait == 0, f"Request {i + 1} should succeed"
 
         wait = await strategy(key, rate, backend)
         assert wait > 0, "Should throttle after limit"
@@ -73,7 +73,7 @@ class TestRateEdgeCases:
         # Should handle long windows
         for i in range(100):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should succeed"
+            assert wait == 0, f"Request {i + 1} should succeed"
 
         wait = await strategy(key, rate, backend)
         assert wait > 0, "Should throttle after limit"
@@ -87,7 +87,7 @@ class TestRateEdgeCases:
 
         # First request succeeds
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "First request should succeed"
+        assert wait == 0, "First request should succeed"
 
         # Second request throttled for 2 seconds
         wait = await strategy(key, rate, backend)
@@ -98,7 +98,7 @@ class TestRateEdgeCases:
 
         # Should be allowed again
         wait = await strategy(key, rate, backend)
-        assert round(wait / 1000) == 0.0, "Should be allowed after 2 seconds"
+        assert round(wait / 1000) == 0, "Should be allowed after 2 seconds"
 
 
 @pytest.mark.anyio
@@ -115,7 +115,7 @@ class TestKeyEdgeCases:
 
         # Should handle empty key
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "Should handle empty key"
+        assert wait == 0, "Should handle empty key"
 
     async def test_very_long_key(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
@@ -126,7 +126,7 @@ class TestKeyEdgeCases:
 
         # Should handle long keys
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "Should handle long key"
+        assert wait == 0, "Should handle long key"
 
     async def test_special_characters_in_key(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
@@ -146,7 +146,7 @@ class TestKeyEdgeCases:
 
         for key in special_keys:
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Should handle key: {key}"
+            assert wait == 0, f"Should handle key: {key}"
 
     async def test_numeric_key(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
@@ -157,7 +157,7 @@ class TestKeyEdgeCases:
 
         # Should handle numeric keys
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "Should handle numeric key"
+        assert wait == 0, "Should handle numeric key"
 
 
 @pytest.mark.anyio
@@ -179,7 +179,7 @@ class TestConcurrencyEdgeCases:
         )
 
         # Exactly 100 should succeed
-        allowed = sum(1 for wait in results if wait == 0.0)
+        allowed = sum(1 for wait in results if wait == 0)
         assert allowed == 100, f"Expected 100 allowed, got {allowed}"
 
         # Next request should be throttled
@@ -204,7 +204,7 @@ class TestConcurrencyEdgeCases:
         )
 
         # One should succeed, one should fail
-        allowed = sum(1 for wait in results if wait == 0.0)
+        allowed = sum(1 for wait in results if wait == 0)
         throttled = sum(1 for wait in results if wait > 0)
 
         assert allowed == 1, "Exactly one request should succeed"
@@ -225,7 +225,7 @@ class TestConcurrencyEdgeCases:
         results = await asyncio.gather(*tasks)
 
         # All should succeed (different keys)
-        allowed = sum(1 for wait in results if wait == 0.0)
+        allowed = sum(1 for wait in results if wait == 0)
         assert allowed == 50, f"All 50 requests should succeed, got {allowed}"
 
 
@@ -244,7 +244,7 @@ class TestTimingEdgeCases:
         # Make 10 requests rapidly
         for i in range(10):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should succeed"
+            assert wait == 0, f"Request {i + 1} should succeed"
 
         # 11th should be throttled
         wait = await strategy(key, rate, backend)
@@ -260,7 +260,7 @@ class TestTimingEdgeCases:
             # Make requests in each window
             for i in range(3):
                 wait = await strategy(key, rate, backend)
-                assert round(wait / 1000) == 0.0, (
+                assert round(wait / 1000) == 0, (
                     f"Window {window} request {i + 1} should succeed"
                 )
 
@@ -289,7 +289,7 @@ class TestStrategyStateEdgeCases:
 
         # Should recover gracefully
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "Should recover from corrupted state"
+        assert wait == 0, "Should recover from corrupted state"
 
     async def test_multiple_strategies_same_key(self, backend: InMemoryBackend):
         """Test different strategies operating on the same key namespace."""
@@ -305,7 +305,7 @@ class TestStrategyStateEdgeCases:
         for strategy in [fixed, sliding, token, leaky]:
             for i in range(5):
                 wait = await strategy(key, rate, backend)
-                assert wait == 0.0, (
+                assert wait == 0, (
                     f"{strategy.__class__.__name__} request {i + 1} should succeed"
                 )
 
@@ -319,7 +319,7 @@ class TestStrategyStateEdgeCases:
 
         # Normal operation
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "Should succeed with connected backend"
+        assert wait == 0, "Should succeed with connected backend"
 
 
 @pytest.mark.anyio

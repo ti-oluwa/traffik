@@ -180,12 +180,7 @@ def _check_process_is_alive(pid: int) -> bool:
     `os.kill(pid, 0)` (sends no signal; only checks deliverability).
 
     Can return `True` for a short window after `pid` has actually died and
-    the OS has already reused the number for an unrelated new process. This
-    is the safe-direction failure for stale-owner recovery: it means
-    recovery waits (or a waiter gets `ShardUnavailableError`) instead of
-    reclaiming a semaphore some other, unrelated process might statistically
-    coincidentally now hold -- vanishingly unlikely, and strictly safer than
-    the alternative of reclaiming too eagerly.
+    the OS has already reused the number for an unrelated new process.
 
     :param pid: The process ID to check.
     :return: `False` only if the OS confirms no such process exists.
@@ -197,6 +192,50 @@ def _check_process_is_alive(pid: int) -> bool:
     except PermissionError:
         return True  # Exists, just owned by someone else.
     return True
+
+
+class ShardFullError(BackendError):
+    """Raised when a shard has no free slot left."""
+
+    def __init__(self, *args: typing.Any, shard_idx: int) -> None:
+        super().__init__(*args)
+        self.shard_idx = shard_idx
+
+
+def _retry_after_reclaiming_expired(
+    method: typing.Callable[..., typing.Any],
+) -> typing.Callable[..., typing.Any]:
+    """
+    Decorator for the operations that can allocate a slot: if one finds its
+    shard full, reclaim that shard's expired slots and retry once before
+    giving up.
+
+    Without this, a shard full of logically-dead keys rejects every new key
+    until something happens to reclaim them. With the default `cleanup_frequency=None`
+    nothing ever reclaims them in the background.
+
+    The reclaim has to happen here, outside the operation, and not at the
+    point the free stack runs dry. That point holds only the slot-map
+    semaphore, while reclaiming needs the shard semaphore first (the preferred
+    documented lock order), so reclaiming inline would invert it. By the time
+    the exception reaches this wrapper every lock has been released.
+
+    Retrying is safe because allocation happens before any write. A failed
+    attempt has changed nothing.
+    """
+
+    @functools.wraps(method)
+    def wrapper(
+        self: "MultiProcessInMemoryBackend", *args: typing.Any, **kwargs: typing.Any
+    ) -> typing.Any:
+        try:
+            return method(self, *args, **kwargs)
+        except ShardFullError as exc:
+            if self._reclaim_expired_in_shard(exc.shard_idx) == 0:
+                raise
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 def derive_shared_memory_name(namespace: str) -> str:
@@ -2029,9 +2068,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             buffer, shard_base + _HEADER_FREE_COUNT_OFFSET
         )[0]
         if count == 0:
-            raise BackendError(
+            raise ShardFullError(
                 f"`max_keys_per_shard` ({self._max_keys_per_shard}) reached for this "
-                "shard. Increase `max_keys` or `number_of_shards`."
+                "shard. Increase `max_keys` or `number_of_shards`.",
+                shard_idx=shard_base // self._shard_size,
             )
 
         count -= 1
@@ -2376,6 +2416,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         finally:
             self._release_shard(shard_idx)
 
+    @_retry_after_reclaiming_expired
     def _set(self, key: str, value: str, expire: typing.Optional[float]) -> None:
         """
         Synchronous set.
@@ -2383,8 +2424,8 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         Always stores the value as a string slot (`slot_kind = STRING`),
         overwriting any existing int slot for the same key.
 
-        Lock order is `slot_map_semaphores[shard_idx]` then `shard_semaphores[shard_idx]`
-        .Strictly sequential, with ABA retries up to `self._max_aba_retries`.
+        Lock order is `slot_map_semaphores[shard_idx]` then `shard_semaphores[shard_idx]`.
+        Strictly sequential, with ABA retries up to `self._max_aba_retries`.
 
         :param key: The throttle key.
         :param value: The string value to store.
@@ -2482,6 +2523,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         finally:
             self._release_shard(shard_idx)
 
+    @_retry_after_reclaiming_expired
     def _increment(self, key: str, amount: int) -> int:
         """
         Synchronous increment using native int64 storage.
@@ -2607,6 +2649,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         finally:
             self._release_shard(shard_idx)
 
+    @_retry_after_reclaiming_expired
     def _increment_with_ttl(self, key: str, amount: int, ttl: int) -> int:
         """
         Synchronous `increment_with_ttl` using native int64 storage.
@@ -2757,6 +2800,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         return results
 
+    @_retry_after_reclaiming_expired
     def _multi_set(
         self,
         shard_to_items: dict[int, list[tuple[str, str]]],
@@ -3056,6 +3100,24 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         return checked, freed
 
+    def _reclaim_expired_in_shard(self, shard_idx: int) -> int:
+        """
+        Reclaim every expired slot in one shard, by examining all of its
+        buckets rather than a random sample. Used when the shard is full, so
+        the cost (linear in the shard's hash-table size) is only paid on that
+        rare path.
+
+        Must be called with no semaphores held.
+
+        :return: The number of slots freed.
+        """
+        if self._buffer is None:
+            return 0
+        _, freed = self._sample_and_reap_shard(
+            shard_idx, self._shard_hash_table_capacity
+        )
+        return freed
+
     def _cleanup(self) -> int:
         """
         Reclaim expired slots across all shards via bounded random sampling
@@ -3215,11 +3277,11 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
             return
 
         shard_to_items: dict[int, list[tuple[str, str]]] = {}
-        for key, val in items.items():
+        for key, value in items.items():
             shard_to_items.setdefault(self._get_shard_idx_for_key(key), []).append(
                 (
                     key,
-                    val,
+                    value,
                 )
             )
 

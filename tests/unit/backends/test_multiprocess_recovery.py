@@ -1,6 +1,7 @@
-"""Regression tests for `MultiProcessInMemoryBackend`'s stale-owner recovery.
+"""
+Regression tests for `MultiProcessInMemoryBackend`'s stale-owner recovery.
 
-`_shard_semaphores`/`_slot_map_semaphores` are plain `multiprocessing.Semaphore`s:
+`_shard_semaphores`/`_slot_map_semaphores` are plain `multiprocessing.Semaphore`s;
 correct under normal operation, but a POSIX semaphore is never released by the
 OS when its holder dies (`SIGKILL`, OOM-kill, a segfault, anything that skips
 Python's own cleanup entirely). Before the fix under test here, a worker dying

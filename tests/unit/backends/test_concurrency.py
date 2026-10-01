@@ -1,6 +1,4 @@
-"""
-Concurrency Tests for Backend Operations
-"""
+"""Concurrency Tests for Backend Operations"""
 
 import asyncio
 

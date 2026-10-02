@@ -145,11 +145,6 @@ class _AsyncRedisLock:
     Keep critical sections short or set a generous TTL.
     """
 
-    RELEASE_SCRIPT = RELEASE_SCRIPT
-    """Lua script for safe release"""
-    ACQUIRE_SCRIPT = ACQUIRE_SCRIPT
-    """Lua script for safe acquire with optional TTL"""
-
     __slots__ = (
         "_client",
         "_max_spins_before_backoff",
@@ -200,12 +195,12 @@ class _AsyncRedisLock:
     @classmethod
     async def _register_acquire_script(cls, client: AnyRedis) -> str:
         """Register and return the acquire script SHA."""
-        return await client.script_load(cls.ACQUIRE_SCRIPT)
+        return await client.script_load(ACQUIRE_SCRIPT)
 
     @classmethod
     async def _register_release_script(cls, client: AnyRedis) -> str:
         """Register and return the release script SHA."""
-        return await client.script_load(cls.RELEASE_SCRIPT)
+        return await client.script_load(RELEASE_SCRIPT)
 
     def is_owner(self, task: typing.Optional[asyncio.Task[typing.Any]] = None) -> bool:
         """Return True if the current task owns this lock."""
@@ -264,7 +259,7 @@ class _AsyncRedisLock:
                 # Script was flushed from Redis cache, re-register and retry
                 # Update shared dict so backend and future locks see the new SHA
                 self._script_shas["acquire"] = await self._client.script_load(  # type: ignore
-                    self.ACQUIRE_SCRIPT
+                    ACQUIRE_SCRIPT
                 )
                 token = await self._client.evalsha(  # type: ignore
                     self._script_shas["acquire"],  # type: ignore[arg-type]
@@ -336,7 +331,7 @@ class _AsyncRedisLock:
             # Script was flushed from Redis cache, re-register and retry
             # Update shared dict so backend and future locks see the new SHA
             self._script_shas["release"] = await self._client.script_load(  # type: ignore
-                self.RELEASE_SCRIPT
+                RELEASE_SCRIPT
             )
             await self._client.evalsha(  # type: ignore
                 self._script_shas["release"],  # type: ignore[arg-type]
@@ -539,11 +534,6 @@ class RedisBackend(ThrottleBackend[AnyRedis, HTTPConnectionT]):
     """
 
     wrap_methods = ("clear",)
-
-    INCREMENT_WITH_TTL_SCRIPT = INCREMENT_WITH_TTL_SCRIPT
-    """Lua script for atomic increment with conditional TTL (set TTL only on key creation)"""
-    CLEAR_SCRIPT = CLEAR_SCRIPT
-    """Lua script for atomic clear of keys matching a pattern"""
 
     def __init__(
         self,
@@ -787,14 +777,14 @@ class RedisBackend(ThrottleBackend[AnyRedis, HTTPConnectionT]):
         """Ensure the `increment_with_ttl` Lua script is registered."""
         if self._increment_with_ttl_sha is None:
             self._increment_with_ttl_sha = await self.connection.script_load(  # type: ignore
-                self.INCREMENT_WITH_TTL_SCRIPT
+                INCREMENT_WITH_TTL_SCRIPT
             )
 
     async def _ensure_clear_script(self) -> None:
         """Ensure the `clear` Lua script is registered."""
         if self._clear_sha is None:
             self._clear_sha = await self.connection.script_load(  # type: ignore
-                self.CLEAR_SCRIPT
+                CLEAR_SCRIPT
             )
 
     async def _ensure_lock_scripts_shas(self) -> None:
@@ -861,7 +851,6 @@ class RedisBackend(ThrottleBackend[AnyRedis, HTTPConnectionT]):
     async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
         """Delete key."""
         self._assert_ready()
-
         deleted_count = await self.connection.delete(key)  # type: ignore[union-attr]
         return deleted_count > 0
 
@@ -882,7 +871,6 @@ class RedisBackend(ThrottleBackend[AnyRedis, HTTPConnectionT]):
     async def expire(self, key: str, seconds: int) -> bool:
         """Set expiration using Redis EXPIRE."""
         self._assert_ready()
-
         result = await self.connection.expire(key, seconds)  # type: ignore[union-attr]
         return bool(result)
 
@@ -914,7 +902,7 @@ class RedisBackend(ThrottleBackend[AnyRedis, HTTPConnectionT]):
         except NoScriptError:
             # Re-register the script and retry
             self._increment_with_ttl_sha = await self.connection.script_load(  # type: ignore
-                self.INCREMENT_WITH_TTL_SCRIPT
+                INCREMENT_WITH_TTL_SCRIPT
             )
             result = await self.connection.evalsha(  # type: ignore
                 self._increment_with_ttl_sha,  # type: ignore[arg-type]
@@ -978,7 +966,7 @@ class RedisBackend(ThrottleBackend[AnyRedis, HTTPConnectionT]):
         except NoScriptError:
             # Script was flushed, re-register and retry
             self._clear_sha = await self.connection.script_load(  # type: ignore
-                self.CLEAR_SCRIPT
+                CLEAR_SCRIPT
             )
             await self.connection.evalsha(  # type: ignore
                 self._clear_sha,  # type: ignore[arg-type]

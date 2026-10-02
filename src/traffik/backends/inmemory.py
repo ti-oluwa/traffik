@@ -373,7 +373,6 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     ) -> typing.Optional[str]:
         """Get value by key."""
         self._assert_ready()
-
         shard_idx, lock, shard = self._get_shard(key)
         entry = shard.get(key)
         if entry is None:
@@ -396,7 +395,6 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     ) -> None:
         """Set value by key."""
         self._assert_ready()
-
         shard_idx, lock, shard = self._get_shard(key)
         expires_at = None
         if expire is not None:
@@ -411,7 +409,6 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
     async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
         """Delete key if exists."""
         self._assert_ready()
-
         shard_idx, lock, shard = self._get_shard(key)
         async with lock:
             if key in shard:
@@ -429,7 +426,6 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :return: New value after increment
         """
         self._assert_ready()
-
         shard_idx, lock, shard = self._get_shard(key)
         async with lock:
             entry = shard.get(key)
@@ -467,7 +463,6 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :return: True if expiration was set, False if key doesn't exist
         """
         self._assert_ready()
-
         _, lock, shard = self._get_shard(key)
         async with lock:
             entry = shard.get(key)
@@ -489,7 +484,6 @@ class InMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         :return: New value after increment
         """
         self._assert_ready()
-
         shard_idx, lock, shard = self._get_shard(key)
         now = monotonic()
         async with lock:

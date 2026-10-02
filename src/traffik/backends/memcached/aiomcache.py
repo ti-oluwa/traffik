@@ -34,7 +34,7 @@ from traffik.typing import (
 logger = logging.getLogger(__name__)
 
 
-def _on_error_return(
+def _on_error(
     func: typing.Callable[P, typing.Awaitable[R]],
     return_value: typing.Optional[T] = None,
     predicate: typing.Optional[typing.Callable[[Exception], bool]] = None,
@@ -66,26 +66,26 @@ def _on_error_return(
     return wrapper
 
 
-def _wrap_methods_with_on_error_return(
+def _wrap_methods_on_error(
     obj: typing.Any,
     methods: typing.Iterable[str],
     return_value: typing.Optional[T] = None,
     predicate: typing.Optional[typing.Callable[[Exception], bool]] = None,
 ) -> None:
     """
-    Wrap specified methods of the object with `_on_error_return` decorator.
+    Wrap specified methods of the object with `_on_error` decorator.
 
     :param obj: Object whose methods to wrap.
     :param methods: Iterable of method names to wrap.
     :param return_value: Value to return on exception (default None).
     :param predicate: Optional callable to check if the exception should be suppressed.
-        See `_on_error_return` for details.
+        See `_on_error` for details.
     """
     for method_name in methods:
         if hasattr(obj, method_name):
-            original_method = getattr(obj, method_name)
-            wrapped_method = _on_error_return(
-                original_method,
+            method = getattr(obj, method_name)
+            wrapped_method = _on_error(
+                method,
                 return_value=return_value,
                 predicate=predicate,
             )
@@ -263,7 +263,7 @@ class _AsyncMemcachedLock:
         name_bytes = self._name_bytes
         token = self._token
         try:
-            # `gets()`/`cas()` close the race that a plain `get()` then
+            # Using `gets()` + `cas()` avoids the race that a plain `get()` then
             # `delete()` leaves open (TOCTOU). If the key expired and someone else
             # re-acquired it between our read and our delete, a bare delete
             # would remove their active lock. `cas()` only succeeds if the
@@ -473,7 +473,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             )
             # If key doesn't exist, `incr` & `decr` raises a specific
             # `ClientException`. We catch that and return None instead
-            _wrap_methods_with_on_error_return(
+            _wrap_methods_on_error(
                 self.connection,
                 methods=["incr", "decr"],
                 predicate=lambda exc: b"NOT_FOUND" in str(exc).encode(),
@@ -503,10 +503,9 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         """
         Adjust the process-local contention serialization gate threshold at runtime.
 
-        Setting threshold to a very large value (e.g. maxsize)
-        effectively disables the gate.
-        Tasks currently waiting on the gate are unaffected until
-        they complete their current acquire cycle.
+        Setting threshold to a very large value (e.g. maxsize) effectively disables the gate.
+        Tasks currently waiting on the gate are unaffected until they complete their current
+        acquire cycle.
 
         :param threshold: The new contention threshold (must be at least 1).
         """
@@ -567,7 +566,6 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         :return: Value as string, or None if not found.
         """
         self._assert_ready()
-
         value = await self.connection.get(key.encode())  # type: ignore[union-attr]
         if value is None:
             return None
@@ -584,7 +582,6 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         :param expire: Optional TTL in seconds.
         """
         self._assert_ready()
-
         exptime = int(expire) if expire is not None else 0
         await self.connection.set(  # type: ignore[union-attr]
             key.encode(),
@@ -602,7 +599,6 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         :return: True if deleted, False if not found.
         """
         self._assert_ready()
-
         deleted = await self.connection.delete(key.encode())  # type: ignore[union-attr]
         return deleted
 
@@ -617,7 +613,6 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         :return: New value after increment.
         """
         self._assert_ready()
-
         # Try to increment existing counter
         encoded_key = key.encode()
         new_value = await self.connection.incr(encoded_key, amount)  # type: ignore[union-attr]
@@ -779,7 +774,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
 
         exptime = int(expire) if expire is not None else 0
 
-        async def _set_one(key: str, value: str) -> None:
+        async def set(key: str, value: str) -> None:
             await self.connection.set(  # type: ignore[union-attr]
                 key.encode(),
                 value.encode(),
@@ -788,9 +783,9 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
             if self.track_keys:
                 await self._track_key(key)
 
-        tasks = [asyncio.create_task(_set_one(k, v)) for k, v in items.items()]
+        tasks = [asyncio.create_task(set(key, value)) for key, value in items.items()]
         try:
-            await asyncio.gather(*tasks)
+            await asyncio.gather(*tasks, return_exceptions=False)
         except Exception:
             # Any exception should cancel any ongoing task.
             for task in tasks:
@@ -803,20 +798,20 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         Clear all tracked keys in the namespace.
 
         Note: This only works if `track_keys` was enabled.
-        If not enabled, this is a no-op. If the Memcached server
-        is only used for this backend, consider flushing the entire cache instead.
+        If not enabled, this is a no-op. If the Memcached server is only used for
+        this backend, consider flushing the entire cache instead.
         Override this method as so.
 
         ```python
-        ...
+        class CustomMemcachedBackend(...):
+            ...
 
-
-        async def clear(self) -> None:
-            # Flush entire Memcached cache, if not tracking keys
-            if self.connection is not None and not self.track_keys:
-                await self.connection.flush_all()
-                return
-            await super().clear()
+            async def clear(self) -> None:
+                # Flush entire Memcached cache, if not tracking keys
+                if self.connection is not None and not self.track_keys:
+                    await self.connection.flush_all()
+                    return
+                await super().clear()
         ```
         """
         if not self.track_keys:
@@ -838,12 +833,12 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
                 asyncio.create_task(self.connection.delete(key.encode()))  # type: ignore[arg-type,union-attr]
                 for key in keys
             ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for key, result in zip(keys, results):
-                if isinstance(result, BaseException):
+            errors = await asyncio.gather(*tasks, return_exceptions=True)
+            for key, error in zip(keys, errors):
+                if isinstance(error, BaseException):
                     raise BackendError(
-                        f"Failed to clear key '{key}': {result!s}"
-                    ) from result
+                        f"Failed to clear key '{key}': {error!s}"
+                    ) from error
 
     async def reset(self) -> None:
         """Reset the backend."""

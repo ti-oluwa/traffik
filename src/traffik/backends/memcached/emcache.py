@@ -34,7 +34,7 @@ from traffik.typing import (
 logger = logging.getLogger(__name__)
 
 
-def _parse_memcached_nodes(
+def parse_memcached_nodes(
     nodes: typing.Sequence[typing.Union[str, tuple[str, int]]],
 ) -> list[emcache.MemcachedHostAddress]:
     """
@@ -248,7 +248,7 @@ class _AsyncMemcachedLock:
         name_bytes = self._name_bytes
         token = self._token
         try:
-            # `gets()`/`cas()` close the race that a plain `get()` then
+            # Using `gets()` + `cas()` avoids the race that a plain `get()` then
             # `delete()` leaves open. If the key expired and someone else
             # re-acquired it between our read and our delete, a bare delete
             # would remove their active lock. `cas()` only succeeds if the
@@ -428,7 +428,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             raise ValueError("`number_of_tracking_shards` must be at least 1")
 
         if nodes is not None:
-            self._host_addresses = _parse_memcached_nodes(nodes)
+            self._host_addresses = parse_memcached_nodes(nodes)
         else:
             if url and (host != "localhost" or port != 11211):
                 raise ValueError("Specify either 'url' or 'host'/'port', not both.")
@@ -438,7 +438,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
                 port = parsed["port"]
             self._host_addresses = [emcache.MemcachedHostAddress(host, port)]
 
-        # Keep single-node attributes for backwards-compatible introspection.
+        # Keep single-node attributes for backwards-compatible introspection
         if len(self._host_addresses) == 1:
             self.host: str = self._host_addresses[0].address
             self.port: int = self._host_addresses[0].port
@@ -639,7 +639,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         :return: Value as string, or None if not found.
         """
         self._assert_ready()
-
         item = await self.connection.get(key.encode())  # type: ignore[union-attr]
         if item is None:
             return None
@@ -656,7 +655,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         :param expire: Optional TTL in seconds.
         """
         self._assert_ready()
-
         exptime = int(expire) if expire is not None else 0
         await self.connection.set(  # type: ignore[union-attr]
             key.encode(),
@@ -675,7 +673,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         :return: True if deleted, False if not found.
         """
         self._assert_ready()
-
         try:
             await self.connection.delete(key.encode(), noreply=False)  # type: ignore[union-attr]
             return True
@@ -710,7 +707,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             except (emcache.NotFoundCommandError, emcache.CommandError):
                 pass
 
-            # Key does not exist; initialise atomically.
+            # Key does not exist so initialise atomically.
             try:
                 await self.connection.add(  # type: ignore[union-attr]
                     encoded_key,
@@ -737,7 +734,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             except (emcache.NotFoundCommandError, emcache.CommandError):
                 pass
 
-            # Key does not exist; initialise to a negative value via set
+            # Key does not exist, initialise to a negative value
             # (Memcached counters can't go negative, so we store as a plain string).
             try:
                 await self.connection.add(  # type: ignore[union-attr]
@@ -786,7 +783,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         :return: True if expiration was set, False if key does not exist.
         """
         self._assert_ready()
-
         try:
             await self.connection.touch(  # type: ignore[union-attr]
                 key.encode(), exptime=seconds
@@ -810,7 +806,6 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         :return: New value after increment.
         """
         self._assert_ready()
-
         encoded_key = key.encode()
         # Key exists, just increment (preserves existing TTL).
         try:
@@ -875,7 +870,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
 
         exptime = expire if expire is not None else 0
 
-        async def _set_one(key: str, value: str) -> None:
+        async def set(key: str, value: str) -> None:
             await self.connection.set(  # type: ignore[union-attr]
                 key.encode(),
                 value.encode(),
@@ -885,9 +880,9 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
             if self.track_keys:
                 await self._track_key(key)
 
-        tasks = [asyncio.create_task(_set_one(k, v)) for k, v in items.items()]
+        tasks = [asyncio.create_task(set(key, value)) for key, value in items.items()]
         try:
-            await asyncio.gather(*tasks)
+            await asyncio.gather(*tasks, return_exceptions=False)
         except Exception:
             # Any exception should cancel any ongoing task.
             for task in tasks:
@@ -932,14 +927,14 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
                 asyncio.create_task(self.connection.delete(key.encode(), noreply=False))  # type: ignore[union-attr]
                 for key in keys
             ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for key, result in zip(keys, results):
-                if isinstance(result, BaseException) and not isinstance(
-                    result, emcache.NotFoundCommandError
+            errors = await asyncio.gather(*tasks, return_exceptions=True)
+            for key, error in zip(keys, errors):
+                if isinstance(error, BaseException) and not isinstance(
+                    error, emcache.NotFoundCommandError
                 ):
                     raise BackendError(
-                        f"Failed to clear key '{key}': {result!s}"
-                    ) from result
+                        f"Failed to clear key '{key}': {error!s}"
+                    ) from error
 
     async def reset(self) -> None:
         """Reset the backend by clearing all tracked namespace data."""

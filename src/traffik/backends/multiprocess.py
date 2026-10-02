@@ -44,7 +44,7 @@ No event loop is needed in the parent process to create the shared memory, semap
 
 If a segment with the target name already exists when `start()` runs, it is treated
 as a stale leftover from a previous run not an actively used peer. Since nothing else
-can safely attach to it anyway, it's unlinked and recreated rather than reused.
+can safely attach to it anyway, it's unlinked and recreated.
 """
 
 import asyncio
@@ -59,6 +59,7 @@ import platform
 import random
 import re
 import struct
+import sys
 import tempfile
 import threading
 import typing
@@ -67,6 +68,11 @@ from multiprocessing.shared_memory import SharedMemory
 from multiprocessing.synchronize import Semaphore
 from time import monotonic
 from types import TracebackType
+
+if sys.version_info >= (3, 10):
+    from typing import Concatenate
+else:
+    from typing_extensions import Concatenate
 
 from traffik._hashing import fnv_32bit_hash
 from traffik._locks import NamedLockHandle, NamedLockPool
@@ -92,6 +98,8 @@ from traffik.typing import (  # noqa: E402
     ConnectionIdentifier,
     ConnectionThrottledHandler,
     HTTPConnectionT,
+    P,
+    R,
     ThrottleErrorHandler,
 )
 
@@ -202,9 +210,9 @@ class ShardFullError(BackendError):
         self.shard_idx = shard_idx
 
 
-def _retry_after_reclaiming_expired(
-    method: typing.Callable[..., typing.Any],
-) -> typing.Callable[..., typing.Any]:
+def _retry_after_reclaim(
+    method: typing.Callable[Concatenate["MultiProcessInMemoryBackend", P], R],
+) -> typing.Callable[Concatenate["MultiProcessInMemoryBackend", P], R]:
     """
     Decorator for the operations that can allocate a slot: if one finds its
     shard full, reclaim that shard's expired slots and retry once before
@@ -226,8 +234,8 @@ def _retry_after_reclaiming_expired(
 
     @functools.wraps(method)
     def wrapper(
-        self: "MultiProcessInMemoryBackend", *args: typing.Any, **kwargs: typing.Any
-    ) -> typing.Any:
+        self: "MultiProcessInMemoryBackend", *args: P.args, **kwargs: P.kwargs
+    ) -> R:
         try:
             return method(self, *args, **kwargs)
         except ShardFullError as exc:
@@ -2416,7 +2424,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         finally:
             self._release_shard(shard_idx)
 
-    @_retry_after_reclaiming_expired
+    @_retry_after_reclaim
     def _set(self, key: str, value: str, expire: typing.Optional[float]) -> None:
         """
         Synchronous set.
@@ -2523,7 +2531,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         finally:
             self._release_shard(shard_idx)
 
-    @_retry_after_reclaiming_expired
+    @_retry_after_reclaim
     def _increment(self, key: str, amount: int) -> int:
         """
         Synchronous increment using native int64 storage.
@@ -2649,7 +2657,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         finally:
             self._release_shard(shard_idx)
 
-    @_retry_after_reclaiming_expired
+    @_retry_after_reclaim
     def _increment_with_ttl(self, key: str, amount: int, ttl: int) -> int:
         """
         Synchronous `increment_with_ttl` using native int64 storage.
@@ -2800,7 +2808,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         return results
 
-    @_retry_after_reclaiming_expired
+    @_retry_after_reclaim
     def _multi_set(
         self,
         shard_to_items: dict[int, list[tuple[str, str]]],
@@ -3278,12 +3286,10 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         shard_to_items: dict[int, list[tuple[str, str]]] = {}
         for key, value in items.items():
-            shard_to_items.setdefault(self._get_shard_idx_for_key(key), []).append(
-                (
-                    key,
-                    value,
-                )
-            )
+            shard_to_items.setdefault(self._get_shard_idx_for_key(key), []).append((
+                key,
+                value,
+            ))
 
         await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
             self._executor, self._multi_set, shard_to_items, expire

@@ -54,7 +54,7 @@ _AnyRedis = typing.Union[Redis[str], RedisCluster[str]]
 """Union of the two coredis client types that share a compatible command API."""
 
 
-_INCREMENT_WITH_TTL_SCRIPT = """
+INCREMENT_WITH_TTL_SCRIPT = """
 -- Atomically increment a counter and set a TTL only on first creation.
 --
 -- KEYS[1]  counter key
@@ -83,7 +83,7 @@ else
 end
 """
 
-_CLEAR_SCRIPT = """
+CLEAR_SCRIPT = """
 -- Scan and delete all keys matching a pattern.
 -- Uses SCAN in a loop to avoid blocking Redis on large datasets.
 --
@@ -322,11 +322,6 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
     wrap_methods: tuple[str, ...] = ("clear",)
 
-    INCREMENT_WITH_TTL_SCRIPT: typing.ClassVar[str] = _INCREMENT_WITH_TTL_SCRIPT
-    """Lua script for atomic increment with TTL on first creation."""
-    CLEAR_SCRIPT: typing.ClassVar[str] = _CLEAR_SCRIPT
-    """Lua script for non-blocking deletion of all keys matching a pattern."""
-
     def __init__(
         self,
         connection: typing.Union[
@@ -513,9 +508,9 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
             # Script object that transparently handles NOSCRIPT errors.
             self._increment_with_ttl_script = client.register_script(
-                self.INCREMENT_WITH_TTL_SCRIPT
+                INCREMENT_WITH_TTL_SCRIPT
             )
-            self._clear_script = client.register_script(self.CLEAR_SCRIPT)
+            self._clear_script = client.register_script(CLEAR_SCRIPT)
 
         if self._named_gate_registry is None or self._named_gate_registry.closed:
             self._named_gate_registry = _NamedGateRegistry(
@@ -581,7 +576,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
     async def get(
         self, key: str, *args: typing.Any, **kwargs: typing.Any
     ) -> typing.Optional[str]:
-        """Return the string value stored at *key*, or `None` if absent."""
+        """Return the string value stored at `key`, or `None` if absent."""
         self._assert_ready()
         value = await self.connection.get(key)  # type: ignore[union-attr]
         return value  # type: ignore[return-value]
@@ -589,7 +584,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
     async def set(
         self, key: str, value: str, expire: typing.Optional[float] = None
     ) -> None:
-        """Set *key* to *value* with an optional expiry in seconds."""
+        """Set `key` to `value` with an optional expiry in seconds."""
         self._assert_ready()
         if expire is not None:
             await self.connection.set(key, value, px=expire * 1000)  # type: ignore[union-attr,call-overload]
@@ -597,13 +592,13 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
             await self.connection.set(key, value)  # type: ignore[union-attr]
 
     async def delete(self, key: str, *args: typing.Any, **kwargs: typing.Any) -> bool:
-        """Delete *key*. Returns `True` if the key existed."""
+        """Delete `key`. Returns `True` if the key existed."""
         self._assert_ready()
         deleted_count = await self.connection.delete([key])  # type: ignore[union-attr]
         return bool(deleted_count)
 
     async def increment(self, key: str, amount: int = 1) -> int:
-        """Atomically increment *key* by *amount* and return the new value."""
+        """Atomically increment `key` by `amount` and return the new value."""
         self._assert_ready()
         if amount == 1:
             return await self.connection.incr(key)  # type: ignore[union-attr]
@@ -615,7 +610,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         return await self.connection.decrby(key, -amount)  # type: ignore[union-attr]
 
     async def decrement(self, key: str, amount: int = 1) -> int:
-        """Atomically decrement *key* by *amount*."""
+        """Atomically decrement `key` by `amount`."""
         self._assert_ready()
         if amount == 1:
             return await self.connection.decr(key)  # type: ignore[union-attr]
@@ -623,7 +618,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
     async def expire(self, key: str, seconds: int) -> bool:
         """
-        Set a TTL on *key*. Returns `True` if the key exists and TTL was set.
+        Set a TTL on `key`. Returns `True` if the key exists and TTL was set.
         """
         self._assert_ready()
         result = await self.connection.expire(key, seconds)  # type: ignore[union-attr]
@@ -631,7 +626,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
 
     async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int = 60) -> int:
         """
-        Atomically increment *key* and set *ttl* **only when the key is new**.
+        Atomically increment `key` and set `ttl` **only when the key is new**.
 
         Uses a Lua script so the check-and-set is performed in a single
         server-side round-trip with no race conditions. Subsequent increments
@@ -702,7 +697,7 @@ class RedisBackend(ThrottleBackend[_AnyRedis, HTTPConnectionT]):
         """
         Delete all keys whose name starts with `namespace:`.
 
-        Uses the `_CLEAR_SCRIPT` Lua `SCAN` loop so Redis is never blocked,
+        Uses the `CLEAR_SCRIPT` Lua `SCAN` loop so Redis is never blocked,
         even for very large datasets.
 
         On Redis Cluster, `SCAN` is routed to **each primary** automatically

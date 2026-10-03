@@ -5,6 +5,7 @@ import asyncio
 import pytest
 from starlette.requests import HTTPConnection
 
+from tests.conftest import BackendGen
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
 from traffik.strategies.fixed_window import FixedWindowStrategy
@@ -290,6 +291,45 @@ class TestStrategyStateEdgeCases:
         # Should recover gracefully
         wait = await strategy(key, rate, backend)
         assert wait == 0, "Should recover from corrupted state"
+
+    async def _assert_fresh_start_after_eviction(
+        self, backends: BackendGen, strategy: ThrottleStrategy[HTTPConnection]
+    ):
+        """
+        Redis under `maxmemory` and Memcached under memory pressure evict keys
+        the library had no say in, which it can't tell apart from a TTL
+        expiring early. Vanished state must mean "no history": a fresh window
+        or bucket, with no error and no stale deficit, on every backend.
+        """
+        rate = Rate.parse("5/s")
+        key = "user:evicted"
+
+        for backend in backends(namespace="state_eviction"):
+            async with backend(persistent=False, close_on_exit=True):
+                for _ in range(3):
+                    await strategy(key, rate, backend)
+
+                await backend.reset()  # Every key gone, as total eviction would
+
+                wait = await strategy(key, rate, backend)
+                assert wait == 0, (
+                    f"{type(strategy).__name__} on {type(backend).__name__} "
+                    f"should start fresh after eviction, got wait={wait}ms"
+                )
+
+    async def test_strategy_with_evicted_state(
+        self, backends: BackendGen, strategy: ThrottleStrategy[HTTPConnection]
+    ):
+        """Test built-in strategy recovery from evicted state."""
+        await self._assert_fresh_start_after_eviction(backends, strategy)
+
+    async def test_custom_strategy_with_evicted_state(
+        self,
+        backends: BackendGen,
+        custom_strategy: ThrottleStrategy[HTTPConnection],
+    ):
+        """Test custom strategy recovery from evicted state."""
+        await self._assert_fresh_start_after_eviction(backends, custom_strategy)
 
     async def test_multiple_strategies_same_key(self, backend: InMemoryBackend):
         """Test different strategies operating on the same key namespace."""

@@ -49,7 +49,6 @@ can safely attach to it anyway, it's unlinked and recreated.
 
 import asyncio
 import contextlib
-import fcntl
 import functools
 import logging
 import math
@@ -82,8 +81,13 @@ ON_WINDOWS = platform.system() == "Windows"
 
 logger = logging.getLogger(__name__)
 if not ON_WINDOWS:
+    import fcntl
+
     from traffik import _atomic  # type: ignore[import]
 else:
+    # Importable on every platform, only constructible off Windows (see
+    # `__init__`), so POSIX-only modules are stubbed rather than imported.
+    fcntl: typing.Any = object()  # type: ignore
     _atomic: typing.Any = object()  # type: ignore
 
 from traffik.backends.base import ThrottleBackend  # noqa: E402

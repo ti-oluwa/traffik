@@ -6,7 +6,6 @@ import logging
 import math
 import sys
 import typing
-import zlib
 from time import monotonic
 from types import TracebackType
 
@@ -14,6 +13,7 @@ import aiomcache
 from aiomcache.exceptions import ClientException
 from aiomcache.pool import Connection, MemcachePool
 
+from traffik._hashing import fnv_32bit_hash
 from traffik._locks import _GatedNamedLock, _NamedGateRegistry, get_token
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.memcached._utils import _parse_memcached_url
@@ -502,7 +502,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         self._named_gate_registry: typing.Optional[_NamedGateRegistry] = None
 
     def _get_tracking_key_for(self, key: str, num_shards: int = 16) -> str:
-        shard = zlib.crc32(key.encode()) % num_shards
+        shard = fnv_32bit_hash(key.encode()) % num_shards
         return f"{self._tracking_key}:{shard}"
 
     def _get_tracking_shard_key(self, shard: int) -> str:
@@ -818,7 +818,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
         if not keys:
             return []
 
-        encoded_keys = [k.encode() for k in keys]
+        encoded_keys = [key.encode() for key in keys]
         values = await self.connection.multi_get(*encoded_keys)  # type: ignore[union-attr]
         results: list[typing.Optional[str]] = []
         for value in values:

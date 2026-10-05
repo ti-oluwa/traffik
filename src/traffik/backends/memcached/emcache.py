@@ -8,13 +8,13 @@ import asyncio
 import logging
 import math
 import typing
-import zlib
 from time import monotonic
 from types import TracebackType
 
 import emcache
 from typing_extensions import Self
 
+from traffik._hashing import fnv_32bit_hash
 from traffik._locks import _GatedNamedLock, _NamedGateRegistry, get_token
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.memcached._utils import _parse_memcached_url
@@ -553,7 +553,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
         self.set_lock_contention_threshold(2**31)
 
     def _get_tracking_key_for(self, key: str, num_shards: int = 16) -> str:
-        shard = zlib.crc32(key.encode()) % num_shards
+        shard = fnv_32bit_hash(key.encode()) % num_shards
         return f"{self._tracking_key}:{shard}"
 
     def _get_tracking_shard_key(self, shard: int) -> str:

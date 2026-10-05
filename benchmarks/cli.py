@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import pathlib
 import platform
 import sys
 import typing
@@ -40,6 +41,80 @@ from benchmarks.scenarios import (
 
 P = ParamSpec("P")
 R = TypeVar("R")
+
+
+def plot_options(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
+    """`--plot` / `--plot-format`, shared by every command that can draw charts."""
+
+    @click.option(
+        "--plot",
+        type=click.Path(file_okay=False, path_type=pathlib.Path),
+        default=None,
+        help=(
+            "Write charts for this run into DIRECTORY (created if missing). "
+            "Needs matplotlib: pip install 'traffik[benchmark]'."
+        ),
+    )
+    @click.option(
+        "--plot-format",
+        type=click.Choice(["svg", "png"]),
+        default="svg",
+        help="Image format for --plot.",
+    )
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs) -> R:
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+def check_plotting_available(plot: typing.Optional[pathlib.Path]) -> None:
+    """Fail fast, before a long benchmark runs, if `--plot` can't work."""
+    if plot is None:
+        return
+    try:
+        import matplotlib  # noqa: F401
+    except ImportError:
+        click.echo(
+            "ERROR: --plot needs matplotlib. Install it with: "
+            "pip install 'traffik[benchmark]'",
+            err=True,
+        )
+        sys.exit(1)
+
+
+def report_plots(paths: typing.Iterable[pathlib.Path]) -> None:
+    """List written chart files on stderr, so `--output json` stdout stays clean."""
+    for path in paths:
+        click.echo(f"wrote {path}", err=True)
+
+
+def draw_aggregate(
+    results,
+    plot: typing.Optional[pathlib.Path],
+    plot_format: str,
+    *,
+    title: str,
+    family: str,
+    backend: str,
+    strategy: str,
+    workers: int,
+) -> None:
+    """Write the aggregate charts for a run if `--plot` was given."""
+    if plot is None:
+        return
+    from benchmarks.output.plots import file_prefix, plot_aggregate
+
+    report_plots(
+        plot_aggregate(
+            results,
+            plot,
+            title=f"{title} ({backend}, {strategy}, {workers} worker(s))",
+            prefix=file_prefix(family, backend, strategy, f"w{workers}"),
+            family=family,  # type: ignore[arg-type]
+            fmt=plot_format,  # type: ignore[arg-type]
+        )
+    )
 
 
 def options(
@@ -149,6 +224,7 @@ def cli() -> None:
 
 @cli.command("http")
 @options()
+@plot_options
 def http_command(
     backend,
     strategy,
@@ -161,8 +237,11 @@ def http_command(
     memcached_host,
     memcached_port,
     scenarios,
+    plot,
+    plot_format,
 ) -> None:
     """Benchmark HTTP throttles using Depends-based injection."""
+    check_plotting_available(plot)
     check_workers_platform(workers)
     config = BenchmarkConfig(
         backend_kind=backend,
@@ -190,11 +269,22 @@ def http_command(
         }
         print_aggregate_json(results, meta)
     else:
-        print_aggregate_table(results, title="HTTP Benchmark Results")
+        print_aggregate_table(results, title="HTTP Benchmark Results", family="http")
+    draw_aggregate(
+        results,
+        plot,
+        plot_format,
+        title="HTTP Benchmark",
+        family="http",
+        backend=backend,
+        strategy=strategy,
+        workers=workers,
+    )
 
 
 @cli.command("middleware")
 @options()
+@plot_options
 def middleware_command(
     backend,
     strategy,
@@ -207,8 +297,11 @@ def middleware_command(
     memcached_host,
     memcached_port,
     scenarios,
+    plot,
+    plot_format,
 ) -> None:
     """Benchmark middleware-mounted throttles."""
+    check_plotting_available(plot)
     check_workers_platform(workers)
     config = BenchmarkConfig(
         backend_kind=backend,
@@ -236,11 +329,24 @@ def middleware_command(
         }
         print_aggregate_json(results, meta)
     else:
-        print_aggregate_table(results, title="Middleware Benchmark Results")
+        print_aggregate_table(
+            results, title="Middleware Benchmark Results", family="middleware"
+        )
+    draw_aggregate(
+        results,
+        plot,
+        plot_format,
+        title="Middleware Benchmark",
+        family="middleware",
+        backend=backend,
+        strategy=strategy,
+        workers=workers,
+    )
 
 
 @cli.command("websocket")
 @options()
+@plot_options
 def websocket_command(
     backend,
     strategy,
@@ -253,8 +359,11 @@ def websocket_command(
     memcached_host,
     memcached_port,
     scenarios,
+    plot,
+    plot_format,
 ) -> None:
     """Benchmark WebSocket throttles."""
+    check_plotting_available(plot)
     check_workers_platform(workers)
     config = BenchmarkConfig(
         backend_kind=backend,
@@ -282,11 +391,24 @@ def websocket_command(
         }
         print_aggregate_json(results, meta)
     else:
-        print_aggregate_table(results, title="WebSocket Benchmark Results")
+        print_aggregate_table(
+            results, title="WebSocket Benchmark Results", family="websocket"
+        )
+    draw_aggregate(
+        results,
+        plot,
+        plot_format,
+        title="WebSocket Benchmark",
+        family="websocket",
+        backend=backend,
+        strategy=strategy,
+        workers=workers,
+    )
 
 
 @cli.command("multiprocess")
 @options(default_workers=4)
+@plot_options
 def multiprocess_command(
     backend,
     strategy,
@@ -299,6 +421,8 @@ def multiprocess_command(
     memcached_host,
     memcached_port,
     scenarios,
+    plot,
+    plot_format,
 ) -> None:
     """
     Benchmark `MultiProcessInMemoryBackend` across real forked gunicorn workers (POSIX only).
@@ -310,6 +434,7 @@ def multiprocess_command(
     if IS_WINDOWS or run_multiprocess_scenarios is None:
         click.echo("ERROR: MultiProcess benchmarks require a POSIX system.", err=True)
         sys.exit(1)
+    check_plotting_available(plot)
     config = BenchmarkConfig(
         backend_kind="multiprocess",
         strategy_kind=strategy,
@@ -336,7 +461,19 @@ def multiprocess_command(
         }
         print_aggregate_json(results, meta)
     else:
-        print_aggregate_table(results, title="MultiProcess Benchmark Results")
+        print_aggregate_table(
+            results, title="MultiProcess Benchmark Results", family="multiprocess"
+        )
+    draw_aggregate(
+        results,
+        plot,
+        plot_format,
+        title="MultiProcess Benchmark",
+        family="multiprocess",
+        backend="multiprocess",
+        strategy=strategy,
+        workers=workers,
+    )
 
 
 @cli.command("compare")
@@ -405,6 +542,7 @@ def multiprocess_command(
     default="async",
     help="Hit /test (async def), or /test-sync (def) on both apps. Ignored for --mode middleware.",
 )
+@plot_options
 def compare_command(
     backend,
     strategy,
@@ -419,6 +557,8 @@ def compare_command(
     memcached_port,
     scenarios,
     endpoint,
+    plot,
+    plot_format,
 ) -> None:
     """
     Compare traffik against SlowAPI under matched conditions.
@@ -431,6 +571,7 @@ def compare_command(
     everything (both still run on the same machine, one after the other, not
     simultaneously). Treat one run as a data point, not a verdict.
     """
+    check_plotting_available(plot)
     check_workers_platform(workers)
     config = BenchmarkConfig(
         backend_kind=backend,
@@ -480,7 +621,23 @@ def compare_command(
         print_compare_json(results, meta)
     else:
         print_compare_table(
-            results, title=f"traffik vs SlowAPI ({backend}, {strategy}, {mode})"
+            results,
+            title=f"traffik vs SlowAPI ({backend}, {strategy}, {mode})",
+            family=mode,
+        )
+
+    if plot is not None:
+        from benchmarks.output.plots import file_prefix, plot_compare
+
+        report_plots(
+            plot_compare(
+                results,
+                plot,
+                title=f"traffik vs SlowAPI ({backend}, {strategy}, {mode}, {workers} worker(s))",
+                prefix=file_prefix("compare", mode, backend, strategy, f"w{workers}"),
+                family=mode,
+                fmt=plot_format,
+            )
         )
 
 
@@ -528,6 +685,7 @@ def compare_command(
         "since that backend cannot grow past what it was sized for."
     ),
 )
+@plot_options
 def scale_command(
     backend,
     strategy,
@@ -540,6 +698,8 @@ def scale_command(
     memcached_port,
     shards,
     mp_max_keys,
+    plot,
+    plot_format,
 ) -> None:
     """
     Measure memory pressure and scalability as key cardinality grows.
@@ -561,6 +721,7 @@ def scale_command(
     Watch the P50/P99 columns for latency drift as the backend fills up,
     not just the memory columns.
     """
+    check_plotting_available(plot)
     check_workers_platform(workers)
     checkpoint_list = [
         int(choice.strip()) for choice in checkpoints.split(",") if choice.strip()
@@ -595,6 +756,19 @@ def scale_command(
         print_scale_json(result, meta)
     else:
         print_scale_table(result)
+
+    if plot is not None:
+        from benchmarks.output.plots import file_prefix, plot_scale
+
+        report_plots(
+            plot_scale(
+                result,
+                plot,
+                title=f"Scale ({backend}, {strategy}, {workers} worker(s))",
+                prefix=file_prefix("scale", backend, strategy, f"w{workers}"),
+                fmt=plot_format,
+            )
+        )
 
 
 if not IS_WINDOWS:

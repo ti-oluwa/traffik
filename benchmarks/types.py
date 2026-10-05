@@ -84,9 +84,14 @@ class ScenarioResult:
     :param successful_requests: Requests that received HTTP 200 / WS ok response.
     :param throttled_requests: Requests that received HTTP 429 / WS rate_limit response.
     :param error_requests: Requests that received any other status code or raised an exception.
-    :param total_time_seconds: Wall-clock seconds for the entire scenario run.
+    :param total_time_seconds: Wall-clock seconds for the entire scenario run,
+        including any intentional pauses.
     :param latencies_seconds: Per-request latency in seconds, same length as total_requests.
     :param iteration: Which iteration number this result belongs to (1-based).
+    :param paused_seconds: Seconds the scenario spent deliberately sleeping
+        (between waves, between the halves of a split run). Excluded from
+        `requests_per_second` so paced scenarios don't report the sleep as
+        slowness.
     """
 
     scenario_name: str
@@ -99,17 +104,30 @@ class ScenarioResult:
     total_time_seconds: float
     latencies_seconds: list[float]
     iteration: int
+    paused_seconds: float = 0.0
+
+    @property
+    def active_seconds(self) -> float:
+        """
+        Wall-clock seconds spent actually sending traffic, excluding
+        intentional pauses.
+
+        :return: `total_time_seconds - paused_seconds`, never below zero.
+        """
+        return max(self.total_time_seconds - self.paused_seconds, 0.0)
 
     @property
     def requests_per_second(self) -> float:
         """
         Requests per second throughput.
 
-        :return: Requests per second or 0.0 if total_time_seconds is zero.
+        :return: Requests per second over `active_seconds` (intentional
+            pauses excluded), or 0.0 if that is zero.
         """
-        if self.total_time_seconds == 0:
+        active = self.active_seconds
+        if active == 0:
             return 0.0
-        return self.total_requests / self.total_time_seconds
+        return self.total_requests / active
 
     @property
     def success_rate(self) -> float:
@@ -291,6 +309,64 @@ class AggregatedResult:
         sorted_latencies = sorted(all_latencies)
         index = int(len(sorted_latencies) * 0.99)
         return sorted_latencies[index] * 1000
+
+    @property
+    def p999_ms(self) -> float:
+        """
+        99.9th percentile latency in milliseconds across all combined latencies.
+
+        Only meaningful with roughly 1,000+ samples (see `sample_count`);
+        below that it is effectively the maximum.
+
+        :return: P99.9 in ms or 0.0 if no latencies.
+        """
+        all_latencies = []
+        for result in self.results:
+            all_latencies.extend(result.latencies_seconds)
+        if not all_latencies:
+            return 0.0
+        sorted_latencies = sorted(all_latencies)
+        index = min(int(len(sorted_latencies) * 0.999), len(sorted_latencies) - 1)
+        return sorted_latencies[index] * 1000
+
+    @property
+    def sample_count(self) -> int:
+        """
+        Number of latency samples pooled across all iterations.
+
+        :return: Total recorded latencies.
+        """
+        return sum(len(result.latencies_seconds) for result in self.results)
+
+    @property
+    def mean_allowed_rps(self) -> float:
+        """
+        Mean rate of requests the throttle allowed (HTTP 200), per second of
+        active time, across iterations.
+
+        :return: Mean allowed requests/sec or 0.0.
+        """
+        rates = [
+            result.successful_requests / result.active_seconds
+            for result in self.results
+            if result.active_seconds
+        ]
+        return statistics.mean(rates) if rates else 0.0
+
+    @property
+    def mean_throttled_rps(self) -> float:
+        """
+        Mean rate of requests the throttle rejected (HTTP 429), per second of
+        active time, across iterations.
+
+        :return: Mean rejected requests/sec or 0.0.
+        """
+        rates = [
+            result.throttled_requests / result.active_seconds
+            for result in self.results
+            if result.active_seconds
+        ]
+        return statistics.mean(rates) if rates else 0.0
 
     @property
     def mean_ms(self) -> float:

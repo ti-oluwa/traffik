@@ -1,33 +1,47 @@
+import typing
+
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from benchmarks.glossary import Family, kind_tag, print_glossary
 from benchmarks.types import AggregatedResult, CompareResult, ScaleResult
+
+MIN_SAMPLES_FOR_P999 = 1000
+"""Below this many latency samples, P99.9 is effectively just the maximum."""
 
 
 def print_aggregate_table(
     results: list[AggregatedResult],
     title: str = "Benchmark Results",
+    family: typing.Optional[Family] = None,
 ) -> None:
     """
     Print a Rich formatted table of aggregated benchmark results to stdout.
 
-    Columns: Scenario | Backend | Strategy | req/s | P50 (ms) | P95 (ms) | P99 (ms) | Success% | Throttled% | Errors%
+    Columns: Scenario | Type | Backend | Strategy | req/s | P50 (ms) | P95 (ms) | P99 (ms) | P99.9 (ms) | Success% | Throttled% | Errors%
+
+    When `family` is given, a glossary explaining what each scenario measures
+    is printed under the table.
 
     :param results: List of aggregated results to display.
     :param title: Title string shown above the table.
+    :param family: Scenario set the results come from (`"http"`, `"middleware"`,
+        `"multiprocess"` or `"websocket"`). Enables the Type column tags and the glossary.
     """
     console = Console()
     table = Table(title=title)
 
     # Add columns
-    table.add_column("Scenario", width=35)
-    table.add_column("Backend", width=18)
+    table.add_column("Scenario", width=32)
+    table.add_column("Type", width=4, justify="center")
+    table.add_column("Backend", width=12)
     table.add_column("Strategy", width=22)
     table.add_column("req/s", width=10, justify="right")
     table.add_column("P50 (ms)", width=9, justify="right")
     table.add_column("P95 (ms)", width=9, justify="right")
     table.add_column("P99 (ms)", width=9, justify="right")
+    table.add_column("P99.9 (ms)", width=10, justify="right")
     table.add_column("Success %", width=10, justify="right")
     table.add_column("Throttled %", width=11, justify="right")
     table.add_column("Errors %", width=9, justify="right")
@@ -41,6 +55,11 @@ def print_aggregate_table(
         p50 = f"{result.p50_ms:.2f}"
         p95 = f"{result.p95_ms:.2f}"
         p99 = f"{result.p99_ms:.2f}"
+        p999 = (
+            f"{result.p999_ms:.2f}"
+            if result.sample_count >= MIN_SAMPLES_FOR_P999
+            else "-"
+        )
         success = f"{result.success_rate:.1f}"
         throttle = f"{result.throttle_rate:.1f}"
         error = f"{result.error_rate:.1f}"
@@ -54,12 +73,14 @@ def print_aggregate_table(
 
         table.add_row(
             scenario,
+            kind_tag(family, scenario),
             backend,
             strategy,
             rps,
             p50,
             p95,
             p99,
+            p999,
             success,
             throttle,
             error,
@@ -79,10 +100,15 @@ def print_aggregate_table(
         f"\nTotal scenarios: {total_scenarios} | Total requests: {total_requests} | Run time: {total_time:.1f}s"
     )
 
+    if family is not None:
+        console.print()
+        print_glossary((r.scenario_name for r in results), family)
+
 
 def print_compare_table(
     results: list[CompareResult],
     title: str = "traffik vs SlowAPI",
+    family: typing.Optional[Family] = None,
 ) -> None:
     """
     Print a side-by-side traffik-vs-SlowAPI table, one row per scenario.
@@ -90,13 +116,19 @@ def print_compare_table(
     RPS delta is `(traffik - slowapi) / slowapi * 100`: positive means
     traffik was faster in this run, negative means SlowAPI was.
 
+    When `family` is given, a glossary explaining what each scenario measures
+    is printed under the table. Read the Type tag before the req/s delta: a
+    lower req/s on an `S` (single-key serialization) scenario is expected.
+
     :param results: List of `CompareResult`.
     :param title: Title string shown above the table.
+    :param family: `"http"` or `"middleware"`. Enables the Type tags and glossary.
     """
     console = Console()
     table = Table(title=title)
 
     table.add_column("Scenario", width=28)
+    table.add_column("Type", width=4, justify="center")
     table.add_column("SlowAPI req/s", width=13, justify="right")
     table.add_column("traffik req/s", width=13, justify="right")
     table.add_column("req/s (Δ%)", width=11, justify="right")
@@ -115,6 +147,7 @@ def print_compare_table(
 
         table.add_row(
             result.scenario_name,
+            kind_tag(family, result.traffik.scenario_name),
             f"{slowapi_rps:.1f}",
             f"{traffik_rps:.1f}",
             Text(f"{delta:+.1f}%", style=delta_style),
@@ -129,6 +162,10 @@ def print_compare_table(
         "\n[dim]req/s (Δ%): positive = traffik faster, negative = SlowAPI "
         "faster, in this run.[/dim]"
     )
+
+    if family is not None:
+        console.print()
+        print_glossary((r.traffik.scenario_name for r in results), family)
 
 
 def print_scale_table(result: ScaleResult, title: str = "Scale Results") -> None:

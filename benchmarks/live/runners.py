@@ -4,6 +4,7 @@ Turns one `HttpScenario`/`WebSocketScenario` plus a running `Server` into a sing
 
 import asyncio
 import time
+import typing
 
 import httpx2
 
@@ -35,6 +36,7 @@ async def run_http_like_scenario(
     :return: The resulting `ScenarioResult`.
     """
     start_time = time.perf_counter()
+    paused_seconds = 0.0
 
     if scenario.mode == "sequential":
         latencies, successful, throttled, errors = await live_client.send_sequential(
@@ -53,6 +55,7 @@ async def run_http_like_scenario(
         latencies, successful, throttled, errors = await live_client.send_waves(
             client, waves=scenario.waves, path=path, headers=scenario.headers
         )
+        paused_seconds = pause_seconds(scenario.waves)
     elif scenario.mode == "unique_keys_batched":
         key_mod = (
             config.concurrency if scenario.key_mod_is_concurrency else scenario.key_mod
@@ -94,6 +97,7 @@ async def run_http_like_scenario(
 
             if start_idx == 0 and scenario.extra_sleep_seconds:
                 await asyncio.sleep(scenario.extra_sleep_seconds)
+                paused_seconds += scenario.extra_sleep_seconds
     elif scenario.mode == "mixed_paths":
         assert scenario.mixed_paths is not None
         latencies, successful, throttled, errors = [], 0, 0, 0
@@ -124,7 +128,21 @@ async def run_http_like_scenario(
         total_time_seconds=total_time,
         latencies_seconds=latencies,
         iteration=iteration,
+        paused_seconds=paused_seconds,
     )
+
+
+def pause_seconds(waves: typing.Sequence[tuple[int, float]]) -> float:
+    """
+    Seconds a `waves` run sleeps between its bursts.
+
+    The sleep after the final wave is never taken (the client skips it), so
+    it is not counted.
+
+    :param waves: `[(requests_in_wave, seconds_to_sleep_after), ...]`.
+    :return: Total intentional sleep time.
+    """
+    return sum(sleep_after for _, sleep_after in waves[:-1])
 
 
 async def send_sequential_with_keys(
@@ -168,6 +186,7 @@ async def run_websocket_scenario(
     :return: The resulting `ScenarioResult`.
     """
     start_time = time.perf_counter()
+    paused_seconds = 0.0
 
     if scenario.mode == "sequential":
         latencies, successful, throttled = await live_client.ws_send_messages(
@@ -180,6 +199,7 @@ async def run_websocket_scenario(
             ws_url, waves=scenario.waves
         )
         total_requests = sum(count for count, _ in scenario.waves)
+        paused_seconds = pause_seconds(scenario.waves)
     elif scenario.mode == "concurrent_connections":
         latencies, successful, throttled = await live_client.ws_concurrent_connections(
             ws_url,
@@ -203,4 +223,5 @@ async def run_websocket_scenario(
         total_time_seconds=total_time,
         latencies_seconds=latencies,
         iteration=iteration,
+        paused_seconds=paused_seconds,
     )

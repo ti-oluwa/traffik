@@ -4,6 +4,7 @@ import asyncio
 import functools
 import logging
 import math
+import sys
 import typing
 import zlib
 from time import monotonic
@@ -11,6 +12,7 @@ from types import TracebackType
 
 import aiomcache
 from aiomcache.exceptions import ClientException
+from aiomcache.pool import Connection, MemcachePool
 
 from traffik._locks import _GatedNamedLock, _NamedGateRegistry, get_token
 from traffik.backends.base import ThrottleBackend
@@ -311,11 +313,83 @@ class _AsyncMemcachedLock:
         await self.release()
 
 
+# Strong references to in-flight replacement tasks, so they aren't garbage
+# collected mid-connect.
+_replacement_tasks: set[asyncio.Task[None]] = set()
+
+
+class _CancellationSafePool(MemcachePool):
+    """
+    `MemcachePool` that never recycles a connection released mid-cancellation.
+
+    `aiomcache` sends a request, then awaits its reply. If the awaiting task is
+    cancelled in between (a client disconnect, a request timeout, a server
+    shutdown), the reply is still on its way, but `aiomcache`'s `acquire` wrapper
+    only discards the connection for `Exception`, and `asyncio.CancelledError`
+    is a `BaseException`. The connection goes back to the pool with that reply
+    unread, and the next command on it reads the previous command's reply as
+    its own: a `get` returns the wrong value, an `add` reports success it
+    didn't have, every operation after it can be off by one reply, and the
+    pool stays poisoned. Under cancellation this was measured as nearly every
+    read returning a wrong answer.
+
+    `release` is called from a `finally` while the exception is propagating,
+    so `sys.exc_info()` shows whether the operation is being torn down. Any
+    non-`Exception` (cancellation, `KeyboardInterrupt`, `GeneratorExit`)
+    closes the connection instead of recycling it. Closing a connection whose
+    reply had in fact already been read costs only a reconnect.
+
+    Every closed connection is replaced. aiomcache only tops the pool up at the
+    start of `acquire`, so a task already parked on the empty queue is never
+    woken by a connection that is closed instead of returned, and would wait
+    forever once the pool drains. Replacing the connection wakes it.
+    """
+
+    def release(self, conn: Connection) -> None:
+        exc = sys.exc_info()[1]
+        torn_down = exc is not None and not isinstance(exc, Exception)
+        self._in_use.remove(conn)
+        if torn_down or conn.reader.at_eof() or conn.reader.exception() is not None:
+            self._do_close(conn)
+            self._replace_connection_in_background()
+        else:
+            self._pool.put_nowait(conn)
+
+    def _replace_connection_in_background(self) -> None:
+        task = asyncio.get_running_loop().create_task(self._replace_connection())
+        _replacement_tasks.add(task)
+        task.add_done_callback(_replacement_tasks.discard)
+
+    async def _replace_connection(self) -> None:
+        try:
+            conn = await self._create_new_conn()
+        except OSError:
+            # Memcached is unreachable. The next `acquire` retries and raises
+            # its own error for whoever needs a connection.
+            logger.debug(
+                "Failed to replace a closed memcached connection.", exc_info=True
+            )
+            return
+        if conn is not None:
+            self._pool.put_nowait(conn)
+
+
+class _CancellationSafeClient(aiomcache.Client):
+    """`aiomcache.Client` using `_CancellationSafePool`."""
+
+    def __init__(self, *args: typing.Any, **kwargs: typing.Any) -> None:
+        super().__init__(*args, **kwargs)
+        # The subclass adds a method and no state, so swapping the class of
+        # the pool the parent just built is safe, and avoids depending on its
+        # private attribute names to rebuild it.
+        self._pool.__class__ = _CancellationSafePool
+
+
 class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
     """
     Memcached-based throttle backend.
 
-    Uses `aiomcache` for async Memcached operations. Does not support multi-node setup.
+    Uses `aiomcache` for Memcached operations. Does not support multi-node setup.
 
     Note: Memcached has a key size limit of 250 bytes.
     """
@@ -464,7 +538,7 @@ class MemcachedBackend(ThrottleBackend[aiomcache.Client, HTTPConnectionT]):
     async def initialize(self) -> None:
         """Initialize the Memcached connection."""
         if self.connection is None:
-            self.connection = aiomcache.Client(
+            self.connection = _CancellationSafeClient(
                 self.host,
                 self.port,
                 pool_size=self.pool_size,

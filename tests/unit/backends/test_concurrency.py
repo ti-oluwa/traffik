@@ -1,6 +1,7 @@
 """Concurrency Tests for Backend Operations"""
 
 import asyncio
+import random
 
 import pytest
 
@@ -121,3 +122,101 @@ class TestBackendConcurrency:
 
                 final = await backend.get(key)
                 assert final == "300"
+
+
+@pytest.mark.anyio
+@pytest.mark.backend
+@pytest.mark.concurrent
+class TestBackendCancellation:
+    """
+    Cancellation (a client disconnect, a request timeout, a server shutdown) is
+    ordinary under an HTTP server, and lands wherever a task happens to be,
+    including between a request being sent and its reply being read. It must
+    never leave a backend's connection able to hand a later caller someone
+    else's reply.
+
+    Before the fix under test, aiomcache returned such a connection to its pool
+    with the reply unread, and almost every later read returned a wrong answer.
+    """
+
+    async def test_cancelled_reads_do_not_corrupt_later_replies(
+        self, backends: BackendGen
+    ) -> None:
+        keys = 20
+        for backend in backends(namespace="cancelled_reads"):
+            async with backend(close_on_exit=True):
+                for i in range(keys):
+                    await backend.set(backend.get_key(f"k{i}"), f"v{i}")
+
+                wrong = []
+
+                async def read(i: int) -> None:
+                    value = await backend.get(backend.get_key(f"k{i}"))
+                    if value != f"v{i}":
+                        wrong.append((i, value))
+
+                rng = random.Random(0)
+                for _ in range(6):
+                    tasks = [
+                        asyncio.create_task(read(rng.randrange(keys)))
+                        for _ in range(100)
+                    ]
+                    await asyncio.sleep(rng.random() * 0.004)
+                    for task in rng.sample(tasks, 70):
+                        task.cancel()
+                    await asyncio.wait_for(
+                        asyncio.gather(*tasks, return_exceptions=True), timeout=15
+                    )
+
+                # Then, once nothing is in flight, every key must still read back
+                # its own value.
+                for i in range(keys):
+                    value = await backend.get(backend.get_key(f"k{i}"))
+                    if value != f"v{i}":
+                        wrong.append((i, value))
+
+                assert not wrong, (
+                    f"{type(backend).__name__} returned wrong replies after "
+                    f"cancellation: {wrong[:3]}"
+                )
+
+    async def test_lock_survives_cancelled_waiters_and_holders(
+        self, backends: BackendGen
+    ) -> None:
+        for backend in backends(namespace="cancelled_lock"):
+            async with backend(close_on_exit=True):
+                inside = 0
+
+                async def critical_section() -> None:
+                    nonlocal inside
+                    async with backend.lock("L", ttl=5.0, blocking_timeout=10.0):
+                        inside += 1
+                        try:
+                            assert inside == 1, "mutual exclusion violated"
+                            await asyncio.sleep(0.01)
+                        finally:
+                            inside -= 1
+
+                rng = random.Random(0)
+                tasks = [asyncio.create_task(critical_section()) for _ in range(40)]
+                await asyncio.sleep(0.03)
+                for task in rng.sample(tasks, 30):
+                    task.cancel()
+                    await asyncio.sleep(rng.random() * 0.004)
+
+                results = await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True), timeout=30
+                )
+                failures = [
+                    result
+                    for result in results
+                    if isinstance(result, Exception)
+                    and not isinstance(result, asyncio.CancelledError)
+                ]
+                assert not failures, (
+                    f"{type(backend).__name__}: unexpected errors {failures[:3]}"
+                )
+
+                # Whoever was cancelled, the lock must not be left held.
+                async with backend.lock("L", ttl=5.0, blocking_timeout=3.0):
+                    pass

@@ -4,8 +4,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from benchmarks.glossary import Family, kind_tag, print_glossary
-from benchmarks.types import AggregatedResult, CompareResult, ScaleResult
+from benchmarks.glossary import Family, get_kind_tag, print_glossary
+from benchmarks.types import AggregatedResult, CompareResult, ScaleResult, SweepResult
 
 MIN_SAMPLES_FOR_P999 = 1000
 """Below this many latency samples, P99.9 is effectively just the maximum."""
@@ -73,7 +73,7 @@ def print_aggregate_table(
 
         table.add_row(
             scenario,
-            kind_tag(family, scenario),
+            get_kind_tag(family, scenario),
             backend,
             strategy,
             rps,
@@ -91,18 +91,18 @@ def print_aggregate_table(
 
     # Print summary
     total_scenarios = len(results)
-    total_requests = sum(r.total_requests for r in results)
+    total_requests = sum(result.total_requests for result in results)
     total_time = sum(
-        r.results[0].total_time_seconds if r.results else 0 for r in results
+        result.results[0].total_time_seconds if result.results else 0
+        for result in results
     )
 
     console.print(
         f"\nTotal scenarios: {total_scenarios} | Total requests: {total_requests} | Run time: {total_time:.1f}s"
     )
-
     if family is not None:
         console.print()
-        print_glossary((r.scenario_name for r in results), family)
+        print_glossary((result.scenario_name for result in results), family)
 
 
 def print_compare_table(
@@ -147,7 +147,7 @@ def print_compare_table(
 
         table.add_row(
             result.scenario_name,
-            kind_tag(family, result.traffik.scenario_name),
+            get_kind_tag(family, result.traffik.scenario_name),
             f"{slowapi_rps:.1f}",
             f"{traffik_rps:.1f}",
             Text(f"{delta:+.1f}%", style=delta_style),
@@ -188,22 +188,22 @@ def print_scale_table(result: ScaleResult, title: str = "Scale Results") -> None
     table.add_column("P50 (ms)", width=9, justify="right")
     table.add_column("P99 (ms)", width=9, justify="right")
 
-    for cp in result.checkpoints:
+    for checkpoint in result.checkpoints:
         backend_mem = (
-            f"{cp.backend_used_memory_mb:.1f}"
-            if cp.backend_used_memory_mb is not None
+            f"{checkpoint.backend_used_memory_mb:.1f}"
+            if checkpoint.backend_used_memory_mb is not None
             else "-"
         )
         table.add_row(
-            f"{cp.cumulative_keys:,}",
-            f"{cp.new_keys_this_checkpoint:,}",
-            f"{cp.rss_mb:.1f}",
-            f"{cp.rss_delta_mb:.1f}",
-            f"{cp.bytes_per_key:.1f}" if cp.cumulative_keys else "-",
+            f"{checkpoint.cumulative_keys:,}",
+            f"{checkpoint.new_keys_this_checkpoint:,}",
+            f"{checkpoint.rss_mb:.1f}",
+            f"{checkpoint.rss_delta_mb:.1f}",
+            f"{checkpoint.bytes_per_key:.1f}" if checkpoint.cumulative_keys else "-",
             backend_mem,
-            f"{cp.mean_rps:.1f}" if cp.mean_rps else "-",
-            f"{cp.p50_ms:.2f}" if cp.p50_ms else "-",
-            f"{cp.p99_ms:.2f}" if cp.p99_ms else "-",
+            f"{checkpoint.mean_rps:.1f}" if checkpoint.mean_rps else "-",
+            f"{checkpoint.p50_ms:.2f}" if checkpoint.p50_ms else "-",
+            f"{checkpoint.p99_ms:.2f}" if checkpoint.p99_ms else "-",
         )
 
     console.print(table)
@@ -271,3 +271,84 @@ def print_comparison_table(
             p95_str,
         )
     console.print(table)
+
+
+def print_sweep_table(result: SweepResult) -> None:
+    """
+    Print a load sweep: one table per key distribution, one row per
+    concurrency level and series, then each series' peak throughput.
+
+    :param result: The sweep to display.
+    """
+    console = Console()
+    distributions = list(dict.fromkeys(point.distribution for point in result.points))
+    labels = {"hot": "one hot key", "many": "many keys (none shared in flight)"}
+
+    for distribution in distributions:
+        table = Table(
+            title=(
+                f"Sweep, {labels.get(distribution, distribution)} "
+                f"({result.backend_kind}, {result.strategy_kind}, "
+                f"{result.workers} worker(s), {result.rate})"
+            )
+        )
+        table.add_column("In flight", justify="right", width=9)
+        table.add_column("Series", width=18)
+        table.add_column("req/s", justify="right", width=10)
+        table.add_column("P50 (ms)", justify="right", width=9)
+        table.add_column("P95 (ms)", justify="right", width=9)
+        table.add_column("P99 (ms)", justify="right", width=9)
+        table.add_column("P99.9 (ms)", justify="right", width=10)
+        table.add_column("Errors%", justify="right", width=8)
+
+        for point in (
+            point for point in result.points if point.distribution == distribution
+        ):
+            r = point.result
+            p999 = f"{r.p999_ms:.2f}" if r.sample_count >= MIN_SAMPLES_FOR_P999 else "-"
+            table.add_row(
+                str(point.concurrency),
+                point.series,
+                f"{r.mean_rps:.1f}",
+                f"{r.p50_ms:.2f}",
+                f"{r.p95_ms:.2f}",
+                f"{r.p99_ms:.2f}",
+                p999,
+                f"{r.error_rate:.1f}",
+            )
+        console.print(table)
+
+    peaks = Table(title="Peak throughput per series")
+    peaks.add_column("Key distribution")
+    peaks.add_column("Series")
+    peaks.add_column("Peak req/s", justify="right")
+    peaks.add_column("At in-flight", justify="right")
+    peaks.add_column("P99 there (ms)", justify="right")
+    for distribution in distributions:
+        for series in dict.fromkeys(point.series for point in result.points):
+            candidates = [
+                point
+                for point in result.points
+                if point.distribution == distribution and point.series == series
+            ]
+            if not candidates:
+                continue
+            best = max(candidates, key=lambda point: point.result.mean_rps)
+            peaks.add_row(
+                labels.get(distribution, distribution),
+                series,
+                f"{best.result.mean_rps:.1f}",
+                str(best.concurrency),
+                f"{best.result.p99_ms:.2f}",
+            )
+    console.print(peaks)
+    console.print(
+        "\n[dim]Closed loop: a fixed number of requests are kept in flight, so this finds "
+        "where each implementation stops scaling but understates the tail an "
+        "arrival rate it cannot keep up with would produce. The rate limit is far above "
+        "the load, so nothing is rejected: what you see is the cost of the throttle "
+        "itself. Read the shape (where req/s flattens and P99 starts climbing), not one "
+        "point. A lower peak with a flatter tail is a trade, not a loss. The load generator "
+        "shares this machine with the server: if req/s falls as in-flight rises even "
+        "with many keys, the client is part of the bottleneck.[/dim]"
+    )

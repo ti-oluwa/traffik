@@ -27,6 +27,15 @@ async def get_identifier(connection: Request) -> str:
     return connection.client[0] if connection.client else "anonymous"
 
 
+def get_gate_kwargs() -> dict[str, int]:
+    """
+    `lock_contention_threshold` for the networked backends, from
+    `BENCH_LOCK_CONTENTION_THRESHOLD`; empty (backend default) when unset.
+    """
+    threshold = int_env("BENCH_LOCK_CONTENTION_THRESHOLD", 0)
+    return {"lock_contention_threshold": threshold} if threshold > 0 else {}
+
+
 def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
     """
     Build the throttle backend selected by `BENCH_BACKEND`.
@@ -64,6 +73,7 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
             namespace=namespace,
             identifier=get_identifier,
             persistent=False,
+            **get_gate_kwargs(),  # type: ignore[arg-type]
         )
     elif kind == "coredis":
         return CoredisBackend(
@@ -71,6 +81,7 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
             namespace=namespace,
             identifier=get_identifier,
             persistent=False,
+            **get_gate_kwargs(),  # type: ignore[arg-type]
         )
     elif kind == "aiomcache":
         return AiomcacheBackend(
@@ -80,6 +91,7 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
             identifier=get_identifier,
             persistent=False,
             track_keys=True,
+            **get_gate_kwargs(),  # type: ignore[arg-type]
         )
     elif kind == "emcache":
         from traffik.backends.memcached.emcache import (
@@ -93,6 +105,7 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
             identifier=get_identifier,
             persistent=False,
             track_keys=True,
+            **get_gate_kwargs(),  # type: ignore[arg-type]
         )
     else:
         raise ValueError(f"Unknown `BENCH_BACKEND`: {kind!r}")

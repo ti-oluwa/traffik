@@ -50,8 +50,11 @@ throttle = HTTPThrottle(
 
 **Storage keys:**
 
-- `{namespace}:{key}:fixedwindow:counter` - request counter (integer, TTL = window duration)
-- `{namespace}:{key}:fixedwindow:start` - window start timestamp (sub-second windows only)
+- `{namespace}:{key}:fixedwindow:{window_id}:counter` - request counter for one window (windows of 1s or
+  more). Each window gets its own key, so the window ends on the clock boundary; the TTL (the window rounded
+  up to whole seconds, plus 2s) only cleans old keys up
+- `{namespace}:{key}:fixedwindow:counter` and `{namespace}:{key}:fixedwindow:start` - request counter and window
+  start timestamp (sub-second windows only)
 
 !!! tip "`FixedWindow` is the default"
     You do not need to pass `strategy=FixedWindow()` explicitly, it is what you get

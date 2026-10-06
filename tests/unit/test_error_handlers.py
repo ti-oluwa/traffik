@@ -126,7 +126,7 @@ class TestRetryHandler:
 
         wait = await handler(exc_info["connection"], exc_info)
         assert call_count == 3, "Should retry 2 times after initial failure"
-        assert wait == 0.0, "Should succeed after retries"
+        assert wait == 0, "Should succeed after retries"
 
     async def test_reraises_after_max_retries(
         self,

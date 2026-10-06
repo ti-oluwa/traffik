@@ -35,7 +35,7 @@ class TestTieredRateStrategy:
         # Free tier: 10 requests
         for _ in range(10):
             wait = await strategy("tier:free:user:123", rate, backend)
-            assert wait == 0.0
+            assert wait == 0
 
         wait = await strategy("tier:free:user:123", rate, backend)
         assert wait > 0, "Free tier should be throttled after 10"
@@ -43,7 +43,7 @@ class TestTieredRateStrategy:
         # Premium tier: 50 requests (5x multiplier)
         for i in range(50):
             wait = await strategy("tier:premium:user:456", rate, backend)
-            assert wait == 0.0, f"Premium request {i + 1} should be allowed"
+            assert wait == 0, f"Premium request {i + 1} should be allowed"
 
         wait = await strategy("tier:premium:user:456", rate, backend)
         assert wait > 0, "Premium should be throttled after 50"
@@ -58,7 +58,7 @@ class TestTieredRateStrategy:
         # Key without tier marker should use default
         for _ in range(5):
             wait = await strategy("user:789", rate, backend)
-            assert wait == 0.0
+            assert wait == 0
 
         wait = await strategy("user:789", rate, backend)
         assert wait > 0
@@ -74,7 +74,7 @@ class TestTieredRateStrategy:
 
         # Free tier should still work
         wait = await strategy("tier:free:user:2", rate, backend)
-        assert wait == 0.0
+        assert wait == 0
 
 
 @pytest.mark.anyio
@@ -90,7 +90,7 @@ class TestGCRAStrategy:
 
         # First request should pass
         wait = await strategy(key, rate, backend, cost=1)
-        assert wait == 0.0
+        assert wait == 0
 
         # Immediate second request should be throttled (needs 10ms spacing)
         wait = await strategy(key, rate, backend, cost=1)
@@ -107,7 +107,7 @@ class TestGCRAStrategy:
         allowed = 0
         for _ in range(5):
             wait = await strategy(key, rate, backend, cost=1)
-            if wait == 0.0:
+            if wait == 0:
                 allowed += 1
 
         assert allowed >= 2, "Should allow at least 2 requests with burst tolerance"
@@ -120,7 +120,7 @@ class TestGCRAStrategy:
 
         # Request with cost=5 should reserve 50ms
         wait = await strategy(key, rate, backend, cost=5)
-        assert wait == 0.0
+        assert wait == 0
 
         # Next request should need to wait ~50ms
         wait = await strategy(key, rate, backend, cost=1)
@@ -160,7 +160,7 @@ class TestAdaptiveThrottleStrategy:
             wait = await strategy(key, rate, backend)
             # Initially all should pass
             if i < 80:  # Before hitting threshold
-                assert wait == 0.0, f"Request {i + 1} should pass before threshold"
+                assert wait == 0, f"Request {i + 1} should pass before threshold"
 
         # Allow window to reset
         await asyncio.sleep(1.1)
@@ -175,7 +175,7 @@ class TestAdaptiveThrottleStrategy:
         requests_allowed = 0
         for _ in range(100):
             wait = await strategy(key, rate, backend)
-            if wait == 0.0:
+            if wait == 0:
                 requests_allowed += 1
             else:
                 break
@@ -208,12 +208,12 @@ class TestPriorityQueueStrategy:
         # Fill with low priority requests (3 out of 5 allowed)
         for _ in range(3):
             wait = await strategy(key_low, rate, backend, cost=1)
-            assert wait == 0.0, "Low priority requests should be allowed initially"
+            assert wait == 0, "Low priority requests should be allowed initially"
 
         # Make 2 more low priority requests to fill the limit
         for _ in range(2):
             wait = await strategy(key_low, rate, backend, cost=1)
-            assert wait == 0.0, "Should reach the 5 request limit"
+            assert wait == 0, "Should reach the 5 request limit"
 
         # Low priority request should now be throttled
         wait_low = await strategy(key_low, rate, backend, cost=1)
@@ -246,7 +246,7 @@ class TestQuotaWithRolloverStrategy:
         # Use entire quota (100 requests)
         for i in range(100):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed within quota"
+            assert wait == 0, f"Request {i + 1} should be allowed within quota"
 
         # Should be throttled after quota is exhausted
         wait = await strategy(key, rate, backend)
@@ -264,7 +264,7 @@ class TestQuotaWithRolloverStrategy:
         # Use only 60 requests (40 unused)
         for i in range(60):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed"
+            assert wait == 0, f"Request {i + 1} should be allowed"
 
         # Wait for new period/window
         await asyncio.sleep(1.1)
@@ -273,7 +273,7 @@ class TestQuotaWithRolloverStrategy:
         # Make 120 requests - all should succeed
         for i in range(120):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed with rollover quota"
+            assert wait == 0, f"Request {i + 1} should be allowed with rollover quota"
 
         # 121st request should be throttled
         wait = await strategy(key, rate, backend)
@@ -291,7 +291,7 @@ class TestQuotaWithRolloverStrategy:
         # Use only 10 requests (90 unused)
         for _ in range(10):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0
+            assert wait == 0
 
         # Wait for new period
         await asyncio.sleep(1.1)
@@ -300,9 +300,7 @@ class TestQuotaWithRolloverStrategy:
         # Make 130 requests - all should succeed
         for i in range(130):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, (
-                f"Request {i + 1} should be allowed (max rollover is 30)"
-            )
+            assert wait == 0, f"Request {i + 1} should be allowed (max rollover is 30)"
 
         # 131st request should be throttled
         wait = await strategy(key, rate, backend)
@@ -324,7 +322,7 @@ class TestQuotaWithRolloverStrategy:
         # New period should have only base quota (100), no rollover
         for i in range(100):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed with base quota"
+            assert wait == 0, f"Request {i + 1} should be allowed with base quota"
 
         # 101st request should be throttled (no rollover bonus)
         wait = await strategy(key, rate, backend)
@@ -359,7 +357,7 @@ class TestTimeOfDayStrategy:
         # Since base rate is 10/s, with 2.0 multiplier we get 20/s
         for i in range(20):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed with 2x multiplier"
+            assert wait == 0, f"Request {i + 1} should be allowed with 2x multiplier"
 
         # 21st request should be throttled
         wait = await strategy(key, rate, backend)
@@ -392,7 +390,7 @@ class TestTimeOfDayStrategy:
         # Should allow requests according to current window's multiplier
         for i in range(expected_limit):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed in current window"
+            assert wait == 0, f"Request {i + 1} should be allowed in current window"
 
         # Next request should be throttled
         wait = await strategy(key, rate, backend)
@@ -419,7 +417,7 @@ class TestTimeOfDayStrategy:
         # Should use default 1.0 multiplier (10 requests)
         for i in range(10):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed with default 1.0x"
+            assert wait == 0, f"Request {i + 1} should be allowed with default 1.0x"
 
         # 11th request should be throttled
         wait = await strategy(key, rate, backend)
@@ -453,7 +451,7 @@ class TestTimeOfDayStrategy:
         # Expected: 10 * 2.5 = 25 requests
         for i in range(25):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, (
+            assert wait == 0, (
                 f"Request {i + 1} should be allowed with timezone adjustment"
             )
 
@@ -491,7 +489,7 @@ class TestTimeOfDayStrategy:
         # Should allow requests according to current period's multiplier
         for i in range(expected_limit):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, (
+            assert wait == 0, (
                 f"Request {i + 1} should be allowed with {expected_multiplier}x multiplier"
             )
 
@@ -526,7 +524,7 @@ class TestTimeOfDayStrategy:
         # Make requests up to the current window's limit
         for i in range(expected_limit):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed in current window"
+            assert wait == 0, f"Request {i + 1} should be allowed in current window"
 
         # Next request should be throttled
         wait = await strategy(key, rate, backend)
@@ -550,7 +548,7 @@ class TestCostBasedTokenBucketStrategy:
         # With burst=50 and cost=1, should allow 50 immediate requests
         for i in range(50):
             wait = await strategy(key, rate, backend, cost=1)
-            assert wait == 0.0, f"Request {i + 1} should be allowed from burst capacity"
+            assert wait == 0, f"Request {i + 1} should be allowed from burst capacity"
 
         # 51st request should be throttled (bucket exhausted)
         wait = await strategy(key, rate, backend, cost=1)
@@ -565,7 +563,7 @@ class TestCostBasedTokenBucketStrategy:
         # Make 5 requests with cost=20 each (total 100 tokens)
         for i in range(5):
             wait = await strategy(key, rate, backend, cost=20)
-            assert wait == 0.0, f"High-cost request {i + 1} should be allowed"
+            assert wait == 0, f"High-cost request {i + 1} should be allowed"
 
         # Bucket should be exhausted (100 tokens consumed)
         wait = await strategy(key, rate, backend, cost=1)
@@ -606,7 +604,7 @@ class TestCostBasedTokenBucketStrategy:
         allowed = 0
         for _ in range(15):
             wait = await strategy(key, rate, backend, cost=1)
-            if wait == 0.0:
+            if wait == 0:
                 allowed += 1
             else:
                 break
@@ -662,7 +660,7 @@ class TestCostBasedTokenBucketStrategy:
         allowed = 0
         for _ in range(15):  # Try 15 to see how many succeed
             wait = await strategy(key, rate, backend, cost=1)
-            if wait == 0.0:
+            if wait == 0:
                 allowed += 1
             else:
                 break
@@ -707,9 +705,7 @@ async def test_all_strategies_handle_unlimited_rate(
     key = "user:unlimited"
     for _ in range(20):
         wait = await custom_strategy(key, rate, backend)
-        assert wait == 0.0, (
-            f"{custom_strategy.__class__.__name__} should allow unlimited"
-        )
+        assert wait == 0, f"{custom_strategy.__class__.__name__} should allow unlimited"
 
 
 @pytest.mark.anyio
@@ -731,7 +727,7 @@ class TestCustomStrategiesGetStat:
         assert stat.key == key
         assert stat.rate == rate
         assert stat.hits_remaining == 50  # 10 * 5.0 multiplier
-        assert stat.wait_ms == 0.0
+        assert stat.wait_ms == 0
         assert stat.metadata is not None
         assert stat.metadata["strategy"] == "tiered_rate"
         assert stat.metadata["tier"] == "premium"
@@ -780,7 +776,7 @@ class TestCustomStrategiesGetStat:
         assert stat.metadata is not None
         assert stat.metadata["strategy"] == "priority_queue"
         assert stat.metadata["queue_size"] == 0
-        assert stat.metadata["total_cost_in_queue"] == 0.0
+        assert stat.metadata["total_cost_in_queue"] == 0
 
         # Add requests with different priorities
         await strategy(key, rate, backend, cost=2)
@@ -895,7 +891,7 @@ class TestCustomStrategiesGetStat:
         assert stat.hits_remaining == float("inf"), (
             f"{custom_strategy.__class__.__name__} should return inf for unlimited"
         )
-        assert stat.wait_ms == 0.0, (
+        assert stat.wait_ms == 0, (
             f"{custom_strategy.__class__.__name__} should have no wait for unlimited"
         )
 

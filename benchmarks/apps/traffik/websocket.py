@@ -1,7 +1,7 @@
 """
 WebSocket benchmark target: a single throttled `/ws` endpoint that echoes
-each received JSON message, or replies `{"type": "rate_limit"}` once
-throttled.
+each received JSON message. Once throttled, the library's default handler
+replies `{"type": "rate_limit", ...}` instead.
 
     BENCH_RATE=100/60s uvicorn benchmarks.apps.traffik.websocket:app --port 8000
 """
@@ -37,9 +37,11 @@ async def websocket_endpoint(websocket: WebSocket):
             await throttle(websocket)
 
             if is_throttled(websocket):
-                await websocket.send_json({"type": "rate_limit"})
-            else:
-                await websocket.send_json({"echo": data, "status": "ok"})
+                # The default throttled handler has already sent the client a
+                # `rate_limit` frame.
+                continue
+
+            await websocket.send_json({"echo": data, "status": "ok"})
     except WebSocketDisconnect:
         pass
 

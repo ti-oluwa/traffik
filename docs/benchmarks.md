@@ -33,7 +33,7 @@ uv sync --group benchmark --inexact
 pip install "traffik[benchmark]"
 ```
 
-This pulls in `click`, `rich`, `fastapi`, `uvicorn`, `gunicorn` (POSIX only), `websockets`, `psutil` (memory sampling, for `scale`), `slowapi` (for `compare`), and the backend client libraries. `gunicorn` isn't available on Windows as anything requiring more than one worker process needs a POSIX system (Linux or macOS).
+This pulls in `click`, `rich`, `fastapi`, `uvicorn`, `gunicorn` (POSIX only), `websockets`, `psutil` (memory sampling, for `scale`), `slowapi` (for `compare` and `sweep`), `matplotlib` (for `--plot`), and the backend client libraries. `gunicorn` isn't available on Windows as anything requiring more than one worker process needs a POSIX system (Linux or macOS).
 
 If you want to benchmark against Redis or Memcached instead of the default in-memory backend, start real instances first:
 
@@ -47,7 +47,7 @@ Any backend other than `inmemory` or `multiprocess` needs a real, reachable serv
 
 ## Running Benchmarks
 
-The suite is a `click`-based CLI with six commands: four benchmark one integration pattern each, and two (`compare`, `scale`) answer a different kind of question - how traffik stacks up against SlowAPI, and how it behaves as key cardinality grows.
+The suite is a `click`-based CLI with seven commands: four benchmark one integration pattern each, and three answer a different kind of question: `compare` (how traffik stacks up against SlowAPI at one load), `sweep` (where each of them stops scaling as load rises), and `scale` (how traffik behaves as key cardinality grows).
 
 ```bash
 python -m benchmarks http
@@ -55,20 +55,21 @@ python -m benchmarks middleware
 python -m benchmarks websocket
 python -m benchmarks multiprocess
 python -m benchmarks compare
+python -m benchmarks sweep
 python -m benchmarks scale
 ```
 
 Or via the Makefile shortcut, which forwards any arguments after `bench`:
 
 ```bash
-make bench "http --scenarios below_limit,over_limit"
+make bench "http --scenarios under_limit,over_limit"
 ```
 
 Each command accepts `--help` for the full option reference.
 
 ### Common Options
 
-These options are shared across `http`, `middleware`, `websocket`, and `multiprocess`. `compare` and `scale` overlap heavily but not exactly - see their own sections below (`compare` adds `--mode` and `--endpoint`; `scale` drops `--iterations`/`--warmup`/`--scenarios` and adds `--checkpoints`/`--mp-max-keys`).
+These options are shared across `http`, `middleware`, `websocket`, and `multiprocess`. `compare`, `sweep` and `scale` overlap heavily but not exactly - see their own sections below (`compare` adds `--mode` and `--endpoint`; `sweep` replaces `--concurrency` and `--scenarios` with `--levels`, `--distribution` and friends; `scale` drops `--iterations`/`--warmup`/`--scenarios` and adds `--checkpoints`/`--mp-max-keys`).
 
 | Option | Short | Default | Description |
 | --- | --- | --- | --- |
@@ -83,6 +84,10 @@ These options are shared across `http`, `middleware`, `websocket`, and `multipro
 | `--memcached-host` | | `localhost` | Used when `--backend` is `aiomcache` or `emcache`. |
 | `--memcached-port` | | `11211` | Used when `--backend` is `aiomcache` or `emcache`. |
 | `--scenarios` | | `all` | Comma-separated scenario names, or `all`. |
+| `--plot` | | off | Write charts for the run into this directory (created if missing). Needs `matplotlib`. See [Graphs](#graphs). Also available on `compare`, `sweep` and `scale`. |
+| `--plot-format` | | `svg` | `svg` or `png`, for `--plot`. |
+| `--no-gate` | | off | `http`, `middleware`, `compare`, `sweep`: disable the process-local lock contention gate, to measure what it buys. A diagnostic, not a recommended setting. Networked backends only; ignored otherwise. |
+| `--lock-contention-threshold` | | backend default | Same flags' finer-grained form: waiters on one lock name before the gate starts serializing them. |
 
 !!! warning "Workers and the in-memory backend"
     `--workers` greater than `1` combined with `--backend inmemory` will print a warning and still run, but the result is not meaningful: each forked worker gets its own independent copy of in-memory state, so requests routed to different workers won't see each other's counters. Use `--backend multiprocess` (or an external backend like `aioredis`/`coredis`) if you want to see real throttling behaviour across multiple worker processes.
@@ -95,49 +100,48 @@ These options are shared across `http`, `middleware`, `websocket`, and `multipro
 
 Benchmarks the most common integration pattern: a throttle injected via `Depends(throttle)` on a single endpoint.
 
-| Scenario | What it simulates |
-| --- | --- |
-| `below_limit` | Steady traffic comfortably under the configured rate. |
-| `at_limit` | Traffic that lands exactly on the configured rate. |
-| `over_limit` | Sustained traffic well past the limit, to measure rejection behaviour. |
-| `concurrent` | A burst of concurrent requests all sharing one identity, to measure lock contention on a single key. |
-| `hot_key` | Concurrent requests explicitly pinned to one `X-Client-ID`, similar intent to `concurrent` but with an explicit identity header. |
-| `many_keys` | Concurrent requests spread across many distinct identities, to measure overhead when load is not concentrated on one key. |
-| `window_boundary` | Bursts timed around fixed-window boundaries, to observe behaviour as a window resets. |
-| `sustained` | A large, high-throughput burst against a generous limit, to measure best-case throughput. |
-| `error_recovery` | Traffic against a throttle configured with `on_error="allow"`, to measure the fail-open path. |
+Scenario names say what the traffic does. The concurrent ones run at `--concurrency` requests in flight, and differ only in key distribution and whether the limit is hit, so they can be compared directly (see [What each scenario measures](#what-each-scenario-measures)).
+
+| Scenario | Traffic | Limit | What it is for |
+| --- | --- | --- | --- |
+| `under_limit` | 80 sequential requests | 200 | Per-request overhead with no contention and no rejection. |
+| `at_limit` | 101 sequential requests | 100 | The same, plus a boundary check: exactly 100 allowed, then exactly 1 rejected. |
+| `over_limit` | 200 sequential requests | 50 | The cost of the rejection path. |
+| `hot_key_under_limit` | 800 concurrent requests, all one `X-Client-ID` | 1000 | Pure single-key serialization: nothing is rejected, so req/s is how fast one key's critical section drains. |
+| `hot_key_over_limit` | 300 concurrent requests, all one `X-Client-ID` | 100 | Single-key contention plus rejection, the shape of one abusive client. |
+| `many_keys_under_limit` | 800 concurrent requests, as many distinct identities as requests in flight | 1000 | The no-contention baseline: same requests, concurrency and limit as `hot_key_under_limit`, so the gap between the two is the cost of sharing a key. |
+| `window_rollover` | Three waves of 20 sequential requests, 1.1 s apart | 20 per second | Does each new window grant a fresh allowance? |
+
+!!! note "Renamed scenarios"
+    Earlier versions called these `below_limit`, `hot_key`, `many_keys`, `sustained` and `window_boundary`, and had `concurrent` and `error_recovery`. `concurrent` sent no `X-Client-ID`, so every request shared the client IP's key: it was a second hot-key scenario, now covered by the two `hot_key_*` ones. `error_recovery` injected no errors (it was `at_limit` with `on_error="allow"` on a healthy backend), so it measured nothing the others don't. A real failure-path benchmark needs a fault-injecting backend.
 
 ### `middleware` - Middleware-Based Throttling
 
-Benchmarks `ThrottleMiddleware` with a `MiddlewareThrottle` entry, applied without touching route handlers. Includes the same nine scenarios as `http`, plus:
+Benchmarks `ThrottleMiddleware` with a `MiddlewareThrottle` entry, applied without touching route handlers. Includes the same seven scenarios as `http` (display names prefixed with `Middleware`), plus:
 
-| Scenario | What it simulates |
-| --- | --- |
-| `selective` | Traffic split between a throttled path and an exempt path, to confirm exempt routes pay no throttle cost and throttled routes are still enforced correctly. |
-
-!!! note "`concurrent` differs from the `http` version"
-    In `middleware`, the `concurrent` scenario round-robins requests across `--concurrency` distinct identities rather than hammering a single shared one. This is a deliberately different contention pattern from the `http` command's `concurrent` scenario. It's testing overhead under many simultaneously-active keys, not lock contention on one key.
+| Scenario | Traffic | What it is for |
+| --- | --- | --- |
+| `exempt_path` | 100 requests to a throttled path, then 100 to an exempt one, limit 50 | Exempt routes must pay no throttle cost and the throttled route must still be enforced: exactly 25% of all requests rejected. |
 
 ### `websocket` - WebSocket Throttling
 
 Benchmarks a single throttled `/ws` endpoint over real WebSocket connections.
 
-| Scenario | What it simulates |
-| --- | --- |
-| `below_limit` | A steady stream of messages under the limit. |
-| `over_limit` | A steady stream of messages well past the limit. |
-| `burst` | A large burst of messages against a tight limit. |
-| `concurrent` | Multiple simultaneous WebSocket connections, each sending a stream of messages. |
-| `window_boundary` | Message bursts timed around fixed-window boundaries. |
+| Scenario | Traffic | What it is for |
+| --- | --- | --- |
+| `under_limit` | 50 messages on one connection, limit 100 | Per-message round trip with nothing rejected. |
+| `over_limit` | 150 messages on one connection, limit 50 | The cost of the rejection path over a WebSocket. |
+| `shared_key_connections` | 10 concurrent connections of 20 messages, limit 1000 | Connection fan-in onto one key (every connection shares the client IP's key), nothing rejected. |
+| `window_rollover` | Three waves of 10 messages, 1.1 s apart | 10 per second. Does each new window grant a fresh allowance? |
 
 ### `multiprocess` - Real Multi-Worker State Sharing
 
-Benchmarks `MultiProcessInMemoryBackend` across real, forked `gunicorn` workers (POSIX only). This command forces `--backend multiprocess` regardless of what `--backend` is passed, and reuses the same `Depends`-based endpoint as `http`. It includes the same nine scenarios as `http`, plus two that specifically stress the shared-memory backend:
+Benchmarks `MultiProcessInMemoryBackend` across real, forked `gunicorn` workers (POSIX only). This command forces `--backend multiprocess` regardless of what `--backend` is passed, and reuses the same `Depends`-based endpoint as `http`. It includes the same seven scenarios as `http` (prefixed `MP`), plus two that specifically stress the shared-memory backend:
 
-| Scenario | What it simulates |
-| --- | --- |
-| `shared_memory` | A large concurrent burst, to stress the shared-memory segment under load spread across workers. |
-| `key_eviction` | Many distinct keys sent in two waves with a pause between them, to observe key cleanup/eviction behaviour over time. |
+| Scenario | Traffic | What it is for |
+| --- | --- | --- |
+| `many_keys_across_shards` | 2000 concurrent requests over 1000 distinct identities, limit 100 per key | Shard parallelism: many keys should spread across shards and workers instead of queuing. Compare with `hot_key_under_limit`. |
+| `key_expiry_reuse` | 500 sequential requests over 500 distinct keys against 100 per 2 s, in two halves with a 6 s pause | Expired slots must be reclaimed. Run it with a small `--mp-max-keys` (about the first-half key count) so the second half only fits if they are; at the default capacity nothing is ever full and it passes trivially. |
 
 !!! warning "`--workers` below 2"
     Running `multiprocess` with `--workers` set below `2` prints a warning: gunicorn won't actually fork multiple workers, so the run won't exercise any cross-process state sharing. Set `--workers` to at least `2` (and realistically, to your CPU core count) to test what this command is for.
@@ -161,14 +165,45 @@ What's held identical between the two apps for a given run:
 | Redis local vs. remote latency | Not special-cased in code - just re-run with `--redis-url` pointed at a local vs. a remote Redis to see the difference; both apps read the same `--redis-url`. |
 
 ```bash
-python -m benchmarks compare --backend inmemory --scenarios below_limit,hot_key,many_keys
+python -m benchmarks compare --backend inmemory --scenarios under_limit,hot_key_under_limit,many_keys_under_limit
 python -m benchmarks compare --backend inmemory --strategy sliding_window_counter
 python -m benchmarks compare --backend inmemory --mode middleware
 python -m benchmarks compare --backend aioredis --redis-url redis://localhost:6379/0 --endpoint sync
+python -m benchmarks compare --backend inmemory --plot ./bench-plots   # adds the throughput-vs-tail trade-off chart
 ```
 
 !!! warning "What this does *not* control for"
     The two apps run **sequentially**, not side by side - each gets the machine to itself while it's being measured, specifically so neither app's traffic competes with the other's for CPU or (for external backends) the same Redis/Memcached connections during its own measurement window. That said, this is still one run, on one machine, with everything else about your system uncontrolled (other processes, thermal throttling, background load). Treat a single `compare` run as a data point, not a verdict - run it more than once, and read the actual numbers rather than just the sign of the delta.
+
+### `sweep` - Where Does Each One Stop Scaling?
+
+A single fixed-concurrency run, which is all `compare` gives you, answers "how fast at this load?". It cannot say where an implementation stops scaling, or whether a lower peak buys a better tail. `sweep` runs one workload at increasing numbers of requests in flight (`--levels`, default `10,50,100,200,400`) and records throughput and P50 to P99.9 at each, for:
+
+- a **hot key** (every request shares one identity), which maximizes lock contention, and
+- **many keys** (no two in-flight requests share a key), which shows whether contention is spread out.
+
+Each is run against traffik and, when comparable, SlowAPI, so a plot of either distribution shows both curves. The rate limit defaults to `1000000/60s`, far above the load, so nothing is rejected: what is left is the cost of the throttle's own synchronization.
+
+```bash
+python -m benchmarks sweep --backend aiomcache --plot ./bench-plots
+python -m benchmarks sweep --backend aiomcache --strategy fixed_window --plot ./bench-plots   # control: no read-compute-write critical section
+python -m benchmarks sweep --backend aiomcache --diagnose-gate --plot ./bench-plots           # adds a "traffik (no gate)" series
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--levels` | `10,50,100,200,400` | Requests in flight at each point. |
+| `--distribution` | `both` | `hot`, `many` or `both`. |
+| `--requests` | `3000` | Requests per point per iteration. P99.9 needs 1,000+ latency samples across iterations to mean anything; it is shown as `-` below that. |
+| `--keys` | `1000` | Distinct keys for the many-key distribution (raised to the level when lower, so no two in-flight requests share a key). |
+| `--rate` | `1000000/60s` | Keep it far above `--requests`. |
+| `--no-slowapi` | off | Only run traffik. SlowAPI is skipped automatically for strategies and backends it has no equivalent for. |
+| `--diagnose-gate` | off | Also run traffik with the process-local lock contention gate disabled, as a third series. Separates the cost of the distributed lock from the cost of the local gate in front of it. Networked backends only. |
+
+The two control runs are what make the result interpretable. Running `--strategy fixed_window` (a single atomic increment) next to `sliding_window_counter` (a locked read, compute and write) shows how much of any gap with SlowAPI comes from the locking. `--diagnose-gate` shows what the gate trades: if disabling it raises throughput but worsens P99 and P99.9, the gate is buying tail behavior with peak throughput.
+
+!!! warning "What a sweep does not tell you"
+    The load is a **closed loop**: a fixed number of requests are kept in flight and a new batch is sent as the previous one finishes. That finds where each implementation stops scaling, but it understates the tail an arrival rate the system cannot keep up with would produce, because the queue forms in the client instead. The load generator also shares the machine with the server, so if req/s falls as in-flight rises even for many keys, the client is part of the bottleneck. Read the *shape* of each curve (where throughput flattens and P99 starts climbing), not a single point, and treat one sweep as a data point.
 
 ### `scale` - Memory Pressure and Scalability
 
@@ -222,18 +257,54 @@ See [Strategies](core-concepts/strategies.md) for what each one does and when to
 
 ### Table Output (default)
 
-A `rich`-rendered table, one row per scenario, aggregated across all timed iterations (warmup iterations are discarded and never shown). Columns:
+A `rich`-rendered table, one row per scenario, aggregated across all timed iterations (warmup iterations are discarded and never shown). Under it is a **glossary** with one row per scenario that ran: what it tests, how to read it, its caveat, and what a good result looks like. Columns:
 
 | Column | Meaning |
 | --- | --- |
 | Scenario | Scenario display name. |
+| Type | What the scenario's req/s actually measures: `T`, `S`, `R`, `L`, `P` or `B`. See [What each scenario measures](#what-each-scenario-measures). |
 | Backend / Strategy | What was benchmarked. |
-| Requests | Total requests sent across all timed iterations. |
-| RPS | Mean requests per second across iterations. |
+| req/s | Mean requests per second across iterations, **excluding intentional pauses** (the sleeps between waves). |
 | P50 / P95 / P99 | Latency percentiles, in milliseconds, pooled across all timed iterations. |
+| P99.9 | The 99.9th percentile. Shown only with 1,000+ latency samples; below that it is just the maximum, so it shows `-`. |
 | Success % | Percentage of requests that received a `200`. |
 | Throttled % | Percentage of requests that received a `429`. |
 | Error % | Percentage of requests that failed for any other reason (connection errors, timeouts, unexpected status codes). |
+
+### What each scenario measures
+
+A rate limiter benchmark mixes scenarios that answer different questions, and one req/s column hides that. Reading "lower req/s" as "slower" is the usual mistake. Every scenario carries a type:
+
+| Type | Name | req/s is... | Read mainly |
+| --- | --- | --- | --- |
+| `T` | Throughput | Close to capacity: independent keys, nothing rejected. | req/s |
+| `S` | Serialization | How fast one key's critical section drains: every request shares a key. | P99 and P99.9, not req/s |
+| `R` | Rejection path | Dominated by cheap 429s, so a faster rejection raises it without doing more useful work. | Throttled % and the allowed rate |
+| `L` | Latency | Just 1 / latency: one request in flight. | P50 to P99 |
+| `P` | Paced | Contains deliberate pauses (excluded from req/s), so it is still a latency figure. | Success % and Throttled % |
+| `B` | Behavior | Not a speed test: it checks that a behavior holds. | Errors % and the glossary's "good looks like" |
+
+**Throughput and latency are different questions.** Throughput is an aggregate (requests completed per second); latency is per request. At a fixed number of requests in flight they are tied together (Little's law: in flight = throughput x average latency), but between two implementations they are not: a design that lets many requests hit the backend at once can post a slightly higher peak while queues build and the tail gets worse, and a design that serializes a hot key deliberately can post a slightly lower peak with a flatter tail. So on an `S` scenario, "traffik is a few percent lower on req/s and lower on P99" is a trade, not a contradiction. On a `T` scenario, where nothing contends, it should not need one.
+
+The concurrent scenarios form a grid, so a difference can be attributed:
+
+| | One key (every request shares it) | Many keys (none shared in flight) |
+| --- | --- | --- |
+| Under the limit | `hot_key_under_limit` (`S`) | `many_keys_under_limit` (`T`) |
+| Over the limit | `hot_key_over_limit` (`S`) | |
+
+The first row has the same requests, concurrency and limit and nothing rejected in either, so the gap between its two cells is purely the cost of key contention. To find where a gap turns into a collapse, use `sweep`.
+
+### Graphs
+
+Pass `--plot DIR` to `http`, `middleware`, `websocket`, `multiprocess`, `compare`, `sweep` or `scale` to write charts for that run into `DIR` (SVG by default, `--plot-format png` for PNG). They are generated from the run you just did, so there is nothing to render separately, and the file names carry the mode, backend, strategy and worker count so runs do not overwrite each other. The paths are listed on stderr, so `--output json` stays clean on stdout.
+
+| Command | Charts |
+| --- | --- |
+| `http`, `middleware`, `websocket`, `multiprocess` | `-throughput` (req/s per scenario, colored by type so a serialization scenario is never mistaken for capacity), `-latency` (P50/P95/P99, plus P99.9 when there are enough samples, log scale), `-outcomes` (allowed, throttled and error share of requests). |
+| `compare` | `-throughput` and `-latency` (traffik next to SlowAPI), and `-tradeoff`: each scenario as a point of req/s change against P99 improvement. The upper-left quadrant is "less throughput, better tail", and where the `S` scenarios should land if serialization is doing its job. |
+| `sweep` | `-throughput`, `-p99` and `-p999` against requests in flight (one panel per key distribution; look for where throughput flattens and the tail starts to climb), and `-hot-key-cost` (hot-key req/s divided by many-key req/s; 1.0 means sharing a key costs nothing). |
+| `scale` | `-memory`, `-bytes-per-key` and `-latency` against distinct keys. |
 
 ### JSON Output
 
@@ -262,7 +333,11 @@ Pass `--output json` for machine-readable results - useful for feeding into your
       "p50_ms": 0.0,
       "p95_ms": 0.0,
       "p99_ms": 0.0,
+      "p999_ms": 0.0,
+      "sample_count": 0,
       "mean_ms": 0.0,
+      "mean_allowed_rps": 0.0,
+      "mean_throttled_rps": 0.0,
       "success_rate": 0.0,
       "throttle_rate": 0.0,
       "error_rate": 0.0,
@@ -278,13 +353,13 @@ Pass `--output json` for machine-readable results - useful for feeding into your
 
 A few things are worth understanding before you interpret a run, so you don't mistake expected behaviour for a bug.
 
-**Success/throttle percentages should match the configured rate.** For a scenario sending `N` requests against a rate that permits `M` of them, expect roughly `M/N × 100` success and the rest throttled (barring the "many distinct keys" scenarios, where each key individually stays under its own limit and everything should succeed). If these don't line up, something's wrong with the run, not with your expectations.
+**Success/throttle percentages should match the configured rate.** For a scenario sending `N` requests against a rate that permits `M` of them, expect roughly `M/N × 100` success and the rest throttled (the `*_under_limit` scenarios should allow everything). `at_limit` should show exactly 99.0% allowed and 1.0% throttled. If these don't line up (barring a window boundary, below), something's wrong with the run, not with your expectations.
 
 **Numbers reflect real network and process overhead - by design.** Because this suite drives real HTTP/WebSocket traffic against a real server process, every request pays for a real TCP round trip, real HTTP/1.1 framing, and real ASGI request handling. That overhead did not exist in earlier versions of this suite (which called the ASGI app directly in-process) and won't disappear here - it's an accurate reflection of what a deployed instance actually costs per request, not a regression.
 
 **Concurrency and `--workers` only pay off with real CPU cores.** `asyncio` concurrency helps most when there's real I/O wait time to overlap; on loopback that wait time is minimal, so a single worker process is largely CPU-bound on request parsing and routing. Multiple `gunicorn` workers only run in true parallel if there are separate physical cores for them to run on, i.e, on a single-core machine, `--workers 4` will look barely different from `--workers 1`, because there's only one core for either to use. If you want to see `--workers` make a real difference, set it based on how many cores your machine actually has and compare against a `--workers 1` run of the same scenario.
 
-**`window_boundary` scenarios can show some run-to-run variance.** These scenarios time bursts around fixed-window edges, and real request latency plus real sleep timing can shift exactly where a burst lands relative to a window boundary. This is a genuine property of testing against real wall-clock timing, not a flaw in the scenario.
+**Fixed and sliding windows are clock-aligned, so a run can straddle a window boundary.** A 60-second window ends on the wall-clock minute, wherever your run happens to be. If a scenario's requests straddle that boundary, the throttle legitimately grants a second allowance and Success % comes out higher than `limit / requests` (for example 48% instead of 25% on `over_limit`). Rerun it. `window_rollover` is the deliberate version of this: three waves 1.1 s apart against a 1 s window, where every wave should land in a fresh window under `fixed_window`.
 
 **Warmup iterations are discarded on purpose.** The first iteration against a freshly-started process can be slower (import caches warming, initial connection setup); warmup iterations exist to absorb that before timed iterations begin. Increase `--warmup` if you still see a slow first timed iteration.
 
@@ -300,7 +375,9 @@ A few things are worth understanding before you interpret a run, so you don't mi
 
 **A scenario reports a nonzero error rate**: this means requests failed for a reason other than throttling (connection errors, timeouts, unexpected responses). It shouldn't happen in a healthy run; check the scenario's stderr output and the backend you selected.
 
-**`compare`/`scale` fail on import with a missing `slowapi`/`psutil`**: these two are benchmark-only dependencies (see [Installation](#installation)) not needed by the other four commands; a plain `uv sync --group benchmark` or `pip install psutil slowapi` picks them up.
+**`compare`/`sweep`/`scale` fail on import with a missing `slowapi`/`psutil`**: these are benchmark-only dependencies (see [Installation](#installation)) not needed by the other four commands; a plain `uv sync --group benchmark` or `pip install psutil slowapi` picks them up.
+
+**`--plot` says it needs matplotlib**: it is part of the benchmark group (`pip install "traffik[benchmark]"`). The check runs before the benchmark starts, so a long run is never wasted on a missing dependency.
 
 ---
 

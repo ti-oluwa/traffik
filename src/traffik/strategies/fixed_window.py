@@ -1,5 +1,6 @@
 """Fixed Window rate limiting strategy implementation."""
 
+import math
 import typing
 from dataclasses import dataclass, field
 
@@ -35,6 +36,34 @@ class FixedWindowStatMetadata(TypedDict):
     """Number of requests (weighted by cost) in the current window."""
 
 
+TTL_BUFFER_SECONDS = 2
+"""Seconds a counter outlives its window, so it can't expire while still current."""
+
+
+def get_window_counter_key(
+    base_key: str, now_ms: float, window_duration_ms: float
+) -> str:
+    """
+    Get counter key for the window containing `now_ms`.
+
+    :param base_key: The strategy's key prefix for this throttle key.
+    :param now_ms: Current wall-clock time, in milliseconds.
+    :param window_duration_ms: Window length, in milliseconds.
+    :return: A key unique to that window.
+    """
+    return f"{base_key}:{int(now_ms // window_duration_ms)}:counter"
+
+
+def get_window_ttl_seconds(window_duration_ms: float) -> int:
+    """
+    Get cleanup TTL for a window's counter.
+
+    :param window_duration_ms: Window length, in milliseconds.
+    :return: The window rounded up to whole seconds, plus a buffer.
+    """
+    return math.ceil(window_duration_ms / 1000) + TTL_BUFFER_SECONDS
+
+
 @dataclass(frozen=True)
 class FixedWindowStrategy:
     """
@@ -67,9 +96,12 @@ class FixedWindowStrategy:
     - High-throughput APIs where slight boundary issues are tolerable
 
     **Storage format:**
-    - Window start key: `{namespace}:{key}:fixedwindow:start` - Stores current window start timestamp
-    - Counter key: `{namespace}:{key}:fixedwindow:counter` - Request counter (integer)
-    - TTL: Window duration + 2 seconds buffer (minimum 2 seconds for cleanup)
+    - Windows of 1 second or more: one counter per window,
+      `{namespace}:{key}:fixedwindow:{window_id}:counter`, where `window_id` is the
+      wall-clock window index.
+    - Sub-second windows: `{namespace}:{key}:fixedwindow:start` (current window start
+      timestamp) and `{namespace}:{key}:fixedwindow:counter` (request counter)
+    - TTL: Window duration (rounded up to whole seconds) + 2 seconds buffer
 
     **Example:**
 
@@ -118,15 +150,14 @@ class FixedWindowStrategy:
         base_key = f"{full_key}:fixedwindow"
         counter_key = f"{base_key}:counter"
 
-        # TTL should be at least 1 second for cleanup, but we track window time separately
-        # Add buffer to ensure keys don't expire during a valid window
-        ttl_seconds = max(int(window_duration_ms // 1000), 2)
         # We only use complex logic for sub-second windows. For windows >= 1 second,
         # we can use the simpler `increment_with_ttl` method. No need to acquire multi-op
         # lock since we only using `increment_with_ttl` which is atomic.
         if not rate.is_subsecond:
             counter = await backend.increment_with_ttl(
-                counter_key, amount=cost, ttl=ttl_seconds
+                get_window_counter_key(base_key, now, window_duration_ms),
+                amount=cost,
+                ttl=get_window_ttl_seconds(window_duration_ms),
             )
             if counter > rate.limit:
                 time_in_window = now - current_window_start
@@ -135,6 +166,7 @@ class FixedWindowStrategy:
             return 0.0
 
         # For sub-second windows, we need to manage window start time separately for accuracy.
+        ttl_seconds = get_window_ttl_seconds(window_duration_ms)
 
         # The `backend.increment_with_ttl` method cannot be used here since using it
         # means a new window start is based on the expiry of the counter key, and the minimum
@@ -208,8 +240,10 @@ class FixedWindowStrategy:
         # For non-subsecond windows, we only use the counter key (with TTL)
         # For subsecond windows, we use both window_start and counter keys
         if not rate.is_subsecond:
-            # Only read the counter for >= 1 second windows
-            stored_counter = await backend.get(counter_key)
+            # Only read the current window's counter for >= 1 second windows
+            stored_counter = await backend.get(
+                get_window_counter_key(base_key, now, window_duration_ms)
+            )
             counter = int(stored_counter) if stored_counter else 0
         else:
             # For subsecond windows, check if we're in the same window

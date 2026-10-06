@@ -68,9 +68,9 @@ class TestHTTPThrottleStat:
                 data = response.json()
 
                 assert data["before"]["hits_remaining"] == 10
-                assert data["before"]["wait_ms"] == 0.0
+                assert data["before"]["wait_ms"] == 0
                 assert data["after"]["hits_remaining"] == 9
-                assert data["after"]["wait_ms"] == 0.0
+                assert data["after"]["wait_ms"] == 0
 
     async def test_stat_with_cost(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
@@ -339,7 +339,7 @@ class TestWebSocketThrottleStat:
                 rate="5/s",
                 identifier=default_client_identifier,
                 strategy=FixedWindowStrategy(),
-                # Raises ConnectionThrottled instead of silently closing, so we
+                # Raises `ConnectionThrottled` instead of silently closing, so we
                 # can report a "throttled" flag back to the client.
                 handle_throttled=connection_throttled,
                 registry=ThrottleRegistry(),

@@ -37,7 +37,7 @@ class TestStrategyStat:
         assert stat.key == key
         assert stat.rate == rate
         assert round(stat.hits_remaining) == 10, "Should have all 10 hits remaining"
-        assert stat.wait_ms == 0.0, "Should have no wait time"
+        assert stat.wait_ms == 0, "Should have no wait time"
 
         # Make 3 requests
         await strategy(key, rate, backend, cost=1)
@@ -47,7 +47,7 @@ class TestStrategyStat:
         # Check stat after requests
         stat = await strategy.get_stat(key, rate, backend)
         assert round(stat.hits_remaining) == 7, "Should have about 7 hits remaining"
-        assert stat.wait_ms == 0.0, "Should still have no wait time"
+        assert stat.wait_ms == 0, "Should still have no wait time"
 
         # Use up all remaining hits
         for _ in range(7):
@@ -78,7 +78,7 @@ class TestStrategyStat:
         # Initial stat
         stat = await strategy.get_stat(key, rate, backend)
         assert round(stat.hits_remaining) == 5
-        assert stat.wait_ms == 0.0
+        assert stat.wait_ms == 0
 
         # Make 2 requests
         await strategy(key, rate, backend, cost=1)
@@ -123,7 +123,7 @@ class TestStrategyStat:
         # Initial stat - bucket starts full at burst_size
         stat = await strategy.get_stat(key, rate, backend)
         assert round(stat.hits_remaining) == 15, "Should start with burst_size tokens"
-        assert stat.wait_ms == 0.0
+        assert stat.wait_ms == 0
 
         # Consume 5 tokens
         await strategy(key, rate, backend, cost=5)
@@ -264,7 +264,7 @@ class TestStrategyStat:
 
         stat = await strategy.get_stat(key, rate, backend)  # type: ignore
         assert stat.hits_remaining == float("inf"), "Should have infinite hits"
-        assert stat.wait_ms == 0.0, "Should have no wait time"
+        assert stat.wait_ms == 0, "Should have no wait time"
 
         # Make some requests
         await strategy(key, rate, backend, cost=100)
@@ -299,7 +299,7 @@ class TestStrategyStat:
         assert 3 <= round(stat.hits_remaining) <= 5, (
             "Should be reset to (approx.) full limit"
         )
-        assert stat.wait_ms == 0.0, "Should have no wait time"
+        assert stat.wait_ms == 0, "Should have no wait time"
 
     async def test_stat_keys_isolation(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]

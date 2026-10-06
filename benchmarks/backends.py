@@ -123,7 +123,7 @@ def create_backend(config: BenchmarkConfig) -> ThrottleBackend[typing.Any, typin
             identifier=get_identifier,
             persistent=False,
             track_keys=True,
-            autobatching=True
+            autobatching=True,
         )
     else:
         raise ValueError(f"Unknown backend kind: {kind}")

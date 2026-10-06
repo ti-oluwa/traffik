@@ -133,7 +133,7 @@ class TestBlockingTimeout:
     def test_set_lock_blocking_timeout_zero(self):
         """Test set_lock_blocking_timeout accepts zero."""
         set_lock_blocking_timeout(0.0)
-        assert get_lock_blocking_timeout() == 0.0
+        assert get_lock_blocking_timeout() == 0
 
     def test_set_lock_blocking_timeout_negative_raises(self):
         """Test set_lock_blocking_timeout raises ValueError for negative values."""

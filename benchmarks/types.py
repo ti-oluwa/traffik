@@ -533,6 +533,12 @@ class BenchmarkConfig:
         target app. `1` spawns a single `uvicorn` process. `>1` spawns
         `gunicorn` with `--preload` and the `fork` start method, actually
         forking that many worker processes rather than simulating them.
+    :param lock_contention_threshold: Passed to the networked backends
+        (Redis, Memcached) as `lock_contention_threshold`, the number of
+        local waiters on one lock name before the process-local contention
+        gate starts serializing them. `None` keeps the backend default. A
+        very large value effectively disables the gate (used by `--no-gate`
+        to measure what it buys). Ignored by the in-process backends.
     """
 
     backend_kind: str = "inmemory"
@@ -547,3 +553,47 @@ class BenchmarkConfig:
     shards: int = 32
     multiprocess_max_keys: int = 65536
     workers: int = 1
+    lock_contention_threshold: typing.Optional[int] = None
+
+
+@dataclass(slots=True)
+class SweepPoint:
+    """
+    One measured point of a load sweep.
+
+    :param series: Which implementation produced it, e.g. `"traffik"`,
+        `"SlowAPI"` or `"traffik (no gate)"`.
+    :param distribution: `"hot"` (every request shares one key) or `"many"`
+        (no two in-flight requests share a key).
+    :param concurrency: Requests kept in flight (a closed loop: each client
+        waits for its response before sending the next request).
+    :param result: Aggregated result across the point's iterations.
+    """
+
+    series: str
+    distribution: str
+    concurrency: int
+    result: AggregatedResult
+
+
+@dataclass(slots=True)
+class SweepResult:
+    """
+    A load sweep: the same workload at increasing concurrency.
+
+    :param backend_kind: Backend the throttles used.
+    :param strategy_kind: Strategy the throttles used.
+    :param workers: Server worker processes.
+    :param rate: The rate limit used. It should be far above the offered
+        load, so every request is allowed and the sweep measures contention,
+        not rejection.
+    :param requests_per_iteration: Requests sent per point per iteration.
+    :param points: Every measured point.
+    """
+
+    backend_kind: str
+    strategy_kind: str
+    workers: int
+    rate: str
+    requests_per_iteration: int
+    points: list[SweepPoint]

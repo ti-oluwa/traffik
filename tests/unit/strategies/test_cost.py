@@ -21,13 +21,13 @@ class TestStrategyCost:
 
         # Make 2 requests with cost=3 each (total 6)
         wait = await strategy(key, rate, backend, cost=3)
-        assert wait == 0.0, "First request should be allowed"
+        assert wait == 0, "First request should be allowed"
         wait = await strategy(key, rate, backend, cost=3)
-        assert wait == 0.0, "Second request should be allowed (total 6)"
+        assert wait == 0, "Second request should be allowed (total 6)"
 
         # Make a request with cost=4 (total would be 10, exactly at limit)
         wait = await strategy(key, rate, backend, cost=4)
-        assert wait == 0.0, "Third request should be allowed (6+4 = 10)"
+        assert wait == 0, "Third request should be allowed (6+4 = 10)"
 
         # Now at limit, cost=5 should be throttled
         wait = await strategy(key, rate, backend, cost=5)
@@ -45,15 +45,15 @@ class TestStrategyCost:
 
         # Use all tokens (10)
         wait = await strategy(key, rate, backend, cost=10)
-        assert wait == 0.0, "Cost=10 should be allowed (bucket at 0)"
+        assert wait == 0, "Cost=10 should be allowed (bucket at 0)"
 
         # Go into debt with cost=5 (bucket at -5)
         wait = await strategy(key, rate, backend, cost=5)
-        assert wait == 0.0, "Cost=5 should be allowed (debt at 5)"
+        assert wait == 0, "Cost=5 should be allowed (debt at 5)"
 
         # Go further into debt with cost=8 (bucket at -13)
         wait = await strategy(key, rate, backend, cost=8)
-        assert wait == 0.0, "Cost=8 should be allowed (debt at 13)"
+        assert wait == 0, "Cost=8 should be allowed (debt at 13)"
 
         # Exceeds max debt (would be -16)
         wait = await strategy(key, rate, backend, cost=3)
@@ -61,7 +61,7 @@ class TestStrategyCost:
 
         # Cost=2 should fit within max debt (debt at 15)
         wait = await strategy(key, rate, backend, cost=2)
-        assert wait == 0.0, "Cost=2 should be allowed (debt at 15)"
+        assert wait == 0, "Cost=2 should be allowed (debt at 15)"
 
     async def test_cost_accumulation_across_strategies(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
@@ -75,7 +75,7 @@ class TestStrategyCost:
         for _ in range(50):
             cost = 2
             wait = await strategy(key, rate, backend, cost=cost)
-            if wait == 0.0:
+            if wait == 0:
                 total_cost += cost
             else:
                 break
@@ -91,18 +91,18 @@ class TestStrategyCost:
 
         # Make requests with explicit cost
         wait = await strategy(key, rate, backend, cost=3)
-        assert wait == 0.0, "Cost=3 should be allowed"
+        assert wait == 0, "Cost=3 should be allowed"
 
         # Make requests with default cost (should be 1)
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "Cost=1 should be allowed (total 4)"
+        assert wait == 0, "Cost=1 should be allowed (total 4)"
 
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "Cost=1 should be allowed (total 5)"
+        assert wait == 0, "Cost=1 should be allowed (total 5)"
 
         # Make another explicit cost request
         wait = await strategy(key, rate, backend, cost=5)
-        assert wait == 0.0, "Cost=5 should be allowed (total 10)"
+        assert wait == 0, "Cost=5 should be allowed (total 10)"
 
         # Should be at limit
         wait = await strategy(key, rate, backend)
@@ -117,7 +117,7 @@ class TestStrategyCost:
 
         # Single request with cost equal to limit
         wait = await strategy(key, rate, backend, cost=10)
-        assert wait == 0.0, "Cost=10 should be allowed (exactly at limit)"
+        assert wait == 0, "Cost=10 should be allowed (exactly at limit)"
 
         # Next request should be throttled
         wait = await strategy(key, rate, backend, cost=1)
@@ -131,15 +131,15 @@ class TestStrategyCost:
 
         # User 1 uses cost=8
         wait = await strategy("user:1", rate, backend, cost=8)
-        assert wait == 0.0, "User 1 cost=8 should be allowed"
+        assert wait == 0, "User 1 cost=8 should be allowed"
 
         # User 2 uses cost=9 (independent of user 1)
         wait = await strategy("user:2", rate, backend, cost=9)
-        assert wait == 0.0, "User 2 cost=9 should be allowed"
+        assert wait == 0, "User 2 cost=9 should be allowed"
 
         # User 1 can still use 2 more
         wait = await strategy("user:1", rate, backend, cost=2)
-        assert wait == 0.0, "User 1 cost=2 should be allowed (total 10)"
+        assert wait == 0, "User 1 cost=2 should be allowed (total 10)"
 
         # User 1 is now at limit
         wait = await strategy("user:1", rate, backend, cost=1)
@@ -147,4 +147,4 @@ class TestStrategyCost:
 
         # User 2 can still use 1 more
         wait = await strategy("user:2", rate, backend, cost=1)
-        assert wait == 0.0, "User 2 cost=1 should be allowed (total 10)"
+        assert wait == 0, "User 2 cost=1 should be allowed (total 10)"

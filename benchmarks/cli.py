@@ -11,8 +11,15 @@ from typing_extensions import ParamSpec, TypeVar
 
 from benchmarks.bench.http import run_scenarios as run_http_scenarios
 from benchmarks.bench.middleware import run_scenarios as run_middleware_scenarios
-from benchmarks.compare import scenario_keys
 from benchmarks.live.orchestrators import run_compare_scenarios, run_scale
+from benchmarks.live.orchestrators.sweep import (
+    DEFAULT_LEVELS,
+    DEFAULT_MANY_KEYS,
+    DEFAULT_RATE,
+    DEFAULT_REQUESTS,
+    NO_GATE_THRESHOLD,
+    run_sweep,
+)
 from benchmarks.types import BackendKind, BenchmarkConfig, StrategyKind
 
 if IS_WINDOWS := (platform.system() == "Windows"):
@@ -26,17 +33,20 @@ from benchmarks.output._json import (
     print_aggregate_json,
     print_compare_json,
     print_scale_json,
+    print_sweep_json,
 )
 from benchmarks.output.table import (
     print_aggregate_table,
     print_compare_table,
     print_scale_table,
+    print_sweep_table,
 )
 from benchmarks.scenarios import (
     HTTP_SCENARIOS,
     MIDDLEWARE_SCENARIOS,
     MULTIPROCESS_SCENARIOS,
     WEBSOCKET_SCENARIOS,
+    resolve_scenario_keys,
 )
 
 P = ParamSpec("P")
@@ -66,6 +76,40 @@ def plot_options(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
         return func(*args, **kwargs)
 
     return wrapper
+
+
+def gate_options(func: typing.Callable[P, R]) -> typing.Callable[P, R]:
+    """`--no-gate` / `--lock-contention-threshold`, for commands that run traffik."""
+
+    @click.option(
+        "--lock-contention-threshold",
+        type=click.IntRange(min=1),
+        default=None,
+        help=(
+            "Waiters on one lock name before the process-local contention gate "
+            "starts serializing them (networked backends only; backend default if unset)."
+        ),
+    )
+    @click.option(
+        "--no-gate",
+        is_flag=True,
+        help=(
+            "Disable the process-local contention gate, to measure what it buys. "
+            "A diagnostic, not a recommended setting. Networked backends only."
+        ),
+    )
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs) -> R:
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+def resolve_gate_threshold(
+    no_gate: bool, threshold: typing.Optional[int]
+) -> typing.Optional[int]:
+    """Resolve `--no-gate` / `--lock-contention-threshold` to one threshold."""
+    return NO_GATE_THRESHOLD if no_gate else threshold
 
 
 def check_plotting_available(plot: typing.Optional[pathlib.Path]) -> None:
@@ -225,7 +269,8 @@ def cli() -> None:
 @cli.command("http")
 @options()
 @plot_options
-def http_command(
+@gate_options
+def http(
     backend,
     strategy,
     iterations,
@@ -239,6 +284,8 @@ def http_command(
     scenarios,
     plot,
     plot_format,
+    lock_contention_threshold,
+    no_gate,
 ) -> None:
     """Benchmark HTTP throttles using Depends-based injection."""
     check_plotting_available(plot)
@@ -254,10 +301,11 @@ def http_command(
         memcached_host=memcached_host,
         memcached_port=memcached_port,
         workers=workers,
+        lock_contention_threshold=resolve_gate_threshold(
+            no_gate, lock_contention_threshold
+        ),
     )
-    scenario_keys_ = (
-        list(HTTP_SCENARIOS) if scenarios == "all" else scenario_keys(scenarios)
-    )
+    scenario_keys_ = resolve_scenario_keys(scenarios, HTTP_SCENARIOS)
     results = asyncio.run(run_http_scenarios(config, scenario_keys_, warmup))
     if output == "json":
         meta = {
@@ -285,7 +333,8 @@ def http_command(
 @cli.command("middleware")
 @options()
 @plot_options
-def middleware_command(
+@gate_options
+def middleware(
     backend,
     strategy,
     iterations,
@@ -299,6 +348,8 @@ def middleware_command(
     scenarios,
     plot,
     plot_format,
+    lock_contention_threshold,
+    no_gate,
 ) -> None:
     """Benchmark middleware-mounted throttles."""
     check_plotting_available(plot)
@@ -314,10 +365,11 @@ def middleware_command(
         memcached_host=memcached_host,
         memcached_port=memcached_port,
         workers=workers,
+        lock_contention_threshold=resolve_gate_threshold(
+            no_gate, lock_contention_threshold
+        ),
     )
-    scenario_keys_ = (
-        list(MIDDLEWARE_SCENARIOS) if scenarios == "all" else scenario_keys(scenarios)
-    )
+    scenario_keys_ = resolve_scenario_keys(scenarios, MIDDLEWARE_SCENARIOS)
     results = asyncio.run(run_middleware_scenarios(config, scenario_keys_, warmup))
     if output == "json":
         meta = {
@@ -347,7 +399,7 @@ def middleware_command(
 @cli.command("websocket")
 @options()
 @plot_options
-def websocket_command(
+def websocket(
     backend,
     strategy,
     iterations,
@@ -377,9 +429,7 @@ def websocket_command(
         memcached_port=memcached_port,
         workers=workers,
     )
-    scenario_keys_ = (
-        list(WEBSOCKET_SCENARIOS) if scenarios == "all" else scenario_keys(scenarios)
-    )
+    scenario_keys_ = resolve_scenario_keys(scenarios, WEBSOCKET_SCENARIOS)
     results = asyncio.run(run_websocket_scenarios(config, scenario_keys_, warmup))
     if output == "json":
         meta = {
@@ -409,7 +459,7 @@ def websocket_command(
 @cli.command("multiprocess")
 @options(default_workers=4)
 @plot_options
-def multiprocess_command(
+def multiprocess(
     backend,
     strategy,
     iterations,
@@ -427,9 +477,9 @@ def multiprocess_command(
     """
     Benchmark `MultiProcessInMemoryBackend` across real forked gunicorn workers (POSIX only).
 
-    Available scenarios: `below_limit`, `at_limit`, `over_limit`, `concurrent`,
-    `hot_key`, `many_keys`, `window_boundary`, `sustained`, `error_recovery`,
-    `shared_memory`, `key_eviction`.
+    Available scenarios: `under_limit`, `at_limit`, `over_limit`,
+    `hot_key_under_limit`, `hot_key_over_limit`, `many_keys_under_limit`,
+    `window_rollover`, `many_keys_across_shards`, `key_expiry_reuse`.
     """
     if IS_WINDOWS or run_multiprocess_scenarios is None:
         click.echo("ERROR: MultiProcess benchmarks require a POSIX system.", err=True)
@@ -447,9 +497,7 @@ def multiprocess_command(
         memcached_port=memcached_port,
         workers=workers,
     )
-    scenario_keys_ = (
-        list(MULTIPROCESS_SCENARIOS) if scenarios == "all" else scenario_keys(scenarios)
-    )
+    scenario_keys_ = resolve_scenario_keys(scenarios, MULTIPROCESS_SCENARIOS)
     results = asyncio.run(run_multiprocess_scenarios(config, scenario_keys_, warmup))
     if output == "json":
         meta = {
@@ -480,9 +528,9 @@ def multiprocess_command(
 @click.option(
     "--backend",
     "-b",
-    type=click.Choice(
-        [choice for choice in BackendKind.choices() if choice != "multiprocess"]
-    ),
+    type=click.Choice([
+        choice for choice in BackendKind.choices() if choice != "multiprocess"
+    ]),
     default="inmemory",
     help="Backend to benchmark. `multiprocess` isn't offered here.",
 )
@@ -543,7 +591,8 @@ def multiprocess_command(
     help="Hit /test (async def), or /test-sync (def) on both apps. Ignored for --mode middleware.",
 )
 @plot_options
-def compare_command(
+@gate_options
+def compare(
     backend,
     strategy,
     mode,
@@ -559,6 +608,8 @@ def compare_command(
     endpoint,
     plot,
     plot_format,
+    lock_contention_threshold,
+    no_gate,
 ) -> None:
     """
     Compare traffik against SlowAPI under matched conditions.
@@ -584,18 +635,18 @@ def compare_command(
         memcached_host=memcached_host,
         memcached_port=memcached_port,
         workers=workers,
+        lock_contention_threshold=resolve_gate_threshold(
+            no_gate, lock_contention_threshold
+        ),
     )
 
     scenario_source = HTTP_SCENARIOS if mode == "http" else MIDDLEWARE_SCENARIOS
-    if scenarios == "all":
-        scenario_keys = list(scenario_source.keys())
-    else:
-        scenario_keys = [scenario.strip() for scenario in scenarios.split(",")]
+    selected_keys = resolve_scenario_keys(scenarios, scenario_source)
 
     try:
         results = asyncio.run(
             run_compare_scenarios(
-                config, scenario_keys, warmup, endpoint_variant=endpoint, mode=mode
+                config, selected_keys, warmup, endpoint_variant=endpoint, mode=mode
             )
         )
     except ValueError as exc:
@@ -636,6 +687,176 @@ def compare_command(
                 title=f"traffik vs SlowAPI ({backend}, {strategy}, {mode}, {workers} worker(s))",
                 prefix=file_prefix("compare", mode, backend, strategy, f"w{workers}"),
                 family=mode,
+                fmt=plot_format,
+            )
+        )
+
+
+@cli.command("sweep")
+@click.option(
+    "--backend",
+    "-b",
+    type=click.Choice(BackendKind.choices()),
+    default="inmemory",
+    help="Backend to benchmark.",
+)
+@click.option(
+    "--strategy",
+    "-s",
+    type=click.Choice(StrategyKind.choices()),
+    default="sliding_window_counter",
+    help=(
+        "Strategy. SlowAPI is only run for fixed_window and sliding_window_counter. "
+        "Run the sweep twice (e.g. fixed_window, then sliding_window_counter) to see "
+        "how much of a gap is the strategy's locking."
+    ),
+)
+@click.option(
+    "--mode",
+    type=click.Choice(["http", "middleware"]),
+    default="http",
+    help="Per-route (Depends/@limiter.limit) or global middleware.",
+)
+@click.option(
+    "--levels",
+    default=",".join(str(level) for level in DEFAULT_LEVELS),
+    help="Comma-separated requests-in-flight levels to measure.",
+)
+@click.option(
+    "--distribution",
+    type=click.Choice(["hot", "many", "both"]),
+    default="both",
+    help="One shared key, many keys (none shared in flight), or both.",
+)
+@click.option(
+    "--requests",
+    type=click.IntRange(min=1),
+    default=DEFAULT_REQUESTS,
+    help="Requests per point per iteration. P99.9 needs 1,000+ across iterations.",
+)
+@click.option(
+    "--keys",
+    type=click.IntRange(min=1),
+    default=DEFAULT_MANY_KEYS,
+    help="Distinct keys for the many-key distribution (raised to the level if lower).",
+)
+@click.option(
+    "--rate",
+    default=DEFAULT_RATE,
+    help="Rate limit. Keep it far above --requests so nothing is rejected.",
+)
+@click.option(
+    "--iterations", "-n", type=int, default=3, help="Timed iterations per point."
+)
+@click.option(
+    "--warmup", "-w", type=int, default=1, help="Warmup iterations per point."
+)
+@click.option("--workers", "-W", type=int, default=1, help="Real worker processes.")
+@click.option("--output", "-o", type=click.Choice(["table", "json"]), default="table")
+@click.option("--redis-url", default="redis://localhost:6379/0")
+@click.option("--memcached-host", default="localhost")
+@click.option("--memcached-port", type=int, default=11211)
+@click.option(
+    "--no-slowapi",
+    is_flag=True,
+    help="Only run traffik, skipping the SlowAPI series.",
+)
+@click.option(
+    "--diagnose-gate",
+    is_flag=True,
+    help=(
+        "Also run traffik with the contention gate disabled, as a third series. "
+        "Shows what the gate trades for its tail behavior. Networked backends only."
+    ),
+)
+@plot_options
+def sweep(
+    backend,
+    strategy,
+    mode,
+    levels,
+    distribution,
+    requests,
+    keys,
+    rate,
+    iterations,
+    warmup,
+    workers,
+    output,
+    redis_url,
+    memcached_host,
+    memcached_port,
+    no_slowapi,
+    diagnose_gate,
+    plot,
+    plot_format,
+) -> None:
+    """
+    Run one workload at increasing load to find where each implementation saturates.
+
+    A single fixed-concurrency run cannot say where throughput stops rising or
+    whether a lower peak buys a better tail. The sweep measures throughput and
+    P50-P99.9 at each level for a hot key and for many keys, against traffik and
+    (when comparable) SlowAPI, and with `--plot` draws the curves.
+    """
+    check_plotting_available(plot)
+    check_workers_platform(workers)
+    try:
+        level_list = [int(item) for item in levels.split(",") if item.strip()]
+    except ValueError:
+        click.echo("ERROR: --levels must be comma-separated integers.", err=True)
+        sys.exit(1)
+        return
+    if not level_list or min(level_list) < 1:
+        click.echo("ERROR: --levels needs at least one level of 1 or more.", err=True)
+        sys.exit(1)
+        return
+
+    config = BenchmarkConfig(
+        backend_kind=backend,
+        strategy_kind=strategy,
+        iterations=iterations,
+        warmup_iterations=warmup,
+        output_format=output,
+        redis_url=redis_url,
+        memcached_host=memcached_host,
+        memcached_port=memcached_port,
+        workers=workers,
+    )
+    distributions = ("hot", "many") if distribution == "both" else (distribution,)
+    result = asyncio.run(
+        run_sweep(
+            config,
+            levels=level_list,
+            distributions=distributions,  # type: ignore[arg-type]
+            rate=rate,
+            requests=requests,
+            keys=keys,
+            warmup_iterations=warmup,
+            include_slowapi=not no_slowapi,
+            diagnose_gate=diagnose_gate,
+            mode=mode,
+        )
+    )
+    if not result.points:
+        click.echo("The sweep produced no results.", err=True)
+        sys.exit(1)
+        return
+
+    if output == "json":
+        print_sweep_json(result)
+    else:
+        print_sweep_table(result)
+
+    if plot is not None:
+        from benchmarks.output.plots import file_prefix, plot_sweep
+
+        report_plots(
+            plot_sweep(
+                result,
+                plot,
+                title=f"Sweep ({backend}, {strategy}, {mode}, {workers} worker(s))",
+                prefix=file_prefix("sweep", mode, backend, strategy, f"w{workers}"),
                 fmt=plot_format,
             )
         )
@@ -686,7 +907,7 @@ def compare_command(
     ),
 )
 @plot_options
-def scale_command(
+def scale(
     backend,
     strategy,
     checkpoints,

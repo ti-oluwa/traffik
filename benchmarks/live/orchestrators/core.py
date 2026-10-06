@@ -32,7 +32,7 @@ def build_environment_variables(
 ) -> dict[str, str]:
     """Environment variables a `benchmarks.apps.*` module reads at import time."""
     run_id = uuid.uuid4().hex[:8]
-    return {
+    env = {
         "BENCH_BACKEND": backend_kind or config.backend_kind,
         "BENCH_STRATEGY": config.strategy_kind,
         "BENCH_RATE": rate,
@@ -45,6 +45,9 @@ def build_environment_variables(
         "BENCH_SHARDS": str(config.shards),
         "BENCH_MP_MAX_KEYS": str(config.multiprocess_max_keys),
     }
+    if config.lock_contention_threshold is not None:
+        env["BENCH_LOCK_CONTENTION_THRESHOLD"] = str(config.lock_contention_threshold)
+    return env
 
 
 def warn_unshared_state(config: BenchmarkConfig) -> None:

@@ -302,7 +302,7 @@ class MemcachedBackend(ThrottleBackend[emcache.Client, HTTPConnectionT]):
     """
     Memcached-based throttle backend.
 
-    Uses `emcache` for Memcached operations with native support for multiple 
+    Uses `emcache` for Memcached operations with native support for multiple
     Memcached nodes via Rendezvous hashing and an adaptive connection pool.
 
     **Note:** Memcached has a key size limit of 250 bytes. Also this backend

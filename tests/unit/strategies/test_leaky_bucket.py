@@ -27,7 +27,7 @@ class TestLeakyBucketStrategy:
         # First 5 requests should succeed (bucket starts empty)
         for i in range(5):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed"
+            assert wait == 0, f"Request {i + 1} should be allowed"
 
         # 6th request should be throttled (bucket full)
         wait = await strategy(key, rate, backend)
@@ -54,7 +54,7 @@ class TestLeakyBucketStrategy:
         allowed_count = 0
         for _ in range(10):
             wait = await strategy(key, rate, backend)
-            if wait == 0.0:
+            if wait == 0:
                 allowed_count += 1
             else:
                 break
@@ -82,7 +82,7 @@ class TestLeakyBucketStrategy:
         # Should not be able to make 5 requests immediately
         wait = await strategy(key, rate, backend)
         # Bucket should have leaked fully by now
-        assert wait == 0.0, "Should allow after bucket has leaked"
+        assert wait == 0, "Should allow after bucket has leaked"
 
     async def test_smooth_rate_enforcement(self, backend: InMemoryBackend):
 
@@ -101,7 +101,7 @@ class TestLeakyBucketStrategy:
         allowed_count = 0
         for _ in range(10):
             wait = await strategy(key, rate, backend)
-            if wait == 0.0:
+            if wait == 0:
                 allowed_count += 1
             else:
                 break
@@ -119,7 +119,7 @@ class TestLeakyBucketStrategy:
             *[strategy(key, rate, backend) for _ in range(20)]
         )
 
-        allowed = sum(1 for wait in results if wait == 0.0)
+        allowed = sum(1 for wait in results if wait == 0)
         assert allowed == 20, f"All 20 requests should be allowed, got {allowed}"
 
     async def test_keys_isolation(self, backend: InMemoryBackend):
@@ -137,7 +137,7 @@ class TestLeakyBucketStrategy:
         # User 2 should have empty bucket
         for i in range(3):
             wait = await strategy("user:2", rate, backend)
-            assert wait == 0.0, f"User 2 request {i + 1} should be allowed"
+            assert wait == 0, f"User 2 request {i + 1} should be allowed"
 
     async def test_unlimited_rate(self, backend: InMemoryBackend):
         """Test unlimited rate handling."""
@@ -148,7 +148,7 @@ class TestLeakyBucketStrategy:
 
         for _ in range(50):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, "Unlimited rate should always allow"
+            assert wait == 0, "Unlimited rate should always allow"
 
     async def test_wait_ms_calculation(self, backend: InMemoryBackend):
         """Test that wait time is calculated correctly."""
@@ -187,7 +187,7 @@ class TestLeakyBucketStrategy:
         allowed_count = 0
         for _ in range(10):
             wait = await strategy(key, rate, backend)
-            if wait == 0.0:
+            if wait == 0:
                 allowed_count += 1
             else:
                 break
@@ -211,7 +211,7 @@ class TestLeakyBucketWithQueueStrategy:
         # First 5 requests should succeed
         for i in range(5):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed"
+            assert wait == 0, f"Request {i + 1} should be allowed"
 
         # 6th request should be throttled
         wait = await strategy(key, rate, backend)
@@ -266,7 +266,7 @@ class TestLeakyBucketWithQueueStrategy:
         allowed_count = 0
         for _ in range(15):
             wait = await strategy(key, rate, backend)
-            if wait == 0.0:
+            if wait == 0:
                 allowed_count += 1
             else:
                 break
@@ -285,7 +285,7 @@ class TestLeakyBucketWithQueueStrategy:
             *[strategy(key, rate, backend) for _ in range(15)]
         )
 
-        allowed = sum(1 for wait in results if wait == 0.0)
+        allowed = sum(1 for wait in results if wait == 0)
         assert allowed == 15, f"All 15 requests should be allowed, got {allowed}"
 
     async def test_keys_isolation(self, backend: InMemoryBackend):
@@ -301,7 +301,7 @@ class TestLeakyBucketWithQueueStrategy:
         # User 2 should be unaffected
         for i in range(3):
             wait = await strategy("user:2", rate, backend)
-            assert wait == 0.0, f"User 2 request {i + 1} should be allowed"
+            assert wait == 0, f"User 2 request {i + 1} should be allowed"
 
     async def test_unlimited_rate(self, backend: InMemoryBackend):
         """Test unlimited rate handling."""
@@ -312,4 +312,4 @@ class TestLeakyBucketWithQueueStrategy:
 
         for _ in range(50):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, "Unlimited rate should always allow"
+            assert wait == 0, "Unlimited rate should always allow"

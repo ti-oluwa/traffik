@@ -3290,10 +3290,12 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
 
         shard_to_items: dict[int, list[tuple[str, str]]] = {}
         for key, value in items.items():
-            shard_to_items.setdefault(self._get_shard_idx_for_key(key), []).append((
-                key,
-                value,
-            ))
+            shard_to_items.setdefault(self._get_shard_idx_for_key(key), []).append(
+                (
+                    key,
+                    value,
+                )
+            )
 
         await asyncio.get_running_loop().run_in_executor(  # type: ignore[arg-type]
             self._executor, self._multi_set, shard_to_items, expire

@@ -28,7 +28,7 @@ class TestSlidingWindowLogStrategy:
         # First 3 requests should succeed
         for i in range(3):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed"
+            assert wait == 0, f"Request {i + 1} should be allowed"
 
         # 4th request should be throttled
         wait = await strategy(key, rate, backend)
@@ -57,7 +57,7 @@ class TestSlidingWindowLogStrategy:
 
         # Now should be allowed (oldest request expired)
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "Should be allowed after oldest request expires"
+        assert wait == 0, "Should be allowed after oldest request expires"
 
     async def test_accurate_rate_enforcement(self, backend: InMemoryBackend):
         """Test that rate is enforced accurately over sliding window."""
@@ -82,7 +82,7 @@ class TestSlidingWindowLogStrategy:
 
         # Now should allow new requests
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "Should allow after 1s from first request"
+        assert wait == 0, "Should allow after 1s from first request"
 
     async def test_concurrent_requests(self, backend: InMemoryBackend):
         """Test strategy under concurrent load."""
@@ -97,7 +97,7 @@ class TestSlidingWindowLogStrategy:
         )
 
         # All 20 should succeed
-        allowed = sum(1 for wait in results if wait == 0.0)
+        allowed = sum(1 for wait in results if wait == 0)
         assert allowed == 20, f"All 20 requests should be allowed, got {allowed}"
 
     async def test_keys_isolation(self, backend: InMemoryBackend):
@@ -114,7 +114,7 @@ class TestSlidingWindowLogStrategy:
 
         # User 2 should be unaffected
         wait = await strategy("user:2", rate, backend)
-        assert wait == 0.0, "User 2 should not be affected"
+        assert wait == 0, "User 2 should not be affected"
 
     async def test_unlimited_rate(self, backend: InMemoryBackend):
         """Test unlimited rate handling."""
@@ -125,7 +125,7 @@ class TestSlidingWindowLogStrategy:
 
         for _ in range(50):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, "Unlimited rate should always allow"
+            assert wait == 0, "Unlimited rate should always allow"
 
 
 @pytest.mark.anyio
@@ -143,7 +143,7 @@ class TestSlidingWindowCounterStrategy:
         # First 5 requests should succeed
         for i in range(5):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, f"Request {i + 1} should be allowed"
+            assert wait == 0, f"Request {i + 1} should be allowed"
 
         # 6th request should be throttled
         wait = await strategy(key, rate, backend)
@@ -176,7 +176,7 @@ class TestSlidingWindowCounterStrategy:
         allowed = 0
         for _i in range(15):  # Try more than the limit
             wait = await strategy(key, rate, backend)
-            if wait == 0.0:
+            if wait == 0:
                 allowed += 1
             else:
                 break
@@ -205,7 +205,7 @@ class TestSlidingWindowCounterStrategy:
         allowed_count = 0
         for _ in range(5):
             wait = await strategy(key, rate, backend)
-            if wait == 0.0:
+            if wait == 0:
                 allowed_count += 1
 
         # Should allow fewer than 5 (better than fixed window's full reset)
@@ -228,7 +228,7 @@ class TestSlidingWindowCounterStrategy:
         results = await asyncio.gather(
             *[strategy(key, rate, backend) for _ in range(500)]
         )
-        allowed = sum(1 for wait in results if wait == 0.0)
+        allowed = sum(1 for wait in results if wait == 0)
         assert allowed == 50, f"Exactly the limit should be allowed, got {allowed}"
 
         full_key = backend.get_key(key)
@@ -261,7 +261,7 @@ class TestSlidingWindowCounterStrategy:
             results = await asyncio.gather(
                 *[strategy(key, rate, backend) for _ in range(20)]
             )
-            allowed += sum(1 for wait in results if wait == 0.0)
+            allowed += sum(1 for wait in results if wait == 0)
             await asyncio.sleep(0.01)
 
         elapsed = asyncio.get_running_loop().time() - start
@@ -285,7 +285,7 @@ class TestSlidingWindowCounterStrategy:
             *[strategy(key, rate, backend) for _ in range(15)]
         )
 
-        allowed = sum(1 for wait in results if wait == 0.0)
+        allowed = sum(1 for wait in results if wait == 0)
         assert allowed == 15, f"All 15 requests should be allowed, got {allowed}"
 
     async def test_keys_isolation(self, backend: InMemoryBackend):
@@ -302,7 +302,7 @@ class TestSlidingWindowCounterStrategy:
 
         # User 2 should be unaffected
         wait = await strategy("user:2", rate, backend)
-        assert wait == 0.0, "User 2 should not be affected"
+        assert wait == 0, "User 2 should not be affected"
 
     async def test_unlimited_rate(self, backend: InMemoryBackend):
         """Test unlimited rate handling."""
@@ -313,7 +313,7 @@ class TestSlidingWindowCounterStrategy:
 
         for _ in range(50):
             wait = await strategy(key, rate, backend)
-            assert wait == 0.0, "Unlimited rate should always allow"
+            assert wait == 0, "Unlimited rate should always allow"
 
     async def test_window_transitions(self, backend: InMemoryBackend):
 
@@ -337,4 +337,4 @@ class TestSlidingWindowCounterStrategy:
 
         # Should be allowed again
         wait = await strategy(key, rate, backend)
-        assert wait == 0.0, "Should allow after window reset"
+        assert wait == 0, "Should allow after window reset"

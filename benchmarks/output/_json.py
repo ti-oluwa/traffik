@@ -4,7 +4,7 @@ import platform
 import sys
 import typing
 
-from benchmarks.types import AggregatedResult, CompareResult, ScaleResult
+from benchmarks.types import AggregatedResult, CompareResult, ScaleResult, SweepResult
 
 
 def result_to_dict(result: AggregatedResult) -> dict:
@@ -148,3 +148,42 @@ def print_scale_json(
         "result": scale_result_to_dict(result),
     }
     print(json.dumps(output, indent=2))
+
+
+def sweep_result_to_dict(result: SweepResult) -> dict:
+    """
+    Serialize a SweepResult to a plain dict suitable for JSON output.
+
+    :param result: The sweep to serialize.
+    :return: A dict with the sweep's settings and every measured point.
+    """
+    return {
+        "backend_kind": result.backend_kind,
+        "strategy_kind": result.strategy_kind,
+        "workers": result.workers,
+        "rate": result.rate,
+        "requests_per_iteration": result.requests_per_iteration,
+        "points": [
+            {
+                "series": point.series,
+                "distribution": point.distribution,
+                "concurrency": point.concurrency,
+                **result_to_dict(point.result),
+            }
+            for point in result.points
+        ],
+    }
+
+
+def print_sweep_json(
+    result: SweepResult,
+    meta: typing.Optional[dict[str, typing.Any]] = None,
+) -> None:
+    """
+    Print `sweep` results as a JSON object to stdout.
+
+    :param result: The sweep to serialize.
+    :param meta: Optional metadata dict to include.
+    """
+    meta = {**default_meta(), **(meta or {})}
+    print(json.dumps({"meta": meta, "result": sweep_result_to_dict(result)}, indent=2))

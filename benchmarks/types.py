@@ -1,8 +1,28 @@
+import math
 import platform
 import statistics
 import typing
 from dataclasses import dataclass
 from enum import Enum, auto
+
+
+def percentile(sorted_values: typing.Sequence[float], fraction: float) -> float:
+    """
+    Nearest-rank percentile of already-sorted values.
+
+    The value at rank `ceil(fraction * n)`: the smallest value that at least
+    `fraction` of the samples are at or below. Indexing with `int(fraction * n)`
+    instead picks the sample one rank too high, which makes P99 the maximum for
+    any run of 100 samples or fewer.
+
+    :param sorted_values: Values in ascending order.
+    :param fraction: Percentile as a fraction, e.g. `0.99`.
+    :return: The percentile value, or `0.0` if there are no values.
+    """
+    if not sorted_values:
+        return 0.0
+    rank = math.ceil(fraction * len(sorted_values))
+    return sorted_values[min(max(rank, 1), len(sorted_values)) - 1]
 
 
 class BackendKind(Enum):
@@ -121,13 +141,15 @@ class ScenarioResult:
         """
         Requests per second throughput.
 
-        :return: Requests per second over `active_seconds` (intentional
-            pauses excluded), or 0.0 if that is zero.
+        :return: Answered requests (allowed plus throttled) per second over
+            `active_seconds` (intentional pauses excluded), or 0.0 if that is
+            zero. Failed requests are not counted: an implementation that
+            fails fast must not look faster for it.
         """
         active = self.active_seconds
         if active == 0:
             return 0.0
-        return self.total_requests / active
+        return (self.successful_requests + self.throttled_requests) / active
 
     @property
     def success_rate(self) -> float:
@@ -169,11 +191,10 @@ class ScenarioResult:
 
         :return: P50 latency in ms or 0.0 if empty.
         """
-        if not self.latencies_seconds:
-            return 0.0
-        sorted_latencies = sorted(self.latencies_seconds)
-        median = statistics.median(sorted_latencies)
-        return median * 1000
+        all_latencies = []
+        for result in self.results:
+            all_latencies.extend(result.latencies_seconds)
+        return percentile(sorted(all_latencies), 0.5) * 1000
 
     @property
     def p95_ms(self) -> float:
@@ -182,11 +203,10 @@ class ScenarioResult:
 
         :return: P95 latency in ms or 0.0 if empty.
         """
-        if not self.latencies_seconds:
-            return 0.0
-        sorted_latencies = sorted(self.latencies_seconds)
-        index = int(len(sorted_latencies) * 0.95)
-        return sorted_latencies[index] * 1000
+        all_latencies = []
+        for result in self.results:
+            all_latencies.extend(result.latencies_seconds)
+        return percentile(sorted(all_latencies), 0.95) * 1000
 
     @property
     def p99_ms(self) -> float:
@@ -195,11 +215,10 @@ class ScenarioResult:
 
         :return: P99 latency in ms or 0.0 if empty.
         """
-        if not self.latencies_seconds:
-            return 0.0
-        sorted_latencies = sorted(self.latencies_seconds)
-        index = int(len(sorted_latencies) * 0.99)
-        return sorted_latencies[index] * 1000
+        all_latencies = []
+        for result in self.results:
+            all_latencies.extend(result.latencies_seconds)
+        return percentile(sorted(all_latencies), 0.99) * 1000
 
     @property
     def mean_ms(self) -> float:
@@ -323,11 +342,7 @@ class AggregatedResult:
         all_latencies = []
         for result in self.results:
             all_latencies.extend(result.latencies_seconds)
-        if not all_latencies:
-            return 0.0
-        sorted_latencies = sorted(all_latencies)
-        index = min(int(len(sorted_latencies) * 0.999), len(sorted_latencies) - 1)
-        return sorted_latencies[index] * 1000
+        return percentile(sorted(all_latencies), 0.999) * 1000
 
     @property
     def sample_count(self) -> int:

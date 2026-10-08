@@ -136,31 +136,64 @@ def print_compare_table(
     table.add_column("traffik P50", width=11, justify="right")
     table.add_column("SlowAPI P99", width=11, justify="right")
     table.add_column("traffik P99", width=11, justify="right")
+    table.add_column("P99 (Δ%)", width=10, justify="right")
 
     for result in results:
         slowapi_rps = result.slowapi.mean_rps
         traffik_rps = result.traffik.mean_rps
-        delta = (
-            ((traffik_rps - slowapi_rps) / slowapi_rps * 100) if slowapi_rps > 0 else 0
-        )
-        delta_style = "green" if delta > 0 else "red"
+        kind_tag = get_kind_tag(family, result.traffik.scenario_name)
+
+        # A req/s difference only means "faster" or "slower" where req/s tracks
+        # per-request speed (T, L). On the others it is a drain rate, a rejection
+        # cost or a paced figure, so it is shown without a verdict.
+        if slowapi_rps > 0:
+            rps_delta = (traffik_rps - slowapi_rps) / slowapi_rps * 100
+            # Run-to-run spread, as a percentage of each side's mean. A gap inside
+            # it is noise, not a result, so it gets no verdict colour.
+            noise_pct = max(
+                result.traffik.rps_stddev / traffik_rps * 100 if traffik_rps else 0.0,
+                result.slowapi.rps_stddev / slowapi_rps * 100,
+            )
+            within_noise = abs(rps_delta) <= noise_pct
+            if kind_tag in ("T", "L") and not within_noise:
+                rps_style = "green" if rps_delta > 0 else "red"
+            else:
+                rps_style = "dim"
+            rps_cell = Text(
+                f"{rps_delta:+.1f}%{' ≈' if within_noise else ''}", style=rps_style
+            )
+        else:
+            rps_cell = Text("n/a", style="dim")
+
+        slowapi_p99 = result.slowapi.p99_ms
+        if slowapi_p99 > 0:
+            p99_delta = (result.traffik.p99_ms - slowapi_p99) / slowapi_p99 * 100
+            p99_cell = Text(
+                f"{p99_delta:+.1f}%", style="green" if p99_delta < 0 else "red"
+            )
+        else:
+            p99_cell = Text("n/a", style="dim")
 
         table.add_row(
             result.scenario_name,
-            get_kind_tag(family, result.traffik.scenario_name),
+            kind_tag,
             f"{slowapi_rps:.1f}",
             f"{traffik_rps:.1f}",
-            Text(f"{delta:+.1f}%", style=delta_style),
+            rps_cell,
             f"{result.slowapi.p50_ms:.2f}ms",
             f"{result.traffik.p50_ms:.2f}ms",
-            f"{result.slowapi.p99_ms:.2f}ms",
+            f"{slowapi_p99:.2f}ms",
             f"{result.traffik.p99_ms:.2f}ms",
+            p99_cell,
         )
 
     console.print(table)
     console.print(
-        "\n[dim]req/s (Δ%): positive = traffik faster, negative = SlowAPI "
-        "faster, in this run.[/dim]"
+        "\n[dim]req/s (Δ%): positive = traffik higher. Green/red only on T and L "
+        "scenarios, where req/s tracks per-request speed; on S, R, P and B it is "
+        "not a verdict. ≈ marks a gap within the run-to-run spread of req/s. P99 (Δ%): negative = traffik's tail is lower (green). "
+        "Both are one run, subject to noise; run-to-run spread is the "
+        "`rps_stddev` in the JSON output.[/dim]"
     )
 
     if family is not None:

@@ -4,18 +4,20 @@ Benchmark scenario definitions.
 `mode` determines which traffic pattern is used:
 
 - `"sequential"`         one request after another, same connection.
-- `"concurrent"`         batches of `config.concurrency` requests via
-                         `asyncio.gather`.
+- `"concurrent"`         `config.concurrency` requests kept in flight at all
+                         times (a closed loop: each worker sends its next
+                         request as soon as its last response arrives).
 - `"waves"`              bursts from `waves`, sleeping between them -
                          for probing window rollover. The sleeps are not
                          counted in the scenario's req/s.
-- `"unique_keys_batched"` like `"concurrent"`, but each request carries a
-                         distinct `X-Client-ID` cycling through
-                         `key_mod` identities.
+- `"unique_keys_concurrent"` like `"concurrent"`, but requests carry
+                         distinct `X-Client-ID`s drawn from about `key_mod`
+                         identities. Each in-flight request has its own
+                         identity, so none are ever shared in flight.
 - `"unique_keys_split"`  two sequential halves of unique-keyed requests
                          with a pause between them - for key expiry and
                          slot reuse. The pause is not counted in req/s.
-- `"mixed_paths"`        sequential batches against different paths (e.g.
+- `"mixed_paths"`        sequential runs against different paths (e.g.
                          a throttled route and an exempt one).
 """
 
@@ -43,8 +45,9 @@ class HttpScenario:
     :param key_mod_is_concurrency: If set, use the run's `--concurrency`
         value as `key_mod` instead of a fixed number (some scenarios tie
         key cardinality to the configured concurrency).
-    :param batch_size: Override `config.concurrency` for batch sizing in
-        `unique_keys_batched` mode (independent of key cardinality).
+    :param in_flight: Override `config.concurrency`, the requests kept in
+        flight, in `unique_keys_concurrent` mode (independent of key
+        cardinality).
     :param mixed_paths: For `mode="mixed_paths"`: `[(path, count), ...]`
         sent sequentially, in order.
     :param extra_sleep_seconds: For `unique_keys_split` mode: seconds to
@@ -59,7 +62,7 @@ class HttpScenario:
         "sequential",
         "concurrent",
         "waves",
-        "unique_keys_batched",
+        "unique_keys_concurrent",
         "unique_keys_split",
         "mixed_paths",
     ] = "sequential"
@@ -69,7 +72,7 @@ class HttpScenario:
     key_header: typing.Optional[str] = None
     key_mod: typing.Optional[int] = None
     key_mod_is_concurrency: bool = False
-    batch_size: typing.Optional[int] = None
+    in_flight: typing.Optional[int] = None
     mixed_paths: typing.Optional[tuple[tuple[str, int], ...]] = None
     extra_sleep_seconds: float = 0.0
 
@@ -170,7 +173,7 @@ def make_shared_scenarios(prefix: str = "") -> dict[str, HttpScenario]:
             name=f"{prefix}Many Keys, Under Limit",
             rate="1000/60s",
             total_requests=800,
-            mode="unique_keys_batched",
+            mode="unique_keys_concurrent",
             key_header="X-Client-ID",
             # As many keys as requests in flight, so no two concurrent requests
             # share a key.
@@ -211,7 +214,7 @@ MULTIPROCESS_SCENARIOS: dict[str, HttpScenario] = {
         name="MP Many Keys Across Shards",
         rate="100/60s",
         total_requests=2000,
-        mode="unique_keys_batched",
+        mode="unique_keys_concurrent",
         key_header="X-Client-ID",
         key_mod=1000,
     ),

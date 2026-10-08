@@ -12,6 +12,7 @@ from typing_extensions import ParamSpec, TypeVar
 from benchmarks.bench.http import run_scenarios as run_http_scenarios
 from benchmarks.bench.middleware import run_scenarios as run_middleware_scenarios
 from benchmarks.live.orchestrators import run_compare_scenarios, run_scale
+from benchmarks.live.orchestrators.scale import default_multiprocess_capacity
 from benchmarks.live.orchestrators.sweep import (
     DEFAULT_LEVELS,
     DEFAULT_MANY_KEYS,
@@ -200,7 +201,7 @@ def options(
             "-choice",
             type=int,
             default=50,
-            help="Concurrent requests per batch in concurrent scenarios.",
+            help="Requests kept in flight in concurrent scenarios.",
         )
         @click.option(
             "--workers",
@@ -458,6 +459,16 @@ def websocket(
 
 @cli.command("multiprocess")
 @options(default_workers=4)
+@click.option(
+    "--mp-max-keys",
+    type=click.IntRange(min=1),
+    default=65536,
+    help=(
+        "Capacity of the fixed-size shared-memory table. Shrink it to make "
+        "`key_expiry_reuse` depend on expired slots being reclaimed; keep roughly "
+        "50% headroom over the keys alive at once, as keys hash unevenly across shards."
+    ),
+)
 @plot_options
 def multiprocess(
     backend,
@@ -471,6 +482,7 @@ def multiprocess(
     memcached_host,
     memcached_port,
     scenarios,
+    mp_max_keys,
     plot,
     plot_format,
 ) -> None:
@@ -496,6 +508,7 @@ def multiprocess(
         memcached_host=memcached_host,
         memcached_port=memcached_port,
         workers=workers,
+        multiprocess_max_keys=mp_max_keys,
     )
     scenario_keys_ = resolve_scenario_keys(scenarios, MULTIPROCESS_SCENARIOS)
     results = asyncio.run(run_multiprocess_scenarios(config, scenario_keys_, warmup))
@@ -566,7 +579,7 @@ def multiprocess(
     "-choice",
     type=int,
     default=50,
-    help="Concurrent requests per batch.",
+    help="Requests kept in flight in concurrent scenarios.",
 )
 @click.option(
     "--workers",
@@ -901,9 +914,10 @@ def sweep(
     type=int,
     default=None,
     help=(
-        "Max keys per `MultiProcessInMemoryBackend`'s fixed-size shared-memory "
-        "table. Defaults to the highest --checkpoints value if not given, "
-        "since that backend cannot grow past what it was sized for."
+        "Max keys in `MultiProcessInMemoryBackend`'s fixed-size shared-memory "
+        "table. Defaults to twice the highest --checkpoints value (plus warmup "
+        "keys): the table cannot grow, and keys hash unevenly across shards, so "
+        "sizing it to exactly the key count overflows some shards early."
     ),
 )
 @plot_options
@@ -961,7 +975,9 @@ def scale(
         memcached_host=memcached_host,
         memcached_port=memcached_port,
         shards=shards,
-        multiprocess_max_keys=mp_max_keys or max(checkpoint_list),
+        multiprocess_max_keys=(
+            mp_max_keys or default_multiprocess_capacity(checkpoint_list)
+        ),
         workers=workers,
     )
 

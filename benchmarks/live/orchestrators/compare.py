@@ -1,8 +1,9 @@
 """
-Runs the `compare` command. For each selected scenario, it spawn sthe traffik
+Runs the `compare` command. For each selected scenario, it spawns the traffik
 app and the SlowAPI app in turn with same rate, backend, identity rule,
-worker count, strategy, and traffic pattern. It then pairs their `AggregatedResult`s
-into a `CompareResult`.
+worker count, strategy, and traffic pattern, alternating which goes first from
+one scenario to the next so neither owns the first slot. It then pairs their
+`AggregatedResult`s into a `CompareResult`.
 
 This run them sequentially, not concurrently as running both apps at once would have their
 traffic compete for the same CPU cores and, for external backends, the same Redis/Memcached
@@ -139,7 +140,7 @@ async def run_compare_scenarios(
     scenarios = SCENARIOS_BY_MODE[mode]
     results: list[CompareResult] = []
 
-    for scenario_key in scenario_keys:
+    for index, scenario_key in enumerate(scenario_keys):
         if scenario_key not in scenarios:
             print(f"ERROR: Unknown scenario: {scenario_key}", file=sys.stderr)
             continue
@@ -152,27 +153,30 @@ async def run_compare_scenarios(
             on_error=scenario.on_error,
         )
 
-        print(f"Running {scenario_key} against traffik...", file=sys.stderr)
-        traffik_results = await run_one_side(
-            TRAFFIK_APP_PATHS[mode],
-            env,
-            scenario,
-            config,
-            path,
-            warmup_iterations,
-            "traffik",
-        )
+        # Alternate which side runs first, scenario by scenario. A fixed order
+        # would hand one side every systematic advantage of going first (or
+        # last): cooler CPU, boost clocks, whatever else is running.
+        sides = [
+            ("traffik", TRAFFIK_APP_PATHS[mode]),
+            ("SlowAPI", SLOWAPI_APP_PATHS[mode]),
+        ]
+        if index % 2:
+            sides.reverse()
 
-        print(f"Running {scenario_key} against SlowAPI...", file=sys.stderr)
-        slowapi_results = await run_one_side(
-            SLOWAPI_APP_PATHS[mode],
-            env,
-            scenario,
-            config,
-            path,
-            warmup_iterations,
-            "SlowAPI",
-        )
+        side_results: dict[str, typing.Optional[list[ScenarioResult]]] = {}
+        for label, app_path in sides:
+            print(f"Running {scenario_key} against {label}...", file=sys.stderr)
+            side_results[label] = await run_one_side(
+                app_path,
+                env,
+                scenario,
+                config,
+                path,
+                warmup_iterations,
+                label,
+            )
+        traffik_results = side_results["traffik"]
+        slowapi_results = side_results["SlowAPI"]
 
         if not traffik_results or not slowapi_results:
             print(

@@ -28,7 +28,12 @@ from benchmarks.live.orchestrators.core import (
     warn_unshared_state,
 )
 from benchmarks.live.server import start_server
-from benchmarks.types import BenchmarkConfig, ScaleCheckpoint, ScaleResult
+from benchmarks.types import (
+    BenchmarkConfig,
+    ScaleCheckpoint,
+    ScaleResult,
+    percentile,
+)
 
 try:
     import psutil
@@ -43,9 +48,61 @@ TRAFFIK_APP_PATH = "benchmarks.apps.traffik.http:app"
 # that has never been seen before.
 GENEROUS_RATE = "1000000000/3600s"
 
+WARMUP_REQUESTS = 300
+"""Requests (on throwaway keys) sent before the baseline memory sample."""
+
+
+CAPACITY_HEADROOM = 2
+"""
+Multiplier on the largest checkpoint when sizing the multiprocess backend.
+
+Keys hash unevenly across shards and each shard's capacity is fixed, so a table
+sized to exactly the number of keys sent overflows in some shards (which then
+answer `ShardFullError` 500s) long before it is full overall.
+"""
+
+
+def default_multiprocess_capacity(checkpoints: typing.Sequence[int]) -> int:
+    """
+    Capacity for the multiprocess backend when `--mp-max-keys` isn't given.
+
+    :param checkpoints: The checkpoint key counts being measured.
+    :return: Enough room for the largest checkpoint, the warmup keys, and uneven
+        hashing across shards.
+    """
+    return max(checkpoints) * CAPACITY_HEADROOM + WARMUP_REQUESTS
+
 
 def bytes_to_mb(n: float) -> float:
     return n / (1024 * 1024)
+
+
+def server_memory_mb(process: "psutil.Process") -> float:
+    """
+    Memory used by the server: its process plus every worker it forked.
+
+    With `--workers` above 1 the process we spawned is only gunicorn's master;
+    the workers (which hold the keys) are its children, so measuring the master
+    alone would miss almost everything. Proportional set size is used where the
+    platform has it, so pages shared between workers (the shared-memory
+    backend's segment) are counted once in total rather than once per worker;
+    elsewhere it falls back to resident set size.
+
+    :param process: The server's master process.
+    :return: Total memory in MiB.
+    """
+    processes = [process, *process.children(recursive=True)]
+    total = 0.0
+    for proc in processes:
+        try:
+            info = proc.memory_full_info()
+            total += getattr(info, "pss", None) or info.rss
+        except (psutil.Error, AttributeError):
+            try:
+                total += proc.memory_info().rss
+            except psutil.Error:
+                continue
+    return bytes_to_mb(total)
 
 
 async def get_redis_used_memory(config: BenchmarkConfig) -> typing.Optional[float]:
@@ -117,36 +174,50 @@ async def run_scale(
     results: list[ScaleCheckpoint] = []
     try:
         process = psutil.Process(server.process.pid)
-        # Do a couple of no-op samples first as the very first sample after
-        # process start can undershoot before the interpreter and its imports
-        # have fully settled.
-        process.memory_info()
-        baseline_rss_mb = bytes_to_mb(process.memory_info().rss)
-        baseline_backend_mb = await get_redis_used_memory(config)
-
-        print(
-            f"Baseline: 0 keys, {baseline_rss_mb:.1f} MiB RSS",
-            file=sys.stderr,
-        )
-        results.append(
-            ScaleCheckpoint(
-                cumulative_keys=0,
-                new_keys_this_checkpoint=0,
-                rss_mb=baseline_rss_mb,
-                rss_delta_mb=0.0,
-                bytes_per_key=0.0,
-                backend_used_memory_mb=baseline_backend_mb,
-                mean_rps=0.0,
-                p50_ms=0.0,
-                p99_ms=0.0,
-                successful=0,
-                errors=0,
-            )
-        )
 
         async with live_client.make_http_client(
             server.base_url, concurrency=concurrency
         ) as http_client:
+            # Warm the server up before taking the baseline. The first requests
+            # allocate one-time state (route and validator caches, connections,
+            # a worker's first event-loop iterations) that would otherwise land
+            # in the first checkpoint and make the per-key cost look enormous.
+            # Warmup keys use their own prefix and are part of the baseline.
+            await live_client.send_concurrent_unique_keys(
+                http_client,
+                start_index=0,
+                count=WARMUP_REQUESTS,
+                concurrency=concurrency,
+                key_header="X-Client-ID",
+                key_prefix="warmup",
+            )
+            # Do a couple of no-op samples first as the very first sample after
+            # process start can undershoot before the interpreter and its imports
+            # have fully settled.
+            server_memory_mb(process)
+            baseline_rss_mb = server_memory_mb(process)
+            baseline_backend_mb = await get_redis_used_memory(config)
+
+            print(
+                f"Baseline: 0 keys, {baseline_rss_mb:.1f} MiB RSS",
+                file=sys.stderr,
+            )
+            results.append(
+                ScaleCheckpoint(
+                    cumulative_keys=0,
+                    new_keys_this_checkpoint=0,
+                    rss_mb=baseline_rss_mb,
+                    rss_delta_mb=0.0,
+                    bytes_per_key=0.0,
+                    backend_used_memory_mb=baseline_backend_mb,
+                    mean_rps=0.0,
+                    p50_ms=0.0,
+                    p99_ms=0.0,
+                    successful=0,
+                    errors=0,
+                )
+            )
+
             previous_cumulative = 0
             for target in sorted_checkpoints:
                 new_keys = target - previous_cumulative
@@ -170,23 +241,16 @@ async def run_scale(
                 )
                 elapsed = time.perf_counter() - start_time
 
-                rss_mb = bytes_to_mb(process.memory_info().rss)
+                rss_mb = server_memory_mb(process)
                 rss_delta_mb = rss_mb - baseline_rss_mb
                 bytes_per_key = (rss_delta_mb * 1024 * 1024) / target if target else 0.0
                 backend_mb = await get_redis_used_memory(config)
 
                 sorted_latencies = sorted(latencies)
-                p50_ms = (
-                    sorted_latencies[len(sorted_latencies) // 2] * 1000
-                    if sorted_latencies
-                    else 0.0
-                )
-                p99_ms = (
-                    sorted_latencies[int(len(sorted_latencies) * 0.99)] * 1000
-                    if sorted_latencies
-                    else 0.0
-                )
-                mean_rps = len(latencies) / elapsed if elapsed > 0 else 0.0
+                p50_ms = percentile(sorted_latencies, 0.5) * 1000
+                p99_ms = percentile(sorted_latencies, 0.99) * 1000
+                answered = successful + _throttled
+                mean_rps = answered / elapsed if elapsed > 0 else 0.0
 
                 results.append(
                     ScaleCheckpoint(

@@ -12,8 +12,8 @@ That keeps rejection out of the numbers: what is left is the cost of the
 throttle's own synchronization, which is what the hot-key and many-key
 distributions are there to separate.
 
-The load is a closed loop: `concurrency` requests are kept in flight, and a new
-batch is sent as the previous one completes. It finds the saturation point, but
+The load is a closed loop: `concurrency` requests are kept in flight, and each
+worker sends its next request as soon as its previous response arrives. It finds the saturation point, but
 it hides how a system behaves under an arrival rate it cannot keep up with
 (requests queue up on the client instead). Treat the tail it reports as a lower
 bound on what an open-loop load would see.
@@ -87,7 +87,7 @@ def sweep_scenario(
         name=f"Many Keys, {concurrency} in flight",
         rate=rate,
         total_requests=requests,
-        mode="unique_keys_batched",
+        mode="unique_keys_concurrent",
         key_header="X-Client-ID",
         key_mod=max(keys, concurrency),
     )
@@ -164,12 +164,17 @@ async def run_sweep(
             )
 
     points: list[SweepPoint] = []
+    point_index = 0
     for distribution in distributions:
         for concurrency in levels:
             scenario = sweep_scenario(
                 distribution, concurrency, rate=rate, requests=requests, keys=keys
             )
-            for label, app_path, series_config in series:
+            # Rotate which series runs first from point to point, so no series
+            # owns the first slot (cooler CPU, boost clocks) at every level.
+            shift = point_index % len(series)
+            point_index += 1
+            for label, app_path, series_config in series[shift:] + series[:shift]:
                 point_config = dataclasses.replace(
                     series_config, concurrency=concurrency
                 )
@@ -214,6 +219,16 @@ async def run_sweep(
                         ),
                     )
                 )
+
+    # Run order rotates (see above); report in a stable order.
+    series_order = {label: i for i, (label, _, _) in enumerate(series)}
+    points.sort(
+        key=lambda point: (
+            list(distributions).index(point.distribution),
+            point.concurrency,
+            series_order[point.series],
+        )
+    )
 
     return SweepResult(
         backend_kind=config.backend_kind,

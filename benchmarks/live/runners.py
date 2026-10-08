@@ -56,15 +56,15 @@ async def run_http_like_scenario(
             client, waves=scenario.waves, path=path, headers=scenario.headers
         )
         paused_seconds = pause_seconds(scenario.waves)
-    elif scenario.mode == "unique_keys_batched":
+    elif scenario.mode == "unique_keys_concurrent":
         key_mod = (
             config.concurrency if scenario.key_mod_is_concurrency else scenario.key_mod
         )
-        batch_size = scenario.batch_size or config.concurrency
+        in_flight = scenario.in_flight or config.concurrency
         latencies, successful, throttled, errors = await live_client.send_concurrent(
             client,
             n=scenario.total_requests,
-            concurrency=batch_size,
+            concurrency=in_flight,
             path=path,
             headers=scenario.headers,
             key_header=scenario.key_header,
@@ -101,13 +101,13 @@ async def run_http_like_scenario(
     elif scenario.mode == "mixed_paths":
         assert scenario.mixed_paths is not None
         latencies, successful, throttled, errors = [], 0, 0, 0
-        for path, count in scenario.mixed_paths:
+        for route, count in scenario.mixed_paths:
             (
                 batch_latencies,
                 batch_ok,
                 batch_throttled,
                 batch_errors,
-            ) = await live_client.send_sequential(client, n=count, path=path)
+            ) = await live_client.send_sequential(client, n=count, path=route)
             latencies.extend(batch_latencies)
             successful += batch_ok
             throttled += batch_throttled

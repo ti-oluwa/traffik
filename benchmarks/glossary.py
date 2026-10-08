@@ -130,7 +130,7 @@ HOT_KEY_OVER = ScenarioDoc(
 MANY_KEYS_UNDER = ScenarioDoc(
     kind=Kind.THROUGHPUT,
     tests=(
-        "800 requests at --concurrency in flight, each batch spread over --concurrency "
+        "800 requests with --concurrency in flight, each in-flight request using its own "
         "distinct X-Client-IDs (so no two in-flight requests share a key), against a limit of 1000."
     ),
     read_as=(
@@ -184,13 +184,16 @@ KEY_EXPIRY_REUSE = ScenarioDoc(
         "250 with a 6s pause between, long enough for every first-half key to expire."
     ),
     read_as=(
-        "Checks the backend reclaims expired slots instead of filling up. Run it with a "
-        "small `--mp-max-keys` (about the first-half key count) to make the second half "
-        "depend on reclamation."
+        "Checks the backend reclaims expired slots instead of filling up. Run it with "
+        "`--mp-max-keys 375`, about 1.5x the 250 keys of one half: one half fits with "
+        "room for uneven hashing, both together (500) do not, so the second half only "
+        "succeeds if the first half's expired slots are reclaimed."
     ),
     caveat=(
-        "With the default capacity (65,536 keys) nothing is ever full, so it passes "
-        "trivially. Latency is pooled across both halves."
+        "At the default capacity (65,536 keys) nothing is ever full, so it passes "
+        "trivially. Do not size the table to exactly one half: keys hash unevenly "
+        "across shards, so some would overflow even with perfect reclamation. "
+        "Latency is pooled across both halves."
     ),
     good="Errors 0%, no latency step between halves, even at a tight --mp-max-keys.",
 )

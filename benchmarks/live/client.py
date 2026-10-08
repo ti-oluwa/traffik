@@ -38,13 +38,22 @@ def make_http_client(
 async def make_request(
     client: httpx2.AsyncClient, path: str, headers: Headers
 ) -> tuple[float, int]:
+    """
+    Send one request and time it.
+
+    A request that fails (timeout, reset connection) keeps the time it took and
+    reports status `0`. Dropping failures from the latency data would make an
+    implementation that times out look faster: its slowest requests would simply
+    vanish from the percentiles.
+
+    :return: `(latency_seconds, status_code)`; status `0` means the request failed.
+    """
+    start = time.perf_counter()
     try:
-        start = time.perf_counter()
         response = await client.get(path, headers=headers)
-        end = time.perf_counter()
-        return end - start, response.status_code
     except Exception:
-        return 0.0, 0
+        return time.perf_counter() - start, 0
+    return time.perf_counter() - start, response.status_code
 
 
 def tally(
@@ -84,6 +93,47 @@ async def send_sequential(
     return latencies, successful, throttled, errors
 
 
+Sender = typing.Callable[[int, int, int], typing.Awaitable[tuple[float, int]]]
+
+
+async def run_closed_loop(n: int, concurrency: int, send: Sender) -> SendResult:
+    """
+    Send `n` requests keeping exactly `concurrency` in flight (a closed loop).
+
+    Each of `concurrency` workers sends its next request the moment its previous
+    response arrives, so the load stays constant. Sending in barrier-synchronized
+    batches instead (gather a batch, wait for all of it, repeat) ties throughput to
+    the slowest request of every batch, which rewards the implementation with the
+    better tail and lets in-flight load drop as each batch drains.
+
+    :param n: Total requests to send.
+    :param concurrency: Workers, i.e. requests in flight.
+    :param send: `send(worker, worker_request_number, sequence)` sends one
+        request and returns `(latency_seconds, status_code)`. `sequence` is a
+        global counter, unique per request.
+    :return: `(latencies_seconds, successful, throttled, errors)`.
+    """
+    latencies: list[float] = []
+    totals = [0, 0, 0]  # successful, throttled, errors
+    next_sequence = 0
+
+    async def worker(worker_id: int) -> None:
+        nonlocal next_sequence
+        sent = 0
+        while next_sequence < n:
+            sequence = next_sequence
+            next_sequence += 1
+            latency, status_code = await send(worker_id, sent, sequence)
+            sent += 1
+            s, t, e = tally(latency, status_code, latencies)
+            totals[0] += s
+            totals[1] += t
+            totals[2] += e
+
+    await asyncio.gather(*(worker(w) for w in range(min(concurrency, n))))
+    return latencies, totals[0], totals[1], totals[2]
+
+
 async def send_concurrent(
     client: httpx2.AsyncClient,
     n: int,
@@ -94,42 +144,28 @@ async def send_concurrent(
     key_mod: typing.Optional[int] = None,
 ) -> SendResult:
     """
-    Send `n` real requests in batches of up to `concurrency`, gathered
-    concurrently within each batch - genuine concurrent sockets, not
-    cooperative-scheduling-only concurrency against an in-process callable.
+    Send `n` real requests with `concurrency` in flight at all times, over
+    genuine concurrent sockets.
 
-    :param key_header: If given (e.g. `"X-Client-ID"`), each request gets
-        a distinct value `f"user-{index % key_mod}"` for this header,
-        simulating traffic from many different identities.
-    :param key_mod: Number of distinct identities to cycle through when
-        `key_header` is set.
+    :param key_header: If given (e.g. `"X-Client-ID"`), requests carry distinct
+        identities in this header, simulating traffic from many clients. Each
+        worker owns its own identities, so no two requests in flight ever share
+        one, however slowly any of them completes.
+    :param key_mod: Approximate number of distinct identities to cycle through
+        when `key_header` is set, rounded down to a multiple of `concurrency`
+        and never below it (one identity per worker).
     :return: `(latencies_seconds, successful, throttled, errors)`.
     """
-    latencies: list[float] = []
-    successful = throttled = errors = 0
-    num_batches = (n + concurrency - 1) // concurrency
+    keys_per_worker = max((key_mod or concurrency) // concurrency, 1)
 
-    for batch_idx in range(num_batches):
-        batch_size = min(concurrency, n - batch_idx * concurrency)
+    async def send(worker: int, sent: int, _sequence: int) -> tuple[float, int]:
+        request_headers = dict(headers or {})
+        if key_header and key_mod:
+            identity = worker + concurrency * (sent % keys_per_worker)
+            request_headers[key_header] = f"user-{identity}"
+        return await make_request(client, path, request_headers or None)
 
-        async def request(index: int) -> tuple[float, int]:
-            request_headers = dict(headers or {})
-            if key_header and key_mod:
-                request_headers[key_header] = f"user-{index % key_mod}"
-            return await make_request(
-                client, path=path, headers=request_headers or None
-            )
-
-        tasks = [request(batch_idx * concurrency + i) for i in range(batch_size)]
-        results = await asyncio.gather(*tasks)
-
-        for latency, status_code in results:
-            s, t, e = tally(latency, status_code, latencies)
-            successful += s
-            throttled += t
-            errors += e
-
-    return latencies, successful, throttled, errors
+    return await run_closed_loop(n, concurrency, send)
 
 
 async def send_concurrent_unique_keys(
@@ -140,48 +176,32 @@ async def send_concurrent_unique_keys(
     key_header: str,
     path: str = "/test",
     headers: Headers = None,
+    key_prefix: str = "user",
 ) -> SendResult:
     """
-    Send `count` real requests concurrently in batches of up to
-    `concurrency`, each carrying a distinct, never-repeated `key_header`
-    value `f"user-{start_index + i}"`.
+    Send `count` real requests with `concurrency` in flight, each carrying a
+    distinct, never-repeated `key_header` value `f"{key_prefix}-{start_index + i}"`.
 
-    Unlike `send_concurrent`'s `key_mod` cycling (which simulates traffic
-    from a fixed pool of identities), every request here creates a brand
-    new identity. Used by the `scale` command to grow a backend's key
-    count by a precise amount while sending genuinely concurrent traffic,
-    so both the memory-growth measurement and the latency measurement
-    reflect real concurrent access, not a sequential loop.
+    Used by the `scale` command to grow a backend's key count by a precise
+    amount while sending genuinely concurrent traffic, so both the
+    memory-growth measurement and the latency measurement reflect real
+    concurrent access, not a sequential loop.
 
     :param start_index: First key index to use; keys run
         `start_index .. start_index + count - 1`.
     :param count: Number of requests (and therefore new keys) to send.
     :param key_header: Header identifying the caller (e.g. `"X-Client-ID"`).
+    :param key_prefix: Prefix of the generated identities. Use a different one
+        for warmup traffic so it can never collide with measured keys.
     :return: `(latencies_seconds, successful, throttled, errors)`.
     """
-    latencies: list[float] = []
-    successful = throttled = errors = 0
-    num_batches = (count + concurrency - 1) // concurrency
 
-    for batch_idx in range(num_batches):
-        batch_size = min(concurrency, count - batch_idx * concurrency)
-        base = start_index + batch_idx * concurrency
+    async def send(_worker: int, _sent: int, sequence: int) -> tuple[float, int]:
+        request_headers = dict(headers or {})
+        request_headers[key_header] = f"{key_prefix}-{start_index + sequence}"
+        return await make_request(client, path, request_headers)
 
-        async def request(index: int) -> tuple[float, int]:
-            request_headers = dict(headers or {})
-            request_headers[key_header] = f"user-{index}"
-            return await make_request(client, path=path, headers=request_headers)
-
-        tasks = [request(base + i) for i in range(batch_size)]
-        results = await asyncio.gather(*tasks)
-
-        for latency, status_code in results:
-            s, t, e = tally(latency, status_code, latencies)
-            successful += s
-            throttled += t
-            errors += e
-
-    return latencies, successful, throttled, errors
+    return await run_closed_loop(count, concurrency, send)
 
 
 async def send_waves(

@@ -74,7 +74,7 @@ setup(
         "coredis": ["coredis>=6.0;  python_version >= '3.10'"],
         "aiomcache": ["aiomcache>=0.8.2"],
         "emcache": [
-            "emcache>=1.3.3; sys_platform == 'linux' or sys_platform == 'darwin'"
+            "emcache>=1.3.3; (sys_platform == 'linux') or (sys_platform == 'darwin' and (platform_machine != 'arm64' or python_version < '3.14'))"
         ],
         # For backwards compatibility
         "redis": ["traffik[aioredis]"],

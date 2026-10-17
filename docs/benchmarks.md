@@ -1,6 +1,6 @@
 # Benchmarks
 
-The benchmark suite exercises Traffik the way it actually runs in production: as a real server process, listening on a real socket, handling real HTTP and WebSocket connections, no just as a Python function called directly in the same process. This page documents how the suite works, how to run it, and how to read its output.
+The benchmark suite exercises Traffik the way it actually runs in production; as an actual server process, listening on a socket, handling HTTP and WebSocket connections, no just as a Python function called directly in the same process. This page documents how the suite works, how to run it, and how to read its output.
 
 !!! note "No result numbers here"
     This page deliberately doesn't publish throughput or latency figures. Results depend heavily on your machine (CPU core count especially. See [What To Expect](#what-to-expect) below), so numbers from one machine are not a reliable stand-in for another's. Run the suite yourself to get figures that reflect your setup.

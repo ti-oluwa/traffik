@@ -11,7 +11,7 @@ Before you install, make sure you have:
 - **Python 3.9+** (up to 3.14) - Traffik uses modern async features and type hints throughout.
 - Any **Starlette** based framework - Traffik integrates with Starlette's `HTTPConnection` model. FastAPI is built on Starlette so it should work without issues.
 
-That's it. No mandatory external services, no heavyweight dependencies. The in-memory backend works with no additional setup.
+That's it. No mandatory external services, no heavyweight dependencies. The in-memory backend works with no additional setup. Besides Starlette, Traffik only pulls in a few small packages, among them [`xxhash`](https://pypi.org/project/xxhash/), which it uses for fast key hashing and shard routing. It ships prebuilt wheels for every supported platform, so you don't need a compiler.
 
 ```bash
 pip install traffik

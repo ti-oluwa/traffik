@@ -3,88 +3,98 @@ import os
 import subprocess
 import sys
 
-from traffik._hashing import fnv_32bit_hash, fnv_64bit_hash, fnv_64bit_hash_hex
+from traffik._hash import hash_32, hash_64_hex
 from traffik.backends.base import build_key
 
 
-class TestFnv32BitHash:
-    """Tests for fnv_32bit_hash against known FNV-1a test vectors."""
+class TestHash32:
+    """
+    Tests for `hash_32` (XXH32) against known test vectors.
+
+    The values are pinned on purpose: shard routing and hash-table buckets depend
+    on them, so a change in algorithm or seed must fail here loudly.
+    """
 
     def test_empty_input(self):
-        """Hash of empty bytes is the offset basis itself."""
-        assert fnv_32bit_hash(b"") == 0x811C9DC5
+        """XXH32 of empty bytes with seed 0 is a published test vector."""
+        assert hash_32(b"") == 0x02CC5D05
 
     def test_known_vectors(self):
-        """Standard FNV-1a 32-bit vectors."""
-        assert fnv_32bit_hash(b"a") == 0xE40C292C
-        assert fnv_32bit_hash(b"foo") == 0xA9F37ED7
+        assert hash_32(b"a") == 0x550D7456
+        assert hash_32(b"foo") == 0xE20F0DD9
+        assert hash_32(b"traffik") == 0xBF805102
 
     def test_deterministic(self):
         """Same input always produces the same output."""
-        assert fnv_32bit_hash(b"traffik") == fnv_32bit_hash(b"traffik")
+        assert hash_32(b"traffik") == hash_32(b"traffik")
 
     def test_different_inputs_differ(self):
-        assert fnv_32bit_hash(b"key1") != fnv_32bit_hash(b"key2")
+        assert hash_32(b"key1") != hash_32(b"key2")
 
     def test_result_fits_32_bits(self):
-        assert 0 <= fnv_32bit_hash(b"some longer input string") < 2**32
+        assert 0 <= hash_32(b"some longer input string") < 2**32
+
+    def test_hex_suffix_is_8_characters(self):
+        """The shared-memory segment name suffix is `format(hash_32(...), "08x")`."""
+        assert format(hash_32(b""), "08x") == "02cc5d05"
+        assert len(format(hash_32(b"a"), "08x")) == 8
+
+    def test_spreads_similar_keys_across_shards(self):
+        """Near-identical keys must not pile onto a few shards."""
+        shards = 16
+        keys = [f"api:items:10.0.0.{i}".encode() for i in range(1, 255)]
+        counts = [0] * shards
+        for key in keys:
+            counts[hash_32(key) % shards] += 1
+        assert all(count > 0 for count in counts)
+        assert max(counts) < len(keys) / shards * 2.5
 
 
-class TestFnv64BitHash:
-    """Tests for fnv_64bit_hash against known FNV-1a test vectors."""
+class TestHash64Hex:
+    """
+    Tests for `hash_64_hex` (XXH3 64-bit, as hex) against known test vectors.
+
+    Pinned for the same reason as `TestHash32`: the digest is part of the keys
+    stored in Redis and Memcached.
+    """
 
     def test_empty_input(self):
-        """Hash of empty bytes is the offset basis itself."""
-        assert fnv_64bit_hash(b"") == 0xCBF29CE484222325
+        """XXH3-64 of empty bytes with seed 0 is a published test vector."""
+        assert hash_64_hex(b"") == "2d06800538d394c2"
 
     def test_known_vectors(self):
-        """Standard FNV-1a 64-bit vectors."""
-        assert fnv_64bit_hash(b"a") == 0xAF63DC4C8601EC8C
-        assert fnv_64bit_hash(b"foo") == 0xDCB27518FED9D577
+        assert hash_64_hex(b"a") == "e6c632b61e964e1f"
+        assert hash_64_hex(b"foo") == "ab6e5f64077e7d8a"
+        assert hash_64_hex(b"traffik") == "ff3378f4177515d1"
+
+    def test_always_16_lowercase_hex_chars(self):
+        for data in (b"", b"x", b"x" * 1000):
+            digest = hash_64_hex(data)
+            assert len(digest) == 16
+            assert digest == digest.lower()
+            int(digest, 16)  # doesn't raise - valid hex
 
     def test_deterministic(self):
-        """Same input always produces the same output."""
-        assert fnv_64bit_hash(b"traffik") == fnv_64bit_hash(b"traffik")
+        assert hash_64_hex(b"traffik") == hash_64_hex(b"traffik")
 
     def test_different_inputs_differ(self):
-        assert fnv_64bit_hash(b"key1") != fnv_64bit_hash(b"key2")
+        assert hash_64_hex(b"key1") != hash_64_hex(b"key2")
 
-    def test_result_fits_64_bits(self):
-        assert 0 <= fnv_64bit_hash(b"some longer input string") < 2**64
-
-    def test_32_and_64_bit_hashes_of_same_input_differ(self):
-        """Sanity check that the two extension functions aren't aliased."""
-        assert fnv_64bit_hash(b"traffik") != fnv_32bit_hash(b"traffik")
-
-
-class TestFnv64BitHashHex:
-    """Tests for fnv_64bit_hash_hex - same hash as fnv_64bit_hash, as hex."""
-
-    def test_matches_int_variant_formatted_as_hex(self):
-        for data in (b"", b"a", b"foo", b"traffik", b"hello world"):
-            assert fnv_64bit_hash_hex(data) == format(fnv_64bit_hash(data), "016x")
-
-    def test_known_vectors(self):
-        assert fnv_64bit_hash_hex(b"") == "cbf29ce484222325"
-        assert fnv_64bit_hash_hex(b"a") == "af63dc4c8601ec8c"
-
-    def test_always_16_chars(self):
-        assert len(fnv_64bit_hash_hex(b"")) == 16
-        assert len(fnv_64bit_hash_hex(b"x" * 1000)) == 16
-
-    def test_deterministic(self):
-        assert fnv_64bit_hash_hex(b"traffik") == fnv_64bit_hash_hex(b"traffik")
+    def test_is_independent_of_the_32_bit_hash(self):
+        """Sanity check that the two helpers aren't aliased."""
+        assert int(hash_64_hex(b"traffik"), 16) != hash_32(b"traffik")
 
 
 class TestLegacyMd5KeysImportTimeResolution:
     """
-    `build_key`'s hash function is resolved once at import time (not
-    per-call), so exercising `TRAFFIK_LEGACY_MD5_KEYS` honestly requires a
-    fresh interpreter so reload()-ing the module in-process wouldn't be
-    representative of how the flag is actually meant to be set.
+    `build_key`'s hash function is resolved once, the first time a key is
+    built, and cached for the rest of the process (not per-call), so
+    exercising `TRAFFIK_LEGACY_MD5_KEYS` honestly requires a fresh interpreter:
+    reloading modules in-process wouldn't be representative of how the flag
+    is actually meant to be set.
     """
 
-    def test_default_uses_fnv(self):
+    def test_default_uses_xxh3(self):
         output = subprocess.run(
             [
                 sys.executable,
@@ -95,7 +105,7 @@ class TestLegacyMd5KeysImportTimeResolution:
             text=True,
             check=True,
         )
-        assert output.stdout.strip() == fnv_64bit_hash_hex(b"a")
+        assert output.stdout.strip() == hash_64_hex(b"a")
 
     def test_env_var_set_before_import_forces_md5(self):
         env = {**os.environ, "TRAFFIK_LEGACY_MD5_KEYS": "1"}
@@ -114,13 +124,13 @@ class TestLegacyMd5KeysImportTimeResolution:
 
 
 class TestBuildKey:
-    """Tests for build_key, which uses `fnv_64bit_hash` to combine args/kwargs."""
+    """Tests for build_key, which uses `hash_64_hex` to combine args/kwargs."""
 
     def test_no_args_returns_wildcard(self):
         assert build_key() == "*"
 
     def test_returns_16_char_hex_digest(self):
-        """FNV-1a 64-bit formatted as hex is always 16 characters."""
+        """XXH3 64-bit formatted as hex is always 16 characters."""
         key = build_key("user", "123")
         assert len(key) == 16
         int(key, 16)  # doesn't raise - valid hex

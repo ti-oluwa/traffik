@@ -51,6 +51,25 @@ export TRAFFIK_DEFAULT_BLOCKING_TIMEOUT=5.0
 | `TRAFFIK_DEFAULT_LOCK_TTL` | float | `None` | Lock auto-expiry in seconds |
 | `TRAFFIK_DEFAULT_BLOCKING` | bool | `true` | Block when lock is contended |
 | `TRAFFIK_DEFAULT_BLOCKING_TIMEOUT` | float | `None` | Max seconds to wait for lock |
+| `TRAFFIK_LEGACY_MD5_KEYS` | bool | `false` | Build composite backend keys with MD5 (pre-`1.3.0` keys) instead of XXH3. See [Key hashing](#key-hashing) |
+
+### Key hashing
+
+When a backend builds a key from extra arguments (`backend.get_key(key, *args, **kwargs)`), it appends a short digest of those arguments. Traffik uses [XXH3](https://xxhash.com) (64-bit, a 16-character hex string) for this. Where hashing only picks a shard or a hash-table bucket, as in the Memcached sharding and `MultiProcessInMemoryBackend`, it uses the 32-bit XXH32. Both are fast, deterministic across processes, machines and platforms, and not intended for security.
+
+Versions before `1.3.0` used MD5 for the key digest. Upgrading therefore changes the keys Traffik reads and writes, so state stored under the old keys (for example long-lived counters in a `persistent=True` backend) is no longer found and starts fresh. Ephemeral limits that expire on their own are not affected in practice. If you need to keep the old keys, force MD5:
+
+```bash
+export TRAFFIK_LEGACY_MD5_KEYS=true
+```
+
+```python
+from traffik.config import set_legacy_md5_keys
+
+set_legacy_md5_keys(True)  # before the first key is built, e.g. at start-up
+```
+
+The choice is made the first time a key is built, usually on the first throttled request, and is then cached for the process, so set it at start-up or in the environment.
 
 ---
 

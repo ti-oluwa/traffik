@@ -45,19 +45,20 @@ LEGACY_MD5_KEYS_ENV_VAR = "TRAFFIK_LEGACY_MD5_KEYS"
 
 def get_legacy_md5_keys() -> bool:
     """
-    Get whether to use MD5 instead of FNV-1a 64-bit for building composite
+    Get whether to use MD5 instead of XXH3 64-bit for building composite
     backend cache keys, from the environment variable `TRAFFIK_LEGACY_MD5_KEYS`.
 
     An escape hatch. Allows forcing the same hashing `build_key()` used pre
-    `v1.3.0`, in case FNV-1a misbehaves on a given platform, or to avoid the
-    one-time key reset that switching hash algorithms causes for
-    `persistent=True` backends carrying over state from before the upgrade.
+    `v1.3.0`, to avoid the one-time key reset that switching hash algorithms
+    causes for `persistent=True` backends carrying over state from before the
+    upgrade.
 
-    Resolved once, at import time. Set this before `traffik.backends.base` is first
-    imported. Calling `set_legacy_md5_keys()` after that point has no effect on
-    the current process.
+    Resolved once, the first time a key is built (usually on the first throttled
+    request), and cached from then on. Set this before that point, such as at
+    start-up or in the environment. Calling `set_legacy_md5_keys()` afterwards has no
+    effect on the current process.
 
-    :return: True if MD5 should be used. Defaults to False (use FNV-1a 64-bit).
+    :return: True if MD5 should be used. Defaults to False (use XXH3 64-bit).
     """
     value = os.getenv(LEGACY_MD5_KEYS_ENV_VAR)
     if value is not None:
@@ -67,13 +68,13 @@ def get_legacy_md5_keys() -> bool:
 
 def set_legacy_md5_keys(enabled: bool) -> None:
     """
-    Set whether to use MD5 instead of FNV-1a 64-bit for building composite
+    Set whether to use MD5 instead of XXH3 64-bit for building composite
     backend cache keys, in the environment variable `TRAFFIK_LEGACY_MD5_KEYS`.
 
-    Must be called before `traffik.backends.base` is first imported to have
-    any effect.
+    Must be called before the first key is built (usually the first throttled
+    request) to have any effect. After that the choice is cached for the process.
 
-    :param enabled: True to use MD5, False to use FNV-1a 64-bit.
+    :param enabled: True to use MD5, False to use XXH3 64-bit.
     """
     os.environ[LEGACY_MD5_KEYS_ENV_VAR] = "1" if enabled else "0"
 

@@ -73,7 +73,7 @@ if sys.version_info >= (3, 10):
 else:
     from typing_extensions import Concatenate
 
-from traffik._hashing import fnv_32bit_hash
+from traffik._hash import hash_32
 from traffik._locks import NamedLockHandle, NamedLockPool
 from traffik._utils import adaptive_expire_sample
 
@@ -255,7 +255,7 @@ def derive_shared_memory_name(namespace: str) -> str:
     Derive a valid shared memory segment name from `namespace`.
 
     Replaces characters outside `[A-Za-z0-9_-]` with underscores, appends
-    an 8-character FNV-1a hex suffix for collision-resistance, and prefixes
+    an 8-character XXH32 hex suffix for collision-resistance, and prefixes
     with `SHARED_MEMORY_NAME_PREFIX`. The result is truncated to
     `SHARED_MEMORY_NAME_MAX_LENGTH` characters.
 
@@ -263,7 +263,7 @@ def derive_shared_memory_name(namespace: str) -> str:
     :return: A valid POSIX shared memory segment name.
     """
     sanitized = re.sub(r"[^A-Za-z0-9_-]", "_", namespace)
-    hex_suffix = format(fnv_32bit_hash(namespace.encode("utf-8")), "08x")
+    hex_suffix = format(hash_32(namespace.encode("utf-8")), "08x")
     middle_max = (
         SHARED_MEMORY_NAME_MAX_LENGTH
         - len(SHARED_MEMORY_NAME_PREFIX)
@@ -1455,12 +1455,13 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         """
         Return the shard index for `key`.
 
-        Uses FNV-1a so the result is deterministic across processes.
+        Uses XXH32 (`traffik._hash.hash_32`) so the result is deterministic
+        across processes. A collision here only unbalances the shards a little.
 
         :param key: The throttle key string.
         :return: Shard index in `[0, number_of_shards)`.
         """
-        return fnv_32bit_hash(key.encode("utf-8")) % self._number_of_shards
+        return hash_32(key.encode("utf-8")) % self._number_of_shards
 
     def _get_shard_base(self, shard_idx: int) -> int:
         """
@@ -1730,7 +1731,7 @@ class MultiProcessInMemoryBackend(ThrottleBackend[None, HTTPConnectionT]):
         hash_table_base = shard_base + self._shard_hash_table_base_offset
         capacity = self._shard_hash_table_capacity
         mask = self._shard_hash_table_mask
-        start = fnv_32bit_hash(key_bytes) & mask
+        start = hash_32(key_bytes) & mask
         first_tombstone = -1
 
         for i in range(capacity):

@@ -15,6 +15,7 @@ from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp
 from typing_extensions import Self
 
+from traffik._hash import hash_64_hex
 from traffik._locks import _AsyncLockContext
 from traffik._utils import get_remote_address
 from traffik.config import (
@@ -99,13 +100,7 @@ def get_md5_hex(data: bytes) -> str:
 def _resolve_hex_func() -> typing.Callable[[bytes], str]:
     if get_legacy_md5_keys():
         return get_md5_hex
-    try:
-        from traffik._hashing import fnv_64bit_hash_hex
-
-        return fnv_64bit_hash_hex
-    except ImportError:  # pragma: no cover
-        # This is only hit without the compiled extension
-        return get_md5_hex
+    return hash_64_hex
 
 
 _hex_func: typing.Optional[typing.Callable[[bytes], str]] = None
@@ -113,9 +108,9 @@ _hex_func: typing.Optional[typing.Callable[[bytes], str]] = None
 
 def get_hex(data: bytes) -> str:
     """
-    Returns the hex digest of `data` using FNV-1a 64-bit, or MD5 if
-    `TRAFFIK_LEGACY_MD5_KEYS`/`traffik.config.set_legacy_md5_keys()` forces
-    it, or if the compiled `_hashing` extension isn't available.
+    Returns the hex digest of `data` using XXH3 64-bit (16 characters), or
+    MD5 (32 characters) if `TRAFFIK_LEGACY_MD5_KEYS`/
+    `traffik.config.set_legacy_md5_keys()` forces it.
 
     Resolved once, on first call, and cached.
     """

@@ -4,13 +4,7 @@ from setuptools import Extension, setup
 
 ON_WINDOWS = platform.system() == "Windows"
 
-ext_modules = [
-    Extension(
-        "traffik._hashing",
-        ["src/traffik/_extensions/hashing.c"],
-        extra_compile_args=["/O2"] if ON_WINDOWS else ["-O2"],
-    ),
-]
+ext_modules = []
 
 if not ON_WINDOWS:
     # Needs GCC/Clang atomic builtins. Not available on MSVC.
@@ -88,6 +82,6 @@ setup(
         "Changelog": "https://github.com/ti-oluwa/traffik/blob/main/CHANGELOG.md",
     },
     package_dir={"": "src"},
-    package_data={"traffik": ["py.typed", "_hashing.pyi", "_atomic.pyi"]},
+    package_data={"traffik": ["py.typed", "_atomic.pyi"]},
     ext_modules=ext_modules,
 )

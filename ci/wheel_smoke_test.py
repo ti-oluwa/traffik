@@ -3,7 +3,8 @@ Run by cibuildwheel against every wheel it builds, on every target
 platform, before any of them are allowed into a release.
 
 This exists specifically so a platform-specific problem in the compiled
-C extension gets caught here, on the actual target platform, instead of by a user after publishing.
+C extension (and in the `xxhash` wheel the hashing depends on) gets caught here,
+on the actual target platform, instead of by a user after publishing.
 """
 
 import platform
@@ -11,11 +12,11 @@ import sys
 
 import traffik  # noqa: F401
 
-# `_hashing` has no platform-specific build restriction and is expected to
-# be present everywhere, Windows included. We check known FNV-1a test vectors
-# rather than just importing, so a bad build (e.g. a struct-width mismatch
-# on an unusual platform) is caught faster here, instead of downstream.
-from traffik._hashing import fnv_32bit_hash, fnv_64bit_hash, fnv_64bit_hash_hex
+# Hashing comes from the `xxhash` package and is expected to work everywhere,
+# Windows included. We check known XXH32/XXH3 test vectors rather than just
+# importing: the hashes decide shard routing and are part of stored keys, so a
+# platform that computed different values would silently split throttle state.
+from traffik._hash import hash_32, hash_64_hex
 from traffik.backends.inmemory import InMemoryBackend  # noqa: F401
 from traffik.throttles import HTTPThrottle  # noqa: F401
 
@@ -25,15 +26,12 @@ print(
 )
 
 
-assert fnv_32bit_hash(b"") == 0x811C9DC5
-assert fnv_32bit_hash(b"a") == 0xE40C292C
-assert fnv_64bit_hash(b"") == 0xCBF29CE484222325
-assert fnv_64bit_hash(b"a") == 0xAF63DC4C8601EC8C
+assert hash_32(b"") == 0x02CC5D05
+assert hash_32(b"a") == 0x550D7456
 
-assert fnv_64bit_hash_hex(b"") == "cbf29ce484222325"
-assert fnv_64bit_hash_hex(b"a") == "af63dc4c8601ec8c"
-assert fnv_64bit_hash_hex(b"traffik") == format(fnv_64bit_hash(b"traffik"), "016x")
-print("[cibw-smoke] `traffik._hashing` OK. Known FNV-1a vectors match")
+assert hash_64_hex(b"") == "2d06800538d394c2"
+assert hash_64_hex(b"a") == "e6c632b61e964e1f"
+print("[cibw-smoke] `traffik._hash` OK. Known XXH32/XXH3 vectors match")
 
 if platform.system() != "Windows":
     # `_atomic` (atomic byte-lock primitives) needs GCC/Clang atomic builtins

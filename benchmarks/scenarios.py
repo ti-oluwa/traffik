@@ -105,19 +105,6 @@ class WebSocketScenario:
     messages_per_connection: int = 0
 
 
-# ---------------------------------------------------------------------------
-# Scenario names say what the traffic does, not how it is expected to turn out.
-# Every concurrent scenario runs at `--concurrency` in-flight requests, so the
-# hot-key and many-key ones differ in key distribution and nothing else:
-#
-#                      1 key (every request shares it)   many keys (none shared in flight)
-#   under the limit    hot_key_under_limit               many_keys_under_limit
-#   over the limit     hot_key_over_limit                -
-#
-# Comparing the two "under the limit" scenarios isolates the cost of key
-# contention: same requests, same concurrency, nothing rejected in either.
-# ---------------------------------------------------------------------------
-
 HOT_KEY_HEADERS = {"X-Client-ID": "hot-key-user"}
 
 
@@ -205,8 +192,6 @@ MIDDLEWARE_SCENARIOS: dict[str, HttpScenario] = {
     ),
 }
 
-# The HTTP set again, forced onto BENCH_BACKEND=multiprocess and run under
-# gunicorn's forked workers, plus two scenarios for the shared-memory backend.
 MULTIPROCESS_SCENARIOS: dict[str, HttpScenario] = {
     **make_shared_scenarios("MP "),
     "many_keys_across_shards": HttpScenario(

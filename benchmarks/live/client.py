@@ -130,7 +130,9 @@ async def run_closed_loop(n: int, concurrency: int, send: Sender) -> SendResult:
             totals[1] += t
             totals[2] += e
 
-    await asyncio.gather(*(worker(w) for w in range(min(concurrency, n))))
+    await asyncio.gather(
+        *(worker(worker_id) for worker_id in range(min(concurrency, n)))
+    )
     return latencies, totals[0], totals[1], totals[2]
 
 
@@ -158,7 +160,7 @@ async def send_concurrent(
     """
     keys_per_worker = max((key_mod or concurrency) // concurrency, 1)
 
-    async def send(worker: int, sent: int, _sequence: int) -> tuple[float, int]:
+    async def send(worker: int, sent: int, _: int) -> tuple[float, int]:
         request_headers = dict(headers or {})
         if key_header and key_mod:
             identity = worker + concurrency * (sent % keys_per_worker)
@@ -196,7 +198,7 @@ async def send_concurrent_unique_keys(
     :return: `(latencies_seconds, successful, throttled, errors)`.
     """
 
-    async def send(_worker: int, _sent: int, sequence: int) -> tuple[float, int]:
+    async def send(_: int, __: int, sequence: int) -> tuple[float, int]:
         request_headers = dict(headers or {})
         request_headers[key_header] = f"{key_prefix}-{start_index + sequence}"
         return await make_request(client, path, request_headers)
@@ -233,9 +235,6 @@ async def send_waves(
             await asyncio.sleep(sleep_after)
 
     return all_latencies, total_successful, total_throttled, total_errors
-
-
-# WebSocket (real connections, via the `websockets` library)
 
 
 async def ws_send_messages(
@@ -279,7 +278,7 @@ async def ws_send_waves(
 ) -> tuple[list[float], int, int]:
     """
     Open one real WebSocket connection and send several waves of messages
-    over it, sleeping between waves - for window-boundary scenarios.
+    over it, sleeping between waves usually for window-boundary scenarios.
 
     :param uri: Full `ws://host:port/path` URI.
     :param waves: `[(messages_in_wave, seconds_to_sleep_after), ...]`.

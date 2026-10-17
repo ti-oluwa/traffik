@@ -1,5 +1,5 @@
 """
-Runs the `sweep` command: the same workload at increasing concurrency, against
+Runs the `sweep` command. Runs the same workload at increasing concurrency, against
 traffik and (when comparable) SlowAPI, for a hot key and for many keys.
 
 A single fixed-concurrency run answers "how fast at this load?". It cannot say
@@ -8,11 +8,11 @@ tail. A sweep can: plot throughput and tail latency against concurrency and
 look for the point where throughput stops rising and latency starts to climb.
 
 The rate limit is set far above the offered load so every request is allowed.
-That keeps rejection out of the numbers: what is left is the cost of the
+That keeps rejection out of the numbers, and what is left is the cost of the
 throttle's own synchronization, which is what the hot-key and many-key
 distributions are there to separate.
 
-The load is a closed loop: `concurrency` requests are kept in flight, and each
+The load is a closed loop, so `concurrency` requests are kept in flight, and each
 worker sends its next request as soon as its previous response arrives. It finds the saturation point, but
 it hides how a system behaves under an arrival rate it cannot keep up with
 (requests queue up on the client instead). Treat the tail it reports as a lower
@@ -28,7 +28,7 @@ from benchmarks.live.orchestrators.compare import (
     SUPPORTED_STRATEGIES,
     TRAFFIK_APP_PATHS,
     UNSUPPORTED_COMPARE_BACKENDS,
-    run_one_side,
+    run_scenario,
 )
 from benchmarks.live.orchestrators.core import (
     build_environment_variables,
@@ -43,7 +43,7 @@ from benchmarks.types import (
 )
 
 NO_GATE_THRESHOLD = 1_000_000
-"""A `lock_contention_threshold` so high the contention gate never engages."""
+"""A high `lock_contention_threshold` so the contention gate never engages."""
 
 DEFAULT_LEVELS = (10, 50, 100, 200, 400)
 DEFAULT_RATE = "1000000/60s"
@@ -53,7 +53,7 @@ DEFAULT_MANY_KEYS = 1000
 Distribution = typing.Literal["hot", "many"]
 
 
-def sweep_scenario(
+def build_sweep_scenario(
     distribution: Distribution,
     concurrency: int,
     *,
@@ -167,8 +167,12 @@ async def run_sweep(
     point_index = 0
     for distribution in distributions:
         for concurrency in levels:
-            scenario = sweep_scenario(
-                distribution, concurrency, rate=rate, requests=requests, keys=keys
+            scenario = build_sweep_scenario(
+                distribution,
+                concurrency=concurrency,
+                rate=rate,
+                requests=requests,
+                keys=keys,
             )
             # Rotate which series runs first from point to point, so no series
             # owns the first slot (cooler CPU, boost clocks) at every level.
@@ -189,7 +193,7 @@ async def run_sweep(
                     f"{concurrency} in flight...",
                     file=sys.stderr,
                 )
-                results = await run_one_side(
+                results = await run_scenario(
                     app_path,
                     env,
                     scenario,
@@ -224,7 +228,7 @@ async def run_sweep(
     series_order = {label: i for i, (label, _, _) in enumerate(series)}
     points.sort(
         key=lambda point: (
-            list(distributions).index(point.distribution),
+            list(distributions).index(point.distribution),  # type: ignore
             point.concurrency,
             series_order[point.series],
         )

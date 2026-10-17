@@ -10,10 +10,6 @@ from benchmarks.live.orchestrators import run_http_scenarios
 from benchmarks.scenarios import MULTIPROCESS_SCENARIOS
 from benchmarks.types import AggregatedResult, BenchmarkConfig
 
-# Reuses the plain HTTP (Depends-based) app. What makes this "multiprocess"
-# is BENCH_BACKEND=multiprocess (forced below) plus real gunicorn workers
-# forked from a master that already ran `MultiProcessInMemoryBackend.start()`
-# at import time (see benchmarks.apps.traffik.config.backend_from_env).
 app_path = "benchmarks.apps.traffik.http:app"
 
 
@@ -21,7 +17,7 @@ async def run_scenarios(
     config: BenchmarkConfig, scenario_keys: list[str], warmup_iterations: int = 1
 ) -> list[AggregatedResult]:
     """
-    Run each selected scenario against real, forked gunicorn worker
+    Run each selected scenario against a forked gunicorn worker
     processes sharing one `MultiProcessInMemoryBackend`.
 
     :param config: Global benchmark configuration (backend is forced to
@@ -36,5 +32,5 @@ async def run_scenarios(
         warmup_iterations,
         MULTIPROCESS_SCENARIOS,
         app_path,
-        forced_backend_kind="multiprocess",
+        backend_kind="multiprocess",
     )

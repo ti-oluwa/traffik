@@ -272,21 +272,21 @@ def cli() -> None:
 @plot_options
 @gate_options
 def http(
-    backend,
-    strategy,
-    iterations,
-    warmup,
-    concurrency,
-    workers,
-    output,
-    redis_url,
-    memcached_host,
-    memcached_port,
-    scenarios,
-    plot,
-    plot_format,
-    lock_contention_threshold,
-    no_gate,
+    backend: str,
+    strategy: str,
+    iterations: int,
+    warmup: int,
+    concurrency: int,
+    workers: int,
+    output: str,
+    redis_url: str,
+    memcached_host: str,
+    memcached_port: int,
+    scenarios: str,
+    plot: typing.Optional[pathlib.Path],
+    plot_format: typing.Literal["svg", "png"],
+    lock_contention_threshold: typing.Optional[int],
+    no_gate: bool,
 ) -> None:
     """Benchmark HTTP throttles using Depends-based injection."""
     check_plotting_available(plot)
@@ -336,21 +336,21 @@ def http(
 @plot_options
 @gate_options
 def middleware(
-    backend,
-    strategy,
-    iterations,
-    warmup,
-    concurrency,
-    workers,
-    output,
-    redis_url,
-    memcached_host,
-    memcached_port,
-    scenarios,
-    plot,
-    plot_format,
-    lock_contention_threshold,
-    no_gate,
+    backend: str,
+    strategy: str,
+    iterations: int,
+    warmup: int,
+    concurrency: int,
+    workers: int,
+    output: str,
+    redis_url: str,
+    memcached_host: str,
+    memcached_port: int,
+    scenarios: str,
+    plot: typing.Optional[pathlib.Path],
+    plot_format: typing.Literal["svg", "png"],
+    lock_contention_threshold: typing.Optional[int],
+    no_gate: bool,
 ) -> None:
     """Benchmark middleware-mounted throttles."""
     check_plotting_available(plot)
@@ -401,19 +401,19 @@ def middleware(
 @options()
 @plot_options
 def websocket(
-    backend,
-    strategy,
-    iterations,
-    warmup,
-    concurrency,
-    workers,
-    output,
-    redis_url,
-    memcached_host,
-    memcached_port,
-    scenarios,
-    plot,
-    plot_format,
+    backend: str,
+    strategy: str,
+    iterations: int,
+    warmup: int,
+    concurrency: int,
+    workers: int,
+    output: str,
+    redis_url: str,
+    memcached_host: str,
+    memcached_port: int,
+    scenarios: str,
+    plot: typing.Optional[pathlib.Path],
+    plot_format: typing.Literal["svg", "png"],
 ) -> None:
     """Benchmark WebSocket throttles."""
     check_plotting_available(plot)
@@ -471,20 +471,20 @@ def websocket(
 )
 @plot_options
 def multiprocess(
-    backend,
-    strategy,
-    iterations,
-    warmup,
-    concurrency,
-    workers,
-    output,
-    redis_url,
-    memcached_host,
-    memcached_port,
-    scenarios,
-    mp_max_keys,
-    plot,
-    plot_format,
+    backend: str,
+    strategy: str,
+    iterations: int,
+    warmup: int,
+    concurrency: int,
+    workers: int,
+    output: str,
+    redis_url: str,
+    memcached_host: str,
+    memcached_port: int,
+    scenarios: str,
+    mp_max_keys: int,
+    plot: typing.Optional[pathlib.Path],
+    plot_format: typing.Literal["svg", "png"],
 ) -> None:
     """
     Benchmark `MultiProcessInMemoryBackend` across real forked gunicorn workers (POSIX only).
@@ -541,9 +541,9 @@ def multiprocess(
 @click.option(
     "--backend",
     "-b",
-    type=click.Choice([
-        choice for choice in BackendKind.choices() if choice != "multiprocess"
-    ]),
+    type=click.Choice(
+        [choice for choice in BackendKind.choices() if choice != "multiprocess"]
+    ),
     default="inmemory",
     help="Backend to benchmark. `multiprocess` isn't offered here.",
 )
@@ -606,23 +606,23 @@ def multiprocess(
 @plot_options
 @gate_options
 def compare(
-    backend,
-    strategy,
-    mode,
-    iterations,
-    warmup,
-    concurrency,
-    workers,
-    output,
-    redis_url,
-    memcached_host,
-    memcached_port,
-    scenarios,
-    endpoint,
-    plot,
-    plot_format,
-    lock_contention_threshold,
-    no_gate,
+    backend: str,
+    strategy: str,
+    mode: typing.Literal["http", "middleware"],
+    iterations: int,
+    warmup: int,
+    concurrency: int,
+    workers: int,
+    output: str,
+    redis_url: str,
+    memcached_host: str,
+    memcached_port: int,
+    scenarios: str,
+    endpoint: typing.Literal["async", "sync"],
+    plot: typing.Optional[pathlib.Path],
+    plot_format: typing.Literal["svg", "png"],
+    lock_contention_threshold: typing.Optional[int],
+    no_gate: bool,
 ) -> None:
     """
     Compare traffik against SlowAPI under matched conditions.
@@ -784,25 +784,25 @@ def compare(
 )
 @plot_options
 def sweep(
-    backend,
-    strategy,
-    mode,
-    levels,
-    distribution,
-    requests,
-    keys,
-    rate,
-    iterations,
-    warmup,
-    workers,
-    output,
-    redis_url,
-    memcached_host,
-    memcached_port,
-    no_slowapi,
-    diagnose_gate,
-    plot,
-    plot_format,
+    backend: str,
+    strategy: str,
+    mode: typing.Literal["http", "middleware"],
+    levels: str,
+    distribution: typing.Literal["hot", "many", "both"],
+    requests: int,
+    keys: int,
+    rate: str,
+    iterations: int,
+    warmup: int,
+    workers: int,
+    output: str,
+    redis_url: str,
+    memcached_host: str,
+    memcached_port: int,
+    no_slowapi: bool,
+    diagnose_gate: bool,
+    plot: typing.Optional[pathlib.Path],
+    plot_format: typing.Literal["svg", "png"],
 ) -> None:
     """
     Run one workload at increasing load to find where each implementation saturates.
@@ -922,19 +922,19 @@ def sweep(
 )
 @plot_options
 def scale(
-    backend,
-    strategy,
-    checkpoints,
-    concurrency,
-    workers,
-    output,
-    redis_url,
-    memcached_host,
-    memcached_port,
-    shards,
-    mp_max_keys,
-    plot,
-    plot_format,
+    backend: str,
+    strategy: str,
+    checkpoints: str,
+    concurrency: int,
+    workers: int,
+    output: str,
+    redis_url: str,
+    memcached_host: str,
+    memcached_port: int,
+    shards: int,
+    mp_max_keys: typing.Optional[int],
+    plot: typing.Optional[pathlib.Path],
+    plot_format: typing.Literal["svg", "png"],
 ) -> None:
     """
     Measure memory pressure and scalability as key cardinality grows.

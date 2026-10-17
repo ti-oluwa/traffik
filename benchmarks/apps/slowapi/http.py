@@ -1,5 +1,5 @@
 """
-SlowAPI-equivalent benchmark target, for the `compare` command.
+SlowAPI HTTP benchmark targets.
 
     BENCH_RATE=100/60s uvicorn benchmarks.apps.slowapi.http:app --port 8001
 """

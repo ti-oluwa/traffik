@@ -1,6 +1,5 @@
 """
-Middleware-mode benchmark target: `ThrottleMiddleware` applied to `/test`,
-with `/unthrottled` left exempt for the selective-throttling scenario.
+Traffik middleware-mode benchmark targets.
 
     BENCH_RATE=100/60s uvicorn benchmarks.apps.traffik.middleware:app --port 8000
 """

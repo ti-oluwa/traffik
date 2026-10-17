@@ -70,10 +70,10 @@ async def run_http_scenarios(
     scenarios: dict[str, HttpScenario],
     app_path: str,
     *,
-    forced_backend_kind: typing.Optional[str] = None,
+    backend_kind: typing.Optional[str] = None,
 ) -> list[AggregatedResult]:
     """
-    Run each selected HTTP/middleware/multiprocess scenario as a real
+    Run each selected HTTP/middleware/multiprocess scenario as a
     subprocess-backed benchmark.
 
     :param config: Global benchmark configuration.
@@ -81,7 +81,7 @@ async def run_http_scenarios(
     :param warmup_iterations: Warmup runs to discard before timing.
     :param scenarios: The scenario registry to resolve `scenario_keys` against.
     :param app_path: `module:app` path uvicorn/gunicorn will import.
-    :param forced_backend_kind: If given, overrides `config.backend_kind`
+    :param backend_kind: If given, overrides `config.backend_kind`
         for the spawned server (the `multiprocess` command forces
         `"multiprocess"` regardless of what `--backend` was given).
     :return: One `AggregatedResult` per successfully-run scenario.
@@ -100,7 +100,7 @@ async def run_http_scenarios(
             rate=scenario.rate,
             uid=f"bench_{scenario_key}",
             on_error=scenario.on_error,
-            backend_kind=forced_backend_kind,
+            backend_kind=backend_kind,
         )
 
         try:
@@ -121,7 +121,10 @@ async def run_http_scenarios(
                 for _ in range(warmup_iterations):
                     try:
                         await run_http_like_scenario(
-                            scenario, config, http_client, iteration=0
+                            scenario,
+                            config=config,
+                            client=http_client,
+                            iteration=0,
                         )
                         await server.reset(http_client)
                     except Exception as exc:
@@ -137,7 +140,10 @@ async def run_http_scenarios(
                     )
                     try:
                         result = await run_http_like_scenario(
-                            scenario, config, client=http_client, iteration=i
+                            scenario,
+                            config=config,
+                            client=http_client,
+                            iteration=i,
                         )
                         scenario_results.append(result)
                         await server.reset(http_client)
@@ -153,7 +159,7 @@ async def run_http_scenarios(
             results.append(
                 AggregatedResult(
                     scenario_name=scenario_results[0].scenario_name,
-                    backend_kind=forced_backend_kind or config.backend_kind,
+                    backend_kind=backend_kind or config.backend_kind,
                     strategy_kind=config.strategy_kind,
                     iterations=len(scenario_results),
                     results=scenario_results,
@@ -170,8 +176,8 @@ async def run_websocket_scenarios(
     app_path: str,
 ) -> list[AggregatedResult]:
     """
-    Run each selected WebSocket scenario as a real subprocess-backed
-    benchmark, driven by real WebSocket connections.
+    Run each selected WebSocket scenario as a subprocess-backed
+    benchmark, driven by WebSocket connections.
 
     :param config: Global benchmark configuration.
     :param scenario_keys: Short scenario names to run.

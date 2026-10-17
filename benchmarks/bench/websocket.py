@@ -9,8 +9,8 @@ async def run_scenarios(
     config: BenchmarkConfig, scenario_keys: list[str], warmup_iterations: int = 1
 ) -> list[AggregatedResult]:
     """
-    Run each selected WebSocket scenario as a real `uvicorn`/`gunicorn`
-    subprocess, driven by real WebSocket connections.
+    Run each selected WebSocket scenario as a `uvicorn`/`gunicorn`
+    subprocess, driven by WebSocket connections.
 
     :param config: Global benchmark configuration.
     :param scenario_keys: List of scenario short names to run.

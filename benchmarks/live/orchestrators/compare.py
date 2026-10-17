@@ -4,11 +4,6 @@ app and the SlowAPI app in turn with same rate, backend, identity rule,
 worker count, strategy, and traffic pattern, alternating which goes first from
 one scenario to the next so neither owns the first slot. It then pairs their
 `AggregatedResult`s into a `CompareResult`.
-
-This run them sequentially, not concurrently as running both apps at once would have their
-traffic compete for the same CPU cores and, for external backends, the same Redis/Memcached
-connection and whichever ran second would look artificially slower (or faster, depending on
-what else is happening on the machine). So one at a time keeps the two measurements independent.
 """
 
 import sys
@@ -39,14 +34,13 @@ SLOWAPI_APP_PATHS = {
 }
 SCENARIOS_BY_MODE = {"http": HTTP_SCENARIOS, "middleware": MIDDLEWARE_SCENARIOS}
 
-# Strategies both traffik and `limits` (SlowAPI's engine) implement the
-# same way. See benchmarks/apps/slowapi/config.py's STRATEGY_MAP.
+# Strategies both traffik and `limits` (SlowAPI's engine) implement the same way.
 SUPPORTED_STRATEGIES = {"fixed_window", "sliding_window_counter"}
 
 UNSUPPORTED_COMPARE_BACKENDS = {"multiprocess"}
 
 
-async def run_one_side(
+async def run_scenario(
     app_path: str,
     env: dict[str, str],
     scenario: HttpScenario,
@@ -55,7 +49,7 @@ async def run_one_side(
     warmup_iterations: int,
     label: str,
 ) -> typing.Optional[list[ScenarioResult]]:
-    """Spawn one app, run warmup + timed iterations against it, tear it down."""
+    """Spawn one app, run warmup and timed iterations against it, then tear it down."""
     try:
         server = await start_server(app_path, env=env, workers=config.workers)
     except ServerStartupError as exc:
@@ -119,17 +113,12 @@ async def run_compare_scenarios(
         equivalent.
     """
     if config.backend_kind in UNSUPPORTED_COMPARE_BACKENDS:
-        raise ValueError(
-            f"`compare` does not support --backend {config.backend_kind}: "
-            "SlowAPI's memory:// storage has no fork-safe equivalent to "
-            "`MultiProcessInMemoryBackend`, so there's no fair comparison to "
-            "run. Use aioredis or coredis (same Redis on both sides) for a "
-            "multi-worker-safe comparison instead."
-        )
+        raise ValueError(f"`compare` does not support --backend {config.backend_kind}")
+
     if config.strategy_kind not in SUPPORTED_STRATEGIES:
         raise ValueError(
             f"`compare` does not support --strategy {config.strategy_kind}: "
-            f"supported are {sorted(SUPPORTED_STRATEGIES)} (the only ones "
+            f"supported are {sorted(SUPPORTED_STRATEGIES)} (as these are the only ones "
             "both traffik and `limits` implement the same way)."
         )
 
@@ -163,20 +152,20 @@ async def run_compare_scenarios(
         if index % 2:
             sides.reverse()
 
-        side_results: dict[str, typing.Optional[list[ScenarioResult]]] = {}
+        scenario_results: dict[str, typing.Optional[list[ScenarioResult]]] = {}
         for label, app_path in sides:
             print(f"Running {scenario_key} against {label}...", file=sys.stderr)
-            side_results[label] = await run_one_side(
-                app_path,
-                env,
-                scenario,
-                config,
-                path,
-                warmup_iterations,
-                label,
+            scenario_results[label] = await run_scenario(
+                app_path=app_path,
+                env=env,
+                scenario=scenario,
+                config=config,
+                path=path,
+                warmup_iterations=warmup_iterations,
+                label=label,
             )
-        traffik_results = side_results["traffik"]
-        slowapi_results = side_results["SlowAPI"]
+        traffik_results = scenario_results["traffik"]
+        slowapi_results = scenario_results["SlowAPI"]
 
         if not traffik_results or not slowapi_results:
             print(

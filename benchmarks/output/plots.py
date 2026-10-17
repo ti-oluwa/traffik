@@ -1,8 +1,7 @@
 """
 Charts for benchmark results, written to disk when a command is run with `--plot`.
 
-Requires `matplotlib` (part of the `benchmark` extra). Every function returns
-the paths it wrote so the CLI can list them.
+Requires `matplotlib`.
 """
 
 import pathlib
@@ -148,14 +147,18 @@ def plot_aggregate(
         ("P99", [result.p99_ms for result in results], "#08519c"),
     ]
     if any(result.sample_count >= MIN_SAMPLES_FOR_P999 for result in results):
-        series.append((
-            "P99.9 (1,000+ samples)",
-            [
-                result.p999_ms if result.sample_count >= MIN_SAMPLES_FOR_P999 else 0.0
-                for result in results
-            ],
-            "#08306b",
-        ))
+        series.append(
+            (
+                "P99.9 (1,000+ samples)",
+                [
+                    result.p999_ms
+                    if result.sample_count >= MIN_SAMPLES_FOR_P999
+                    else 0.0
+                    for result in results
+                ],
+                "#08306b",
+            )
+        )
     bar_h = 0.8 / len(series)
     for i, (label, values, color) in enumerate(series):
         offsets = [y - 0.4 + bar_h * (i + 0.5) for y in ypos]
@@ -397,7 +400,9 @@ def plot_scale(
         label="server RSS growth (MiB)",
     )
     backend_used_memory = [
-        checkpoint.backend_used_memory_mb for checkpoint in checkpoints
+        checkpoint.backend_used_memory_mb
+        for checkpoint in checkpoints
+        if checkpoint.backend_used_memory_mb is not None
     ]
     if all(value is not None for value in backend_used_memory):
         axes.plot(

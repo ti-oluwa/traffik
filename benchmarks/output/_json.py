@@ -9,7 +9,7 @@ from benchmarks.types import AggregatedResult, CompareResult, ScaleResult, Sweep
 
 def result_to_dict(result: AggregatedResult) -> dict:
     """
-    Serialize an AggregatedResult to a plain dict suitable for JSON output.
+    Serialize an `AggregatedResult` to a plain dict suitable for JSON output.
 
     :param result: The aggregated result to serialize.
     :return: A dict with all computed properties included.
@@ -38,7 +38,7 @@ def result_to_dict(result: AggregatedResult) -> dict:
 
 def compare_result_to_dict(result: CompareResult) -> dict:
     """
-    Serialize a CompareResult to a plain dict suitable for JSON output.
+    Serialize a `CompareResult` to a plain dict suitable for JSON output.
 
     :param result: The paired traffik/SlowAPI result to serialize.
     :return: A dict with both sides' full aggregated results plus the
@@ -60,7 +60,7 @@ def compare_result_to_dict(result: CompareResult) -> dict:
 
 def scale_result_to_dict(result: ScaleResult) -> dict:
     """
-    Serialize a ScaleResult to a plain dict suitable for JSON output.
+    Serialize a `ScaleResult` to a plain dict suitable for JSON output.
 
     :param result: The scale run result to serialize.
     :return: A dict with backend/strategy/worker metadata and every checkpoint.
@@ -152,7 +152,7 @@ def print_scale_json(
 
 def sweep_result_to_dict(result: SweepResult) -> dict:
     """
-    Serialize a SweepResult to a plain dict suitable for JSON output.
+    Serialize a `SweepResult` to a plain dict suitable for JSON output.
 
     :param result: The sweep to serialize.
     :return: A dict with the sweep's settings and every measured point.

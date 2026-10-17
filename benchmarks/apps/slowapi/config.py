@@ -9,8 +9,7 @@ from benchmarks.env import get_env, int_env
 BACKEND = get_env("BENCH_BACKEND", "inmemory").lower()
 NAMESPACE = get_env("BENCH_NAMESPACE", "bench")
 
-# traffik strategy name -> limits strategy name. Only strategies both
-# libraries actually implement the same way belong here.
+# traffik strategy name to limits strategy name mapping.
 STRATEGY_MAP = {
     "fixed_window": "fixed-window",
     "sliding_window_counter": "sliding-window-counter",

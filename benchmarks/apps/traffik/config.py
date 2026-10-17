@@ -11,6 +11,9 @@ from benchmarks.env import get_env, int_env
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.memcached.aiomcache import MemcachedBackend as AiomcacheBackend
+from traffik.backends.memcached.emcache import (
+    MemcachedBackend as EmcacheBackend,
+)
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.backends.redis.aioredis import RedisBackend as AioredisBackend
 from traffik.backends.redis.coredis import RedisBackend as CoredisBackend
@@ -23,8 +26,7 @@ class FlushingAiomcacheBackend(AiomcacheBackend):
     `track_keys=True` is how the backend normally knows which keys to delete, but
     it costs extra Memcached round trips every time a key is created. SlowAPI's
     reset flushes the server, so tracking keys here would charge traffik for a
-    reset convenience the other side doesn't pay for. The backend's own docs
-    recommend this override for a dedicated server.
+    reset convenience SlowAPI doesn't pay for.
     """
 
     async def clear(self) -> None:
@@ -32,21 +34,13 @@ class FlushingAiomcacheBackend(AiomcacheBackend):
         await self.connection.flush_all()  # type: ignore[union-attr]
 
 
-def _flushing_emcache_backend() -> type[ThrottleBackend[typing.Any, typing.Any]]:
-    """The same for `emcache`, imported lazily as it is an optional dependency."""
-    from traffik.backends.memcached.emcache import (
-        MemcachedBackend as EmcacheBackend,
-    )
+class FlushingEmcacheBackend(EmcacheBackend):
+    """`emcache` backend whose `clear()` flushes the whole (dedicated) server."""
 
-    class FlushingEmcacheBackend(EmcacheBackend):
-        """`emcache` backend whose `clear()` flushes the whole (dedicated) server."""
-
-        async def clear(self) -> None:
-            self._assert_ready()
-            for address in self._host_addresses:
-                await self.connection.flush_all(address)  # type: ignore[union-attr]
-
-    return FlushingEmcacheBackend
+    async def clear(self) -> None:
+        self._assert_ready()
+        for address in self._host_addresses:
+            await self.connection.flush_all(address)  # type: ignore[union-attr]
 
 
 async def get_identifier(connection: Request) -> str:
@@ -61,10 +55,6 @@ async def get_identifier(connection: Request) -> str:
 
 
 def get_gate_kwargs() -> dict[str, int]:
-    """
-    `lock_contention_threshold` for the networked backends, from
-    `BENCH_LOCK_CONTENTION_THRESHOLD`; empty (backend default) when unset.
-    """
     threshold = int_env("BENCH_LOCK_CONTENTION_THRESHOLD", 0)
     return {"lock_contention_threshold": threshold} if threshold > 0 else {}
 
@@ -126,7 +116,7 @@ def backend_from_env() -> ThrottleBackend[typing.Any, typing.Any]:
             **get_gate_kwargs(),  # type: ignore[arg-type]
         )
     elif kind == "emcache":
-        return _flushing_emcache_backend()(  # type: ignore[call-arg]
+        return FlushingEmcacheBackend(
             host=get_env("BENCH_MEMCACHED_HOST", "localhost"),
             port=int_env("BENCH_MEMCACHED_PORT", 11211),
             namespace=namespace,

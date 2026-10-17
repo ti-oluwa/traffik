@@ -191,10 +191,7 @@ class ScenarioResult:
 
         :return: P50 latency in ms or 0.0 if empty.
         """
-        all_latencies = []
-        for result in self.results:
-            all_latencies.extend(result.latencies_seconds)
-        return percentile(sorted(all_latencies), 0.5) * 1000
+        return percentile(sorted(self.latencies_seconds), 0.5) * 1000
 
     @property
     def p95_ms(self) -> float:
@@ -203,10 +200,7 @@ class ScenarioResult:
 
         :return: P95 latency in ms or 0.0 if empty.
         """
-        all_latencies = []
-        for result in self.results:
-            all_latencies.extend(result.latencies_seconds)
-        return percentile(sorted(all_latencies), 0.95) * 1000
+        return percentile(sorted(self.latencies_seconds), 0.95) * 1000
 
     @property
     def p99_ms(self) -> float:
@@ -215,10 +209,7 @@ class ScenarioResult:
 
         :return: P99 latency in ms or 0.0 if empty.
         """
-        all_latencies = []
-        for result in self.results:
-            all_latencies.extend(result.latencies_seconds)
-        return percentile(sorted(all_latencies), 0.99) * 1000
+        return percentile(sorted(self.latencies_seconds), 0.99) * 1000
 
     @property
     def mean_ms(self) -> float:

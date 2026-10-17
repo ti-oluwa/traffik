@@ -2,17 +2,12 @@
 Spawns the benchmark target app as a real OS process (or a real
 multi-process cluster) and waits for it to accept connections.
 
-Two shapes:
+The server can start in two shapes:
 
-- `workers <= 1`: a single `uvicorn` process. This is what "one instance
-  of your app" looks like in production - a real event loop, a real
-  listening socket, real HTTP parsing.
+- `workers <= 1`: a single `uvicorn` process.
 - `workers > 1`: `gunicorn -k uvicorn.workers.UvicornWorker --preload
   --workers N`. Gunicorn imports the app module once in its master
-  process (satisfying `--preload`), then forks `N` worker processes from
-  it - the same `fork` start method
-  `traffik.backends.multiprocess.MultiProcessInMemoryBackend` is built
-  around (see its module docstring).
+  process, then forks `N` worker processes from it.
 """
 
 import asyncio

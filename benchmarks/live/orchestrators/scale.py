@@ -42,10 +42,6 @@ except ImportError:  # pragma: no cover
 
 TRAFFIK_APP_PATH = "benchmarks.apps.traffik.http:app"
 
-# Generous enough that a single request against a brand-new key is never
-# throttled as this command measures memory/latency against key count, not
-# throttling behaviour, and every checkpoint's requests each touch a key
-# that has never been seen before.
 GENEROUS_RATE = "1000000000/3600s"
 
 WARMUP_REQUESTS = 300
@@ -64,7 +60,7 @@ answer `ShardFullError` 500s) long before it is full overall.
 
 def default_multiprocess_capacity(checkpoints: typing.Sequence[int]) -> int:
     """
-    Capacity for the multiprocess backend when `--mp-max-keys` isn't given.
+    Computes the capacity for the multiprocess backend when `--mp-max-keys` isn't given.
 
     :param checkpoints: The checkpoint key counts being measured.
     :return: Enough room for the largest checkpoint, the warmup keys, and uneven
@@ -77,9 +73,9 @@ def bytes_to_mb(n: float) -> float:
     return n / (1024 * 1024)
 
 
-def server_memory_mb(process: "psutil.Process") -> float:
+def server_memory_mb(process: "psutil.Process") -> float:  # type: ignore
     """
-    Memory used by the server: its process plus every worker it forked.
+    Get memory used by the server - its process plus every worker it forked.
 
     With `--workers` above 1 the process we spawned is only gunicorn's master;
     the workers (which hold the keys) are its children, so measuring the master
@@ -97,10 +93,10 @@ def server_memory_mb(process: "psutil.Process") -> float:
         try:
             info = proc.memory_full_info()
             total += getattr(info, "pss", None) or info.rss
-        except (psutil.Error, AttributeError):
+        except (psutil.Error, AttributeError):  # type: ignore
             try:
                 total += proc.memory_info().rss
-            except psutil.Error:
+            except psutil.Error:  # type: ignore
                 continue
     return bytes_to_mb(total)
 
@@ -113,34 +109,31 @@ async def get_redis_used_memory(config: BenchmarkConfig) -> typing.Optional[floa
     connections for these backends, not the actual key data).
 
     :return: `used_memory` in MiB, or `None` if not applicable, `redis`
-        isn't installed, or the query fails for any reason - this is a
-        nice-to-have, not something worth failing the whole run over.
+        isn't installed, or the query fails for any reason.
     """
     if config.backend_kind not in ("aioredis", "coredis"):
         return None
     try:
-        import redis.asyncio as redis_asyncio
+        import redis.asyncio as aioredis
     except ImportError:
         return None
 
     try:
-        redis_client = redis_asyncio.Redis.from_url(config.redis_url)
+        client = aioredis.Redis.from_url(config.redis_url)
         try:
-            info = await redis_client.info("memory")
+            info = await client.info("memory")
             return bytes_to_mb(float(info["used_memory"]))
         finally:
-            await redis_client.aclose()
+            await client.aclose()
     except Exception:
         return None
 
 
 async def run_scale(
-    config: BenchmarkConfig,
-    checkpoints: list[int],
-    concurrency: int,
+    config: BenchmarkConfig, checkpoints: list[int], concurrency: int
 ) -> ScaleResult:
     """
-    Grow one continuously-running traffik server's backend to each of
+    Grow one continuously running traffik server's backend to each of
     `checkpoints` (cumulative, ascending distinct-key counts), measuring
     process RSS and per-batch latency/throughput after each one.
 
@@ -162,12 +155,17 @@ async def run_scale(
         )
 
     warn_unshared_state(config)
-    sorted_checkpoints = sorted({c for c in checkpoints if c > 0})
+    sorted_checkpoints = sorted(
+        {checkpoint for checkpoint in checkpoints if checkpoint > 0}
+    )
     if not sorted_checkpoints:
         raise ValueError("`checkpoints` must contain at least one positive value.")
 
     env = build_environment_variables(
-        config, rate=GENEROUS_RATE, uid="scale", on_error="raise"
+        config,
+        rate=GENEROUS_RATE,
+        uid="scale",
+        on_error="raise",
     )
     server = await start_server(TRAFFIK_APP_PATH, env=env, workers=config.workers)
 
@@ -230,7 +228,7 @@ async def run_scale(
                 (
                     latencies,
                     successful,
-                    _throttled,
+                    throttled,
                     errors,
                 ) = await live_client.send_concurrent_unique_keys(
                     http_client,
@@ -249,7 +247,7 @@ async def run_scale(
                 sorted_latencies = sorted(latencies)
                 p50_ms = percentile(sorted_latencies, 0.5) * 1000
                 p99_ms = percentile(sorted_latencies, 0.99) * 1000
-                answered = successful + _throttled
+                answered = successful + throttled
                 mean_rps = answered / elapsed if elapsed > 0 else 0.0
 
                 results.append(

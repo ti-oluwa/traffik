@@ -1,5 +1,5 @@
 """
-Turns one `HttpScenario`/`WebSocketScenario` plus a running `Server` into a single `ScenarioResult`.
+Runs a `HttpScenario`/`WebSocketScenario` plus a running `Server` to return a single `ScenarioResult`.
 """
 
 import asyncio
@@ -55,7 +55,7 @@ async def run_http_like_scenario(
         latencies, successful, throttled, errors = await live_client.send_waves(
             client, waves=scenario.waves, path=path, headers=scenario.headers
         )
-        paused_seconds = pause_seconds(scenario.waves)
+        paused_seconds = pause(scenario.waves)
     elif scenario.mode == "unique_keys_concurrent":
         key_mod = (
             config.concurrency if scenario.key_mod_is_concurrency else scenario.key_mod
@@ -132,7 +132,7 @@ async def run_http_like_scenario(
     )
 
 
-def pause_seconds(waves: typing.Sequence[tuple[int, float]]) -> float:
+def pause(waves: typing.Sequence[tuple[int, float]]) -> float:
     """
     Seconds a `waves` run sleeps between its bursts.
 
@@ -199,7 +199,7 @@ async def run_websocket_scenario(
             ws_url, waves=scenario.waves
         )
         total_requests = sum(count for count, _ in scenario.waves)
-        paused_seconds = pause_seconds(scenario.waves)
+        paused_seconds = pause(scenario.waves)
     elif scenario.mode == "concurrent_connections":
         latencies, successful, throttled = await live_client.ws_concurrent_connections(
             ws_url,

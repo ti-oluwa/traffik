@@ -1,5 +1,5 @@
 """
-Middleware-mode SlowAPI-equivalent, for `compare --mode middleware`.
+SlowAPI middleware benchmark targets.
 
     BENCH_RATE=100/60s uvicorn benchmarks.apps.slowapi.middleware:app --port 8001
 """

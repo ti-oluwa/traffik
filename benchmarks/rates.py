@@ -12,12 +12,8 @@ def to_limits_rate(rate: str) -> str:
     `limits.parse()` accepts (e.g. `"100/60second"`), for use with
     SlowAPI's `@limiter.limit(...)`.
 
-    Restricted to whole-second windows: every scenario in
-    `benchmarks.scenarios` uses one, and `limits`' smallest built-in
-    granularity is the second, so there is no equivalent representation
-    for a sub-second traffik rate - converting `"10/500ms"` to a coarser
-    unit would silently change the limit being compared, defeating the
-    point of a controlled comparison.
+    Restricted to whole-second windows as `limits`' smallest built-in
+    granularity is the second.
 
     :param rate: A traffik rate string, as accepted by `traffik.rates.Rate.parse`.
     :return: An equivalent rate string accepted by `limits.parse`.
@@ -27,8 +23,8 @@ def to_limits_rate(rate: str) -> str:
     if parsed.expire % 1000 != 0:
         raise ValueError(
             f"Rate {rate!r} has a sub-second window ({parsed.expire}ms); "
-            "SlowAPI/`limits` has no sub-second granularity, so `compare` "
-            "cannot represent this rate identically on both sides."
+            "SlowAPI/`limits` has no sub-second granularity. "
+            "Cannot represent this rate identically on both sides."
         )
     seconds = parsed.expire // 1000
     return f"{parsed.limit}/{seconds}second"

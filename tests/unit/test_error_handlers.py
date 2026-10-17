@@ -15,10 +15,11 @@ from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import Throttle, ThrottleExceptionInfo
 
+pytestmark = pytest.mark.anyio
+
 new_connection = functools.partial(make_connection, HTTPConnection)
 
 
-@pytest.mark.anyio
 @requires_throttle_type
 class TestBackendFallback:
     """Tests for fallback error handler."""
@@ -83,7 +84,6 @@ class TestBackendFallback:
                 await handler(exc_info["connection"], exc_info)
 
 
-@pytest.mark.anyio
 @requires_throttle_type
 class TestRetryHandler:
     """Tests for retry error handler."""
@@ -191,7 +191,6 @@ class TestRetryHandler:
             await handler(exc_info["connection"], exc_info)
 
 
-@pytest.mark.anyio
 @requires_throttle_type
 class TestFailover:
     """Tests for failover error handler."""

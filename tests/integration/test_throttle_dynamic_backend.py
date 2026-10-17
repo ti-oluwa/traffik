@@ -21,10 +21,10 @@ from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, Throttle
 
+pytestmark = [pytest.mark.anyio, pytest.mark.throttle]
 
-@pytest.mark.throttle
+
 @requires_throttle_type
-@pytest.mark.anyio
 async def test_dynamic_backend_resolves_from_context(
     inmemory_backend: InMemoryBackend,
     throttle_type: type[Throttle[HTTPConnection]],
@@ -36,9 +36,6 @@ async def test_dynamic_backend_resolves_from_context(
     - stays unset (`throttle.backend is None`) even after being called,
       picking up whatever backend context is active for that call instead.
     - correctly switches back to the outer context once an inner one exits.
-
-    No app involved - calls the throttle directly against a bare connection,
-    so this only needs to vary by `throttle_type`, not by framework.
     """
     with pytest.raises(ValueError):
         throttle_type(
@@ -76,8 +73,6 @@ async def test_dynamic_backend_resolves_from_context(
         assert throttle.backend is None
 
 
-@pytest.mark.throttle
-@pytest.mark.anyio
 async def test_dynamic_backend_with_lifespan(
     inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
 ) -> None:
@@ -147,8 +142,6 @@ async def test_dynamic_backend_with_lifespan(
         assert throttle.backend is None
 
 
-@pytest.mark.throttle
-@pytest.mark.anyio
 async def test_dynamic_backend_with_middleware(
     inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
 ) -> None:

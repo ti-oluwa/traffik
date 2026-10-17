@@ -14,19 +14,20 @@ tests or managed by CI infrastructure the test runner doesn't control.
 """
 
 import functools
-import os
 
 import pytest
 from starlette.requests import HTTPConnection
 
-from tests.conftest import REDIS_HOST, SkipBackend
-from tests.utils import make_connection
+from tests.conftest import REDIS_HOST
+from tests.utils import make_connection, requires_redis
 from traffik._utils import CircuitBreaker
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.error_handlers import failover, retry
 from traffik.exceptions import BackendConnectionError
 from traffik.registry import ThrottleRegistry
 from traffik.throttles.http import HTTPThrottle
+
+pytestmark = [pytest.mark.anyio, pytest.mark.backend, requires_redis]
 
 new_connection = functools.partial(make_connection, HTTPConnection)
 
@@ -35,13 +36,6 @@ new_connection = functools.partial(make_connection, HTTPConnection)
 UNREACHABLE_REDIS_URL = f"redis://{REDIS_HOST}:6399/0"
 
 
-def _require_redis() -> None:
-    if os.getenv("SKIP_REDIS_TESTS", "false").lower() in ("1", "true", "yes", "t"):
-        raise SkipBackend("Skipping Redis backend tests as per environment setting.")
-
-
-@pytest.mark.anyio
-@pytest.mark.backend
 class TestRedisConnectionFailure:
     """`RedisBackend` operations against an unreachable server must raise
     the library's own `BackendConnectionError`, not a raw driver exception,
@@ -49,7 +43,6 @@ class TestRedisConnectionFailure:
     """
 
     async def test_unreachable_backend_raises_backend_connection_error(self) -> None:
-        _require_redis()
         from traffik.backends.redis.aioredis import RedisBackend
 
         backend = RedisBackend(
@@ -80,7 +73,6 @@ class TestRedisConnectionFailure:
         exercising the code path relevant to a real request served while
         the connection is down.
         """
-        _require_redis()
         from traffik.backends.redis.aioredis import RedisBackend
 
         backend = RedisBackend(
@@ -99,15 +91,12 @@ class TestRedisConnectionFailure:
             await throttle(new_connection())
 
 
-@pytest.mark.anyio
-@pytest.mark.backend
 class TestRedisFailover:
     """`failover()` against a real unreachable `RedisBackend`, falling back
     to a real `InMemoryBackend`.
     """
 
     async def test_hit_succeeds_via_fallback(self) -> None:
-        _require_redis()
         from traffik.backends.redis.aioredis import RedisBackend
 
         primary = RedisBackend(
@@ -136,7 +125,6 @@ class TestRedisFailover:
         to the fallback without even attempting the (still unreachable)
         primary -- verified by the circuit's own state, not by timing.
         """
-        _require_redis()
         from traffik.backends.redis.aioredis import RedisBackend
 
         primary = RedisBackend(
@@ -176,7 +164,6 @@ class TestRedisFailover:
         recovers, it must exhaust its attempts and re-raise, not hang or
         swallow the failure silently.
         """
-        _require_redis()
         from traffik.backends.redis.aioredis import RedisBackend
 
         backend = RedisBackend(

@@ -1,6 +1,6 @@
 # Makefile for Traffik development and testing
 
-.PHONY: help install install-dev install-test install-docs install-bench test test-fast test-watch test-coverage test-coverage-xml test-coverage-html bench lint lint-fix format format-check security type-check quality build upload upload-test dev-setup clean ci docs debug-env example dev release-check
+.PHONY: help install install-dev install-test install-docs install-bench test test-fast test-unit test-integration test-watch test-coverage test-coverage-xml test-coverage-html bench lint lint-fix format format-check security type-check quality build upload upload-test dev-setup clean ci docs debug-env example dev release-check
 
 # Default target
 help: ## Show this help message
@@ -38,8 +38,14 @@ test: ## Run full test suite. Requires all dependencies.
 %:
 	@:
 
-test-fast: ## Run tests not marked as slow]
-	SKIP_REDIS_TESTS=true SKIP_MEMCACHED_TESTS=true uv run pytest -m "not slow" -x -v --tb=short
+test-fast: ## Run tests that need no external services (no Redis/Memcached), stop on first failure
+	SKIP_REDIS_TESTS=true SKIP_MEMCACHED_TESTS=true uv run pytest -x -v --tb=short
+
+test-unit: ## Run only tests marked 'unit'
+	uv run pytest -m unit -v --tb=short
+
+test-integration: ## Run only tests marked 'integration'
+	uv run pytest -m integration -v --tb=short
 
 test-watch: ## Run tests in watch mode
 	uv run pytest-watch --onpass "echo 'Tests passed'" --onfail "echo 'Tests failed'" -- -v --tb=short 

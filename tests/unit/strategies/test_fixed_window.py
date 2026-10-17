@@ -7,13 +7,14 @@ from unittest.mock import patch
 import pytest
 
 from tests.conftest import BackendGen
+from tests.utils import flaky
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
 from traffik.strategies.fixed_window import FixedWindowStrategy
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.strategy
+
 class TestFixedWindow:
     async def test_fixed_window_basic_limiting(self, backend: InMemoryBackend):
         """Test basic rate limiting with fixed window strategy."""
@@ -157,7 +158,7 @@ class TestFixedWindow:
             # Wait for next window. Next window starts at (window + 1) * 100ms
             await asyncio.sleep(0.11)  # 110ms to ensure new window
 
-    @pytest.mark.flaky(reruns=3, reruns_delay=2)
+    @flaky
     async def test_fixed_window_sub_second_rates(self, backend: InMemoryBackend):
         """Test with rates smaller than 1 second."""
 
@@ -176,8 +177,6 @@ class TestFixedWindow:
         assert wait <= 100, "Wait should be within window duration"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestFixedWindowWholeSecondWindows:
     """
     Regression tests for windows of one second or more.

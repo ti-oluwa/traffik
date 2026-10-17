@@ -69,20 +69,20 @@ explicit = true
 traffik = { workspace = true }
 
 [tool.pytest.ini_options]
-addopts = []
+addopts = ["--strict-markers"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
+    # Applied automatically from the test's directory (see `tests/conftest.py`).
+    "unit: fast, isolated tests (everything under `tests/unit/`).",
+    "integration: tests that exercise several components together (everything under `tests/integration/`).",
+    "backend: tests that test a throttle backend (everything under `tests/**/backends/`).",
+    "strategy: tests that test a throttling strategy (everything under `tests/**/strategies/`).",
+    # Applied explicitly, usually once per module through `pytestmark`.
     "flaky: marks tests that are flaky and reruns them on failure",
-    "slow: marks tests that are slow",
-    "benchmark: marks tests that benchmark performance",
-    "backend: tests that test a throttle backend",
-    "strategy: tests that test a throttling strategy",
     "throttle: tests that test throttling functionality",
     "registry: tests that test throttle registry functionality",
-    "redis: Redis related tests",
-    "memcached: tests that require Memcached access",
     "fastapi: tests that are specific to FastAPI",
     "websocket: tests that involve WebSocket functionality",
     "decorator: tests that test decorator functionality",

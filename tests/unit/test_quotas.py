@@ -13,13 +13,13 @@ from traffik.quotas import QuotaContext
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import Throttle, is_throttled
 
+pytestmark = [pytest.mark.anyio, pytest.mark.quota]
+
 new_connection = functools.partial(
     make_connection, path="/", query_string=b"", server=("testserver", 80)
 )
 
 
-@pytest.mark.anyio
-@pytest.mark.quota
 @requires_throttle_type
 class TestQuotaContext:
     async def test_quota_context_bound_mode(

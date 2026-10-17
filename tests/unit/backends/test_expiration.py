@@ -1,18 +1,15 @@
 """Tests for bounded random-sampling active expiration in in-memory backends."""
 
 import asyncio
-import multiprocessing
-import platform
 
 import pytest
 
+from tests.utils import requires_fork
 from traffik.backends.inmemory import InMemoryBackend
 
-MAYBE_POSIX = platform.system() != "Windows"
-SUPPORTS_FORK = MAYBE_POSIX and "fork" in multiprocessing.get_all_start_methods()
+pytestmark = pytest.mark.anyio
 
 
-@pytest.mark.anyio
 class TestInMemoryBackendExpiration:
     async def test_cleanup_reclaims_expired_keys(self):
         """`_cleanup()` removes expired keys via sampling, without a full scan."""
@@ -91,8 +88,7 @@ class TestInMemoryBackendExpiration:
             assert all(isinstance(v, str) for v in values)
 
 
-@pytest.mark.anyio
-@pytest.mark.skipif(not SUPPORTS_FORK, reason="Requires POSIX fork support")
+@requires_fork
 class TestMultiProcessInMemoryBackendExpiration:
     async def test_cleanup_reclaims_expired_slots(self):
         """`_cleanup()` reclaims expired slots via bucket sampling."""

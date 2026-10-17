@@ -17,18 +17,15 @@ from traffik.decorators.generic import throttled
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
+pytestmark = [pytest.mark.anyio, pytest.mark.throttle, pytest.mark.decorator]
 
-@pytest.mark.throttle
-@pytest.mark.decorator
+
 def test_throttled_no_throttles_raises() -> None:
     """`throttled()` with no throttles raises ValueError. No app involved."""
     with pytest.raises(ValueError, match="At least one throttle"):
         throttled()
 
 
-@pytest.mark.throttle
-@pytest.mark.decorator
-@pytest.mark.anyio
 async def test_throttled_no_connection_raises() -> None:
     """Raises ValueError when no HTTPConnection/WebSocket is in the call args."""
     throttle = HTTPThrottle(
@@ -46,9 +43,6 @@ async def test_throttled_no_connection_raises() -> None:
         await bad_endpoint("hello")  # type: ignore[arg-type]
 
 
-@pytest.mark.throttle
-@pytest.mark.decorator
-@pytest.mark.anyio
 async def test_throttled_websocket_no_connection_raises() -> None:
     """Raises ValueError when no WebSocket is in the call args."""
     throttle = WebSocketThrottle(
@@ -66,9 +60,6 @@ async def test_throttled_websocket_no_connection_raises() -> None:
         await bad_ws_endpoint("hello")  # type: ignore[arg-type]
 
 
-@pytest.mark.throttle
-@pytest.mark.decorator
-@pytest.mark.anyio
 async def test_throttled_preserves_function_metadata() -> None:
     """`@throttled` preserves the wrapped function's `__name__`/`__doc__`."""
     throttle = HTTPThrottle(
@@ -87,9 +78,6 @@ async def test_throttled_preserves_function_metadata() -> None:
     assert my_endpoint.__doc__ == "My endpoint docstring."
 
 
-@pytest.mark.throttle
-@pytest.mark.decorator
-@pytest.mark.anyio
 class TestDecoratorWithHTTPThrottle:
     async def test_single_throttle(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
@@ -305,10 +293,7 @@ class TestDecoratorWithHTTPThrottle:
                 assert response.headers.get("Retry-After") is not None
 
 
-@pytest.mark.throttle
-@pytest.mark.decorator
 @pytest.mark.websocket
-@pytest.mark.anyio
 class TestDecoratorWithWebSocketThrottle:
     async def test_single_throttle(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework

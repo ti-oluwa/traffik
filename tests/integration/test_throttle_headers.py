@@ -21,9 +21,9 @@ from traffik.headers import Header
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
+pytestmark = [pytest.mark.anyio, pytest.mark.throttle]
 
-@pytest.mark.throttle
-@pytest.mark.anyio
+
 class TestHTTPThrottleHeaders:
     async def test_static_string_headers(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework

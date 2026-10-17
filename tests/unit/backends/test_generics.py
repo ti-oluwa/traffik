@@ -12,9 +12,9 @@ from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.exceptions import BackendConnectionError, LockAcquisitionError
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.backend
+
 class TestThrottleBackend:
     async def test_get_key(self, backends: BackendGen) -> None:
         for backend in backends(namespace="generics"):

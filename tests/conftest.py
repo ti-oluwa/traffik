@@ -4,6 +4,7 @@ import datetime
 import logging
 import multiprocessing
 import os
+import pathlib
 import platform
 import sys
 import typing
@@ -12,7 +13,12 @@ import pytest
 from starlette.requests import HTTPConnection
 
 from tests.frameworks import ASGIFramework, FastAPIAdapter, StarletteAdapter
-from tests.utils import HTTPConnectionT
+from tests.utils import (
+    SKIP_MEMCACHED_TESTS,
+    SKIP_REDIS_TESTS,
+    SUPPORTS_FORK,
+    HTTPConnectionT,
+)
 from traffik.backends.base import ThrottleBackend
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.strategies import (
@@ -25,6 +31,39 @@ from traffik.strategies import (
 from traffik.throttles import ThrottleStrategy
 
 logger = logging.getLogger(__name__)
+
+DIRECTORY_MARKERS = {
+    "unit": "unit",
+    "integration": "integration",
+    "backends": "backend",
+    "strategies": "strategy",
+}
+"""Test directory name -> marker applied to every test collected beneath it."""
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark tests from the directory they live in (`unit/backends/` -> `unit`, `backend`)."""
+    tests_dir = pathlib.Path(__file__).parent
+    for item in items:
+        for part in item.path.relative_to(tests_dir).parent.parts:
+            marker_name = DIRECTORY_MARKERS.get(part)
+            if marker_name is not None:
+                item.add_marker(getattr(pytest.mark, marker_name))
+
+
+def pytest_report_header() -> list[str]:
+    """Say which backends are disabled, so reduced `backends` coverage is visible."""
+    disabled = [
+        name
+        for name, skipped in (
+            ("redis (SKIP_REDIS_TESTS)", SKIP_REDIS_TESTS),
+            ("memcached (SKIP_MEMCACHED_TESTS)", SKIP_MEMCACHED_TESTS),
+            ("multiprocess (no fork support)", not SUPPORTS_FORK),
+        )
+        if skipped
+    ]
+    return [f"traffik: disabled backends: {', '.join(disabled)}"] if disabled else []
+
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = os.getenv("REDIS_PORT", "6379")
@@ -48,7 +87,7 @@ def get_inmemory_backend(namespace: str, persistent: bool) -> InMemoryBackend:
 
 
 def get_aioredis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
-    if os.getenv("SKIP_REDIS_TESTS", "false").lower() in ("1", "true", "yes", "t"):
+    if SKIP_REDIS_TESTS:
         raise SkipBackend("Skipping Redis backend tests as per environment setting.")
 
     from traffik.backends.redis.aioredis import RedisBackend
@@ -63,7 +102,7 @@ def get_aioredis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
 
 
 def get_coredis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
-    if os.getenv("SKIP_REDIS_TESTS", "false").lower() in ("1", "true", "yes", "t"):
+    if SKIP_REDIS_TESTS:
         raise SkipBackend("Skipping Redis backend tests as per environment setting.")
 
     from traffik.backends.redis.coredis import RedisBackend
@@ -77,7 +116,7 @@ def get_coredis_backend(namespace: str, persistent: bool) -> ThrottleBackend:
 
 
 def get_aiomcache_backend(namespace: str, persistent: bool) -> ThrottleBackend:
-    if os.getenv("SKIP_MEMCACHED_TESTS", "false").lower() in ("1", "true", "yes", "t"):
+    if SKIP_MEMCACHED_TESTS:
         raise SkipBackend(
             "Skipping Memcached backend tests as per environment setting."
         )
@@ -100,7 +139,7 @@ def get_aiomcache_backend(namespace: str, persistent: bool) -> ThrottleBackend:
 
 
 def get_emcache_backend(namespace: str, persistent: bool) -> ThrottleBackend:
-    if os.getenv("SKIP_MEMCACHED_TESTS", "false").lower() in ("1", "true", "yes", "t"):
+    if SKIP_MEMCACHED_TESTS:
         raise SkipBackend(
             "Skipping Memcached backend tests as per environment setting."
         )
@@ -133,7 +172,6 @@ def get_multiprocess_backend(namespace: str, persistent: bool) -> ThrottleBacken
     )
 
 
-MAYBE_POSIX = platform.system() != "Windows"
 BACKEND_FACTORIES: list[
     typing.Callable[[str, bool], ThrottleBackend[typing.Any, typing.Any]]
 ] = [get_inmemory_backend, get_aiomcache_backend, get_aioredis_backend]
@@ -141,14 +179,13 @@ BACKEND_FACTORIES: list[
 if sys.version_info >= (3, 10):
     BACKEND_FACTORIES.append(get_coredis_backend)
 
-if MAYBE_POSIX:
-    supports_fork = "fork" in multiprocessing.get_all_start_methods()
+if platform.system() != "Windows":
     BACKEND_FACTORIES.append(get_emcache_backend)
 
-    if supports_fork:
-        BACKEND_FACTORIES.append(get_multiprocess_backend)
+if SUPPORTS_FORK:
+    BACKEND_FACTORIES.append(get_multiprocess_backend)
 
-    if supports_fork and multiprocessing.get_start_method(allow_none=True) != "fork":
+    if multiprocessing.get_start_method(allow_none=True) != "fork":
         multiprocessing.set_start_method("fork", force=True)
 
 

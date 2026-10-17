@@ -16,6 +16,8 @@ from tests.utils import default_client_identifier, make_client
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
+pytestmark = [pytest.mark.anyio, pytest.mark.throttle]
+
 
 async def tenant_identifier(connection: HTTPConnection) -> str:
     auth_header = connection.headers.get("authorization", "")
@@ -26,8 +28,6 @@ async def tenant_identifier(connection: HTTPConnection) -> str:
     return "unknown"
 
 
-@pytest.mark.throttle
-@pytest.mark.anyio
 class TestMultiServicePatterns:
     async def test_multi_service_shared_backend(
         self, backends: BackendGen, web_framework: ASGIFramework

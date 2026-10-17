@@ -12,10 +12,10 @@ from traffik.backends.inmemory import InMemoryBackend
 from traffik.registry import Bypass, Rule, ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
+pytestmark = [pytest.mark.anyio, pytest.mark.throttle]
+
 
 @pytest.mark.registry
-@pytest.mark.throttle
-@pytest.mark.anyio
 class TestThrottleRules:
     async def test_bypass_rule_skips_throttle_for_matching_path(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework

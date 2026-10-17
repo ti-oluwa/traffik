@@ -41,10 +41,10 @@ from traffik.throttles import (
     is_throttled,
 )
 
+pytestmark = [pytest.mark.anyio, pytest.mark.throttle]
 
-@pytest.mark.throttle
+
 @requires_throttle_type
-@pytest.mark.anyio
 class TestThrottleBasic:
     async def test_throttle_initialization(
         self,
@@ -281,8 +281,6 @@ class TestThrottleBasic:
         assert throttle.backend is new_backend
 
 
-@pytest.mark.throttle
-@pytest.mark.anyio
 class TestConnectionIdentifierContext:
     """
     Tests for `ConnectionIdentifier` supporting both the legacy `(connection)`
@@ -520,8 +518,6 @@ class TestConnectionIdentifierContext:
         )
 
 
-@pytest.mark.throttle
-@pytest.mark.anyio
 async def test_disabled_http_throttle_skips_hit() -> None:
     """A disabled throttle passes all requests through, even past the rate limit.
 
@@ -549,8 +545,6 @@ async def test_disabled_http_throttle_skips_hit() -> None:
         assert result is req
 
 
-@pytest.mark.throttle
-@pytest.mark.anyio
 class TestHTTPThrottle:
     async def test_http_throttle_skip_handler_marks_wait_without_handler(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
@@ -756,9 +750,7 @@ class TestHTTPThrottle:
                     assert status_codes.count(429) == 2
 
 
-@pytest.mark.throttle
 @pytest.mark.websocket
-@pytest.mark.anyio
 class TestWebSocketThrottle:
     async def test_websocket_throttle_skip_handler_marks_wait_without_handler(
         self,

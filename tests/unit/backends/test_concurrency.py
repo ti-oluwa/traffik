@@ -7,9 +7,9 @@ import pytest
 
 from tests.conftest import BackendGen
 
+pytestmark = [pytest.mark.anyio, pytest.mark.concurrent]
 
-@pytest.mark.anyio
-@pytest.mark.backend
+
 @pytest.mark.concurrent
 class TestBackendConcurrency:
     async def test_increment_high_concurrency(self, backends: BackendGen) -> None:
@@ -124,8 +124,6 @@ class TestBackendConcurrency:
                 assert final == "300"
 
 
-@pytest.mark.anyio
-@pytest.mark.backend
 @pytest.mark.concurrent
 class TestBackendCancellation:
     """

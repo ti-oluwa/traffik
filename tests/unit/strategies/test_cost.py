@@ -8,9 +8,9 @@ from traffik.rates import Rate
 from traffik.strategies.token_bucket import TokenBucketWithDebtStrategy
 from traffik.throttles import ThrottleStrategy
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.strategy
+
 class TestStrategyCost:
     async def test_cost(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]

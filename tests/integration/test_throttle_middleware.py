@@ -21,10 +21,9 @@ from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle, get_wait, is_throttled
 
+pytestmark = [pytest.mark.anyio, pytest.mark.throttle, pytest.mark.middleware]
 
-@pytest.mark.throttle
-@pytest.mark.middleware
-@pytest.mark.anyio
+
 class TestMiddlewareThrottleBasic:
     async def test_initialization(self) -> None:
         throttle = HTTPThrottle(
@@ -230,9 +229,6 @@ class TestMiddlewareThrottleBasic:
         assert is_throttled(second)
 
 
-@pytest.mark.throttle
-@pytest.mark.middleware
-@pytest.mark.anyio
 class TestMiddlewareThrottleRegexMatching:
     """More `path=` regex edge cases - still no app needed."""
 
@@ -340,9 +336,6 @@ class TestMiddlewareThrottleRegexMatching:
                 assert await middleware_throttle(request) is request
 
 
-@pytest.mark.throttle
-@pytest.mark.middleware
-@pytest.mark.anyio
 class TestThrottleMiddlewareBasic:
     async def test_basic_functionality(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
@@ -787,10 +780,7 @@ class TestThrottleMiddlewareBasic:
             assert (await client.get("/api/users/list")).status_code == 429
 
 
-@pytest.mark.throttle
-@pytest.mark.middleware
 @pytest.mark.websocket
-@pytest.mark.anyio
 class TestThrottleMiddlewareWebSocket:
     async def test_websocket_passthrough(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
@@ -926,9 +916,6 @@ class TestThrottleMiddlewareWebSocket:
                     await ws.receive_json()
 
 
-@pytest.mark.throttle
-@pytest.mark.middleware
-@pytest.mark.anyio
 class TestThrottleMiddlewareBackends:
     async def test_multiple_backends(
         self, backends: BackendGen, web_framework: ASGIFramework
@@ -1012,9 +999,6 @@ class TestThrottleMiddlewareBackends:
                 assert status_codes.count(429) == 7
 
 
-@pytest.mark.throttle
-@pytest.mark.middleware
-@pytest.mark.anyio
 class TestThrottleMiddlewareStreaming:
     async def test_with_streaming_responses(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
@@ -1204,9 +1188,6 @@ def make_ws_throttle(uid: str, cost: typing.Optional[int] = None) -> MiddlewareT
     )
 
 
-@pytest.mark.throttle
-@pytest.mark.middleware
-@pytest.mark.anyio
 class TestPrepThrottles:
     """`prep_throttles` - pure function, no app, no framework."""
 
@@ -1282,9 +1263,6 @@ class TestPrepThrottles:
         assert result["websocket"] == [t_ws1, t_ws2]
 
 
-@pytest.mark.throttle
-@pytest.mark.middleware
-@pytest.mark.anyio
 async def test_middleware_sort_parameter_integration(
     inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
 ) -> None:

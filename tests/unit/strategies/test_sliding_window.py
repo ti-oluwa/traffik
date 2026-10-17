@@ -12,9 +12,9 @@ from traffik.strategies.sliding_window import (
     SlidingWindowLogStrategy,
 )
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.strategy
+
 class TestSlidingWindowLogStrategy:
     """Tests for `SlidingWindowLogStrategy`."""
 
@@ -128,8 +128,6 @@ class TestSlidingWindowLogStrategy:
             assert wait == 0, "Unlimited rate should always allow"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestSlidingWindowCounterStrategy:
     """Tests for SlidingWindowCounterStrategy."""
 

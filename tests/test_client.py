@@ -17,8 +17,9 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from tests.client import AsyncTestClient, LifespanStartupError
 
+pytestmark = [pytest.mark.anyio, pytest.mark.unit]
 
-@pytest.mark.anyio
+
 class TestHTTP:
     async def test_get(self) -> None:
         async def endpoint(request: Request) -> JSONResponse:
@@ -152,7 +153,6 @@ class TestHTTP:
             assert response.status_code == 500
 
 
-@pytest.mark.anyio
 class TestWebSocket:
     async def test_send_and_receive_json(self) -> None:
         async def ws_endpoint(websocket: WebSocket) -> None:
@@ -260,7 +260,6 @@ class TestWebSocket:
             assert ws.accepted_subprotocol == "chat"
 
 
-@pytest.mark.anyio
 class TestLifespan:
     async def test_startup_and_shutdown_run(self) -> None:
         events = []

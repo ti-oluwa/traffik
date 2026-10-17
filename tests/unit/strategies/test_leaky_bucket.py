@@ -11,9 +11,9 @@ from traffik.strategies.leaky_bucket import (
     LeakyBucketWithQueueStrategy,
 )
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.strategy
+
 class TestLeakyBucketStrategy:
     """Tests for LeakyBucketStrategy."""
 
@@ -196,8 +196,6 @@ class TestLeakyBucketStrategy:
         assert 3 <= allowed_count <= 7, f"Should allow ~5 requests, got {allowed_count}"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestLeakyBucketWithQueueStrategy:
     """Tests for LeakyBucketWithQueueStrategy."""
 

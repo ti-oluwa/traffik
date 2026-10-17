@@ -12,9 +12,9 @@ from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.exceptions import LockTimeoutError
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.backend
+
 class TestLocalTTLFactorValidation:
     """`local_ttl_factor` must be in `(0, 1]` when `enforce_ttl_locally` and
     `ttl` are both set; the validation lives in the shared base class, so a
@@ -64,8 +64,6 @@ class TestLocalTTLFactorValidation:
             backend.lock("l", ttl=1.0, enforce_ttl_locally=False, local_ttl_factor=0.0)
 
 
-@pytest.mark.anyio
-@pytest.mark.backend
 class TestInMemoryAndMultiprocessLockTTLDefaults:
     """Regression tests: `InMemoryBackend.lock(...)`/`MultiProcessInMemoryBackend.lock(...)`
     default to `enforce_ttl_locally=True, local_ttl_factor=1.0` (appropriate, since
@@ -87,8 +85,6 @@ class TestInMemoryAndMultiprocessLockTTLDefaults:
             assert not lock_context._acquired
 
 
-@pytest.mark.anyio
-@pytest.mark.backend
 class TestLockTimeoutErrorSurfacing:
     """`LockTimeoutError` must always surface once the TTL watchdog fires,
     regardless of what the protected body does with the `CancelledError` it

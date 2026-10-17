@@ -1,3 +1,6 @@
+import multiprocessing
+import os
+import platform
 import typing
 
 import pytest
@@ -10,6 +13,36 @@ from typing_extensions import TypeVar
 from tests.client import AsyncTestClient
 from traffik.throttles import HTTPThrottle, Throttle, WebSocketThrottle
 from traffik.typing import EXEMPTED
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    """Whether the environment variable `name` is set to a truthy value."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() in ("1", "true", "yes", "t")
+
+
+SKIP_REDIS_TESTS = env_flag("SKIP_REDIS_TESTS")
+SKIP_MEMCACHED_TESTS = env_flag("SKIP_MEMCACHED_TESTS")
+SUPPORTS_FORK = (
+    platform.system() != "Windows" and "fork" in multiprocessing.get_all_start_methods()
+)
+
+requires_redis = pytest.mark.skipif(
+    SKIP_REDIS_TESTS, reason="Redis tests disabled via SKIP_REDIS_TESTS."
+)
+"""Skip tests that need Redis when `SKIP_REDIS_TESTS` is set."""
+requires_memcached = pytest.mark.skipif(
+    SKIP_MEMCACHED_TESTS, reason="Memcached tests disabled via SKIP_MEMCACHED_TESTS."
+)
+"""Skip tests that need Memcached when `SKIP_MEMCACHED_TESTS` is set."""
+requires_fork = pytest.mark.skipif(
+    not SUPPORTS_FORK, reason="Requires POSIX `fork` start method support."
+)
+"""Skip tests that need the `fork` start method (not available on Windows)."""
+flaky = pytest.mark.flaky(reruns=3, reruns_delay=2)
+"""Rerun a timing-sensitive test up to 3 times (2s apart) before failing."""
 
 
 async def default_client_identifier(connection: HTTPConnection) -> str:

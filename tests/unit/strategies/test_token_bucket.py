@@ -11,9 +11,9 @@ from traffik.strategies.token_bucket import (
     TokenBucketWithDebtStrategy,
 )
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.strategy
+
 class TestTokenBucketStrategy:
     """Tests for TokenBucketStrategy."""
 
@@ -179,8 +179,6 @@ class TestTokenBucketStrategy:
         assert wait <= 1000, "Wait should be within reasonable bounds"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestTokenBucketWithDebtStrategy:
     """Tests for TokenBucketWithDebtStrategy."""
 

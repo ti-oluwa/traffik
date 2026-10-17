@@ -25,9 +25,9 @@ from traffik.backends.inmemory import InMemoryBackend
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle, is_throttled
 
+pytestmark = [pytest.mark.anyio, pytest.mark.throttle]
 
-@pytest.mark.throttle
-@pytest.mark.anyio
+
 class TestHTTPThrottleCost:
     async def test_default_cost(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
@@ -182,9 +182,7 @@ class TestHTTPThrottleCost:
                 assert response.status_code == 200
 
 
-@pytest.mark.throttle
 @pytest.mark.websocket
-@pytest.mark.anyio
 class TestWebSocketThrottleCost:
     async def test_cost_per_message(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework

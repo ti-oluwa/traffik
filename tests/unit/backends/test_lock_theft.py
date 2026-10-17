@@ -1,37 +1,30 @@
 """Regression tests for lock-theft protection."""
 
 import asyncio
-import os
 
 import pytest
 
-from tests.conftest import MEMCACHED_HOST, MEMCACHED_PORT, BackendGen, SkipBackend
+from tests.conftest import MEMCACHED_HOST, MEMCACHED_PORT, BackendGen
+from tests.utils import requires_memcached
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.backends.memcached.aiomcache import MemcachedBackend as AioMcacheBackend
 from traffik.backends.memcached.emcache import MemcachedBackend as EmcacheBackend
 from traffik.backends.multiprocess import MultiProcessInMemoryBackend
 from traffik.exceptions import LockReleaseError
 
+pytestmark = pytest.mark.anyio
+
 # Bounded so a crashed/killed test run can't leave a permanent key behind to
 # poison a later run against the same server.
 INJECTED_KEY_TTL = 30
 
 
-def require_memcached() -> None:
-    if os.getenv("SKIP_MEMCACHED_TESTS", "false").lower() in ("1", "true", "yes", "t"):
-        raise SkipBackend(
-            "Skipping Memcached backend tests as per environment setting."
-        )
-
-
-@pytest.mark.anyio
-@pytest.mark.backend
+@requires_memcached
 class TestAiomcacheLockTheftProtection:
     async def test_release_does_not_delete_a_reacquired_lock(self) -> None:
         """
         Inject a re-acquisition exactly between the ownership read and the CAS.
         """
-        require_memcached()
         backend = AioMcacheBackend(
             host=MEMCACHED_HOST,
             port=MEMCACHED_PORT,
@@ -72,7 +65,6 @@ class TestAiomcacheLockTheftProtection:
         """Sanity check: the fix must not break the ordinary, uncontended
         release path.
         """
-        require_memcached()
         backend = AioMcacheBackend(
             host=MEMCACHED_HOST,
             port=MEMCACHED_PORT,
@@ -88,11 +80,9 @@ class TestAiomcacheLockTheftProtection:
                 pass
 
 
-@pytest.mark.anyio
-@pytest.mark.backend
+@requires_memcached
 class TestEmcacheLockTheftProtection:
     async def test_release_does_not_delete_a_reacquired_lock(self) -> None:
-        require_memcached()
         backend = EmcacheBackend(
             host=MEMCACHED_HOST,
             port=MEMCACHED_PORT,
@@ -129,7 +119,6 @@ class TestEmcacheLockTheftProtection:
             await client.delete(name_bytes)  # cleanup
 
     async def test_release_still_deletes_when_uncontended(self) -> None:
-        require_memcached()
         backend = EmcacheBackend(
             host=MEMCACHED_HOST,
             port=MEMCACHED_PORT,
@@ -144,8 +133,6 @@ class TestEmcacheLockTheftProtection:
                 pass
 
 
-@pytest.mark.anyio
-@pytest.mark.backend
 class TestRedisLockTheftProtection:
     """
     The default Redis lock (`_AsyncRedisLock`) already uses a single

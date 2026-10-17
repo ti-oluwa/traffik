@@ -6,6 +6,7 @@ import datetime
 import pytest
 from starlette.requests import HTTPConnection
 
+from tests.utils import flaky
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
 from traffik.strategies.custom import (
@@ -19,9 +20,9 @@ from traffik.strategies.custom import (
 )
 from traffik.throttles import ThrottleStrategy
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.strategy
+
 class TestTieredRateStrategy:
     """Tests for `TieredRateStrategy`."""
 
@@ -77,8 +78,6 @@ class TestTieredRateStrategy:
         assert wait == 0
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestGCRAStrategy:
     """Tests for GCRA (Generic Cell Rate Algorithm) Strategy."""
 
@@ -139,8 +138,6 @@ class TestGCRAStrategy:
         assert 90 <= wait <= 110, f"Wait time {wait} should be ~100ms"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestAdaptiveThrottleStrategy:
     """Tests for `AdaptiveThrottleStrategy`."""
 
@@ -190,8 +187,6 @@ class TestAdaptiveThrottleStrategy:
         )
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestPriorityQueueStrategy:
     """Tests for `PriorityQueueStrategy`."""
 
@@ -228,9 +223,7 @@ class TestPriorityQueueStrategy:
         )
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-@pytest.mark.flaky(reruns=3, reruns_delay=2)
+@flaky
 class TestQuotaWithRolloverStrategy:
     """Tests for `QuotaWithRolloverStrategy`."""
 
@@ -329,8 +322,6 @@ class TestQuotaWithRolloverStrategy:
         assert wait > 0, "Should be throttled with no rollover"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestTimeOfDayStrategy:
     """Tests for `TimeOfDayStrategy`."""
 
@@ -531,8 +522,6 @@ class TestTimeOfDayStrategy:
         assert wait > 0, f"Should be throttled after {expected_limit} requests"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestCostBasedTokenBucketStrategy:
     """Tests for `CostBasedTokenBucketStrategy`."""
 
@@ -695,8 +684,6 @@ class TestCostBasedTokenBucketStrategy:
         assert wait == 0
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 async def test_all_strategies_handle_unlimited_rate(
     backend: InMemoryBackend, custom_strategy: ThrottleStrategy[HTTPConnection]
 ):
@@ -708,8 +695,6 @@ async def test_all_strategies_handle_unlimited_rate(
         assert wait == 0, f"{custom_strategy.__class__.__name__} should allow unlimited"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestCustomStrategiesGetStat:
     """Tests for get_stat methods on custom strategies."""
 

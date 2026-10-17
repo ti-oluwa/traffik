@@ -5,6 +5,7 @@ import asyncio
 import pytest
 from starlette.requests import HTTPConnection
 
+from tests.utils import flaky
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
 from traffik.strategies.fixed_window import FixedWindowStrategy
@@ -22,9 +23,9 @@ from traffik.strategies.token_bucket import (
 )
 from traffik.throttles import ThrottleStrategy
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.strategy
+
 class TestStrategyStat:
     async def test_fixed_window_stat(self, backend: InMemoryBackend):
         """Test Fixed Window strategy statistics."""
@@ -274,7 +275,7 @@ class TestStrategyStat:
         stat = await strategy.get_stat(key, rate, backend)  # type: ignore
         assert stat.hits_remaining == float("inf"), "Should still be infinite"
 
-    @pytest.mark.flaky(reruns=3, reruns_delay=2)
+    @flaky
     async def test_stat_after_window_reset(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
     ):

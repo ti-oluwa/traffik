@@ -12,6 +12,8 @@ from traffik.exceptions import ConfigurationError
 from traffik.registry import Bypass, Rule, ThrottleRegistry, prep_rules
 from traffik.throttles import Throttle
 
+pytestmark = [pytest.mark.anyio, pytest.mark.registry]
+
 RULE_TYPES = [Rule, Bypass]
 
 
@@ -128,7 +130,6 @@ class TestThrottleRuleBasic:
         assert len({r1, r2}) == 2
 
 
-@pytest.mark.anyio
 class TestBaseThrottleRuleCheck:
     async def test_no_constraints_matches_everything(self) -> None:
         rule = Rule()
@@ -259,7 +260,6 @@ class TestBaseThrottleRuleCheck:
         assert await rule.check(connection) is True
 
 
-@pytest.mark.anyio
 class TestBypassThrottleRuleCheck:
     """Bypass inverts check: returns False when conditions match (bypass)."""
 
@@ -539,7 +539,6 @@ def _make_throttle(
     )
 
 
-@pytest.mark.anyio
 class TestThrottleRegistryGetThrottle:
     @requires_throttle_type
     async def test_returns_instance(self, throttle_type: type[Throttle]) -> None:
@@ -561,7 +560,6 @@ class TestThrottleRegistryGetThrottle:
 
 
 @requires_throttle_type
-@pytest.mark.anyio
 class TestThrottleRegistryDisableEnable:
     async def test_disable_returns_true_when_found(
         self, throttle_type: type[Throttle]

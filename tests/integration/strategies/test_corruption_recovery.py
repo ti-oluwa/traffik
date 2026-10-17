@@ -26,6 +26,8 @@ from traffik.strategies.token_bucket import (
     TokenBucketWithDebtStrategy,
 )
 
+pytestmark = pytest.mark.anyio
+
 GARBAGE_VALUES = [
     "not_valid_data!!!",
     "AAAA",
@@ -39,8 +41,6 @@ def get_corrupt_key(backend: InMemoryBackend, key: str) -> str:
     return backend.get_key(key)
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestFixedWindowCorruptionRecovery:
     async def test_corrupted_counter_for_non_subsecond(self, backend: InMemoryBackend):
         strategy = FixedWindowStrategy()
@@ -70,8 +70,6 @@ class TestFixedWindowCorruptionRecovery:
         assert wait == 0, "Should allow first request with corrupted window start"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestTokenBucketCorruptionRecovery:
     async def test_corrupted_state_allows_request(self, backend: InMemoryBackend):
         strategy = TokenBucketStrategy()
@@ -122,8 +120,6 @@ class TestTokenBucketCorruptionRecovery:
         assert stat.hits_remaining == rate.limit
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestTokenBucketWithDebtCorruptionRecovery:
     async def test_corrupted_state_allows_request(self, backend: InMemoryBackend):
         strategy = TokenBucketWithDebtStrategy(max_debt=5)
@@ -152,8 +148,6 @@ class TestTokenBucketWithDebtCorruptionRecovery:
         assert stat.hits_remaining == rate.limit + strategy.max_debt
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestSlidingWindowLogCorruptionRecovery:
     async def test_corrupted_log_allows_request(self, backend: InMemoryBackend):
         strategy = SlidingWindowLogStrategy()
@@ -189,8 +183,6 @@ class TestSlidingWindowLogCorruptionRecovery:
         assert stat.hits_remaining == rate.limit
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestSlidingWindowCounterCorruptionRecovery:
     async def test_corrupted_previous_window_treated_as_zero(
         self, backend: InMemoryBackend
@@ -212,8 +204,6 @@ class TestSlidingWindowCounterCorruptionRecovery:
         assert wait == 0, "Should allow request with corrupted previous window"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestLeakyBucketCorruptionRecovery:
     async def test_corrupted_state_allows_request(self, backend: InMemoryBackend):
         strategy = LeakyBucketStrategy()
@@ -259,8 +249,6 @@ class TestLeakyBucketCorruptionRecovery:
         assert wait == 0, "Should recover from NaN state, not return NaN itself"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestLeakyBucketWithQueueCorruptionRecovery:
     async def test_corrupted_state_allows_request(self, backend: InMemoryBackend):
         strategy = LeakyBucketWithQueueStrategy()
@@ -283,8 +271,6 @@ class TestLeakyBucketWithQueueCorruptionRecovery:
         assert stat.hits_remaining == float(rate.limit)
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestGCRACorruptionRecovery:
     async def test_corrupted_tat_allows_request(self, backend: InMemoryBackend):
         strategy = GCRAStrategy()

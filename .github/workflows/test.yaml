@@ -203,4 +203,4 @@ jobs:
           SKIP_REDIS_TESTS: true
           SKIP_MEMCACHED_TESTS: true
         run: |
-          uv run pytest tests/ -m "not (slow or concurrent)" --strict-markers -v --tb=short -x
+          uv run pytest tests/ -m "not concurrent" -v --tb=short -x

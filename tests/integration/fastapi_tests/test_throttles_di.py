@@ -20,6 +20,8 @@ from traffik.decorators.fastapi import throttled
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle
 
+pytestmark = [pytest.mark.anyio, pytest.mark.fastapi, pytest.mark.throttle]
+
 
 @pytest.fixture(scope="function")
 def app(inmemory_backend: InMemoryBackend) -> FastAPI:
@@ -32,9 +34,6 @@ class ItemModel(BaseModel):
     price: float
 
 
-@pytest.mark.throttle
-@pytest.mark.fastapi
-@pytest.mark.anyio
 class TestThrottlesDepedencyInjection:
     async def test_throttle_with_app_lifespan(self, app: FastAPI) -> None:
         throttle = HTTPThrottle(

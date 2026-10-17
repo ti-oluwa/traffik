@@ -5,13 +5,20 @@ import pytest
 from fastapi import Depends, FastAPI, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from tests.utils import default_client_identifier, make_client
+from tests.utils import default_client_identifier, flaky, make_client
 from traffik import strategies
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.decorators.fastapi import throttled
 from traffik.rates import Rate
 from traffik.registry import ThrottleRegistry
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
+
+pytestmark = [
+    pytest.mark.anyio,
+    pytest.mark.fastapi,
+    pytest.mark.throttle,
+    pytest.mark.decorator,
+]
 
 
 @pytest.fixture(scope="function")
@@ -20,10 +27,6 @@ async def app(inmemory_backend: InMemoryBackend) -> FastAPI:
     return app
 
 
-@pytest.mark.anyio
-@pytest.mark.throttle
-@pytest.mark.decorator
-@pytest.mark.fastapi
 class TestThrottleDecorator:
     async def test_throttle_decorator_only(self, app: FastAPI) -> None:
         throttle = HTTPThrottle(
@@ -108,7 +111,7 @@ class TestThrottleDecorator:
             assert response.status_code == 429
             assert response.headers.get("Retry-After") is not None
 
-    @pytest.mark.flaky(reruns=3, reruns_delay=2)
+    @flaky
     async def test_throttled_decorator_with_multiple_throttles(
         self, app: FastAPI
     ) -> None:

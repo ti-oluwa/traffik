@@ -12,9 +12,9 @@ from traffik.strategies.leaky_bucket import LeakyBucketStrategy
 from traffik.strategies.sliding_window import SlidingWindowLogStrategy
 from traffik.strategies.token_bucket import TokenBucketStrategy
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.strategy
+
 class TestStrategyStateSerialization:
     """
     Test strategy state persistence via `traffik.strategies._serde`.

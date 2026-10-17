@@ -19,9 +19,9 @@ from traffik.registry import ThrottleRegistry
 from traffik.strategies.fixed_window import FixedWindowStrategy
 from traffik.throttles import HTTPThrottle, WebSocketThrottle
 
+pytestmark = [pytest.mark.anyio, pytest.mark.throttle]
 
-@pytest.mark.throttle
-@pytest.mark.anyio
+
 class TestHTTPThrottleStat:
     async def test_stat_basic(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework
@@ -325,9 +325,7 @@ class TestHTTPThrottleStat:
                 )
 
 
-@pytest.mark.throttle
 @pytest.mark.websocket
-@pytest.mark.anyio
 class TestWebSocketThrottleStat:
     async def test_stat_before_and_after_each_message(
         self, inmemory_backend: InMemoryBackend, web_framework: ASGIFramework

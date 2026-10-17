@@ -6,6 +6,7 @@ import pytest
 from starlette.requests import HTTPConnection
 
 from tests.conftest import BackendGen
+from tests.utils import flaky
 from traffik.backends.inmemory import InMemoryBackend
 from traffik.rates import Rate
 from traffik.strategies.fixed_window import FixedWindowStrategy
@@ -14,9 +15,9 @@ from traffik.strategies.sliding_window import SlidingWindowLogStrategy
 from traffik.strategies.token_bucket import TokenBucketStrategy
 from traffik.throttles import ThrottleStrategy
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.strategy
+
 class TestRateEdgeCases:
     """Tests for edge cases in rate definitions."""
 
@@ -63,7 +64,7 @@ class TestRateEdgeCases:
         assert wait > 0, "Should throttle after limit"
         assert wait <= 50, "Wait should be within window duration"
 
-    @pytest.mark.flaky(reruns=3, reruns_delay=2)
+    @flaky
     async def test_very_long_time_window(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
     ):
@@ -102,8 +103,6 @@ class TestRateEdgeCases:
         assert round(wait / 1000) == 0, "Should be allowed after 2 seconds"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestKeyEdgeCases:
     """Tests for edge cases with throttling keys."""
 
@@ -161,9 +160,7 @@ class TestKeyEdgeCases:
         assert wait == 0, "Should handle numeric key"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
-@pytest.mark.flaky(reruns=3, reruns_delay=2)
+@flaky
 class TestConcurrencyEdgeCases:
     """Tests for concurrency edge cases."""
 
@@ -230,8 +227,6 @@ class TestConcurrencyEdgeCases:
         assert allowed == 50, f"All 50 requests should succeed, got {allowed}"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestTimingEdgeCases:
     """Tests for timing-related edge cases."""
 
@@ -269,8 +264,6 @@ class TestTimingEdgeCases:
             await asyncio.sleep(0.05)
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestStrategyStateEdgeCases:
     """Tests for strategy state management edge cases."""
 
@@ -362,8 +355,6 @@ class TestStrategyStateEdgeCases:
         assert wait == 0, "Should succeed with connected backend"
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestWaitTimeCalculations:
     """Tests for wait time calculation edge cases."""
 
@@ -399,7 +390,7 @@ class TestWaitTimeCalculations:
         wait = await strategy(key, rate, backend)
         assert 0 < wait <= 1500, f"Wait time {wait}ms out of reasonable bounds"
 
-    @pytest.mark.flaky(reruns=3, reruns_delay=2)
+    @flaky
     async def test_wait_ms_decreases_over_time(
         self, backend: InMemoryBackend, strategy: ThrottleStrategy[HTTPConnection]
     ):

@@ -3,7 +3,6 @@
 import asyncio
 import multiprocessing
 import os
-import platform
 import signal
 import subprocess
 import sys
@@ -15,6 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.utils import requires_fork
 from traffik.backends.multiprocess import (
     _HASH_TABLE_ENTRY_SIZE,
     _HASH_TABLE_LOAD_FACTOR,
@@ -26,19 +26,7 @@ from traffik.backends.multiprocess import (
 )
 from traffik.exceptions import BackendError, ShardUnavailableError
 
-SUPPORTS_FORK = (
-    platform.system() != "Windows" and "fork" in multiprocessing.get_all_start_methods()
-)
-
-pytestmark = [
-    pytest.mark.anyio,
-    pytest.mark.backend,
-    pytest.mark.concurrent,
-    pytest.mark.skipif(
-        not SUPPORTS_FORK,
-        reason="`MultiProcessInMemoryBackend` requires the 'fork' start method.",
-    ),
-]
+pytestmark = [pytest.mark.anyio, pytest.mark.concurrent, requires_fork]
 
 
 @pytest.fixture

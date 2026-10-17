@@ -6,9 +6,9 @@ Regression tests for backward system-clock-jump resilience.
 or leak based on `now - last_<event>_time`, using wall-clock time (needed so
 the calculation agrees across processes and survives restarts). Without a
 floor at zero, a backward clock jump (NTP correction, a manual date change,
-a leap-second adjustment) produced a *negative* elapsed time, which was then
+a leap-second adjustment) produced a negative elapsed time, which was then
 used directly: token bucket's token count went negative and got persisted,
-so every later request computed its wait time from that deficit -- a wait
+so every later request computed its wait time from that deficit, a wait
 proportional to the jump size, long after the jump itself had already been
 corrected. Leaky bucket's level was pushed up rather than down, causing the
 same kind of incorrect, escalating throttling. The fix floors every such
@@ -32,9 +32,9 @@ from traffik.strategies.token_bucket import (
     TokenBucketWithDebtStrategy,
 )
 
+pytestmark = pytest.mark.anyio
 
-@pytest.mark.anyio
-@pytest.mark.strategy
+
 class TestTokenBucketClockJumpResilience:
     @pytest.mark.parametrize(
         "strategy_cls", [TokenBucketStrategy, TokenBucketWithDebtStrategy]
@@ -84,8 +84,6 @@ class TestTokenBucketClockJumpResilience:
             )
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestLeakyBucketClockJumpResilience:
     @pytest.mark.parametrize(
         "strategy_cls", [LeakyBucketStrategy, LeakyBucketWithQueueStrategy]
@@ -113,8 +111,6 @@ class TestLeakyBucketClockJumpResilience:
             )
 
 
-@pytest.mark.anyio
-@pytest.mark.strategy
 class TestCostBasedTokenBucketClockJumpResilience:
     async def test_backward_jump_does_not_cause_persistent_wait(
         self, backend: InMemoryBackend

@@ -139,6 +139,7 @@ nav:
       - Overview: integration/index.md
       - Dependencies: integration/dependencies.md
       - Decorators: integration/decorators.md
+      - Shorthand Specs: integration/shorthand-specs.md
       - Middleware: integration/middleware.md
       - Direct Usage: integration/direct-usage.md
   - Advanced:

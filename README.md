@@ -47,6 +47,32 @@ async def list_items():
 
 Run with `uvicorn main:app`, hit `/items` over 100 times in a minute, get a `429`. That's the whole contract; everything else is configuration on top of it.
 
+### Or in one line
+
+Don't want to build a throttle object for a simple limit? `@throttled(...)` accepts a **shorthand spec**, a string in the form `uid|rate|strategy|type`. Only the rate is required:
+
+```python
+from fastapi import WebSocket
+from traffik.decorators.fastapi import throttled
+
+@app.get("/items")
+@throttled("api:items|100/min")                                  # same limit as above
+async def list_items():
+    return {"items": []}
+
+@app.get("/search")
+@throttled("search:burst|10/s", "search:sustained|200/min|token_bucket")   # stack limits
+async def search():
+    return {"results": []}
+
+@app.websocket("/ws")
+@throttled("chat:connect|30/min|fixed_window|ws")                # WebSocket handshake
+async def chat(websocket: WebSocket):
+    ...
+```
+
+Strategies are referred to by alias (`fixed_window`, `sliding_window_counter`, `sliding_window_log`, `token_bucket`, `leaky_bucket`, `leaky_bucket_with_queue`, `gcra`), and specs mix freely with pre-built `Throttle` objects. Two things to know: specs work with `@throttled(...)` only (dependencies, middleware and direct calls take a `Throttle`), and **always include a uid when you run more than one worker on a shared backend**. A spec without one (`"100/min"`) gets a random uid per process, so each worker counts separately. Full format, examples and errors: **[Shorthand Specs](https://ti-oluwa.github.io/traffik/integration/shorthand-specs/)**.
+
 ## How Traffik Works
 
 Three replaceable pieces, each configurable on its own:
@@ -99,7 +125,7 @@ Full grammar: **[Rates](https://ti-oluwa.github.io/traffik/core-concepts/rates/)
 
 ## Integration Patterns
 
-Throttles work as FastAPI dependencies (shown above, also on routers via `APIRouter(dependencies=[...])`), as decorators (`@throttled(...)` - has different import paths for Starlette vs. FastAPI, and accepts shorthand strings like `"100/min"` or `"api:items|100/min"` instead of a pre-built `Throttle`), as blanket middleware rules across routes (`ThrottleMiddleware` + `Throttle`(s)), or called directly (`await throttle.hit(...)`) anywhere in your code, including per-message inside a WebSocket loop. See **[Integration Patterns](https://ti-oluwa.github.io/traffik/integration/)** for a worked example of each, and **[Decorators](https://ti-oluwa.github.io/traffik/integration/decorators/)** for the full shorthand-spec grammar.
+Throttles work as FastAPI dependencies (shown above, also on routers via `APIRouter(dependencies=[...])`), as decorators (`@throttled(...)` - has different import paths for Starlette vs. FastAPI, and accepts [shorthand specs](#or-in-one-line) like `"api:items|100/min"` instead of a pre-built `Throttle`), as blanket middleware rules across routes (`ThrottleMiddleware` + `Throttle`(s)), or called directly (`await throttle.hit(...)`) anywhere in your code, including per-message inside a WebSocket loop. See **[Integration Patterns](https://ti-oluwa.github.io/traffik/integration/)** for a worked example of each, and **[Shorthand Specs](https://ti-oluwa.github.io/traffik/integration/shorthand-specs/)** for the full spec grammar.
 
 ## Also Included
 
@@ -119,7 +145,7 @@ Briefly, since these all have worked examples in the docs:
 
 Two independent choices determine your overhead, the **backend** (baseline cost for in-memory is sub-millisecond, Redis/Memcached are dominated by their round trip, the multi-process backend hops through a thread pool) and the **strategy** (whether you pay a locking tax on top. `FixedWindow`/`GCRA` mostly do not lock. But anything that reads-computes-writes state has to, for correctness).
 
-There's no universal ranking between backends. Which one costs less depends on your workload shape (key cardinality, contention, worker count) more than on the backend's label. Full breakdown and how to reason about your own case: **[Performance](https://ti-oluwa.github.io/*traffik*/performance/)**.
+There's no universal ranking between backends. Which one costs less depends on your workload shape (key cardinality, contention, worker count) more than on the backend's label. Full breakdown and how to reason about your own case: **[Performance](https://ti-oluwa.github.io/traffik/performance/)**.
 
 A benchmark suite ships with the repo for testing this against your own traffic shape, and includes a head-to-head comparison against SlowAPI:
 

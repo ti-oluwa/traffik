@@ -28,16 +28,21 @@ async def list_items():
 
 Apply `@throttled(...)` directly to a route function. Two variants exist: one for Starlette (needs a `Request` parameter in the function), and one for FastAPI (no `Request` needed, FastAPI's DI handles it).
 
-Decorators keep the throttle configuration visible at the handler level without modifying the route signature.
+Decorators keep the throttle configuration visible at the handler level without modifying the route signature. They also accept **[shorthand specs](shorthand-specs.md)**: a one-line string instead of a `Throttle` object.
 
 ```python
 @app.get("/items")
 @throttled(throttle)
 async def list_items():
     ...
+
+@app.get("/search")
+@throttled("search:burst|10/s", "search:sustained|200/min|sliding_window_counter")  # no Throttle objects needed
+async def search():
+    ...
 ```
 
-[Read more about the decorator approach](decorators.md)
+[Read more about the decorator approach](decorators.md) | [Shorthand specs](shorthand-specs.md)
 
 ---
 
@@ -79,7 +84,7 @@ async def upload(request: Request):
 | Approach | Best for |
 |---|---|
 | Dependency injection | Per-route and per-router throttling in FastAPI |
-| Decorators | Keeping throttle config co-located with the handler |
+| Decorators | Keeping throttle config co-located with the handler; the only place [shorthand specs](shorthand-specs.md) work |
 | Middleware | Global or path-based throttling across all routes |
 | Direct usage | Dynamic costs, conditional logic, multi-step workflows |
 

@@ -54,6 +54,26 @@ async def list_items():
 
 Run it with `uvicorn main:app`, hit `/items` more than 100 times in a minute, and you'll get a 429 right after the 100th request. That's essentially the whole contract. Everything else in these docs is configuration on top of it.
 
+### Or in one line
+
+For simple limits you can skip the `Throttle` object. The `@throttled` decorator accepts a **shorthand spec**, a string of the form `uid|rate|strategy|type` where only the rate is required:
+
+```python
+from traffik.decorators.fastapi import throttled
+
+@app.get("/items")
+@throttled("api:items|100/min")                                          # same limit as above
+async def list_items():
+    return {"items": ["widget", "gizmo", "thingamajig"]}
+
+@app.get("/search")
+@throttled("search:burst|10/s", "search:sustained|200/min|token_bucket")   # stack several limits
+async def search():
+    return {"results": []}
+```
+
+Strategy, WebSocket type, reusing a registered throttle and more are covered in [Shorthand Specs](integration/shorthand-specs.md).
+
 ---
 
 ## How Traffik works
@@ -105,6 +125,10 @@ Is your backend down because of a transient Redis error? You can choose how that
 **Identifiers are just async functions.**
 
 "A client" can mean an IP, a user ID, an API key, a tenant. So pass any async callable as an `identifier` and it's used everywhere that throttle is. You can return the `EXEMPTED` sentinel to bypass throttling entirely for a given connection, as simple as that.
+
+**Throttle in one line.**
+
+Simple limits do not need a `Throttle` object: `@throttled("api:items|100/min|token_bucket")` is a complete throttle, with the uid, rate and strategy in one string. Specs stack (`@throttled("burst|10/s", "sustained|200/min")`), mix with pre-built throttles, and cover WebSockets too. See [Shorthand Specs](integration/shorthand-specs.md).
 
 **Dependency injection friendly.**
 

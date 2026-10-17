@@ -210,19 +210,7 @@ For per-message throttling inside an established WebSocket connection, see [Dire
 
 ## Shorthand string specs
 
-Instead of building a `Throttle` up front, `@throttled(...)` also accepts shorthand strings. This is handy for simple, one-off limits where a full `HTTPThrottle(...)` call would just add noise.
-
-```
-"<rate>"
-"<rate>|<strategy>"
-"<rate>|<strategy>|<type>"
-"<uid>"
-"<uid>|<rate>"
-"<uid>|<rate>|<strategy>"
-"<uid>|<rate>|<strategy>|<type>"
-```
-
-Segments are separated by `|`, not `:`, so a uid can freely use `:` for namespacing (e.g. `"api:items"`, the convention used throughout these docs) without conflicting with the spec grammar. `<strategy>` is one of the aliases registered in `traffik.throttles.specs.STRATEGY_ALIASES` (e.g. `"fixed_window"`, `"token_bucket"`, `"sliding_window_log"`), and `<type>` is `"http"` or `"ws"`, defaulting to `"http"`.
+Instead of building a `Throttle` up front, `@throttled(...)` also accepts a short string. Use it for simple limits where a full `HTTPThrottle(...)` call would just add noise.
 
 === "FastAPI decorator"
 
@@ -262,23 +250,7 @@ Segments are separated by `|`, not `:`, so a uid can freely use `:` for namespac
     )
     ```
 
-Pre-built throttles and shorthand strings can be mixed freely in the same call, and a bare rate (no strategy or type) defaults to the fixed-window strategy and the `"http"` type:
-
-```python
-@throttled(burst_throttle, "200/min")  # one pre-built, one shorthand
-async def route(...): ...
-```
-
-A string with no rate at all (just `"<uid>"`) doesn't build a throttle, it looks the uid up in the registry and reuses whatever is already registered under it, raising if nothing is there yet:
-
-```python
-HTTPThrottle(uid="api:items", rate="100/min")  # registered once, elsewhere
-
-@throttled("api:items")  # reuses the throttle above
-async def list_items(): ...
-```
-
-`uid=` and `type=` keyword arguments on `@throttled(...)` supply defaults for specs that don't embed their own, and are rejected if they conflict with a value a spec does embed. Anything a shorthand string can't express (a custom strategy, HTTP-only `use_method`, and so on) still needs a `Throttle` built directly.
+The string is `uid|rate|strategy|type`, and only the rate is required. Specs and pre-built throttles can be mixed in one call, a bare uid reuses a registered throttle, and keyword arguments such as `identifier=` apply to every spec. The full format, strategy aliases, WebSocket specs, error messages, and one important caveat about specs without a uid are on the **[Shorthand Specs](shorthand-specs.md)** page.
 
 ---
 

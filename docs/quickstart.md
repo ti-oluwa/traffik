@@ -157,6 +157,23 @@ async def search():
     return {"results": []}
 ```
 
+The same thing without creating the throttle objects, using [shorthand specs](integration/shorthand-specs.md) (`uid|rate|strategy|type`, where only the rate is required):
+
+```python
+@app.get("/search")
+@throttled("search:burst|5/min", "search:sustained|50/hour")
+async def search():
+    return {"results": []}
+
+@app.get("/feed")
+@throttled("api:feed|5/min|sliding_window_counter")  # pick a strategy by alias
+async def feed():
+    return {"feed": []}
+```
+
+!!! tip "Give specs a uid when you run more than one worker"
+    A spec without a uid (`"100/min"`) gets a random one in each process, so with Redis and several workers every worker counts on its own. Write `"api:items|100/min"` instead.
+
 !!! warning "There are two `throttled` imports and they're not the same thing"
     | Import | Framework | Route needs `Request`? |
     |---|---|---|
